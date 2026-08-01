@@ -23,8 +23,6 @@ import {
   type TodoLike,
   type TransitionKind,
 } from '../shared/audit';
-import type { CostResult } from '../shared/pricing';
-import type { CiSnapshot } from './ciChecks';
 import { auditFilePath } from './auditPaths';
 import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
@@ -66,16 +64,14 @@ export interface AuditRecorder {
   recordTransition(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike): void;
   /** Record a todo-list mutation, but only while a run is open for the repo (§25.4). */
   recordTodoChange(repoKey: string, before: TodoLike[], after: TodoLike[]): void;
-  /** Record an agent-loop state.yaml observation, diffing against the last seen for the run (§25.5). */
+  /** Record a loop-state observation for the run, diffing against the last seen (§25.5). Fed by the
+   *  surviving §27 loop-view provider — the app no longer writes or interprets .agent-loop/, but still
+   *  snapshots its bytes for the §25 record. */
   recordLoop(repoKey: string, loop: LoopLike | null): void;
   /** Record resolved step inputs and any ticket association (§25.5), only while a run is open. */
   recordInputs(repoKey: string, values: Record<string, string>, typeByName: Record<string, string>): void;
   /** Record a flow-injected command and its exit (§25.5), only while a run is open. */
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
-  /** Record the §26.10 per-iteration cost (priced dollars + unpriced model ids), only while a run is open. */
-  recordCost(repoKey: string, iteration: number, cost: CostResult): void;
-  /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
-  recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
    *  `reason` is the OS's untrusted message; the record bounds and strips it. */
   recordNotifyFailed(repoKey: string, reason: string): void;
@@ -199,24 +195,6 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'command', source, cmd, exit }]);
       } catch (e) {
         log('audit recordCommand failed', e);
-      }
-    },
-
-    recordCost(repoKey, iteration, cost) {
-      try {
-        appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'loop.cost', iteration, usd: cost.usd, unpriced: cost.unpricedModels }]);
-      } catch (e) {
-        log('audit recordCost failed', e);
-      }
-    },
-
-    recordCi(repoKey, iteration, snapshot) {
-      try {
-        appendIfOpen(repoKey, [
-          { ts: auditTimestamp(now()), type: 'loop.ci', iteration, total: snapshot.total, passed: snapshot.passed, failed: snapshot.failed, pending: snapshot.pending },
-        ]);
-      } catch (e) {
-        log('audit recordCi failed', e);
       }
     },
 

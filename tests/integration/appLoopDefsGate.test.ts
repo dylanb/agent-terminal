@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 function resolve(name: string): LoopDefV2Result {
-  return resolveLoopDefV2(name, { tiers: { operator: null, appBundled: APP_BUNDLED }, repoDir });
+  return resolveLoopDefV2(name, { tiers: { operator: null, appBundled: APP_BUNDLED, retired: null }, repoDir });
 }
 
 const gateActions = (r: LoopDefV2Result): Array<{ option: string; actions: string[] }> => {

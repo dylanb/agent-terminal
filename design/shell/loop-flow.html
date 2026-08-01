@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="tokens.css">
 <style>
   /* §24.2.3 T0 — loop-step surfaces, built on the converged shell + tokens.css.
-     Surfaces: (1) multi-step rail w/ a bespoke loop-step orbit mark, (2) v4 loop-state mirror +
+     Surfaces: (1) multi-step rail w/ a bespoke loop-step orbit mark, (2) loop-step read-out +
      gate, housed together in a (3) FULL-HEIGHT DOCKED panel (not floating; "makes room" like the
      right drawer, internally scrollable), (4) awaiting-human banner (+ OS notify), (5) typed-input modal. */
 
@@ -176,7 +176,7 @@
     </div>
   </aside>
 
-  <!-- (3) FULL-HEIGHT DOCKED loop + gate panel (state mirror + gate together) -->
+  <!-- (3) FULL-HEIGHT DOCKED loop + gate panel (loop read-out + gate together) -->
   <aside class="loop-panel" id="loop-panel" aria-label="Loop &amp; gate">
     <div class="lhead">
       <svg class="loopmark"><use href="#loop-orbit"/></svg>
@@ -184,20 +184,20 @@
       <button class="iconbtn x" id="lclose" title="Close">✕</button>
     </div>
     <div class="lbody">
-      <div class="seg-h">State · .agent-loop/state.yaml (v4)</div>
+      <div class="seg-h">State</div>
       <div class="ldl">
-        <div class="lrow"><span class="lk">status</span><span class="ld"></span><span class="lv bad">awaiting-human-pr-approval</span></div>
+        <div class="lrow"><span class="lk">status</span><span class="ld"></span><span class="lv">complete</span></div>
         <div class="lrow"><span class="lk">iteration</span><span class="ld"></span><span class="lv">9</span></div>
         <div class="lrow"><span class="lk">pr</span><span class="ld"></span><span class="lv sig">#179</span></div>
         <div class="lrow"><span class="lk">branch</span><span class="ld"></span><span class="lv">agent-loop/issue-176</span></div>
-        <div class="lrow"><span class="lk">gate options</span><span class="ld"></span><span class="lv">approve · changes · impasse</span></div>
-        <div class="grow">+ extensible — reviewer count, last verdict, timings slot in here as the bridge derives them.</div>
+        <div class="lrow"><span class="lk">gate options</span><span class="ld"></span><span class="lv">approve · changes</span></div>
+        <div class="grow">+ extensible — reviewer count, last verdict, timings slot in here as the engine derives them.</div>
       </div>
 
       <div class="seg-h">Review gate</div>
       <div class="gate2">
-        <p class="gate-note" id="gatenote">A decision injects the matching <span class="lock">/agent-loop-*</span> command into the terminal. Refused while a process is running (§19.3).</p>
-        <!-- data-driven: exactly this gate's human_options [approve, request-changes, impasse] -->
+        <p class="gate-note" id="gatenote">A decision is applied in-app by the loop engine — approve runs the loop's own <span class="lock">side-effect</span> (e.g. gh pr ready) and, at a terminal gate, advances the flow. Refused while a turn is running (§27.10).</p>
+        <!-- data-driven: exactly this gate's human_options [approve, request-changes] -->
         <div class="btns">
           <!-- Approve + its consequence chip are one bundled unit; the chip text joins the button's
                accessible NAME via aria-labelledby (button's own text + the chip's name span). -->
@@ -206,7 +206,6 @@
             <span class="advance" id="advchip"><span aria-hidden="true">→</span> <span id="adv-name">flow to Ship</span></span>
           </span>
           <button class="pill send" id="reqchanges">Request changes</button>
-          <button class="pill" id="impasse">Impasse</button>
         </div>
         <!-- request-changes composer (revealed) -->
         <div class="rc" id="rc">
@@ -227,8 +226,8 @@
   <main class="main">
     <div class="status-bar" id="statusbar">
       <span class="title">PR #179 — Replace loop sentinel with completion file</span>
-      <span class="activity">Running reviewers · ⠋</span>
-      <button class="alert" id="status-alert"><span class="dot"></span><b>Loop needs you</b> — <span class="it">awaiting-human-pr-approval · iter 9 · PR #179</span></button>
+      <span class="activity">Bootstrapping #179 · ⠋</span>
+      <button class="alert" id="status-alert"><span class="dot"></span><b>Loop needs you</b> — <span class="it">complete · iter 9 · PR #179</span></button>
     </div>
     <div class="viewport">
       <div data-viewpane="1" class="on">
@@ -236,7 +235,7 @@
           <div class="dim">~/pundits.work · agent-loop/issue-176</div>
           <div><span class="u">$</span> agent-loop 179 --loop impl-loop</div>
           <div class="dim">  ● iteration 9 · consolidated 11 reviewers</div>
-          <div>⏺ Review complete — status <span class="u">awaiting-human-pr-approval</span>. Approve, request changes, or impasse.</div>
+          <div>⏺ Review complete — status <span class="u">complete</span>. Approve or request changes.</div>
           <div class="dim">  ● 0 blocking findings · 2 nits deferred</div>
           <div style="margin-top:8px"><span class="u">$</span> <span class="cur">&nbsp;</span></div>
           <div class="esc">esc to interrupt · open the loop panel from the rail or the status-bar alert to decide the gate</div>
@@ -307,7 +306,6 @@
     if(e.target.closest('#lclose')) openPanel(false);
     if(e.target.closest('#status-alert')) openPanel(true);
     if(e.target.closest('#reqchanges')) document.getElementById('rc').classList.toggle('open');
-    if(e.target.closest('#impasse')) document.getElementById('gatenote').textContent='Impasse injects /agent-loop-impasse — records the loop as stuck for human triage. The flow stays on this step.';
     const sb=e.target.closest('.seg button'); if(sb){ sb.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===sb)); }
     const pk=e.target.closest('.rc .pick'); if(pk) pk.classList.toggle('sel');
     const chk=e.target.closest('.todo .chk'); if(chk) chk.closest('.todo').classList.toggle('done');

@@ -1,9 +1,9 @@
-// The human-readable "what the loop mechanics are doing right now" descriptor (§24.2.2 / §26). One shared
-// definition — the main-process producer and the renderer both key off THIS vocabulary, so they cannot
-// drift (CLAUDE.md shared-semantics rule; the sibling of occurrence.ts / loopStatus.ts).
+// The human-readable "what the loop mechanics are doing right now" descriptor (§24.2.2 / §27.10). One
+// shared definition — the main-process bootstrap producer and the renderer both key off THIS vocabulary,
+// so they cannot drift (CLAUDE.md shared-semantics rule; the sibling of occurrence.ts / loopStatus.ts).
 
 /** The distinct loop-mechanics activities a phrase can describe. */
-export type LoopActivityKind = 'pickup' | 'waiting' | 'work' | 'reviewers' | 'consolidate';
+export type LoopActivityKind = 'pickup';
 
 /** Optional facts that specialize a phrase (the bootstrapping issue; a wipe re-bootstrap). */
 export interface LoopActivityContext {
@@ -23,14 +23,6 @@ export function loopActivityPhrase(kind: LoopActivityKind, ctx: LoopActivityCont
     case 'pickup':
       if (ctx.wipe) return 'Retrying bootstrap';
       return ctx.issue != null ? `Bootstrapping #${ctx.issue}` : 'Bootstrapping';
-    case 'waiting':
-      return 'Waiting for the agent';
-    case 'work':
-      return 'Working';
-    case 'reviewers':
-      return 'Running reviewers';
-    case 'consolidate':
-      return 'Consolidating reviews';
   }
 }
 
@@ -39,18 +31,14 @@ export function loopActivity(kind: LoopActivityKind, ctx?: LoopActivityContext):
   return { phrase: loopActivityPhrase(kind, ctx) };
 }
 
-/** The live loop state the descriptor is derived from: an in-flight bootstrap, or the current turn plus
- *  whether its prompt has been injected yet (deferred → "waiting", injected → the turn phase). */
+/** The live loop state the descriptor is derived from: an in-flight bootstrap. */
 export interface LoopActivityInputs {
   pickup: { issue: number; wipe: boolean } | null;
-  turn: { kind: 'work' | 'reviewers' | 'consolidate'; injected: boolean } | null;
 }
 
-/** Derive the current activity descriptor, or null when the loop mechanics are idle (at a gate, done, or
- *  between flows). A bootstrap outranks a turn (it precedes any turn); an un-injected turn is still
- *  "waiting for the agent". Pure: the decision is tested, not the rendering of it. */
+/** Derive the current activity descriptor, or null when the loop mechanics are idle (no bootstrap in
+ *  flight). Pure: the decision is tested, not the rendering of it. */
 export function deriveLoopActivity(inputs: LoopActivityInputs): LoopActivity | null {
   if (inputs.pickup) return loopActivity('pickup', { issue: inputs.pickup.issue, wipe: inputs.pickup.wipe });
-  if (inputs.turn) return loopActivity(inputs.turn.injected ? inputs.turn.kind : 'waiting');
   return null;
 }

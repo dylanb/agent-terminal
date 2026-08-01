@@ -29,8 +29,6 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   const cleanDestinations: InstallDestinationPreview[] = [
     { destination: 'flow', conflict: false },
     { destination: 'appLoops', conflict: false },
-    { destination: 'loops', conflict: false },
-    { destination: 'skills', conflict: false },
     { destination: 'commands', conflict: false },
   ];
   const clean: InstallExamplesPreview = {
@@ -126,26 +124,25 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('shows the consent step before any apply when a destination conflicts', async () => {
     const apply = vi.fn(async () => okResult());
-    await openConsent(['skills'], { apply });
+    await openConsent(['appLoops'], { apply });
     expect(apply).not.toHaveBeenCalled();
   });
 
   it('offers one decision per CONFLICTING destination and none for the clean ones', async () => {
-    await openConsent(['skills', 'commands']);
-    expect(consentBox('skills')).toBeTruthy();
+    await openConsent(['appLoops', 'commands']);
+    expect(consentBox('appLoops')).toBeTruthy();
     expect(consentBox('commands')).toBeTruthy();
     expect(consentBox('flow')).toBeNull();
-    expect(consentBox('loops')).toBeNull();
   });
 
   it('names the conflicting files under each destination so the user knows what is at stake', async () => {
-    await openConsent(['skills']);
-    expect(prompt()?.textContent).toContain('skills-file.md');
+    await openConsent(['appLoops']);
+    expect(prompt()?.textContent).toContain('appLoops-file.md');
   });
 
   it('forwards only the consented destinations — one decision never covers two', async () => {
     const apply = vi.fn(async () => okResult());
-    await openConsent(['skills', 'commands'], { apply });
+    await openConsent(['appLoops', 'commands'], { apply });
     consentBox('commands').click();
     confirmBtn().click();
     await vi.waitFor(() =>
@@ -154,8 +151,8 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
-    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }], skipped: [{ destination: 'skills', files: rels('a/SKILL.md') }] }));
-    await openConsent(['skills'], { apply });
+    const apply = vi.fn(async () => okResult({ created: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }], skipped: [{ destination: 'commands', files: rels('groom-ticket.md') }] }));
+    await openConsent(['appLoops'], { apply });
     confirmBtn().click();
     await vi.waitFor(() =>
       expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []),
@@ -229,32 +226,31 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     const apply = vi.fn(async () =>
       okResult({
         created: [{ destination: 'commands', files: rels('groom-ticket.md') }],
-        overwritten: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
-        skipped: [{ destination: 'flow', files: rels('flow.yaml') }],
+        overwritten: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
+        skipped: [],
       }),
     );
-    await openConsent(['skills'], { apply });
-    consentBox('skills').click();
+    await openConsent(['appLoops'], { apply });
+    consentBox('appLoops').click();
     confirmBtn().click();
     await vi.waitFor(() => expect(reportGroup('commands')).not.toBeNull());
 
     expect(reportGroup('commands')?.textContent).toContain('groom-ticket.md');
-    expect(reportGroup('skills')?.textContent).toContain('review-intent/SKILL.md');
-    expect(reportGroup('flow')?.textContent).toContain('flow.yaml');
-    expect(reportGroup('loops')).toBeNull(); // a destination with nothing to report gets no group
+    expect(reportGroup('appLoops')?.textContent).toContain('plan-loop.yaml');
+    expect(reportGroup('flow')).toBeNull(); // a destination with nothing to report gets no group
     // A file name shared across destinations stays attributable to the group it is listed under.
-    expect(reportGroup('commands')?.textContent).not.toContain('flow.yaml');
+    expect(reportGroup('commands')?.textContent).not.toContain('plan-loop.yaml');
   });
 
   it('summarizes the outcome in the live region rather than reading out every file name (WCAG 4.1.3)', async () => {
     const many = rels(...Array.from({ length: 20 }, (_, i) => `f${i}.md`));
-    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: many }] }));
+    const apply = vi.fn(async () => okResult({ created: [{ destination: 'appLoops', files: many }] }));
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
     expect(status().textContent).toContain('created 20');
     expect(status().textContent).not.toContain('f19.md');
-    expect(reportGroup('loops')?.textContent).toContain('f19.md');
+    expect(reportGroup('appLoops')?.textContent).toContain('f19.md');
   });
 
   it('reports what it wrote AND what it left alone before failing, alongside the error (mid-write failure)', async () => {
@@ -262,17 +258,17 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       async (): Promise<InstallExamplesResult> => ({
         ok: false,
         error: 'Could not install groom-ticket.md',
-        created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
+        created: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         overwritten: [],
-        skipped: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
       }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(alert()?.textContent).toContain('Could not install groom-ticket.md'));
-    expect(reportGroup('loops')?.textContent).toContain('plan-loop/plan-loop.yaml');
+    expect(reportGroup('appLoops')?.textContent).toContain('plan-loop.yaml');
     // The failure arm carries skipped too, so the report shows what was preserved, not just what landed.
-    expect(reportGroup('skills')?.textContent).toContain('review-intent/SKILL.md');
+    expect(reportGroup('commands')?.textContent).toContain('other-cmd.md');
   });
 
   it('clears a previous report when a new run starts', async () => {
@@ -307,24 +303,21 @@ describe('install examples view organism (§18.1/§23.4)', () => {
           { destination: 'commands', files: rels('groom-ticket.md') },
           { destination: 'flow', files: rels('flow.yaml') },
         ],
-        overwritten: [
-          { destination: 'skills', files: rels('review-intent/SKILL.md') },
-          { destination: 'appLoops', files: rels('plan-loop/plan-loop.yaml') },
-        ],
-        skipped: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
+        overwritten: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
+        skipped: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
     const order = [...reportList().children].map((li) => li.getAttribute('data-destination'));
-    expect(order).toEqual(['flow', 'appLoops', 'loops', 'skills', 'commands']);
+    expect(order).toEqual(['flow', 'appLoops', 'commands']);
   });
 
   it('exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)', async () => {
     // A <fieldset>/<legend> gave this by construction. A div carrying role="group" + aria-labelledby buys
     // the layout the dialog needs, but pays for it with three strings that must agree — so they are pinned.
-    await openConsent(['loops', 'skills']);
+    await openConsent(['appLoops', 'commands']);
     const group = host.querySelector('.flow-modal .install-consent') as HTMLElement;
     expect(group.getAttribute('role')).toBe('group');
 
@@ -334,7 +327,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(label?.textContent?.trim()).toBe('Replace files in');
 
     // Every decision control lives inside the group it names.
-    for (const id of ['loops', 'skills'] as InstallDestinationId[]) {
+    for (const id of ['appLoops', 'commands'] as InstallDestinationId[]) {
       expect(group.contains(consentBox(id))).toBe(true);
     }
   });
@@ -343,18 +336,16 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     // The files sit inside the implicit <label>, so accname folds every path into the control's NAME:
     // a screen reader announces dozens of paths before the user learns which destination this is. The
     // manifest is a DESCRIPTION, not a name.
-    await openConsent(['loops']);
-    const box = consentBox('loops');
+    await openConsent(['appLoops']);
+    const box = consentBox('appLoops');
     const label = box.closest('label') as HTMLElement;
-    // Both loop trees can conflict in one install, and this control authorizes overwriting one of
-    // them: the legacy §26 tree has to name itself as such, not as the unqualified "Loop definitions".
-    expect(label.textContent).toContain('Legacy loop definitions');
-    expect(label.textContent).not.toContain('loops-file.md');
+    expect(label.textContent).toContain('App loop definitions');
+    expect(label.textContent).not.toContain('appLoops-file.md');
 
     const describedBy = box.getAttribute('aria-describedby');
     expect(describedBy).toBeTruthy();
     const desc = host.ownerDocument.getElementById(describedBy as string);
-    expect(desc?.textContent).toContain('loops-file.md');
+    expect(desc?.textContent).toContain('appLoops-file.md');
   });
 
   it('announces what was written even when the install fails partway (WCAG 4.1.3)', async () => {
@@ -364,9 +355,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       async (): Promise<InstallExamplesResult> => ({
         ok: false,
         error: 'Could not install groom-ticket.md',
-        created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
+        created: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         overwritten: [],
-        skipped: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -529,7 +520,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       obs.takeRecords().flatMap((r) => [...r.addedNodes]).map((n) => n.textContent ?? '');
 
     it('never announces "Install cancelled." on the Install path', async () => {
-      await openConsent(['loops']);
+      await openConsent(['appLoops']);
       const region = status();
       const obs = new MutationObserver(() => {});
       obs.observe(region, { childList: true, characterData: true, subtree: true });
@@ -543,7 +534,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     });
 
     it('still announces the retraction when the user DOES dismiss', async () => {
-      await openConsent(['loops']);
+      await openConsent(['appLoops']);
       const region = status();
       const obs = new MutationObserver(() => {});
       obs.observe(region, { childList: true, characterData: true, subtree: true });

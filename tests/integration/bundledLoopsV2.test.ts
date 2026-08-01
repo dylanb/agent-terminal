@@ -16,15 +16,15 @@ const repoDir = resolve(__dirname, '..', '..');
 describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
   for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
     it(`resolves ${name} from the app-bundled tier with declared gate options`, () => {
-      const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
+      const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
       expect(r.ok, r.ok ? '' : r.reason).toBe(true);
       if (!r.ok) return;
-      expect(r.def.origin).toBe('app-bundled');
+      expect(r.tierRoot).toBe(SOURCE_TREE);
       expect(r.def.gate.length).toBeGreaterThan(0);
     });
 
     it(`${name}: every catalog persona resolves to a charter document that exists`, () => {
-      const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
+      const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       for (const reviewer of r.def.reviewers) {
@@ -36,8 +36,8 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
   it('groom-loop and plan-loop declare different approve side-effects (differing defs, AC 1 / §27.13)', () => {
     // Post-N5 the shipped defs are all approve-only, so they differ by their §27.13 approve SIDE-EFFECT
     // (groom → update-issue-body, plan → PR non-draft flip), not by their option list.
-    const g = resolveLoopDefV2('groom-loop', { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
-    const p = resolveLoopDefV2('plan-loop', { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
+    const g = resolveLoopDefV2('groom-loop', { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
+    const p = resolveLoopDefV2('plan-loop', { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
     expect(g.ok && p.ok).toBe(true);
     if (!g.ok || !p.ok) return;
     const actions = (r: typeof g): unknown[] => (r.ok ? r.def.gate.flatMap((x) => x.sideEffects.map((se) => se.args.action)) : []);

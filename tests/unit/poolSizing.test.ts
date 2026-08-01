@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { maxWorkersForEnv } from '../../vitest.poolSizing';
 
-// The fs.watch-backed suites (agentLoopBridge / viewerWatch) drop or stall events on macOS FSEvents
+// The fs.watch-backed suites (viewerWatch, turn-done watch) drop or stall events on macOS FSEvents
 // when many test-file forks contend for the run loop, so a local full-suite run caps parallelism;
 // CI hosts are dedicated and stay unrestricted. The cap mirrors vitest's own `'17%'` rounding
 // (getWorkersCountByPercentage): Math.round(0.17*n) clamped to [1, n].

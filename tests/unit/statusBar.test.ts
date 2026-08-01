@@ -173,7 +173,7 @@ describe('status bar (§22.3.1)', () => {
       const { render } = mount({ githubRef });
       render(model({ title: { kind: 'pr', number: 57 } }));
       await flush();
-      render(model({ title: { kind: 'pr', number: 57 }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'pr', number: 57 }, activity: { phrase: 'Bootstrapping #12' } }));
       await flush();
       expect(githubRef).toHaveBeenCalledTimes(1);
     });
@@ -275,7 +275,7 @@ describe('status bar (§22.3.1)', () => {
       render(model({ title: { kind: 'user', text: '' } }));
       const input = startEditing(host);
       type(input, 'half a nam');
-      render(model({ title: { kind: 'user', text: '' }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'user', text: '' }, activity: { phrase: 'Bootstrapping #12' } }));
       expect(editor(host)).toBe(input);
       expect(editor(host)!.value).toBe('half a nam');
     });
@@ -317,13 +317,13 @@ describe('status bar (§22.3.1)', () => {
   describe('the engine activity', () => {
     it('names what the engine is doing', () => {
       const { host, render } = mount();
-      render(model({ activity: { phrase: 'Running reviewers' } }));
-      expect(host.querySelector('.sb-activity')!.textContent).toContain('Running reviewers');
+      render(model({ activity: { phrase: 'Bootstrapping #40' } }));
+      expect(host.querySelector('.sb-activity')!.textContent).toContain('Bootstrapping #40');
     });
 
     it('says nothing while the engine is idle', () => {
       const { host, render } = mount();
-      render(model({ activity: { phrase: 'Running reviewers' } }));
+      render(model({ activity: { phrase: 'Bootstrapping #40' } }));
       render(model({ activity: null }));
       expect(host.querySelector('.sb-activity')!.textContent).toBe('');
     });
@@ -336,31 +336,31 @@ describe('status bar (§22.3.1)', () => {
 
     it('does not re-announce an unchanged phrase on every push', () => {
       const { host, render } = mount();
-      render(model({ activity: { phrase: 'Working' } }));
+      render(model({ activity: { phrase: 'Bootstrapping #40' } }));
       const phrase = host.querySelector('.sb-activity .phrase');
-      render(model({ activity: { phrase: 'Working' }, alert: blocked }));
+      render(model({ activity: { phrase: 'Bootstrapping #40' }, alert: blocked }));
       expect(host.querySelector('.sb-activity .phrase')).toBe(phrase);
     });
 
     it('announces a phrase that really changed, without tearing down the region', () => {
       const { host, render } = mount();
-      render(model({ activity: { phrase: 'Working' } }));
+      render(model({ activity: { phrase: 'Bootstrapping' } }));
       const region = host.querySelector('.sb-activity')!;
-      render(model({ activity: { phrase: 'Running reviewers' } }));
+      render(model({ activity: { phrase: 'Bootstrapping #40' } }));
       expect(host.querySelector('.sb-activity')).toBe(region);
-      expect(region.textContent).toContain('Running reviewers');
+      expect(region.textContent).toContain('Bootstrapping #40');
       expect(region.querySelectorAll('.spin')).toHaveLength(1);
     });
 
     it('updates a changed phrase in place without recreating the phrase or spinner nodes, so the spinner animation never restarts', () => {
       const { host, render } = mount();
-      render(model({ activity: { phrase: 'Working' } }));
+      render(model({ activity: { phrase: 'Bootstrapping' } }));
       const phraseNode = host.querySelector('.sb-activity .phrase');
       const spinner = host.querySelector('.sb-activity .spin');
-      render(model({ activity: { phrase: 'Running reviewers' } }));
+      render(model({ activity: { phrase: 'Bootstrapping #40' } }));
       expect(host.querySelector('.sb-activity .phrase')).toBe(phraseNode);
       expect(host.querySelector('.sb-activity .spin')).toBe(spinner); // not recreated → CSS animation stays continuous
-      expect(phraseNode!.textContent).toBe('Running reviewers');
+      expect(phraseNode!.textContent).toBe('Bootstrapping #40');
     });
   });
 
@@ -404,9 +404,17 @@ describe('status bar (§22.3.1)', () => {
 
     it('coexists with the title and the activity — no element suppresses another', () => {
       const { host, render } = mount();
-      render(model({ title: { kind: 'user', text: 'Named work' }, activity: { phrase: 'Working' }, alert: blocked }));
+      render(model({ title: { kind: 'user', text: 'Named work' }, activity: { phrase: 'Bootstrapping #40' }, alert: blocked }));
       expect(titleEl(host)!.textContent).toContain('Named work');
-      expect(host.querySelector('.sb-activity')!.textContent).toContain('Working');
+      expect(host.querySelector('.sb-activity')!.textContent).toContain('Bootstrapping #40');
+      expect(alertEl(host).textContent).toContain('awaiting-human-pr-approval');
+    });
+
+    it('coexists with the title when the activity is idle — an empty activity region does not suppress a populated alert (the only reachable state during a §27 turn)', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named work' }, activity: null, alert: blocked }));
+      expect(titleEl(host)!.textContent).toContain('Named work');
+      expect(host.querySelector('.sb-activity')!.textContent).toBe('');
       expect(alertEl(host).textContent).toContain('awaiting-human-pr-approval');
     });
 
@@ -668,7 +676,7 @@ describe('status bar (§22.3.1)', () => {
       input.value = 'New name';
       press(input, 'Enter');
       // an ordinary background push (same repo, no new edit) lands while the save is still pending
-      render(model({ title: { kind: 'user', text: 'Old' }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'user', text: 'Old' }, activity: { phrase: 'Bootstrapping #12' } }));
       reject(new Error('EROFS'));
       await flush();
       expect(onError).toHaveBeenCalledTimes(1);
@@ -758,7 +766,7 @@ describe('status bar (§22.3.1)', () => {
       const onAlertActivate = vi.fn();
       const setTitle = vi.fn(() => Promise.resolve());
       const { host, render } = mount({ onAlertActivate, setTitle });
-      render(model({ title: { kind: 'user', text: 'Named' }, activity: { phrase: 'Working' }, alert: blocked }));
+      render(model({ title: { kind: 'user', text: 'Named' }, activity: { phrase: 'Bootstrapping #40' }, alert: blocked }));
       return { host, onAlertActivate, setTitle };
     };
     const railFrame = document.createElement('section');
@@ -771,7 +779,7 @@ describe('status bar (§22.3.1)', () => {
     mainFrame.appendChild(b.host);
 
     for (const p of [a, b]) {
-      expect(p.host.querySelector('.sb-activity')!.textContent).toContain('Working');
+      expect(p.host.querySelector('.sb-activity')!.textContent).toContain('Bootstrapping #40');
       alertBtn(p.host)!.click();
       expect(p.onAlertActivate).toHaveBeenCalledTimes(1);
       const input = edit(p.host);

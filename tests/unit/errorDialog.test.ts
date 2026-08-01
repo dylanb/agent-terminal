@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createErrorDialog, type ErrorDialogOptions } from '../../src/renderer/src/errorDialog';
 import { assertRendersFromHostDocument } from './relocatable';
 
-// Slice B (§26.9) — the blocking error alert raised when an async bootstrap fails (a pickup that could
+// Slice B (§27.10) — the blocking error alert raised when an async bootstrap fails (a pickup that could
 // not run: dirty tree, unresolvable base, conflicting branch). A placement-agnostic blocking dialog
 // (UI-STANDARDS §5): focus trap, role=dialog, focus move-in/restore. Unlike confirmDialog it carries no
 // destructive action — a single Dismiss acknowledges it.
@@ -29,7 +29,7 @@ afterEach(() => {
 const dialog = () => host.querySelector<HTMLElement>('.flow-modal');
 const dismissBtn = () => host.querySelector<HTMLButtonElement>('.flow-modal .dismiss');
 
-describe('error dialog (§26.9 bootstrap-failure alert)', () => {
+describe('error dialog (§27.10 bootstrap-failure alert)', () => {
   it('renders the reason message and a single Dismiss action', () => {
     createErrorDialog(host).render(opts({ message: 'could not resolve base branch' }));
     expect(host.textContent).toContain('could not resolve base branch');
@@ -64,6 +64,25 @@ describe('error dialog (§26.9 bootstrap-failure alert)', () => {
     dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(dialog()).toBeNull();
     expect(document.activeElement).toBe(opener);
+  });
+
+  it('strips display-control characters from the repo-authored title and message (CWE-117, §B.13e)', () => {
+    // Both fields are now first-time producers of repo-authored bytes: a cloned repo's in-repo v2 def can
+    // reach `flow:onBootstrapError` (the origin refusal that stopped it is gone), and the step id lands in
+    // the title. A U+202E (RTL override) must be neutralised at both sinks, exactly as the strip the
+    // status-bar and loop-status paths share, so the operator's recovery surface cannot be spoofed.
+    createErrorDialog(host).render({
+      title: 'Bootstrap failed ‮ step',
+      message: 'unsafe branch name ‮ rm -rf /',
+    });
+    const d = dialog()!;
+    const titleEl = host.querySelector(`#${d.getAttribute('aria-labelledby')}`)!;
+    const msgEl = host.querySelector(`#${d.getAttribute('aria-describedby')}`)!;
+    expect(titleEl.textContent).not.toContain('‮');
+    expect(msgEl.textContent).not.toContain('‮');
+    // The visible text survives — the char becomes a space, nothing legitimate is dropped.
+    expect(titleEl.textContent).toContain('Bootstrap failed');
+    expect(msgEl.textContent).toContain('rm -rf /');
   });
 
   it('render(null) closes an open dialog', () => {

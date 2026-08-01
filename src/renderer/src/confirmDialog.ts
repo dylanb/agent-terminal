@@ -15,7 +15,7 @@ export interface ConfirmDialogOptions {
   /** WAI-ARIA APG / UI-STANDARDS §5.2: `alertdialog` when the app raised this without the operator
    *  asking, `dialog` (the default) when they did. */
   role?: 'dialog' | 'alertdialog';
-  /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§26.9). Lets a
+  /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§27.10). Lets a
    *  caller react to a dismissal (e.g. roll the flow back); omit when a dismiss needs no action. */
   onCancel?: () => void;
 }
@@ -31,7 +31,7 @@ export interface ConfirmDialog {
 export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: () => void }): ConfirmDialog {
   // `pending` is non-null ONLY while a dialog is open and UNANSWERED, so a later render can tell an
   // open-and-displaced dialog (still pending) from an already-answered one (nulled), and never
-  // double-fires onCancel (§26.9). The shell's `confirm` path does not fire onDismiss, so an accept is not
+  // double-fires onCancel (§27.10). The shell's `confirm` path does not fire onDismiss, so an accept is not
   // mistaken for a dismissal.
   let pending: ConfirmDialogOptions | null = null;
   const shell = createModalShell(
@@ -49,7 +49,7 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         pending = null;
         return shell.render(null);
       }
-      // Replacing a still-open, unanswered dialog counts as declining it (§26.9): run its onCancel so a
+      // Replacing a still-open, unanswered dialog counts as declining it (§27.10): run its onCancel so a
       // rollback isn't dropped. shell.render(build) tears the old card down WITHOUT firing onDismiss, so this
       // is the only place the displaced dialog's cancellation is signalled.
       if (pending) pending.onCancel?.();

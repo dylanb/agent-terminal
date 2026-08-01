@@ -1,5 +1,5 @@
-// The §27 human-gate decision executor (§27.9/§27.13 / N5) — a SIBLING of the §26 `runGateDecision`: it must
-// never reach the §26 executor, write §26 loop state, or inject a §26 actor (AC8/§27.15).
+// The §27 human-gate decision executor (§27.9/§27.13 / N5): it writes app-owned loop state and resolves
+// gate refs from the flow's typed inputs (AC8/§27.15).
 
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd } from '../shared/audit';
@@ -17,7 +17,7 @@ import type {
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
- *  these only from the flow's typed inputs, never a §26 state.yaml (§27.15). */
+ *  these only from the flow's typed inputs (§27.15). */
 export interface AppGateRefs {
   pr: number | null;
   ticket: number | null;
@@ -46,7 +46,7 @@ export interface AppGateDecisionDeps {
    *  the still-open redo composer keeps the instruction for a retry. */
   deliverRedo(repoDir: string, step: string, turnKey: string, instruction: string): boolean;
   /** §27.9/AC6 — enter the polish stand-down for `step`: the orchestrator stops injecting and the operator
-   *  takes the keyboard. App-owned loop state only (never the §26 surface); persisted so it survives a relaunch.
+   *  takes the keyboard. App-owned loop state only; persisted so it survives a relaunch.
    *  Throws only when the loop area is unresolvable (a planted symlink) — the caller keeps that off the flow. */
   enterPolish(repoDir: string, step: string): void;
   /** §27.9/AC6 — end the polish stand-down. Approve is the one lever that clears it (best-effort; an absent
@@ -121,7 +121,7 @@ export async function runAppGateDecision(
     deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy'), 1);
     return false;
   }
-  // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only (never the §26 surface).
+  // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
   // and the operator can retry. One-way (no human input to lose), so the result is ignored by the caller.
   if (option === 'polish') {
@@ -135,10 +135,10 @@ export async function runAppGateDecision(
     deps.onViewChanged();
     return false;
   }
-  // impasse (§26-only) is never executed here.
+  // impasse is never executed here.
   if (option !== 'approve') return false;
 
-  // §26 D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
+  // D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
   // re-run the outward side-effect); a failed side-effect does not (§27.13 / AC3).
   const accepted: AppLoopRunState = { loop: run.loop, step: run.step, turnKey: run.turnKey, status: 'accepted' };
   try {

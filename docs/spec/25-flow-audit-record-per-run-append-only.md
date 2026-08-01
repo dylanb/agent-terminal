@@ -2,9 +2,9 @@
 
 ### 25.1 Goal & boundary (D-audit-1)
 
-Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the agent-loop status/iteration, and the commands the flow issued on the user's behalf.
+Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the loop status/iteration, and the commands the flow issued on the user's behalf.
 
-**Boundary:** auditing is **observe-only** and **best-effort**. It injects nothing, blocks nothing, and **never throws into the flow path** — it only records what the flow lifecycle and the TODO store already produce (Phase 1) and what the agent-loop bridge already mirrors (Phase 2). A failed audit write is logged and dropped; the flow proceeds unaffected (mirrors the §19.1 "never throws, degrade to null" discipline). **UI:** none this round — files only.
+**Boundary:** auditing is **observe-only** and **best-effort**. It injects nothing, blocks nothing, and **never throws into the flow path** — it only records what the flow lifecycle and the TODO store already produce (Phase 1) and what the surviving loop engine's run state already supplies (Phase 2). A failed audit write is logged and dropped; the flow proceeds unaffected (mirrors the §19.1 "never throws, degrade to null" discipline). **UI:** none this round — files only.
 
 ### 25.2 Storage layout (D-audit-2)
 
@@ -98,7 +98,7 @@ Every event carries an ISO-8601 UTC `ts`.
 - `todo.text` — `{ id, text }` after an edit.
 - `todo.deleted` — `{ id }`.
 
-**Phase 2 — loop integration:** `input.resolved` `{ name, value }` (one per resolved step input), `ticket.assoc` `{ ticket }` (a `github-ticket` input resolving to a positive integer), `pr.assoc` `{ pr }` (from the `state.yaml` mirror), `loop.status` `{ from, to }` and `loop.iteration` `{ n }` (diffed from the mirror on each observation; the first observation records the entry status with `from` empty), `command` `{ source, cmd, exit }` (a flow-injected bootstrap correlated with its OSC-133 command span), `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`, taken on each loop status change).
+**Phase 2 — loop integration:** `input.resolved` `{ name, value }` (one per resolved step input), `ticket.assoc` `{ ticket }` (a `github-ticket` input resolving to a positive integer), `pr.assoc` `{ pr }` (from the loop engine's run state), `loop.status` `{ from, to }` and `loop.iteration` `{ n }` (diffed from the loop engine's run state on each observation; the first observation records the entry status with `from` empty), `command` `{ source, cmd, exit }` (a flow-injected bootstrap correlated with its OSC-133 command span), `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`, taken on each loop status change).
 
 ### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
 
@@ -107,9 +107,9 @@ Per the `src/shared/` rule (CLAUDE.md), the meanings main, the tests, and a futu
 ### 25.7 Constraints & accepted limitations
 
 - **Never throws into the flow path.** A failed audit write is logged and dropped; the flow is never affected.
-- **Untrusted strings.** TODO text and the repo/flow names are escaped on write (YAML quoting) and path segments are sanitized (§25.2). Phase 2's `.agent-loop/` snapshot performs the §20.2 realpath check so a symlink cannot escape the repo, and sanitizes the untrusted `state.yaml` `status` (CWE-117, per §16.3 / `loopNotifier`).
+- **Untrusted strings.** TODO text and the repo/flow names are escaped on write (YAML quoting) and path segments are sanitized (§25.2). Phase 2's `.agent-loop/` snapshot performs the §20.2 realpath check so a symlink cannot escape the repo (CWE-117).
 - **Basename collision** across same-named repos is **accepted** — the run files co-mingle in one basename directory; the per-repo current-run pointer is keyed by the **full** repo path so each repo still tracks its own open run.
-- **Explicit ID sourcing only** (Phase 2) — ticket/PR numbers come from resolved inputs and `state.yaml`, never from branch-name or PR-body scraping.
+- **Explicit ID sourcing only** (Phase 2) — ticket/PR numbers come from resolved inputs only, never from branch-name or PR-body scraping, nor from any external state mirror.
 - **Retention:** keep all, no pruning.
 
 ### 25.8 Build — tracer-bullet phases
@@ -118,7 +118,7 @@ Per the CLAUDE.md tracer-bullet rule, each slice is fired by an **existing UI co
 
 - **Phase 0 — Spec (this section).** The contract the code implements.
 - **Phase 1 — Lifecycle + TODO timeline.** The writer core plus every event the flow lifecycle and TODO store already produce (`flow.started` / `flow.status` / `step.entered` / `flow.completed` + `todo.*`). **Fire:** Start, then Advance/Restart/Undo; add/move/edit/delete a TODO while a flow is in progress. **Land:** the per-run file appears with `flow.started`; the lifecycle events accrue with timestamps; a new Start opens a new file; go-back after `done` appends to the same one; `todo.*` events accrue while a flow is active, nothing when none is. **e2e:** drive Start → Advance → done → Undo (same file), then Start again (new file); within an active flow, manipulate a TODO and assert its events.
-- **Phase 2 — Loop integration + timeline reconstruction.** Everything sourced from the agent-loop bridge (tickets, PRs, inputs, loop status/iteration, injected commands, output snapshots) plus the timeline reconstructor that proves the whole record is replayable. **Fire:** enter a loop step (the `state.yaml` mirror is observed), resolve a `github-ticket` input (the bootstrap injects `agent-loop pickup <input>`), and let the loop's `state.yaml` change. **Land:** `input.resolved` / `ticket.assoc` on resolution; `loop.status` / `loop.iteration` / `pr.assoc` + an `outputs.snapshot` on each status change; a `command` event once the injected bootstrap runs; the reconstructor folds a full run into its ordered timeline + final state. **e2e:** drive a loop step through `state.yaml` edits and assert the loop/input/ticket/PR/snapshot events on disk; the bootstrap-`command` correlation (OSC-133, §15.5) is proven through the real shadow with scripted bytes at the integration layer, with the full-PTY e2e covering it where shell integration is available.
+- **Phase 2 — Loop integration + timeline reconstruction.** Everything sourced from the loop engine's run state (tickets, PRs, inputs, loop status/iteration, injected commands, output snapshots) plus the timeline reconstructor that proves the whole record is replayable. **Fire:** enter a loop step (the `state.yaml` mirror is observed), resolve a `github-ticket` input (the bootstrap injects `agent-loop pickup <input>`), and let the loop's `state.yaml` change. **Land:** `input.resolved` / `ticket.assoc` on resolution; `loop.status` / `loop.iteration` / `pr.assoc` + an `outputs.snapshot` on each status change; a `command` event once the injected bootstrap runs; the reconstructor folds a full run into its ordered timeline + final state. **e2e:** drive a loop step through `state.yaml` edits and assert the loop/input/ticket/PR/snapshot events on disk; the bootstrap-`command` correlation (OSC-133, §15.5) is proven through the real shadow with scripted bytes at the integration layer, with the full-PTY e2e covering it where shell integration is available.
 
 ---
 

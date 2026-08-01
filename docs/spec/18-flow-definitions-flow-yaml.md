@@ -5,15 +5,14 @@
 - A flow definition is a **declarative YAML file** the app reads and watches. The **instantiated** definition for a run lives at `<worktree>/.agent-terminal/flow.yaml`; progression at `<worktree>/.agent-terminal/flow-state.yaml` (§19.1).
 - **Library:** definitions are chosen from a merged library — **global** `~/.config/agent-terminal/flows/*.yaml` ∪ **per-repo** `<repo>/.agent-terminal/flows/*.yaml`; **repo entries win on name clash** (`flow:list`).
 - **Global directory = the per-user home `~/.agent-terminal/` (§23.4).** The "global" flow definition/template lookup resolves relative to the user's home (F = `$HOME`, else the OS home) — a fixed per-process anchor that does not track later cwd changes, **independent of the launch root L**. The local-first repo tier (`<repo>/.agent-terminal/flow.yaml`) already covers the repo the instance launched at; the global tier is the per-user fallback for a repo that has none, so it must never be re-anchored to L (which would shadow the user's `~/.agent-terminal/flow.yaml` rather than fall back to it).
-- **Install-examples action — a user-invoked seed across a set of destinations (v2.134, was flow-home-only).** A Settings affordance seeds what the bundle carries into the places their readers discover them from. There are five **destinations**, and a destination is the unit the user consents to, the unit a conflict is reported under, and the unit a result is grouped by: the **flow home** (above); the app-owned **V2 loop-definition location** (§27.15); the legacy engine's **loop-config location** (§24.2.3); and the two directories **Claude Code** — a separate process — loads **skills** and **slash commands** from. Nothing the app reads out of its own bundle makes a persona or a command discoverable, so the files must physically land there.
-  - **Global, never override-aware.** The loops destination is the **user-level** loops directory, not whatever `resolveLoopDir` would answer for the repo the app is pointed at. A repo carrying an override has deliberately taken ownership of what that override contains; reconciling it against a newly-seeded global definition is the user's business (§24.2.3 resolution order, unchanged). An install that landed inside one repo would leave every other repo — and the packaged app opened against none — unseeded.
-  - **Skills fan in.** A LoopDef names its personas by bare skill name and Claude Code discovers a skill only as `<skills root>/<skill name>/`, so each bundled skill is written **twice**: once under its own loop's directory at the loop-config destination (the §26.5 layout the engine reads), and once under the shared skills root. It is a copy-out, not a move.
+- **Install-examples action — a user-invoked seed across a set of destinations (v2.134, was flow-home-only).** A Settings affordance seeds what the bundle carries into the places their readers discover them from. There are three **destinations**, and a destination is the unit the user consents to, the unit a conflict is reported under, and the unit a result is grouped by: the **flow home** (above); the app-owned **V2 loop-definition location** (§27.15); and the directory **Claude Code** — a separate process — loads **slash commands** from. Nothing the app reads out of its own bundle makes a command discoverable, so the files must physically land there.
+  - **Global, never override-aware.** The V2 loop-definition destination is the **user-level** loops-v2 directory, not whatever `resolveLoopDefV2` would answer for the repo the app is pointed at. A repo carrying an override has deliberately taken ownership of what that override contains; reconciling it against a newly-seeded global definition is the user's business (§24.2.3 resolution order, unchanged). An install that landed inside one repo would leave every other repo — and the packaged app opened against none — unseeded.
   - **Non-destructive, per destination.** A file that is absent is created; a file present and byte-identical is skipped; a file present and differing is replaced **only** in a destination the user consented to. Consent in one destination never replaces files in another. Enumeration is tree-driven over the bundle, so a file added to the bundle later is seeded with no code change.
   - **Consent names the exact preview.** A successful preview returns an opaque `previewId`; apply carries that identity back with the per-destination decisions. Main consumes only the matching one-use authorization, so an older confirmation cannot act on a snapshot created by a newer preview.
   - **All-or-nothing is bounded to a pre-write check.** **Before the first write**, every destination is checked: its bundle tree is present (an absent tree is a mispackaged build, and is refused — never enumerated as "no files" and reported as a successful install of nothing), every planned file resolves inside its destination (the link-following refusal, CWE-59), and its container is writable. If any check fails, nothing is written anywhere. A failure appearing only *after* writing has begun is **not** rolled back: the result then names every file the action created or overwrote before failing, and nothing outside that list differs from its pre-action bytes. That is a reporting guarantee, not a transactional one.
   - **The bundle is copied as bytes.** A bundled asset need not be UTF-8 text; it is written byte-for-byte, so a binary asset is neither corrupted on the way out nor left permanently mismatched against the byte-compare that classifies it.
-  - **A destination root the USER has symlinked is followed, not refused.** The five destination roots are derived by the app (the home dir, `CLAUDE_CONFIG_DIR`) and never read out of untrusted content, so a link the user placed at one — a dotfiles repo, a stow-style setup — is their own configuration. The tools that *read* those directories follow it, so refusing to write through it seeds nothing the reader will load, and grants no protection: whatever could plant the link can already write the directory. The write is confined to the **resolved** root, and a link *inside* it that escapes is still refused (CWE-22/59).
-  - **The loops container confers execution authority.** `loopExecAllowed` (§26.6) admits an `exec` action only from an `operator-config`-origin def, which is exactly a def read from the user-level loops directory. Seeding there is what makes the bundled `plan-loop`'s `exec` gate runnable, so the container guard on that destination protects an execution-authority boundary (CWE-829), not merely a config directory.
+  - **A destination root the USER has symlinked is followed, not refused.** The three destination roots are derived by the app (the home dir, `CLAUDE_CONFIG_DIR`) and never read out of untrusted content, so a link the user placed at one — a dotfiles repo, a stow-style setup — is their own configuration. The tools that *read* those directories follow it, so refusing to write through it seeds nothing the reader will load, and grants no protection: whatever could plant the link can already write the directory. The write is confined to the **resolved** root, and a link *inside* it that escapes is still refused (CWE-22/59).
+  - **The loops container confers no execution authority.** The user-level V2 loop-definition container holds def content the app seeds and reads and carries **no** execution-authority distinction — `loopExecAllowed` and the §27 bootstrap origin gate are both deleted, the schema's `ExecSideEffect` is unshipped, and shipping it requires deciding trust afresh (naming v2.129). The container guard is justified by what it still does — stopping a non-directory destination `<name>` (a symlink, dangling symlink or plain file the sweep would otherwise write a def through) or a non-writable container (CWE-59), while a symlink the **user** placed at the tier entry is followed as §18.1 policy, not refused — rather than by a privilege boundary.
   - The action **never** deletes, and never edits a `.gitignore` (§19.1). It is the explicit, user-invoked exemption to the no-silent-rewrite rule: it writes only where the user asked, and asks before replacing a file it did not create.
 
 ```mermaid
@@ -39,7 +38,6 @@ flowchart TD
 
   subgraph BUNDLE["Bundle (read-only)"]
     BF["example/flow"]
-    BL["example/loops/&lt;loop&gt;"]
     BV["example/loops-v2/&lt;loop&gt;"]
     BC["example/commands"]
   end
@@ -47,16 +45,12 @@ flowchart TD
   subgraph DEST["Destinations (write targets)"]
     DF["flow — ~/.agent-terminal &#40;§23.4&#41;"]
     DV["appLoops — user-config loops-v2 dir read by V2 resolver &#40;§27.15&#41;"]
-    DL["loops — user-config loops dir &#40;§24.2.3, never override-aware&#41;"]
-    DS["skills — user-config skills dir &#40;Claude Code&#41;"]
     DC["commands — user-config commands dir &#40;Claude Code&#41;"]
   end
 
   WRITE --> DEST
   BF -->|"flow.yaml + .md templates &#40;§18.6&#41;"| DF
-  BL -->|"whole tree"| DL
   BV -->|"whole tree"| DV
-  BL -->|"skills/ fan in — written twice"| DS
   BC -->|"whole tree"| DC
 ```
 
@@ -91,16 +85,16 @@ draft PR; the flow therefore carries no legacy `bootstrap: pickup` field and no 
 ### 18.2 Steps & kinds (D3/D7/D30)
 
 - Every step is **typed**: `loop` (runs an agent-loop), `manual` (a human produces an artifact), `action` (a declared side-effect). **All kinds end in a gate.**
-- **`loop`** binds a `loop:` LoopDef and may declare `bootstrap:` (§18.3) and `loop_namespace:` — the closed set `legacy` (the §26 engine, the default when the field is absent) and `app` (the §27 engine, §27.15). **Only loop steps** can be **sent back for more work** (request-changes — §19.4/D7); manual/action steps are done/not-done.
+- **`loop`** binds a `loop:` LoopDef and may declare `bootstrap:` (§18.3) and `loop_namespace:` — the closed set `legacy` and `app`. **Absence binds `app`, the §27 engine (§27.15).** `legacy` is a recognized value that names no surviving engine: a step that declares it fails to load with a reason naming the retired namespace, while the rest of the flow still advances, reverts, undoes and terminates around it. **Only loop steps** can be **sent back for more work** (request-changes — §19.4/D7); manual/action steps are done/not-done.
 - **`manual`** may bind `skill:`; the human decides when done.
 - **`todo_template:`** (§18.6) may be bound by **any** step kind — the shipped flow binds one on each of its three `loop` steps.
 - **`action`** declares a `command:` string run in the hosted terminal via the §9.3 path (subject to the running-process refusal of §19.3); e.g. `gh pr ready "$PR"`. No built-in typed-action catalog in v1.
 
 ### 18.3 Bootstrap is a per-step entry action (D15)
 
-- For a legacy-bound (§26) loop step, `bootstrap: pickup` runs `agent-loop pickup <input>` **on entry to the step that declares it** — which may be **any** step, including the first. A flow whose first step needs a PR bootstraps at the very start; a flow opening with a `manual` step does not. Bootstrap is therefore **not intrinsically a "flow start" action**.
-- An app-bound (§27) loop step does not use the flow-level `bootstrap` field. Its selected V2 loop definition owns any `pickup` recipe; the main-process §27 executor runs that recipe on entry, subject to the definition-origin gate and its own conflict policy (§27.8/§27.10).
-- Legacy worked example: step 1 `manual` groom-ticket (no PR yet) → on entering step 2 `loop plan-loop` with `bootstrap: pickup`, the app runs `agent-loop pickup <ticket>` to create the PR, then `agent-loop <pr> --loop plan-loop`; output may be a single PR (+ issues) or an epic of N PRs (§23.2).
+- `bootstrap: pickup` runs **on entry to the step that declares it** — which may be **any** step, including the first. A flow whose first step needs a PR bootstraps at the very start; a flow opening with a `manual` step does not. Bootstrap is therefore **not intrinsically a "flow start" action**.
+- A §27-bound loop step **honours the flow-level `bootstrap` field**: it is satisfied by the step's bound V2 loop definition's own `pickup` contract, which the main-process §27 executor runs on entry, subject to its own conflict policy (§27.10). Where a step declares `bootstrap: pickup` and the bound definition carries no `pickup` contract, the step does not run — the operator is told why, with a route out. Def tiers carry no trust distinction, so no origin gate guards this (§27.8).
+- Worked example: step 1 `manual` groom-ticket (no PR yet) → on entering step 2 `loop plan-loop` with `bootstrap: pickup`, the bound `plan-loop` definition's own `pickup` contract creates the branch and the draft PR (§27.10).
 
 ### 18.4 Typed step inputs (D29/D34)
 

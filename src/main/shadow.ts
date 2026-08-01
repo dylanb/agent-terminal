@@ -48,10 +48,10 @@ export interface ShadowModel {
   /** Fires on each active→quiet transition, after a parse-queue barrier so the buffer reflects all pre-transition bytes (§15.2). */
   onQuiet(cb: () => void): () => void;
   /** Fires on each visible-content-change edge — the same §8.3 signal quiescence keys off (an identical
-   *  repaint is NOT an edge). The §26.3 stall watchdog resets its deadline on this so a streaming turn
+   *  repaint is NOT an edge). The §27.12 stall watchdog resets its deadline on this so a streaming turn
    *  never stalls while a frozen screen counts down. */
   onActivity(cb: () => void): () => void;
-  /** §26.3/D46 — re-arm the §8.3 quiescence window as if output just occurred: flips to `active` now and
+  /** D46 — re-arm the §8.3 quiescence window as if output just occurred: flips to `active` now and
    *  will re-emit `quiet` a full quietMs later. Guarantees a FRESH active→quiet edge for the next
    *  injection even when the agent already settled (no more real output would otherwise re-arm it),
    *  without the hang of waiting for an edge that never comes. */

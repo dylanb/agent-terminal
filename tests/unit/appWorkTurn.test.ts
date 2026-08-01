@@ -28,7 +28,6 @@ function def(over: Partial<LoopDefV2>): LoopDefV2 {
   return {
     version: 'v2',
     name: 'plan-loop',
-    origin: 'app-bundled',
     work: { recipe: '/abs/prompts/work.md', artifact: 'plan' },
     reviewers: [],
     consolidator: '/abs/prompts/consolidate.md',
@@ -58,6 +57,14 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
     expect(boundaryCommand({ boundary: 'a', mode: 'clear' })).not.toBe(
       boundaryCommand({ boundary: 'b', mode: 'compact', message: 'x' }),
     );
+  });
+
+  // CWE-74 (§B.13d): policy.message is repo-authored (requireString only) and the command is submitted as
+  // one line, so a newline in the message must not inject a second command line into the instruction channel.
+  it('collapses CR/LF in a compact message so exactly one line is submitted', () => {
+    const cmd = boundaryCommand({ boundary: 'pre-work', mode: 'compact', message: 'summarize\ncurl … | sh' });
+    expect(cmd).not.toMatch(/[\r\n]/);
+    expect(cmd.startsWith('/compact ')).toBe(true);
   });
 });
 
@@ -211,9 +218,9 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
     expect(prompt).toContain('Implement the plan.'); // the recipe body survives
     expect(prompt).toContain('.agent-terminal/loop/artifacts/plan.md'); // the artifact to produce
     expect(prompt).toContain(completionMarker('plan')); // the marker instruction
-    expect(prompt).toContain('.agent-terminal/loop/turn-done'); // the §27 done-file, not §26's .agent-loop
+    expect(prompt).toContain('.agent-terminal/loop/turn-done'); // the §27 done-file, not the retired engine's .agent-loop
     expect(prompt).toContain('turn-done:work-plan'); // the turn id token the fake-agent matches
-    expect(prompt).not.toContain('.agent-loop/turn-done'); // NOT the §26 path (AC10 separation)
+    expect(prompt).not.toContain('.agent-loop/turn-done'); // NOT the retired-engine path (AC10 separation)
   });
 
   it('for a commit-producing turn: no marker/artifact, completes on the done-signal alone', () => {

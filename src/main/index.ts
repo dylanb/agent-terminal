@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -15,7 +15,7 @@ import {
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
-import { createInjector } from './inject';
+import { createInjector, DEFER_DEADLINE_MS } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
@@ -35,8 +35,6 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidFlowSetTitle,
-  isValidFlowGateDecision,
-  isValidFlowResolveBootstrapConflict,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -71,38 +69,18 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, legacyLoopNameForStep, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
-import { createFlowEntryActions } from './flowEntryActions';
-import { planStepResume } from './loopRebind';
-import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
+import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
+import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding';
+import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, artifactPath, loopExecAllowed, type LoopDef, type PickupContract } from './loopDef';
-import { runPickup, createRealPickupDeps, decidePickupAction } from './loopPickup';
-import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, hostedAgentPresent, type TurnRunner } from './loopOrchestrator';
+import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
-import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
-import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
-import { findingSignature, nextImpasse } from './findingSignature';
-import { readSessionTokens, sessionLogDir } from './costMeter';
-import { createFlowStateStore } from './flowState';
-import { createRealCiChecks } from './ciChecks';
-import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
-import { prunablePersonas, recordCleanPersonas } from './personaSkip';
-import { decideGateOutcome, shouldAdvanceFlowOnGate, type GateOption } from './gateActions';
-import { executeGateOutcome } from './gateExecutor';
-import { createRealGateGitHub } from './gateGithub';
-import { createRealGateExec } from './gateExec';
-import { writeHumanNote } from './humanNotes';
-import { readEpicPlan } from './epicPlan';
-import { readTurnDone, clearTurnDone, watchTurnDone } from './turnDoneFile';
-import { writeLoopState } from './loopStateWriter';
-import { readLoopExtension } from './loopStateReader';
-import { canResumeRepo, currentTurnByArtifacts, decideResume, shouldReconstructErrorTurn } from './loopResume';
-import type { FlowStepDef } from './flow';
+import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
@@ -130,14 +108,13 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { probeChainedInput } from './chainedInputProbe';
-import { resolveExampleLoopsV2Dir } from './exampleAssets';
-import { userConfigLoopsV2Dir } from './userConfig';
+import { resolveAppLoopDefTiers } from './appLoopDefTiers';
+import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import type { CliInstallResult } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
   resolveAppGateRefs,
-  toAppLoopBootstrapSpec,
   type AppLoopBootstrapCoordinator,
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
@@ -211,8 +188,8 @@ async function createWindow(): Promise<void> {
   // agent flipped active/quiet) and the strip re-pulls flow:state. `agentActivity` holds the latest
   // §8.3 activity so flow:state can fold it into the derived view without re-deriving it.
   let agentActivity: AgentState = 'quiet';
-  // §26.2/§26.3 — fired on each active→quiet flip so the loop orchestrator can inject a deferred/retry
-  // turn the moment the instance is injectable. Assigned once the runner exists (below); a no-op until.
+  // §27.2/§27.3 — fired on each active→quiet flip so the app-loop engine can inject a deferred/retry
+  // turn the moment the instance is injectable. Assigned once the engine exists (below); a no-op until.
   let notifyInjectable: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
@@ -225,7 +202,7 @@ async function createWindow(): Promise<void> {
       agentActivity = status.agentState;
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
-      if (status.agentState === 'quiet') notifyInjectable(); // §26.2: the instance is now injectable
+      if (status.agentState === 'quiet') notifyInjectable(); // §27.2: the instance is now injectable
     },
   });
 
@@ -236,7 +213,7 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
-  // §26.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
+  // §27.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
@@ -271,13 +248,6 @@ async function createWindow(): Promise<void> {
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
     void warmBase();
-    // §26.11 / §26 D42a — resume/reconstruct the run in the repo the operator just entered, not only the
-    // launch root: cd-ing into a repo whose run is stranded in `error` (or mid-work) must reconstruct its
-    // turn so the loop panel's Retry / mark-turn-complete act on it. Keyed to `repoKey` — the same identity
-    // the flow + the recovery handlers use — so the reconstructed activeTurn.repoDir matches. Idempotent
-    // (guarded on activeTurn/resumedRepos); the error path injects nothing, and a mid-work drive that finds
-    // no hosted agent safe-stops (§26.2) rather than leaking into a bare shell.
-    resumeLoop(repoKey);
   });
   // Drops echoed self-injected input from re-capture (§16.5).
   // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
@@ -328,159 +298,26 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
-  // §26.3/§26.4 — the in-app turn descriptor the runner's domain ports read. A turn is the `work` actor
-  // (produces `plan.md`), the `reviewers` fan-out (produces every roster persona's
-  // `reviews/<iter>/<persona>.json`), or the `consolidate` actor (produces `reviews/<iter>/consolidated.json`
-  // with a verdict); `kind` selects the prompt recipe and the artifact-confirmed check.
-  type ActiveTurn =
-    | { kind: 'work'; repoDir: string; loopName: string; phase: string; turnKey: string }
-    | { kind: 'reviewers'; repoDir: string; loopName: string; phase: string; turnKey: string; personas: string[]; iteration: number }
-    | { kind: 'consolidate'; repoDir: string; loopName: string; phase: string; turnKey: string; iteration: number };
-  let activeTurn: ActiveTurn | null = null;
-  // §26 activity readout — an in-flight bootstrap (before state.yaml exists), and whether the current
-  // turn's PROMPT has been injected yet (deferred → "waiting", injected → the turn phrase). Both feed the
-  // status bar's activity via deriveLoopActivity; neither is authority, only display.
+  // §27 activity readout — an in-flight bootstrap (before the app-loop run state exists) feeds the status
+  // bar's activity via deriveLoopActivity; not authority, only display. Written by the §27 bootstrap
+  // coordinator and cleared when the bootstrap resolves.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
-  let turnPromptInjected = false;
-  let turnTimer: ReturnType<typeof setTimeout> | null = null;
-  let unwatchTurnDone: (() => void) | null = null;
-  let turnRunner: TurnRunner;
-  // §26.3/D47a(b) — whether a turn's expected artifact exists and parses. Standalone (not just the runner's
-  // dep) so the §26.3/D48 error-recovery "accept" path can gate on the SAME check the runner uses.
-  const artifactPresentFor = (turn: ActiveTurn): boolean => {
-    if (turn.kind === 'reviewers') return allReviewsPresent(turn.repoDir, turn.iteration, turn.personas);
-    if (turn.kind === 'consolidate') return consolidatedVerdict(turn.repoDir, turn.iteration) !== null;
-    // §26.3/D47a — the WORK turn's completion artifact comes from the loop (`def.workArtifact`), the SAME
-    // definition the injected instruction names, so the runner's gate and the agent's instruction can't
-    // desync. "" (impl-loop: work produces code, not a file) → no file gate; completion is the turn-done
-    // file alone (the runner still requires onDoneSignal). Non-empty (plan-loop) → the file must be present.
-    const rel = parseLoopDef(turn.repoDir, turn.loopName)?.workArtifact ?? '';
-    if (rel === '') return true;
-    try {
-      return statSync(path.join(turn.repoDir, rel)).size > 0;
-    } catch {
-      return false;
-    }
-  };
-  turnRunner = createTurnRunner({
-    compose: () => {
-      if (!activeTurn) return null;
-      if (activeTurn.kind === 'reviewers') {
-        return composeSpawnReviewersPrompt({
-          phase: activeTurn.phase,
-          iteration: activeTurn.iteration,
-          personas: activeTurn.personas,
-          turnKey: activeTurn.turnKey,
-        });
-      }
-      if (activeTurn.kind === 'consolidate') {
-        return composeConsolidatePrompt({
-          repoDir: activeTurn.repoDir,
-          loopName: activeTurn.loopName,
-          phase: activeTurn.phase,
-          iteration: activeTurn.iteration,
-          turnKey: activeTurn.turnKey,
-          // §26.5 — v1 omits the rising severity-floor ladder (severity_floor_track read, not enforced),
-          // so the clean policy is "keep-nothing → clean" and the floor is `minor` (defers nothing).
-          tokens: {
-            CLEAN_POLICY: 'Emit verdict "clean" only when findings_kept is empty after triage; otherwise "needs-work".',
-            SEVERITY_FLOOR: 'minor',
-          },
-        });
-      }
-      const s = parseAgentLoopState(activeTurn.repoDir);
-      return composeWorkPrompt({
-        repoDir: activeTurn.repoDir,
-        loopName: activeTurn.loopName,
-        phase: activeTurn.phase,
-        turnKey: activeTurn.turnKey,
-        // §26.3/D47a — the same `def.workArtifact` the runner's gate uses (artifactPresentFor), so the
-        // injected "verify before done" instruction and the completion check name the same file (or none).
-        workArtifact: parseLoopDef(activeTurn.repoDir, activeTurn.loopName)?.workArtifact ?? '',
-        tokens: {
-          ITERATION: String(s?.iteration ?? 1),
-          PR_NUMBER: s?.pr != null ? String(s.pr) : '',
-          HEAD_REF: s?.branch ?? '',
-          PLAN_LINE_THRESHOLD: '1000',
-        },
-      });
-    },
-    inject: (prompt, opts) => {
-      // §26.3/D46 — clearing the prior turn's done-signal any earlier than the next turn's PROMPT inject
-      // would drop a completion that arrived during the transition.
-      if (!opts?.preamble && activeTurn) {
-        clearTurnDone(activeTurn.repoDir);
-        // §26 activity — the turn prompt landing flips the strip readout from "Waiting for the agent" to
-        // the turn phrase (the preamble keeps the wait phrase; it is not the turn working yet).
-        turnPromptInjected = true;
-        pushFlowChanged();
-      }
-      inject(prompt, { submit: true });
-    },
-    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
-    artifactPresent: () => (activeTurn ? artifactPresentFor(activeTurn) : false),
-    armTimer: () => {
-      if (turnTimer) clearTimeout(turnTimer); // self-clearing: a re-arm (each activity edge) replaces, never leaks
-      turnTimer = setTimeout(() => turnRunner.onStall(), config.stallTimeoutMs);
-    },
-    cancelTimer: () => {
-      if (turnTimer) clearTimeout(turnTimer);
-      turnTimer = null;
-    },
-    writeError: (reason) => {
-      if (!activeTurn) return;
-      const s = parseAgentLoopState(activeTurn.repoDir);
-      writeLoopState(activeTurn.repoDir, {
-        status: 'error',
-        iteration: s?.iteration ?? 1,
-        pr: s?.pr ?? null,
-        branch: s?.branch ?? null,
-        boundLoop: activeTurn.loopName,
-        linkedIssues: s?.linkedIssues ?? [],
-        errorReason: reason,
-      });
-      audit.recordCommand(activeTurn.repoDir, 'turn', `turn ${activeTurn.turnKey} failed: ${reason}`, 1);
-      pushFlowChanged();
-      // §26.3/D48 — a live turn-runner failure is never silent: raise the blocking error dialog with the
-      // reason (the panel's error pill + Retry stay; the dialog only informs). Only fires on a fresh
-      // transition into error — resume/reconstruction (§26.11) rebuilds activeTurn without driving writeError.
-      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason });
-    },
-    onComplete: (turnKey) => {
-      const finished = activeTurn;
-      if (finished) audit.recordCommand(finished.repoDir, 'turn', `turn ${turnKey} complete`, 0);
-      pushFlowChanged();
-      chainAfter(finished);
-    },
-    // §26.3/D46 — re-arm the shadow quiescence window so a chained turn waits for a fresh active→quiet
-    // edge before injecting, rather than racing the still-streaming agent on the stale post-done-signal quiet.
-    noteSettle: () => shadow.noteSettle(),
-  });
-  // §26.4/§26.6 — the turn→next-turn chain a completed turn advances into. One definition shared by the
-  // automatic completion path (onComplete) and the §26.3/D48 recovery "accept" path (markTurnComplete),
-  // so a human-accepted turn advances through the exact same steps a signalled one would.
-  const chainAfter = (finished: ActiveTurn | null): void => {
-    // §26.4 — the work turn chains into the reviewer fan-out (same loop, same iteration).
-    if (finished?.kind === 'work') startReviewersTurn(finished.repoDir, finished.loopName, finished.phase);
-    // §26.3/D46 — the fan-out chains into the consolidate turn, /clear-ing the instance first so the
-    // consolidator merges in a fresh main-instance context (the work-agent's context cannot bias it).
-    else if (finished?.kind === 'reviewers') {
-      startConsolidateTurn(finished.repoDir, finished.loopName, finished.phase, finished.iteration, CLEAR_PREAMBLE);
-    }
-    // §26.6 — the consolidate verdict decides the branch (clean STOPs at the gate, needs-work re-iterates).
-    else if (finished?.kind === 'consolidate') advanceAfterConsolidate(finished);
-  };
-  // §27.15 — the §27 (app-namespace) work-turn engine, driving the SAME hosted instance as the §26 runner
-  // through its own domain ports. Only one turn is ever in flight (one instance), so the shadow signals fan
-  // out to BOTH runners below; the idle one no-ops (each guards on its own in-flight state). The §27 engine
-  // keeps its run state and done-file in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10).
+  // §B.5 item 6 / §B.13a — the main-side carrier for a transient notice produced AFTER a transition reply was
+  // already sent (the coordinator's asynchronous §19.3 busy-shell refusal). It rides the next `flow:state`
+  // response for the repo — consumed one-shot when that view is built — because there is no delivery-ack
+  // channel to hang it on. The strip then holds it across passive re-pulls and clears it on the next
+  // transition (§B.10). Keyed by repoKey; the receiver never re-derives the target (one payload = one repo).
+  const pendingNotice = new Map<string, string>();
+  // §27.15 — the §27 (app-namespace) work-turn engine, driving the hosted instance through its own domain
+  // ports. Only one turn is ever in flight (one instance). It keeps its run state and done-file in the §27
+  // loop area (AC10).
   const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
   let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchAppTurnDone: (() => void) | null = null;
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => ({
-    tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+    tiers: resolveAppLoopDefTiers(iconLoc),
     repoDir,
   });
   let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
@@ -539,7 +376,7 @@ async function createWindow(): Promise<void> {
     terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
   });
   // Watch the §27 done-file (in the §27 loop area) for the active §27 turn, key-matched so a prior turn's
-  // latched file cannot complete a different one — the §27 analogue of armTurnDoneWatch (§27.12).
+  // latched file cannot complete a different one (§27.12).
   const armAppTurnDoneWatch = (repoDir: string): void => {
     unwatchAppTurnDone?.();
     unwatchAppTurnDone = watchTurnDone(
@@ -550,307 +387,17 @@ async function createWindow(): Promise<void> {
       appTurnDoneSubdir,
     );
   };
-  // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
-  // assigned once the runners exist so the shadow's onStatus (built earlier) can fire it forward. Fans out
-  // to both engines; the idle one no-ops (§27.15 — one instance, one turn in flight).
+  // The §8.3 active→quiet flip is the engine's "instance is now injectable" signal (§27.2) — assigned once
+  // the engine exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => {
-    turnRunner.onInjectable();
     appEngine.onInjectable();
   };
-  // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§26.3): a streaming turn
+  // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§27.12): a streaming turn
   // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
-  // Inert unless a turn is in flight (each runner guards it), so this is idle-cheap outside a loop.
+  // Inert unless a turn is in flight (the engine guards it), so this is idle-cheap outside a loop.
   shadow.onActivity(() => {
-    turnRunner.noteActivity();
     appEngine.noteActivity();
   });
-  // §26.3/D47a — the turn-done file is the sole completion signal, so EVERY turn-starter must call this,
-  // not just the work turn: a chain entered mid-run (§26.11 resume into reviewers/consolidate) would
-  // otherwise have no completion trigger at all.
-  const armTurnDoneWatch = (repoDir: string): void => {
-    unwatchTurnDone?.();
-    unwatchTurnDone = watchTurnDone(repoDir, () => {
-      // §26.3/D46 — key-match: a prior turn's latched file must not complete a different in-flight turn.
-      if (readTurnDone(repoDir) === activeTurn?.turnKey) turnRunner.onDoneSignal();
-    });
-  };
-  const startWorkTurn = (repoDir: string, loopName: string, phase: string, preamble?: string): void => {
-    activeTurn = { kind: 'work', repoDir, loopName, phase, turnKey: `work-${phase}` };
-    armTurnDoneWatch(repoDir);
-    turnPromptInjected = false; // §26 activity — a new turn starts in "waiting" until its prompt injects
-    turnRunner.requestTurn(activeTurn.turnKey, { preamble });
-  };
-  // §26.3/D48 — clear an `error` status back to the turn's phase entry status (dropping the stale reason)
-  // so the mirror leaves the error state. Shared by the Retry (re-drive) and the accept (advance) recovery
-  // paths; a no-op when the def/phase can't be resolved (retry still proceeds to re-request the turn).
-  const clearErrorToEntry = (repoKey: string, turn: ActiveTurn): void => {
-    const def = parseLoopDef(repoKey, turn.loopName);
-    const entryStatus = def?.phases.find((p) => p.id === turn.phase)?.entryStatus;
-    if (!entryStatus) return;
-    const s = parseAgentLoopState(repoKey);
-    writeLoopState(repoKey, {
-      status: entryStatus,
-      iteration: s?.iteration ?? 1,
-      pr: s?.pr ?? null,
-      branch: s?.branch ?? null,
-      boundLoop: turn.loopName,
-      linkedIssues: s?.linkedIssues ?? [],
-    });
-    pushFlowChanged();
-  };
-  // §26.3/D48 recovery — re-drive the turn that stopped in `error` (e.g. after the operator starts Claude
-  // for a `no hosted agent` stop). Clear the error status, then re-request the SAME turn: it injects if the
-  // agent is now present, or stops in error again if not. No-op when no turn is active for this repo.
-  const retryActiveTurn = (repoKey: string): void => {
-    const turn = activeTurn; // capture: the intervening writes must not lose the null-narrowing
-    if (!turn || turn.repoDir !== repoKey) return;
-    clearErrorToEntry(repoKey, turn);
-    turnRunner.requestTurn(turn.turnKey);
-  };
-  // §26.3/D47a(c) + D48 — the operator's "this turn is done" control. When the run stopped in `error` and
-  // the errored turn's artifact is actually present (a late done-signal the engine gave up on — e.g. a plan
-  // finished after the run erred), ACCEPT it: clear the error and chain to the next turn via the SAME path a
-  // signalled completion takes (work→reviewers), WITHOUT re-running the turn — so an accepted plan is never
-  // regenerated. Otherwise (a live in-flight turn) it is the D47a(c) manual-advance override, unchanged.
-  const markTurnComplete = (repoKey: string): void => {
-    const turn = activeTurn;
-    if (turn && turn.repoDir === repoKey && parseAgentLoopState(repoKey)?.status === 'error') {
-      if (!artifactPresentFor(turn)) return; // nothing to accept — Retry (re-run) is the path
-      audit.recordCommand(turn.repoDir, 'turn', `turn ${turn.turnKey} accepted (artifact present)`, 0);
-      clearErrorToEntry(repoKey, turn);
-      chainAfter(turn);
-      return;
-    }
-    turnRunner.markComplete();
-  };
-  // §26.5 — the plan-phase skip footprint, or null when there is no plan.md (the impl phase's file-set
-  // footprint is a recorded v1 gap, so the skip-opt is confined to the plan phase where plan.md exists).
-  const planFootprint = (repoDir: string): { kind: 'plan'; digest: string } | null => {
-    const digest = planDigest(repoDir);
-    return digest === '' ? null : { kind: 'plan', digest };
-  };
-  // §26.10 — price the run's accumulated session-log tokens (main session + subagent logs), swept from the
-  // instant the flow started: the repo's project dir accumulates every session ever logged against it, so an
-  // unbounded sweep reports the repo's lifetime spend rather than this run's. A flow with no recorded start
-  // (one begun before the instant was persisted) sweeps unbounded rather than reporting nothing.
-  // Best-effort: any failure degrades to $0 rather than aborting the loop's critical path (CLAUDE.md
-  // side-effect rule).
-  const iterationCost = (repoDir: string): CostResult => {
-    try {
-      const since = createFlowStateStore(repoDir).read()?.startedAt;
-      return priceTokens(readSessionTokens(sessionLogDir(repoDir, process.env, os.homedir()), since));
-    } catch {
-      return { usd: 0, unpricedModels: [] };
-    }
-  };
-  // §26.7 — CI runs, it does not block. At each iteration boundary take a BEST-EFFORT, NON-BLOCKING
-  // snapshot of whatever CI state already exists on the non-draft PR and record it (display-only). This is
-  // fire-and-forget: the loop has ALREADY advanced (gate STOP or re-iterate) by the time gh returns, so a
-  // slow/pending CI check can never stall the loop (§26.7 removes the engine's polling ci-waiter).
-  const captureCiSnapshot = (repoDir: string, pr: number | null, iteration: number): void => {
-    if (pr === null) return; // no PR yet → no checks to read (§26.7 "omitted if none")
-    void createRealCiChecks(repoDir)
-      .snapshot(pr)
-      .then((snap) => {
-        if (snap) {
-          audit.recordCi(repoDir, iteration, snap);
-          pushFlowChanged();
-        }
-      });
-  };
-  // §26.4/§26.5 — fan the phase's reviewer roster out as parallel subagents, MINUS the personas the skip-opt
-  // prunes: a persona clean last iteration with an unchanged plan footprint is dropped and its last-clean
-  // review reused (carried forward), so the consolidator still reads a full set. An empty roster means
-  // nothing to fan out; a fully-pruned roster carries every review forward and goes straight to consolidate.
-  const startReviewersTurn = (repoDir: string, loopName: string, phase: string): void => {
-    const def = parseLoopDef(repoDir, loopName);
-    const roster = def ? reviewerRosterForPhase(def, phase) : [];
-    if (roster.length === 0) return;
-    const s = parseAgentLoopState(repoDir);
-    const iteration = s?.iteration ?? 1;
-    const fp = planFootprint(repoDir);
-    const { active, pruned } = fp
-      ? prunablePersonas(roster, readLoopExtension(repoDir).personaState, iteration, fp)
-      : { active: roster, pruned: [] as string[] };
-    if (pruned.length > 0) carryForwardReviews(repoDir, pruned, iteration - 1, iteration);
-    if (active.length === 0) {
-      // Every persona reused — no fan-out to run; /clear and consolidate the carried-forward reviews.
-      startConsolidateTurn(repoDir, loopName, phase, iteration, CLEAR_PREAMBLE);
-      return;
-    }
-    activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas: active, iteration };
-    armTurnDoneWatch(repoDir);
-    turnPromptInjected = false;
-    turnRunner.requestTurn(activeTurn.turnKey);
-  };
-  // §26.3/D46 — the actor-boundary context reset, passed as the next turn's gated `preamble` so the turn
-  // runner injects it only once the agent has re-quiesced (never on the racing done-signal file), then
-  // waits for /clear to drain before the turn prompt. Replaces the old un-gated inject-then-mark-active.
-  const CLEAR_PREAMBLE = '/clear';
-  // §26.3/D45 — run the consolidate turn: a fresh main-instance turn that reads the fan-out's persona
-  // reviews and writes `reviews/<iter>/consolidated.json` with a verdict (advances when that verdict
-  // parses; retry-then-error on a missing/malformed one, like every turn).
-  const startConsolidateTurn = (repoDir: string, loopName: string, phase: string, iteration: number, preamble?: string): void => {
-    activeTurn = { kind: 'consolidate', repoDir, loopName, phase, turnKey: `consolidate-${phase}`, iteration };
-    armTurnDoneWatch(repoDir);
-    turnPromptInjected = false;
-    turnRunner.requestTurn(activeTurn.turnKey, { preamble });
-  };
-  // §26.6/§26.13 L4 — branch on the consolidate verdict (normalized against the bound LoopDef taxonomy):
-  // `clean` writes the phase's post-clean gate status and STOPs (awaits the human); `needs-work` writes
-  // the next iteration at the phase entry status, /clear-s, and re-runs the work turn.
-  const advanceAfterConsolidate = (finished: { repoDir: string; loopName: string; phase: string; iteration: number }): void => {
-    const def = parseLoopDef(finished.repoDir, finished.loopName);
-    const raw = consolidatedVerdict(finished.repoDir, finished.iteration);
-    const verdict = def && raw !== null ? normalizeConsolidatedVerdict(def, raw) : 'needs-work';
-    const phase = def?.phases.find((p) => p.id === finished.phase);
-    const ext = readLoopExtension(finished.repoDir);
-    // §26.8 — advance the stuck detector: the top-3-kept finding signature, compared against the prior
-    // one. Two identical signatures in a row flags the run stuck, which routes the needs-work verdict to
-    // the triage gate for the human to confirm impasse.
-    const sig = findingSignature(consolidatedFindings(finished.repoDir, finished.iteration), def?.verdicts?.severityOrder ?? []);
-    const impasse = nextImpasse(ext.impasse.lastFindingsSig, ext.impasse.consecutiveIdentical, sig);
-    // §26.6/§26.8 — decide whether this needs-work verdict auto-iterates or STOPs at the phase's triage gate.
-    const outcome = decideConsolidateOutcome({
-      verdict,
-      iteration: finished.iteration,
-      postCleanGate: phase?.postCleanGate ?? '',
-      postNeedsWorkGate: phase?.postNeedsWorkGate ?? '',
-      capBaseline: ext.capBaseline,
-      iterationCap: phase?.iterationCap ?? 0,
-      stuck: impasse.stuck,
-    });
-    // §26.5 skip-opt — fold this iteration's clean personas (their own review verdict) into persona_state
-    // with the current plan footprint, so the next fan-out can prune the unchanged-clean ones. Confined to
-    // the plan phase (a plan footprint exists); the impl file-set footprint is a recorded v1 gap.
-    const fp = planFootprint(finished.repoDir);
-    const personaState = fp
-      ? recordCleanPersonas(
-          ext.personaState,
-          (def ? reviewerRosterForPhase(def, finished.phase) : []).filter((p) => {
-            const v = personaVerdict(finished.repoDir, finished.iteration, p);
-            return v !== null && def !== null && isPersonaClean(def, v);
-          }),
-          finished.iteration,
-          fp,
-        )
-      : null;
-    // §26.10 — the display-only cost meter: price the run's accumulated session-log tokens at the iteration
-    // boundary, persist it (strip readout), and record the per-iteration §25 cost event. Best-effort — a
-    // failure here must never abort the loop (CLAUDE.md), so it degrades to $0 and the recorder never throws.
-    const cost = iterationCost(finished.repoDir);
-    const s = parseAgentLoopState(finished.repoDir);
-    const base = {
-      pr: s?.pr ?? null,
-      branch: s?.branch ?? null,
-      boundLoop: finished.loopName,
-      linkedIssues: s?.linkedIssues ?? [],
-      // §26.8 — persist the signature run on every consolidate so the next iteration can detect x2.
-      impasse: { consecutiveIdentical: impasse.consecutiveIdentical, lastFindingsSig: impasse.lastFindingsSig },
-      ...(personaState ? { personaState } : {}),
-      cost,
-    };
-    if (outcome.kind === 'gate') {
-      writeLoopState(finished.repoDir, { ...base, status: outcome.status, iteration: finished.iteration });
-      audit.recordCost(finished.repoDir, finished.iteration, cost);
-      captureCiSnapshot(finished.repoDir, s?.pr ?? null, finished.iteration);
-      pushFlowChanged();
-      return;
-    }
-    writeLoopState(finished.repoDir, {
-      ...base,
-      status: phase?.entryStatus ?? s?.status ?? '',
-      iteration: outcome.nextIteration,
-    });
-    audit.recordCost(finished.repoDir, finished.iteration, cost);
-    captureCiSnapshot(finished.repoDir, s?.pr ?? null, finished.iteration);
-    pushFlowChanged();
-    startWorkTurn(finished.repoDir, finished.loopName, finished.phase, CLEAR_PREAMBLE);
-  };
-
-  // §26.11 / L8 — auto-resume an interrupted run from <repo>/.agent-loop/state.yaml (decision in
-  // loopResume.ts). Best-effort: any gap — no state, no bound loop, no resume_contract — is a silent no-op.
-  const resumedRepos = new Set<string>();
-  const resumeLoop = (repoDir: string): void => {
-    const turnInFlight = turnRunner.state() === 'in-flight';
-    const s = parseAgentLoopState(repoDir);
-    if (!s) return;
-    const loopName = readLoopExtension(repoDir).boundLoop;
-    if (!loopName) return;
-    const def = parseLoopDef(repoDir, loopName);
-    if (!def?.resume) return;
-    // §26.3/D48 recovery — a run persisted in `error` is NOT auto-re-driven (human-owned), but it IS
-    // reconstructed (no injection) so the loop panel's Retry (re-run) and "mark turn complete" (accept the
-    // present artifact and advance) act on the right turn after a relaunch. This is NOT one-shot: returning
-    // to an error repo after a detour to another must re-point the single turn slot at THIS repo, or the
-    // first repo's Retry silently no-ops (§16.3). Which turn errored is inferred from artifact evidence.
-    // Single-phase defs only — the vendored plan-loop/impl-loop are single-phase; a multi-phase error's
-    // phase is ambiguous from state.yaml alone (recorded gap).
-    if (s.status === 'error') {
-      if (!shouldReconstructErrorTurn(repoDir, activeTurn?.repoDir ?? null, turnInFlight)) return;
-      if (def.phases.length !== 1) return;
-      const errPhase = def.phases[0];
-      const errRoster = reviewerRosterForPhase(def, errPhase.id);
-      const kind = currentTurnByArtifacts(def.resume.midIterSafe, {
-        reviewsStarted: errRoster.length > 0 && anyReviewPresent(repoDir, s.iteration, errRoster),
-        reviewsComplete: errRoster.length > 0 && allReviewsPresent(repoDir, s.iteration, errRoster),
-        consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
-      });
-      if (kind === 'post-consolidate') return; // the verdict branch, not a turn to reconstruct (recorded gap)
-      audit.recordCommand(repoDir, 'resume', `reconstruct ${kind} error at iter ${s.iteration}`, 0);
-      if (kind === 'work') {
-        activeTurn = { kind: 'work', repoDir, loopName, phase: errPhase.id, turnKey: `work-${errPhase.id}` };
-      } else if (kind === 'reviewers') {
-        activeTurn = {
-          kind: 'reviewers',
-          repoDir,
-          loopName,
-          phase: errPhase.id,
-          turnKey: `review-${errPhase.id}`,
-          personas: errRoster,
-          iteration: s.iteration,
-        };
-      } else {
-        activeTurn = {
-          kind: 'consolidate',
-          repoDir,
-          loopName,
-          phase: errPhase.id,
-          turnKey: `consolidate-${errPhase.id}`,
-          iteration: s.iteration,
-        };
-      }
-      // Arm the file watch for whichever turn was reconstructed, so the operator's Retry (which re-injects)
-      // can complete via the turn-done file — the sole completion signal since §26 D42a.
-      armTurnDoneWatch(repoDir);
-      return;
-    }
-    // The DRIVING resume injects a turn, so it fires at most once per repo and never while a turn is in
-    // flight (the single runner would drop the request) — unlike the reconstruct path above.
-    if (!canResumeRepo(repoDir, resumedRepos, turnInFlight)) return;
-    const phase = def.phases.find((p) => p.entryStatus === s.status);
-    const roster = phase ? reviewerRosterForPhase(def, phase.id) : [];
-    const decision = decideResume({
-      status: s.status,
-      iteration: s.iteration,
-      phases: def.phases.map((p) => ({ id: p.id, entryStatus: p.entryStatus })),
-      midIterSafe: def.resume.midIterSafe,
-      artifacts: {
-        reviewsStarted: roster.length > 0 && anyReviewPresent(repoDir, s.iteration, roster),
-        reviewsComplete: roster.length > 0 && allReviewsPresent(repoDir, s.iteration, roster),
-        consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
-      },
-    });
-    if (decision.kind === 'none') return;
-    resumedRepos.add(repoDir);
-    audit.recordCommand(repoDir, 'resume', `resume ${decision.kind} at ${s.status} iter ${s.iteration}`, 0);
-    if (decision.kind === 'work') startWorkTurn(repoDir, loopName, decision.phaseId);
-    else if (decision.kind === 'reviewers') startReviewersTurn(repoDir, loopName, decision.phaseId);
-    else if (decision.kind === 'consolidate') startConsolidateTurn(repoDir, loopName, decision.phaseId, decision.iteration);
-    // Every turn of the iteration already produced its artifact — only the verdict branch remains.
-    else advanceAfterConsolidate({ repoDir, loopName, phase: decision.phaseId, iteration: decision.iteration });
-  };
-
   let nextFlowEntryToken = 0;
   const currentFlowEntryTokens = new Map<string, number>();
   let activeFlowEntryOccurrence: { repoKey: string; entry: AppLoopEntry; token: number } | null = null;
@@ -870,146 +417,59 @@ async function createWindow(): Promise<void> {
     }
   };
 
-  // §26.9 / L1 — entering a `bootstrap: pickup` loop step runs in-app pickup (gh/git + state.yaml write)
-  // OUT OF BAND, replacing the retired §24.2.3 T3 injected `agent-loop pickup`. Fire-and-forget: on
-  // completion it records an audit command event and pushes flow:onStateChanged so the T2 mirror
-  // re-pulls and renders the freshly-written status. `audit` is built below but referenced lazily here.
-  // The context one pickup run needs, captured so a wipe-and-retry conflict (§26.9) can re-fire the exact
-  // same bootstrap after the operator confirms. `stepId` is the loop step to roll back to on failure/decline.
-  interface PickupJob {
-    repoKey: string;
-    stepId: string;
-    issue: number;
-    loopName: string;
-    def: LoopDef;
-    pickup: PickupContract;
-  }
-  // Conflicts awaiting the operator's wipe/cancel answer, keyed by repo (one active flow per repo).
-  const pendingConflict = new Map<string, PickupJob>();
-
-  const firePickup = (job: PickupJob, wipeConflict: boolean): void => {
-    const { repoKey, stepId, issue, loopName, def, pickup } = job;
-    // §26 activity — the async bootstrap is now visibly in flight (the status bar shows "Bootstrapping #n"
-    // + spinner). Cleared when the pickup resolves, whatever the outcome.
-    pickupInFlight = { repoKey, issue, wipe: wipeConflict };
-    pushFlowChanged();
-    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })
-      .then((result) => {
-        if (pickupInFlight?.repoKey === repoKey) pickupInFlight = null;
-        audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
-        // The pickup is fire-and-forget: the operator may have terminated or navigated the flow off this
-        // step while it ran. A stale result must not drive a turn, prompt a wipe, or roll back a step the
-        // flow already left (§26.9) — otherwise a terminated flow gets a work prompt injected against it.
-        const live = flow.state(repoKey);
-        const action = decidePickupAction(result, live.status === 'in_progress' && live.stepName === stepId);
-        switch (action.kind) {
-          case 'stale':
-            return;
-          case 'work': {
-            pushFlowChanged();
-            // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
-            // entry_status the freshly-written state.yaml now sits at (the bound def's first phase). §26 D42a
-            // (Q3) — like every other loop-step entry, the first work turn is preceded by an actor-boundary
-            // /clear (§26.3/D46) so the loop starts from a clean agent context.
-            const phase = def.phases.find((p) => p.entryStatus === action.status)?.id ?? def.phases[0]?.id;
-            if (phase) startWorkTurn(repoKey, loopName, phase, CLEAR_PREAMBLE);
-            return;
-          }
-          case 'conflict':
-            // §26.9 wipe-and-retry — the branch already exists and NOTHING destructive was done. Keep the
-            // flow on the loop step and ask the operator to confirm the (destructive, outward-facing) wipe;
-            // the answer returns on flow:resolveBootstrapConflict.
-            pendingConflict.set(repoKey, job);
-            send(CH.flowOnBootstrapConflict, { sessionId: SESSION_ID, branch: action.branch, repoKey });
-            return;
-          case 'revert':
-            // §26.9 — hard failure (dirty tree / unresolvable base / …). NEVER leave the flow stranded on
-            // the half-entered loop step: roll it back one step (Option C) and surface the reason in a
-            // blocking error dialog (CLAUDE.md — a critical-path failure the operator cannot see or fix by
-            // clicking must never be swallowed).
-            flow.revertStep(repoKey, stepId);
-            pushFlowChanged();
-            send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey, step: stepId, reason: action.reason });
-            return;
-        }
-      });
-  };
-
-  const runPickupForStep = (step: FlowStepDef, inputs: Record<string, string>): void => {
-    const repoKey = activeFlowEntryOccurrence?.repoKey ?? null;
-    if (!repoKey || step.kind !== 'loop' || !step.loop) return;
-    const def = parseLoopDef(repoKey, step.loop);
-    if (!def?.pickup) return; // no pickup_contract → nothing to bootstrap from
-    const ticketInput = (step.inputs ?? []).find((i) => i.type === 'github-ticket');
-    const raw = ticketInput ? inputs[ticketInput.name] : undefined;
-    const issue = raw && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null;
-    if (issue === null) return; // cannot bootstrap without a resolved github-ticket issue number
-    firePickup({ repoKey, stepId: step.id, issue, loopName: step.loop, def, pickup: def.pickup }, false);
-  };
-
-  // §26.9 — the operator's answer to a bootstrap conflict. `wipe` re-fires the SAME job with the wipe
-  // enabled; declining rolls the flow back one step (the flow was held on the loop step while the confirm
-  // was up). A stale answer (nothing pending) is inert.
-  const resolveBootstrapConflict = (repoKey: string, wipe: boolean): void => {
-    const job = pendingConflict.get(repoKey);
-    if (!job) return;
-    pendingConflict.delete(repoKey);
-    if (wipe) {
-      firePickup(job, true);
-      return;
-    }
-    flow.revertStep(repoKey, job.stepId);
-    pushFlowChanged();
-  };
-
-  // §26 D42a — entering a loop step with NO `bootstrap: pickup` RESUMES the existing run under the step's
-  // loop (`agent-loop resume --loop <new>`): rebind state.yaml to the new loop (fresh internal state, but
-  // the same PR/branch/issues carried), then drive its first work turn behind an actor-boundary /clear
-  // (§26.3/D46). Decision in loopRebind.ts; the "nothing to resume" outcomes are audited no-ops (a loop
-  // step can be display-only), and only a persist failure mid-rebind is surfaced.
-  const resumeLoopForStep = (step: FlowStepDef): void => {
-    const repoKey = activeFlowEntryOccurrence?.repoKey ?? null;
-    if (!repoKey || step.kind !== 'loop' || !step.loop) return;
-    const prior = parseAgentLoopState(repoKey);
-    const plan = planStepResume(
-      prior && { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration },
-      step.loop,
-      parseLoopDef(repoKey, step.loop),
-    );
-    if (!plan.ok) {
-      // Nothing to resume (no def, no prior run, or a phase-less def). Not a blocking error: a loop step
-      // can legitimately be display-only (its state.yaml mirror still renders), and the flow stays
-      // recoverable via Terminate/Restart. Record why so the no-op leaves a trace (§25), never silent.
-      audit.recordCommand(repoKey, 'resume', `loop step not resumed: ${plan.reason}`, 1);
-      return;
-    }
-    try {
-      writeLoopState(repoKey, plan.write);
-    } catch (e) {
-      // A persist failure DID interrupt a rebind that was going to run — surface it (the state on disk may
-      // be half-written) so the operator can retry rather than sit on a silently-failed transition.
-      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not persist the loop rebind: ${String(e)}` });
-      return;
-    }
-    startWorkTurn(repoKey, step.loop, plan.workPhase, CLEAR_PREAMBLE);
-  };
-
-  // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
-  // busy shell — a live OSC-133 command span means not at a ready prompt. A `bootstrap: pickup` loop
-  // step runs in-app pickup instead (§26.9); a non-pickup loop step RESUMES the existing run (§26 D42a).
-  // Must be built after the injector + tracker exist.
+  // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a busy
+  // shell — a live OSC-133 command span means not at a ready prompt. A loop step binds the §27 engine via the
+  // preparer (positions 2/4/5/6) then the dispatch (positions 7/8). Must be built after the injector + tracker.
   let appBootstrapCoordinator: AppLoopBootstrapCoordinator | null = null;
+  // §B.5 positions 2/4/5/6 — resolve the bound def, then REFUSE (with the right operator-facing surface) or
+  // READY (optionally carrying AC 5's migration notice). The order lives in createLoopBindingPreparer; the
+  // effects are wired here to the real resolver, engine, IPC and flow machine (CLAUDE.md injection-seam).
+  const prepareLoopBinding = createLoopBindingPreparer({
+    resolveDef: (step) => {
+      const t = activeFlowEntryOccurrence;
+      if (!t || step.loop === undefined) return { ok: false, reason: 'this loop step names no loop to run' };
+      return resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+    },
+    canEnterWork: () => appEngine.canEnter(),
+    // Position 2 — an unresolved def keeps the surviving app-namespace step (reverting would be an AC 2
+    // change), so surface the reason on the per-step loop-error path and dispatch nothing.
+    refuseUnresolved: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    // Positions 4/5 — surface the durable bootstrap error, then DEFER an identity-guarded revert + push. The
+    // entry action fires inside advance's `enter(view())`, whose reply view was captured at the entered step;
+    // a synchronous revert's push would be overwritten by that stale reply, so the revert rides a later tick
+    // (mirrors the coordinator's naturally-async rollbackStep guard — entryToken + status + step + issue).
+    refuseAndRevert: createRefuseAndRevert({
+      activeOccurrence: () =>
+        activeFlowEntryOccurrence
+          ? { repoKey: activeFlowEntryOccurrence.repoKey, token: activeFlowEntryOccurrence.token }
+          : null,
+      entryToken: (repoKey) => currentFlowEntryTokens.get(repoKey),
+      identity: (repoKey) => {
+        const s = flow.state(repoKey);
+        return { step: s.stepName, status: s.status, issue: s.refs?.ticket ?? null };
+      },
+      emitError: (repoKey, step, reason) => send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey, step, reason }),
+      revert: (repoKey, step) => flow.revertStep(repoKey, step),
+      push: () => pushFlowChanged(),
+      defer: (fn) => setImmediate(fn),
+    }),
+    // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
+    // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
+    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc)),
+  });
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
-    runPickup: runPickupForStep,
-    resumeLoop: resumeLoopForStep,
-    // §27.15/§27.3 — an app-namespace step binds the §27 engine: start its work turn (run the declared
-    // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
-    // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
+    prepareLoopBinding,
+    // §B.5 positions 7/8 (AC 10) — dispatch a READY binding. The coordinator injects the step's `skill`
+    // (submitted, §19.3-refused on a busy shell) strictly BEFORE the engine boundary on BOTH routes: a
+    // no-`pickup` def defers the accepted turn and chains the boundary off the skill's submit; a `pickup` def
+    // injects after the bootstrap's work entry. So the seam only forwards the collapsed skill line on the job
+    // (CWE-74). The `!resolved.ok`/no-coordinator arm is a defensive direct entry the preparer's position 2
+    // has already made unreachable on the live path.
     enterAppLoop: (step) => {
       const t = activeFlowEntryOccurrence;
-      if (!t || !step.loop) return;
+      if (!t || step.loop === undefined) return;
       const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
       if (!resolved.ok || appBootstrapCoordinator === null) {
@@ -1024,31 +484,21 @@ async function createWindow(): Promise<void> {
         entryToken: t.token,
         entry: t.entry,
         issue,
-        bootstrap:
-          resolved.def.pickup === null
-            ? null
-            : toAppLoopBootstrapSpec(resolved.def.origin, resolved.def.pickup),
+        bootstrap: resolved.def.pickup,
+        ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
     },
   });
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
-    readLoopState: (repoKey) => parseAgentLoopState(repoKey),
-    readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
-    // §26.10 — the display-only cost readout for the strip: format the last-recorded cost from the
-    // orchestrator-owned extension (loopStateReader), or null before any iteration recorded one.
-    readLoopCost: (repoKey) => {
-      const c = readLoopExtension(repoKey).cost;
-      return c ? formatCost(c) : null;
-    },
     // §27.15 — the §27 (app-namespace) loop-view provider: resolve the bound app-def across the operator
     // and app-bundled tiers and produce its whole run-less/failure view. Tier roots are chosen by the
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
       provideAppLoopView(appEngine, name, {
-        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+        tiers: resolveAppLoopDefTiers(iconLoc),
         repoDir: repoKey,
       }),
   });
@@ -1137,13 +587,36 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
       return true;
     },
-    enterWork: (repoDir, loopName, stepId, entry) => {
-      const result = appEngine.enter(repoDir, loopName, stepId, entry);
+    enterWork: (repoDir, loopName, stepId, entry, deferRequest) => {
+      // §B.20a — with `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
+      // the coordinator fires `triggerWork` off the skill injection's completion so the boundary preamble is
+      // written strictly after the skill's submit (§B.5 item 6, CWE-74). Non-deferred, the turn requests now.
+      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest });
       if (result === 'entered') {
         armAppTurnDoneWatch(repoDir);
         pushFlowChanged();
       }
       return result;
+    },
+    // §B.13c — inject the collapsed skill line submitted, signalling completion once its submit `\r` is written
+    // so the deferred work turn can chain strictly after it (§B.5 item 6).
+    inject: (text, onComplete) => inject(text, { submit: true, onComplete }),
+    // §19.3 — a live OSC-133 command span means the shell is not at a ready prompt.
+    isShellBusy: () => tracker.summaries().some((s) => s.running),
+    // §B.5 item 6 / §B.13a — the coordinator's async busy-shell refusal is not an error (the work turn runs
+    // fine); stash it on the main-side carrier so it rides the next `flow:state` response for the repo.
+    emitNotice: ({ repoDir, notice }) => {
+      pendingNotice.set(repoDir, notice);
+      pushFlowChanged();
+    },
+    // §B.20a — request the turn deferred by `enterWork(…, true)`, and abandon one never triggered.
+    triggerWork: () => appEngine.triggerDeferredTurn(),
+    cancelWork: () => appEngine.cancelDeferredTurn(),
+    // §B.20a (CWE-755) — the deadline the deferred turn's skill injection must signal completion within, or the
+    // coordinator reverts rather than leave the runner occupied by a turn never requested.
+    armDeferDeadline: (onLapse) => {
+      const timer = setTimeout(onLapse, DEFER_DEADLINE_MS);
+      return () => clearTimeout(timer);
     },
     emitError: ({ repoDir, stepId, reason }) =>
       send(CH.flowOnBootstrapError, {
@@ -1171,10 +644,6 @@ async function createWindow(): Promise<void> {
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
   const githubRefs = createGithubRefs();
 
-  // T2 (§24.2.3): watch a loop repo's state.yaml so a hand-edit re-pushes over the EXISTING
-  // flow:onStateChanged seam (§24.2.2 S5) — no new plumbing. One watcher per repo, established
-  // lazily; since the strip just re-pulls, duplicate file events are harmless.
-  const loopWatchers = new Map<string, () => void>();
   // T4 (§24.2.3): the raise/dedup decision lives in loopNotifier (unit-tested); only the untestable
   // Electron Notification surface is created here.
   const loopNotifier = createLoopNotifier({
@@ -1204,17 +673,9 @@ async function createWindow(): Promise<void> {
     },
   });
   const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
-    // Watch state.yaml whenever it feeds the view — the loop mirror (loop steps) OR the cross-step
-    // refs (§24.2.3 T7, e.g. a PR appearing on a manual step) — so either updates live (§24.2.2 S5).
-    // Only cache a watcher that actually attached: refs can show a typed-input ticket before the
-    // .agent-loop dir exists, and caching a failed attempt would block re-attaching once it appears.
-    if ((view.loop || view.refs) && !loopWatchers.has(repoKey)) {
-      const unwatch = watchAgentLoopState(repoKey, pushFlowChanged);
-      if (unwatch) loopWatchers.set(repoKey, unwatch);
-    }
     loopNotifier.observe(repoKey, view);
-    // §25.5: every view computation (including the state.yaml-watch re-pull) observes the loop mirror,
-    // so an external `agent-loop` advance is recorded as well as one fired from the strip.
+    // §25.5: every view computation observes the loop mirror, so a §27 loop advance is recorded whether it
+    // was fired from the strip or reconstructed on a state re-pull.
     audit.recordLoop(repoKey, view.loop ?? null);
     return view;
   };
@@ -1237,15 +698,12 @@ async function createWindow(): Promise<void> {
     return list;
   };
 
-  // §26 — the live "what the loop mechanics are doing now" descriptor, derived fresh on every view so a
-  // spinner phrase is never stale. Scoped to the repo the view is for.
+  // §27.10 — the live "what the loop mechanics are doing now" descriptor, derived fresh on every view so a
+  // spinner phrase is never stale. Scoped to the repo the view is for. Only the surviving bootstrap (pickup)
+  // phrase remains; the retired engine's turn-phase arm is gone (§B.21).
   const loopActivityFor = (repoKey: string): LoopActivity | null =>
     deriveLoopActivity({
       pickup: pickupInFlight?.repoKey === repoKey ? { issue: pickupInFlight.issue, wipe: pickupInFlight.wipe } : null,
-      turn:
-        activeTurn?.repoDir === repoKey && turnRunner.state() === 'in-flight'
-          ? { kind: activeTurn.kind, injected: turnPromptInjected }
-          : null,
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
@@ -1306,18 +764,7 @@ async function createWindow(): Promise<void> {
     return map;
   };
 
-  // The bound LoopDef name of the flow's current loop step for `repoKey` (§26.6 gate handler) — null when
-  // the definition/step doesn't resolve or the current step is not a loop step.
-  const boundLoopName = (repoKey: string): string | null => {
-    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
-    if (!load.ok) return null;
-    // §27.15 — the §26 gate-decision executor is a §26-only write surface; the selector refuses an
-    // app-namespace step (the guard is at the operation), so a same-named operator §26 def is never fired
-    // for a §27 step.
-    return legacyLoopNameForStep(load.definition.steps[flow.state(repoKey).position - 1]);
-  };
-
-  // §26 D42a — advance the flow one step when a loop step's loop reaches a success terminal. Guarded on
+  // §27.9/§27.13 — advance the flow one step when a loop step's loop reaches a success terminal. Guarded on
   // in_progress (advance throws otherwise, e.g. a flow the operator terminated while the gate resolved) and
   // run inside inTransition so the next step's entry actions fire in transition context, matching the manual
   // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
@@ -1328,79 +775,10 @@ async function createWindow(): Promise<void> {
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
-  // §26.6 / L5 / D52 — execute the human's gate decision in-app (NOT an injected `/agent-loop-*` command,
-  // retired §26.12): resolve the bound LoopDef + the gate at the current status, guard the option against
-  // the gate's human_options, then run that option's action list (state write, gh side-effects out of
-  // band, human note) and advance/re-iterate/stop. Best-effort: an unresolved gate or an unoffered option
-  // is ignored (the loop stays where it is).
-  const runGateDecision = (repoKey: string, option: GateOption, note: string): void => {
-    const loopName = boundLoopName(repoKey);
-    const s = parseAgentLoopState(repoKey);
-    const def = loopName ? parseLoopDef(repoKey, loopName) : null;
-    if (!loopName || !s || !def) return;
-    const gate = gateForStatus(def, s.status);
-    if (!gate || !gate.humanOptions.includes(option)) return; // not at a gate offering this option
-    const outcome = decideGateOutcome(gate, option);
-    const reiterPhase = def.phases.find((p) => p.entryStatus === outcome.nextStatus)?.id ?? def.phases[0]?.id;
-    // Until the §19.4 feedback composer supplies the reason (a later slice), default an empty note to the
-    // decision itself so the gate's `append-human-note` action always leaves an observable artifact.
-    const noteText = note.trim().length > 0 ? note : `human ${option}`;
-    // §26.6/D48 — a failed state write leaves the loop where it is (onWriteFailed); the flow must NOT
-    // auto-advance over an unpersisted transition, so track the failure and gate the advance on it.
-    let gateWriteFailed = false;
-    void executeGateOutcome(
-      outcome,
-      {
-        repoDir: repoKey,
-        boundLoop: loopName,
-        iteration: s.iteration,
-        pr: s.pr,
-        branch: s.branch,
-        linkedIssues: s.linkedIssues,
-        note: noteText,
-        // §26.9 — skip epic-promote if this run already created its sub-issues (idempotent re-entry).
-        epicAlreadyPromoted: readLoopExtension(repoKey).epic.subIssues.length > 0,
-        // §26.6 — exec runs only for an operator-authored def (CWE-829), minus the repo's loops_deny_exec.
-        execAllowed: loopExecAllowed(def, repoKey, loopName),
-      },
-      {
-        github: createRealGateGitHub(repoKey),
-        // §26.6 — resolve an exec action's `{{artifact.<id>}}` against the bound LoopDef; run it out of band.
-        resolveArtifact: (id) => artifactPath(def, repoKey, id),
-        runExec: createRealGateExec(repoKey),
-        writeState: (state) => writeLoopState(repoKey, state),
-        writeHumanNote: (iteration, text) => writeHumanNote(repoKey, iteration, text),
-        // §26.9 / L8 — the epic classification the work-agent wrote into plan.md gates epic-promote.
-        readEpicPlan: () => readEpicPlan(repoKey),
-        // §26.6 — request-changes re-runs the phase's work turn in a fresh context (the next iteration is
-        // already persisted by executeGateOutcome, so the work prompt reads the incremented count).
-        reiterate: () => {
-          if (reiterPhase) {
-            startWorkTurn(repoKey, loopName, reiterPhase, CLEAR_PREAMBLE);
-          }
-        },
-        // §26.6/D48 — a gate transition that could not be persisted is never silent: surface the reason in
-        // the blocking error dialog and record it, so the loop can never sit stranded with no trace.
-        onWriteFailed: (reason) => {
-          gateWriteFailed = true;
-          audit.recordCommand(repoKey, 'gate', `gate ${option} write failed: ${reason}`, 1);
-          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not persist gate transition: ${reason}` });
-        },
-      },
-    ).then(() => {
-      audit.recordCommand(repoKey, 'gate', `gate ${option}`, 0);
-      // §26 D42a — a SUCCESS terminal (approve terminating the loop) means this flow's loop step is done,
-      // so auto-advance the flow to its next step. Impasse/error terminals are human-owned and never
-      // advance; a failed state write leaves the loop unmoved, so never advance over it.
-      if (!gateWriteFailed && shouldAdvanceFlowOnGate(option, outcome)) autoAdvanceFlow(repoKey);
-      pushFlowChanged();
-    });
-  };
-
-  // §27.9/§27.13 / N5 — composition root for the §27 gate decision; isolated from the §26 executor above (AC8).
-  // Returns the request-changes delivered/dropped result so the two-way flow:appRequestChanges caller can hold
-  // the composer open on a drop (approve goes through the one-way channel and ignores the result).
-  const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
+  // §27.9/§27.13 / N5 — composition root for the §27 gate decision. Returns the request-changes
+  // delivered/dropped result so the two-way flow:appRequestChanges caller can hold the composer open on a
+  // drop (approve goes through the one-way channel and ignores the result).
+  const runAppGateDecisionRaw = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
     runAppGateDecisionImpl(
       repoKey,
       step,
@@ -1424,7 +802,7 @@ async function createWindow(): Promise<void> {
         // §27.9/AC4 — the resume+done-watch preamble mirrors the flowAppRouteOut handler below; both drive a
         // §27 engine that is idle for this repoDir after a relaunch (there is no launch-time §27 resume).
         // TODO(dylanb): the resume-if-not-active leg is deferred coverage, not an untestability exemption — a
-        // cold-relaunch-then-request-changes @ownapp test (mirroring the §26 cd-resume e2e) closes it.
+        // cold-relaunch-then-request-changes @ownapp test closes it.
         deliverFeedback: (repoDir, s, tk, feedback) => {
           if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
           armAppTurnDoneWatch(repoDir);
@@ -1437,15 +815,28 @@ async function createWindow(): Promise<void> {
           armAppTurnDoneWatch(repoDir);
           return appEngine.redo(repoDir, s, tk, instruction);
         },
-        // §27.9/AC6 — polish is app-owned loop state written to its own file (never the §26 surface).
+        // §27.9/AC6 — polish is app-owned loop state written to its own file (§27.9).
         enterPolish: (repoDir, step) => enterPolish(repoDir, step),
         clearPolish: (repoDir) => clearPolish(repoDir),
       },
       note,
     );
 
-  // Flow A (§4): every output byte goes to the renderer AND the shadow tee. Turn completion is detected
-  // via the .agent-loop/turn-done FILE only (§26.3/D47a; §26 D42a retired the echo-hazardous line scanner).
+  // §B.3/AC 4 — the gate-decision seam refuses a marked binding at the operation: a step that binds no
+  // surviving engine (loop_namespace: legacy) never reaches the outward-facing side effect, even if its run
+  // state already sits at a verdict. The binding is read from the loaded def by the step id the payload names
+  // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
+  const runAppGateDecision = createGuardedGateDecision({
+    bindingOf: (repoKey, step) => {
+      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
+    },
+    refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    run: runAppGateDecisionRaw,
+  });
+
+  // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
+  // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.
   ptyProcess.onData((data) => {
     outputGate.send(data);
     shadow.write(data);
@@ -1494,20 +885,6 @@ async function createWindow(): Promise<void> {
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
-      // §26.3/D47a(c) + D48 — the operator's "this turn is done" control: a manual advance for a live
-      // in-flight turn, or (on an `error` with the artifact present) accept-and-advance without re-running.
-      [CH.flowMarkTurnComplete]: (_e, m) => {
-        if (isValidFlowRequest(m)) markTurnComplete(m.repoKey);
-      },
-      // §26.6 / L5 — the human's data-driven gate decision, executed app-internally.
-      [CH.flowGateDecision]: (_e, m) => {
-        if (isValidFlowGateDecision(m)) runGateDecision(m.repoKey, m.option, m.note ?? '');
-      },
-      // §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after the operator
-      // starts Claude for a `no hosted agent` stop).
-      [CH.flowRetryTurn]: (_e, m) => {
-        if (isValidFlowRequest(m)) retryActiveTurn(m.repoKey);
-      },
       // §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), acting on
       // the step+turn identity the payload names (§6), never ambient state. After a relaunch the engine has
       // no live turn, so reconstruct the stopped turn from the persisted §27 run state first (never re-driven
@@ -1539,10 +916,6 @@ async function createWindow(): Promise<void> {
           return;
         }
         pushFlowChanged();
-      },
-      // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
-      [CH.flowResolveBootstrapConflict]: (_e, m) => {
-        if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
       },
       // §27.10 — the step and the destroyed resources are both named in the payload, so an answer cannot
       // be applied to a step, or a resource set, the operator was never shown.
@@ -1631,8 +1004,16 @@ async function createWindow(): Promise<void> {
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
       // Flow lifecycle (§24.2.2). An illegal transition throws (machine invariant) → the invoke
       // rejects and the strip re-pulls; a malformed payload fails closed to a benign error view.
-      [CH.flowState]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
+      [CH.flowState]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const view = trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
+        // §B.5 item 6 / §B.13a — a coordinator-produced async notice (busy shell at hand-off) rides exactly
+        // ONE state response: attach it when this view carries none, and consume it so it is not re-sent.
+        const pending = pendingNotice.get(m.repoKey);
+        if (pending === undefined || view.notice !== undefined) return view;
+        pendingNotice.delete(m.repoKey);
+        return { ...view, notice: pending };
+      },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         return withoutTrustedBootstrap(m.repoKey, () =>
@@ -1737,10 +1118,10 @@ async function createWindow(): Promise<void> {
             process.cwd(),
           ),
         })),
-      // Install bundled examples (§18.1/§23.4/§26.5): bundles resolve build-aware (packaged resources vs
+      // Install bundled examples (§18.1/§23.4/§27.8): bundles resolve build-aware (packaged resources vs
       // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
-      // loadFlowDefinitionLocalFirst, and the definitions, persona skills and commands land in the
-      // user-level Claude config directories that the engine and Claude Code discover from.
+      // loadFlowDefinitionLocalFirst, and the app loop definitions and commands land in the user-level
+      // Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
       [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),
     },
@@ -1759,16 +1140,8 @@ async function createWindow(): Promise<void> {
       () => shadow.dispose(),
       () => stopViewerWatch(),
       () => {
-        for (const stop of loopWatchers.values()) stop();
-        loopWatchers.clear();
-      },
-      () => {
-        if (turnTimer) clearTimeout(turnTimer);
-      },
-      () => {
         if (appTurnTimer) clearTimeout(appTurnTimer);
       },
-      () => unwatchTurnDone?.(),
       () => unwatchAppTurnDone?.(),
     ]);
   });
@@ -1781,13 +1154,6 @@ async function createWindow(): Promise<void> {
   else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   outputGate.open();
-
-  // §26.11 / L8 — on launch, auto-resume an interrupted run in the launch-root repo (the §23.4 spawn cwd).
-  // Absent/complete/human-owned state is a no-op. The deferred turn injects once the hosted instance is
-  // injectable (§26.2). (The best-effort mid-session `cd`-into-repo resume trigger is a recorded v1 gap:
-  // once the hosted instance occupies the shell the cwd rarely changes, and injecting a resumed turn into a
-  // bare bash prompt before an agent is launched is the §26.11/B11 no-interlock risk — deferred.)
-  resumeLoop(launchRoot);
 }
 
 app.whenReady().then(createWindow);

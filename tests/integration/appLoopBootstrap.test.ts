@@ -19,11 +19,11 @@ import {
   type AppBootstrapGitHub,
 } from '../../src/main/bootstrapPorts';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
+import { BUSY_NOTICE } from '../../src/main/flowEntryActions';
 
 const PREEXISTING_OID = 'a'.repeat(40);
 
 const bootstrap: AppLoopBootstrapSpec = {
-  origin: 'operator',
   initialStatus: 'planning',
   wipe: { mode: 'abort' },
   branchTemplate: 'plan-loop/issue-{issue}',
@@ -34,10 +34,9 @@ const bootstrap: AppLoopBootstrapSpec = {
   ],
 };
 
-function spec(origin: AppLoopBootstrapSpec['origin'] = 'operator'): AppLoopBootstrapSpec {
+function spec(): AppLoopBootstrapSpec {
   return {
     ...bootstrap,
-    origin,
     initialLabels: [...bootstrap.initialLabels],
   };
 }
@@ -316,30 +315,6 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       issue: 78,
       initialStatus: 'planning',
     });
-  });
-
-  it('refuses a repo-resident pickup before the first git or gh operation (CWE-829)', async () => {
-    const g = fakeGit();
-    const h = fakeGitHub();
-    const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
-      request({ spec: spec('repo') }),
-    );
-    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/origin|repo-resident/i) });
-    expect(g.calls).toEqual([]);
-    expect(h.calls).toEqual([]);
-  });
-
-  it('honors command-bearing pickup only from the operator-authored resolver branch', async () => {
-    const g = fakeGit();
-    const h = fakeGitHub();
-    const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
-      request({ spec: spec('app-bundled') }),
-    );
-    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/operator-authored|origin/i) });
-    expect(g.calls).toEqual([]);
-    expect(h.calls).toEqual([]);
   });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -1021,6 +996,19 @@ function job(over: Partial<AppLoopBootstrapJob> = {}): AppLoopBootstrapJob {
   };
 }
 
+// §B.13a deferred-skill deps: inert no-ops so a coordinator built for a skill-less job satisfies the widened
+// dep set without exercising the hand-off. Specs that drive the hand-off (deferHarness) override these.
+function deferDepDefaults() {
+  return {
+    inject: vi.fn(),
+    isShellBusy: () => false,
+    emitNotice: vi.fn(),
+    triggerWork: vi.fn(),
+    cancelWork: vi.fn(),
+    armDeferDeadline: (_onLapse: () => void) => () => {},
+  };
+}
+
 describe('createAppLoopBootstrapCoordinator — async step identity + rollback (ST2 AC4/AC7)', () => {
   const successOwnership = {
     base: 'main',
@@ -1049,6 +1037,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const finalizeBootstrap = vi.fn(async () => {});
     let current = true;
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => result,
       compensateBootstrap,
       finalizeBootstrap,
@@ -1079,13 +1068,13 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
   it('enters work immediately when the def declares no pickup', () => {
     const x = coordinator(success);
     x.c.enter(job({ bootstrap: null }));
-    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance');
+    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false);
   });
 
   it('enters work after a successful pickup only while the named step is still current', async () => {
     const x = coordinator(success);
     x.c.enter(job());
-    await vi.waitFor(() => expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance'));
+    await vi.waitFor(() => expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false));
     expect(x.rollbackStep).not.toHaveBeenCalled();
     expect(x.finalizeBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ repoDir: '/repo', entryToken: 1 }),
@@ -1104,6 +1093,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const enterWork = vi.fn(() => 'entered' as const);
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1141,6 +1131,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     );
     const enterWork = vi.fn(() => 'entered' as const);
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1167,6 +1158,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       'plan-loop',
       'plan',
       'chain-advance',
+      false,
     );
 
     finishes[1](success);
@@ -1187,6 +1179,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1254,6 +1247,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const enterWork = vi.fn(() => 'entered' as const);
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1282,6 +1276,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const enterWork = vi.fn(() => 'entered' as const);
     const run = vi.fn(async () => success);
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1299,7 +1294,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     c.enter(job());
 
     expect(run).not.toHaveBeenCalled();
-    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance');
+    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false);
   });
 
   it('treats a pickup-bearing step with no positive ticket identity as an async bootstrap failure', async () => {
@@ -1350,6 +1345,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const acceptBootstrap = vi.fn();
     const emitError = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap,
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1393,6 +1389,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const run = vi.fn(async () => success);
     const rollbackStep = vi.fn(() => true);
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1421,6 +1418,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1456,6 +1454,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1503,6 +1502,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const rollbackStep = vi.fn(() => true);
     const acceptBootstrap = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => success,
       compensateBootstrap,
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1543,6 +1543,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => success,
       compensateBootstrap,
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1574,6 +1575,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => success,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1634,6 +1636,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => ({ ok: false, kind: 'error' as const, error: 'draft PR creation failed' }),
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1711,6 +1714,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const audit = vi.fn();
     const finalizeBootstrap = vi.fn(async () => {});
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => success,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap,
@@ -1749,6 +1753,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const rollbackStep = vi.fn(() => true);
     const emitError = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => Promise.reject('runner exploded'),
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1781,6 +1786,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run: async () => ({ ok: false, kind: 'error' as const, error: 'late failure' }),
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1829,6 +1835,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
     const audit = vi.fn();
     let current = true;
     const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
       run,
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
@@ -1900,7 +1907,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
       expect.objectContaining({ confirmedWipe: target() }),
     ]);
     await vi.waitFor(() =>
-      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance'),
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
     );
   });
 
@@ -1970,5 +1977,135 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
 
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     expect(run.mock.calls[1][0]).toBe('/other');
+  });
+});
+
+describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (§B.13a / §B.5 item 6, AC10)', () => {
+  const successOwnership = {
+    base: 'main',
+    branch: 'plan-loop/issue-78',
+    ownedOid: '2'.repeat(40),
+    pr: { kind: 'known' as const, number: 42 },
+  };
+  const success: AppLoopBootstrapResult = {
+    ok: true,
+    identity: { pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' },
+    ownership: successOwnership,
+  };
+
+  function deferHarness(over: { busy?: boolean } = {}) {
+    const injected: string[] = [];
+    let injectOnComplete: (() => void) | null = null;
+    let deadlineOnLapse: (() => void) | null = null;
+    const cancelDeadline = vi.fn();
+    const enterWork = vi.fn(() => 'entered' as const);
+    const rollbackStep = vi.fn(() => true);
+    const emitError = vi.fn();
+    const emitNotice = vi.fn();
+    const triggerWork = vi.fn();
+    const cancelWork = vi.fn();
+    const audit = vi.fn();
+    const acceptBootstrap = vi.fn();
+    const finalizeBootstrap = vi.fn(async () => {});
+    const c = createAppLoopBootstrapCoordinator({
+      ...deferDepDefaults(),
+      run: async () => success,
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap,
+      hasBootstrapForJob: () => false,
+      isCurrentJob: () => true,
+      canEnterWork: () => true,
+      acceptBootstrap,
+      rollbackStep,
+      enterWork,
+      emitError,
+      emitConflict: vi.fn(),
+      audit,
+      inject: (text: string, onComplete: () => void) => {
+        injected.push(text);
+        injectOnComplete = onComplete;
+      },
+      isShellBusy: () => over.busy === true,
+      emitNotice,
+      triggerWork,
+      cancelWork,
+      armDeferDeadline: (onLapse: () => void) => {
+        deadlineOnLapse = onLapse;
+        return cancelDeadline;
+      },
+    });
+    return {
+      c,
+      injected,
+      enterWork,
+      rollbackStep,
+      emitError,
+      emitNotice,
+      triggerWork,
+      cancelWork,
+      cancelDeadline,
+      acceptBootstrap,
+      fireInjectComplete: () => injectOnComplete?.(),
+      fireDeadline: () => deadlineOnLapse?.(),
+    };
+  }
+
+  it('injects the step skill after work entry and defers the turn until the injection completes', async () => {
+    const x = deferHarness();
+    x.c.enter(job({ skill: '/plan' }));
+    await vi.waitFor(() => expect(x.injected).toEqual(['/plan']));
+    // The engine is told to accept-without-request so the skill lands ahead of the boundary (AC10).
+    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', true);
+    // The turn is NOT requested until the injection's own completion signal arrives.
+    expect(x.triggerWork).not.toHaveBeenCalled();
+    x.fireInjectComplete();
+    expect(x.triggerWork).toHaveBeenCalledTimes(1);
+    expect(x.cancelDeadline).toHaveBeenCalled();
+  });
+
+  it('refuses the skill over a busy shell, still starts the turn, and surfaces BUSY_NOTICE (§19.3)', async () => {
+    const x = deferHarness({ busy: true });
+    x.c.enter(job({ skill: '/plan' }));
+    await vi.waitFor(() =>
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
+    );
+    expect(x.injected).toEqual([]);
+    expect(x.emitNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ repoDir: '/repo', stepId: 'plan', notice: BUSY_NOTICE }),
+    );
+    expect(x.triggerWork).not.toHaveBeenCalled();
+  });
+
+  it('reverts the step when the deferral deadline lapses with no completion signal (CWE-755)', async () => {
+    const x = deferHarness();
+    x.c.enter(job({ skill: '/plan' }));
+    await vi.waitFor(() => expect(x.injected).toEqual(['/plan']));
+    x.fireDeadline();
+    expect(x.cancelWork).toHaveBeenCalledTimes(1);
+    expect(x.rollbackStep).toHaveBeenCalled();
+    expect(x.emitError).toHaveBeenCalled();
+    expect(x.triggerWork).not.toHaveBeenCalled();
+  });
+
+  it('fires the turn exactly once — a deadline that lapses after completion is a no-op', async () => {
+    const x = deferHarness();
+    x.c.enter(job({ skill: '/plan' }));
+    await vi.waitFor(() => expect(x.injected).toEqual(['/plan']));
+    x.fireInjectComplete();
+    x.fireDeadline();
+    expect(x.triggerWork).toHaveBeenCalledTimes(1);
+    expect(x.cancelWork).not.toHaveBeenCalled();
+    expect(x.rollbackStep).not.toHaveBeenCalled();
+  });
+
+  it('neither injects nor defers when the pickup def carries no skill (AC2 fast start)', async () => {
+    const x = deferHarness();
+    x.c.enter(job());
+    await vi.waitFor(() =>
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
+    );
+    expect(x.injected).toEqual([]);
+    expect(x.emitNotice).not.toHaveBeenCalled();
+    expect(x.triggerWork).not.toHaveBeenCalled();
   });
 });

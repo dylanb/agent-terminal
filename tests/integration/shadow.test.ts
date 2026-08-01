@@ -100,7 +100,7 @@ describe('shadow screen model (§8)', () => {
 
 // §8.3 — a full-screen TUI agent (Claude Code, Codex) repaints its frame on a timer even while idle at
 // its prompt, so bytes never stop. Byte-presence would pin agentState 'active' forever (the injection
-// engine then defers every turn, §26.2). Quiescence keys off *rendered-screen change*, not raw bytes:
+// engine then defers every turn, §27). Quiescence keys off *rendered-screen change*, not raw bytes:
 // an unchanged repaint is quiet, a changing frame (spinner/stream) is active.
 describe('content-diff quiescence for a repainting TUI (§8.3)', () => {
   let statuses: ShadowStatus[];
@@ -144,10 +144,10 @@ describe('content-diff quiescence for a repainting TUI (§8.3)', () => {
   });
 });
 
-// §26.3 stall watchdog — the turn runner resets its stall deadline on every *visible-content change*
+// §27 stall watchdog — the turn runner resets its stall deadline on every *visible-content change*
 // edge (the same §8.3 signal that reaches quiescence), so a streaming turn never stalls but a frozen
 // screen counts down. onActivity exposes that edge; an identical repaint is NOT an edge.
-describe('shadow.onActivity — fires per visible-content-change edge (§26.3)', () => {
+describe('shadow.onActivity — fires per visible-content-change edge (§27)', () => {
   let shadow: ReturnType<typeof createShadowModel>;
   const repaint = (frame: string) => `\x1b[2J\x1b[H${frame}`;
 
@@ -187,11 +187,11 @@ describe('shadow.onActivity — fires per visible-content-change edge (§26.3)',
   });
 });
 
-// §26.3/D46 — the re-arm primitive behind "a chained turn waits for a fresh settle": even when the
+// §27/D46 — the re-arm primitive behind "a chained turn waits for a fresh settle": even when the
 // screen has ALREADY gone quiet (the agent settled and would emit no further output to re-arm it),
 // noteSettle must manufacture a fresh active→quiet edge so the next injection still gets its settle,
 // with no hang waiting for an edge that never comes.
-describe('shadow.noteSettle — re-arms quiescence for a fresh settle (§26.3/D46)', () => {
+describe('shadow.noteSettle — re-arms quiescence for a fresh settle (§27/D46)', () => {
   let statuses: ShadowStatus[];
   let shadow: ReturnType<typeof createShadowModel>;
   beforeEach(() => {

@@ -10,9 +10,10 @@ import {
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from './bootstrapPorts';
-import type { LoopDefV2Origin, PickupContractV2 } from './loopDefV2';
+import type { PickupContractV2 } from './loopDefV2';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
+import { BUSY_NOTICE } from './flowEntryActions';
 import {
   hasAppBootstrapConflict,
   sameAppBootstrapConflictTarget,
@@ -35,14 +36,9 @@ export interface AppLoopBootstrapRequest {
   confirmedWipe?: AppBootstrapConflictTarget;
 }
 
-export type AppLoopBootstrapSpec = { origin: LoopDefV2Origin } & PickupContractV2;
-
-export function toAppLoopBootstrapSpec(
-  origin: LoopDefV2Origin,
-  pickup: PickupContractV2,
-): AppLoopBootstrapSpec {
-  return { origin, ...pickup };
-}
+// Def tiers carry no trust distinction (v2.129): a bootstrap spec is exactly the resolved def's pickup
+// contract, with no tier/origin label gating it.
+export type AppLoopBootstrapSpec = PickupContractV2;
 
 export type AppBootstrapPrOwnership =
   | { kind: 'none' }
@@ -176,9 +172,6 @@ export async function runAppLoopBootstrap(
     recovery === undefined
       ? { ok: false, kind: 'error', error }
       : { ok: false, kind: 'error', error, requiresAttention: true, recovery };
-  if (req.spec.origin !== 'operator') {
-    return fail(`refused bootstrap from a non-operator-authored loop def (origin: ${req.spec.origin})`);
-  }
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
   if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
   const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
@@ -386,6 +379,10 @@ export interface AppLoopBootstrapJob {
   issue: number | null;
   entry: AppLoopEntry;
   bootstrap: AppLoopBootstrapSpec | null;
+  // §B.5 item 6 / AC10: present when the step's bound def declares a `pickup:` block AND carries a skill —
+  // the coordinator injects it AFTER work entry is accepted so it is submitted ahead of the boundary
+  // preamble (CWE-74). Absent when the def declares no `pickup:` block (the seam injects it) or has no skill.
+  skill?: string;
 }
 
 export interface AppLoopBootstrapCoordinatorDeps {
@@ -402,7 +399,24 @@ export interface AppLoopBootstrapCoordinatorDeps {
     loopName: string,
     stepId: string,
     entry: AppLoopEntry,
+    deferRequest: boolean,
   ): AppLoopEnterResult;
+  /** Inject the job's (already-collapsed) skill line, submitted, calling `onComplete` once its submit `\r`
+   *  has been written (§B.13c). The deferred work turn chains off that signal (§B.5 item 6, AC10). */
+  inject(text: string, onComplete: () => void): void;
+  /** True iff the shell is mid-command (§19.3): the skill is refused rather than typed into live stdin. */
+  isShellBusy(): boolean;
+  /** Surface a transient §19.3 notice on a later state push — distinct from `emitError`'s blocking dialog,
+   *  because a refusal on a step whose work turn is running fine is not an error (§B.5 item 6). */
+  emitNotice(notice: { repoDir: string; stepId: string; notice: string }): void;
+  /** Fire the work turn that `enterWork(…, true)` accepted but did not request — the engine requests it
+   *  now, chaining its boundary strictly after the skill's submit (§B.20a). */
+  triggerWork(job: AppLoopBootstrapJob): void;
+  /** Abandon a deferred-but-never-triggered work turn, freeing the runner (§B.20a). */
+  cancelWork(job: AppLoopBootstrapJob): void;
+  /** Arm the deferral deadline: `onLapse` fires if the injection never signals completion; the returned
+   *  canceller is invoked when completion does arrive (CWE-755 — never leave a turn accepted-but-unrequested). */
+  armDeferDeadline(onLapse: () => void): () => void;
   emitError(error: { repoDir: string; stepId: string; reason: string }): void;
   emitConflict(
     conflict: { repoDir: string; stepId: string } & AppBootstrapConflictTarget,
@@ -433,8 +447,8 @@ export function createAppLoopBootstrapCoordinator(
     { job: AppLoopBootstrapJob; target: AppBootstrapConflictTarget }
   >();
   const heldKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
-  const enterWork = (job: AppLoopBootstrapJob): AppLoopEnterResult =>
-    deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry);
+  const callEnterWork = (job: AppLoopBootstrapJob, deferRequest: boolean): AppLoopEnterResult =>
+    deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry, deferRequest);
   const audit = (job: AppLoopBootstrapJob, kind: AppBootstrapAuditKind, detail?: string): void => {
     try {
       if (detail === undefined) deps.audit(job.repoDir, kind, job.stepId);
@@ -444,6 +458,11 @@ export function createAppLoopBootstrapCoordinator(
   const emitError = (job: AppLoopBootstrapJob, reason: string): void => {
     try {
       deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason });
+    } catch {}
+  };
+  const emitNotice = (job: AppLoopBootstrapJob, notice: string): void => {
+    try {
+      deps.emitNotice({ repoDir: job.repoDir, stepId: job.stepId, notice });
     } catch {}
   };
   const emitConflict = (
@@ -479,6 +498,76 @@ export function createAppLoopBootstrapCoordinator(
       audit(job, 'rollback', combined);
       emitError(job, combined);
     }
+  };
+  // §B.5 item 6 / §B.20a: the turn was accepted-but-not-requested; inject the step's skill and chain its
+  // request off the injection's completion, so the repo-authored skill line is submitted before any boundary
+  // preamble (CWE-74). A deadline guards the gap: if completion never signals, revert rather than leave the
+  // step in_progress with a turn that occupies the runner but is never requested (CWE-755).
+  const handoffSkill = (job: AppLoopBootstrapJob, skill: string): void => {
+    let fired = false;
+    const cancelDeadline = deps.armDeferDeadline(() => {
+      if (fired) return;
+      fired = true;
+      const reason = `the work turn for step ${job.stepId} was never requested: its skill injection did not complete in time`;
+      audit(job, 'failure', reason);
+      try {
+        deps.cancelWork(job);
+      } catch {}
+      rollbackJob(job, reason);
+    });
+    try {
+      deps.inject(skill, () => {
+        if (fired) return;
+        fired = true;
+        try {
+          cancelDeadline();
+        } catch {}
+        try {
+          deps.triggerWork(job);
+        } catch (e) {
+          const reason = `could not start the work turn for step ${job.stepId}: ${errMsg(e)}`;
+          audit(job, 'failure', reason);
+          try {
+            deps.cancelWork(job);
+          } catch {}
+          rollbackJob(job, reason);
+        }
+      });
+    } catch (e) {
+      if (fired) return;
+      fired = true;
+      try {
+        cancelDeadline();
+      } catch {}
+      const reason = `could not inject the skill for step ${job.stepId}: ${errMsg(e)}`;
+      audit(job, 'failure', reason);
+      try {
+        deps.cancelWork(job);
+      } catch {}
+      rollbackJob(job, reason);
+    }
+  };
+  // §B.5 item 6: a bound def declaring a `pickup:` block has its skill injected AFTER work entry is
+  // accepted, not at the seam — so no synchronous revert arm below the injection can roll back a step whose
+  // agent turn is already live. Over a busy shell (§19.3) the skill is refused and BUSY_NOTICE surfaced, and
+  // the turn starts on the synchronous arm instead (item 4's no-injection case).
+  const enterWorkForJob = (job: AppLoopBootstrapJob): AppLoopEnterResult => {
+    const skill = job.skill;
+    const hasSkill = typeof skill === 'string' && skill.length > 0;
+    let busy = false;
+    if (hasSkill) {
+      try {
+        busy = deps.isShellBusy();
+      } catch {
+        busy = true;
+      }
+    }
+    const defer = hasSkill && !busy;
+    const result = callEnterWork(job, defer);
+    if (result !== 'entered') return result;
+    if (defer) handoffSkill(job, skill as string);
+    else if (hasSkill && busy) emitNotice(job, BUSY_NOTICE);
+    return result;
   };
   type CurrentJobStatus =
     | { kind: 'current' }
@@ -555,7 +644,7 @@ export function createAppLoopBootstrapCoordinator(
     }
     let result: AppLoopEnterResult;
     try {
-      result = enterWork(job);
+      result = enterWorkForJob(job);
     } catch (e) {
       const reason = `could not enter work for step ${job.stepId}: ${errMsg(e)}`;
       audit(job, 'failure', reason);
@@ -631,7 +720,7 @@ export function createAppLoopBootstrapCoordinator(
         if (result.ok) {
           let entryResult: AppLoopEnterResult;
           try {
-            entryResult = enterWork(job);
+            entryResult = enterWorkForJob(job);
           } catch (e) {
             const reason = `bootstrap succeeded but work entry failed: ${errMsg(e)}`;
             audit(job, 'failure', reason);

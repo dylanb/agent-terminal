@@ -15,8 +15,8 @@ export interface StatusBarDeps {
   openExternal(url: string): Promise<boolean> | void;
   /** Name `repoKey`'s work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): Promise<void>;
-  /** The human is blocked and sent to the panel's gate decision, recovery Retry, or stable Close entry
-   *  (§24.2.3 T4). `opener` lets the panel return focus without reaching into this DOM. */
+  /** The human is blocked and sent to the panel's gate decision, the work-turn route out, or stable Close
+   *  entry (§24.2.3 T4). `opener` lets the panel return focus without reaching into this DOM. */
   onAlertActivate(opener: HTMLElement): void;
   /** A name the user typed could not be saved. */
   onError(reason: string): void;

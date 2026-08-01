@@ -16,12 +16,10 @@ asarUnpack:
 extraResources:
   - from: build/icon.png
     to: icon.png
-  # The install-examples action (§18.1/§23.4/§26.5) reads the bundled trees at runtime; ship each under
+  # The install-examples action (§18.1/§23.4/§27.8) reads the bundled trees at runtime; ship each under
   # the path its packaged resolver reads back (process.resourcesPath/example/<tree>, see exampleAssets).
   - from: example/flow
     to: example/flow
-  - from: example/loops
-    to: example/loops
   # The §27 (v2) def tree — the app-bundled resolution tier read by resolveExampleLoopsV2Dir.
   - from: example/loops-v2
     to: example/loops-v2

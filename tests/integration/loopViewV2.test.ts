@@ -9,7 +9,7 @@ import { writeAppLoopState, enterPolish } from '../../src/main/appLoopState';
 // The §27 loop-view provider (the READ meeting point, engine-selected on the flow step's `app` namespace):
 // it resolves the bound app-def and produces the whole loop view the strip/panel render — a run-less view
 // (gate options display-only, no round has run) or a def-failure view carrying the reason (AC 6). It reads
-// no §26 loop state, so a §27 step renders with §26 defs and §26 loop state absent (AC "neither path").
+// no retired-engine loop state, so a §27 step renders with the retired engine's defs and loop state both absent (AC "neither path").
 
 const DEF = (opts: string[], reviewers: string[] = []): string => `version: v2
 name: plan-loop
@@ -33,7 +33,7 @@ pickup:
 let appDir: string;
 let repoDir: string;
 function tiers(): LoopDefV2Tiers {
-  return { operator: null, appBundled: join(appDir, 'loops-v2') };
+  return { operator: null, appBundled: join(appDir, 'loops-v2'), retired: null };
 }
 function plant(name: string, opts: string[], reviewers: string[] = []): void {
   const defDir = join(appDir, 'loops-v2', name);

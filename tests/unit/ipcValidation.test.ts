@@ -11,7 +11,6 @@ import {
   isValidFlowProvideInput,
   isValidFlowSetTitle,
   isValidFlowGithubRef,
-  isValidFlowGateDecision,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
@@ -189,19 +188,6 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowGithubRef(null)).toBe(false);
   });
 
-  it('confines a flow:gateDecision option to the known set + guards repoKey/session/note (§26.6 / L5)', () => {
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'approve' })).toBe(true);
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'request-changes' })).toBe(true);
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'impasse', note: 'why' })).toBe(true);
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'terminate' })).toBe(false); // not an offered option
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo' })).toBe(false); // option required
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'approve', note: 42 })).toBe(false); // note must be a string
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: 'relative', option: 'approve' })).toBe(false); // unsafe key
-    expect(isValidFlowGateDecision({ sessionId: 'other', repoKey: '/repo', option: 'approve' })).toBe(false); // dead session
-    expect(isValidFlowGateDecision([])).toBe(false); // not a record
-    expect(isValidFlowGateDecision(null)).toBe(false);
-  });
-
   it('confines a flow:appRouteOut action to the §27 set + guards repoKey/session/identity (§27.12/§6)', () => {
     const base = { sessionId: sid, repoKey: '/repo', step: 'plan', turnKey: 'work-plan' };
     expect(isValidFlowAppRouteOut({ ...base, action: 'retry' })).toBe(true);
@@ -266,7 +252,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
 
   it('the shared GATE_DECISION_OPTIONS set is widened additively by redo and polish (§27.9/§27.15)', () => {
     // §27 makes ONE additive change to the gate surface: the shared set gains redo and polish, alongside the
-    // §26 approve/request-changes/impasse. Single-sourced so the type and the wire validator cannot drift.
+    // base approve/request-changes/impasse. Single-sourced so the type and the wire validator cannot drift.
     expect(GATE_DECISION_OPTIONS).toContain('redo');
     expect(GATE_DECISION_OPTIONS).toContain('polish');
     expect(GATE_DECISION_OPTIONS).toContain('approve');
@@ -310,13 +296,6 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: [0] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: ['1'] })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: 321 })).toBe(false);
-  });
-
-  it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {
-    for (const option of GATE_DECISION_OPTIONS) {
-      expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option })).toBe(true);
-    }
-    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'defer' })).toBe(false);
   });
 
   it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {

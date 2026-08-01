@@ -11,8 +11,8 @@
 // of the well-formedness gate (§27.12c/AC8).
 //
 // The in-flight turn STATE MACHINE — inject-when-injectable, the boundary preamble drain, retry-once, the
-// stall watchdog — is reused read-only from the §26 turn runner (loopOrchestrator.ts, the plan's authorized
-// "read-only §26-cited copy"); this module owns only the §27-specific run state, the artifact-marker gate,
+// stall watchdog — is reused from the §27 turn runner (loopOrchestrator.ts); this module owns only the
+// §27-specific run state, the artifact-marker gate,
 // and the route-out. Every effect is a domain port the host wires to the injector, the §8.3 quiescence
 // signal, the stall timer, the §27 loop-state writer, and the flow — never the primitives behind them.
 
@@ -31,7 +31,7 @@ import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } f
 import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
-/** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
+/** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
 const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILENAME;
 
@@ -113,7 +113,7 @@ export interface AppLoopEngineDeps {
   persist(repoDir: string, state: AppLoopRunState): void;
   /** Record a §25 audit event for the turn (best-effort; never aborts the turn). */
   audit(repoDir: string, cmd: string, exit: number | null): void;
-  /** §27-only error push so the renderer surfaces the reason (never a silent stop, §26.3/D48 parallel). */
+  /** §27-only error push so the renderer surfaces the reason (never a silent stop, §27.12/D48 parallel). */
   emitError(reason: string): void;
   /** The live loop view changed — the panel/strip re-pull. */
   onViewChanged(): void;
@@ -129,10 +129,23 @@ export interface AppLoopEngineDeps {
 }
 
 export interface AppLoopEngine {
-  /** §27.10 */
+  /** §27.10 — free to accept a new turn: the runner is idle AND no accepted-but-not-yet-requested turn
+   *  occupies it (the §B.20a deferral gap counts as in-flight, so a second entry in the gap is refused). */
   canEnter(): boolean;
-  /** §27.10 */
-  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): AppLoopEnterResult;
+  /** §27.10 — enter a work turn. With `opts.deferRequest` (§B.20a / §B.5 item 6) the turn is ACCEPTED
+   *  (answers `'entered'`, occupies the runner, persists `working`) but its `requestTurn` is DEFERRED to a
+   *  caller-supplied trigger — the coordinator fires `triggerDeferredTurn` from the skill injection's own
+   *  completion so the two injections never share the agent's input line (AC10/CWE-74). Without the flag the
+   *  request fires synchronously on the initial arm, exactly as before. */
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean }): AppLoopEnterResult;
+  /** §B.20a — fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm (§B.5 item 4b): re-arm
+   *  quiescence and wait for a fresh settle before injecting the boundary, so the deferred turn cannot race
+   *  the skill injection whose completion triggered it. Inert if no turn is awaiting its trigger. */
+  triggerDeferredTurn(): void;
+  /** §B.20a / §B.5 item 6(a) — abandon a turn deferred by `enter({ deferRequest })` without requesting it,
+   *  freeing the runner. The coordinator calls this on the deferral's deadline lapse before it reverts the
+   *  step, so a turn is never left un-requested with the runner occupied. Inert if no turn is awaiting. */
+  cancelDeferredTurn(): void;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn. */
   onInjectable(): void;
   /** The turn's done-file fired (host-watched, key-matched) — gate completion (§27.12). */
@@ -337,6 +350,10 @@ function activeTurnFor(
 
 export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let active: ActiveAppTurn | null = null;
+  // §B.20a — a turn accepted by `enter({ deferRequest })` whose `requestTurn` is deferred to a caller
+  // trigger. Set true from `entered` until `triggerDeferredTurn`/`cancelDeferredTurn`; while true the runner
+  // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle (§B.5 item 6(b)).
+  let awaitingTrigger = false;
   let runner: TurnRunner;
   // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
@@ -533,7 +550,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     inject: (prompt, opts) => {
       // Clear the prior turn's done-signal at the PROMPT inject (not the preamble): any earlier and a
-      // completion arriving during the boundary drain would be dropped (§26.3/D46 parallel).
+      // completion arriving during the boundary drain would be dropped (§27.12/D46 parallel).
       if (!opts?.preamble && active) clearTurnDone(active.repoDir, APP_TURN_DONE_SUBDIR);
       deps.inject(prompt);
     },
@@ -574,10 +591,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     noteSettle: () => deps.noteSettle(),
   });
 
-  const start = (turn: ActiveAppTurn): void => {
+  const start = (turn: ActiveAppTurn, defer = false): void => {
     active = turn;
     persist('working');
     deps.audit(turn.repoDir, `§27 work turn ${turn.turnKey} boundary: ${turn.boundaryCmd}`, null);
+    // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
+    // it from the skill injection's completion so the two never share the input line (AC10/CWE-74). The
+    // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap (§B.5 item 6(b)).
+    if (defer) {
+      awaitingTrigger = true;
+      return;
+    }
     runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
   };
 
@@ -752,10 +776,24 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   return {
     canEnter() {
-      return runner.state() !== 'in-flight';
+      return runner.state() !== 'in-flight' && !awaitingTrigger;
     },
-    enter(repoDir, loopName, stepId, entry) {
-      if (runner.state() === 'in-flight') return 'busy';
+    triggerDeferredTurn() {
+      if (!awaitingTrigger || !active) return;
+      awaitingTrigger = false;
+      // §B.5 item 4b — the chained arm: re-arm quiescence and wait for a fresh settle, never inject on the
+      // stale quiet the just-submitted skill left behind.
+      runner.requestTurn(active.turnKey, { preamble: active.boundaryCmd, forceChained: true });
+    },
+    cancelDeferredTurn() {
+      if (!awaitingTrigger) return;
+      // §B.5 item 6(a) — the deadline lapsed with no completion signal: drop the accepted-but-unrequested
+      // turn so the runner is free, then the coordinator reverts the flow step. No request was ever issued.
+      awaitingTrigger = false;
+      active = null;
+    },
+    enter(repoDir, loopName, stepId, entry, opts) {
+      if (runner.state() === 'in-flight' || awaitingTrigger) return 'busy';
       const r = deps.resolveDef(repoDir, loopName);
       if (!r.ok) return 'unresolved';
       // §27.9/AC6 — a fresh clean-slate work turn owns no prior stand-down: clear any stale polish so an
@@ -783,7 +821,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
       }
       setCarry(repoDir, stepId, ids);
-      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
+      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }), opts?.deferRequest === true);
       return 'entered';
     },
     onInjectable() {

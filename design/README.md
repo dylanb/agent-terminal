@@ -1,5 +1,7 @@
 # Design — Agent Terminal UI (Phase 1, spec §24.1)
 
+> **Status (as of 2026-07-30, post-N8):** pre-N8 design study, left standing as history. The `.agent-loop` bridge, the v4 `state.yaml` mirror and the per-LoopDef status/gate mechanics named below in the present tense belong to the **retired** external engine (spec §26); the shipped engine is the in-app §27 loop engine. The design language and surfaces remain current — the engine plumbing they name does not.
+
 UI-inwards build of the flow-management three-view shell. Process: **Mood → Options → Implement** (§24.1A/B/C).
 
 ## Status

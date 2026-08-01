@@ -27,10 +27,10 @@ describe('githubHttpsHref — the open-external allow-list returns the NORMALIZE
   });
 });
 
-// §26.9 — epic-promote / pickup read the issue/PR number back from `gh …` stdout (a URL ending in
+// §18.3 — epic-promote / pickup read the issue/PR number back from `gh …` stdout (a URL ending in
 // `/<number>`). A drifted/failed output must degrade to null so the ref is simply dropped, never
 // crashing the best-effort transition.
-describe('numberFromGithubUrl (§26.9 gh create stdout — one parser for every gh caller)', () => {
+describe('numberFromGithubUrl (§18.3 gh create stdout — one parser for every gh caller)', () => {
   it('pulls the trailing number from a gh issue/PR URL', () => {
     expect(numberFromGithubUrl('https://github.com/o/r/issues/502\n')).toBe(502);
     expect(numberFromGithubUrl('  https://github.com/o/r/pull/17  ')).toBe(17);

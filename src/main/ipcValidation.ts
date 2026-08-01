@@ -26,8 +26,6 @@ import {
   type FlowRequestMsg,
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
-  type FlowGateDecisionMsg,
-  type FlowResolveBootstrapConflictMsg,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
@@ -180,20 +178,8 @@ export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
   );
 }
 
-/** flow:gateDecision — the human's gate option (§26.6 / L5). `option` is confined to the known set;
- *  `note` (optional) is the free-text reason written to human-notes/{iter}.md. */
-export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
-  return (
-    isRecord(m) &&
-    isLiveSession(m) &&
-    isSafeRepoKey(m.repoKey) &&
-    (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option) &&
-    (m.note === undefined || typeof m.note === 'string')
-  );
-}
-
-/** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set
- *  (never a §26 gate option); `repoKey` becomes a filesystem path so it gets the safe-path guard; `step`
+/** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;
+ *  `repoKey` becomes a filesystem path so it gets the safe-path guard; `step`
  *  and `turnKey` are the non-empty identity the receiver acts on (§6). */
 export function isValidFlowAppRouteOut(m: unknown): m is FlowAppRouteOutMsg {
   return (
@@ -264,13 +250,6 @@ export function isValidFlowAppRedo(m: unknown): m is FlowAppRedoMsg {
  *  path so it gets the safe-path guard; `step` is the non-empty identity the receiver acts on (§6). */
 export function isValidFlowArmInterrupt(m: unknown): m is FlowArmInterruptMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.step === 'string' && m.step.length > 0;
-}
-
-/** flow:resolveBootstrapConflict — the operator's answer to a §26.9 bootstrap conflict. `wipe` selects
- *  wipe-and-retry (true) vs roll-back (false); `repoKey` becomes a filesystem path, so it gets the same
- *  safe-path guard as the other flow channels. */
-export function isValidFlowResolveBootstrapConflict(m: unknown): m is FlowResolveBootstrapConflictMsg {
-  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.wipe === 'boolean';
 }
 
 export function isValidFlowResolveAppBootstrapConflict(

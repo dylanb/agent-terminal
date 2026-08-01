@@ -150,8 +150,8 @@ describe('status bar model (§22.3.1)', () => {
 
   describe('the engine activity', () => {
     it('carries the phrase the engine reports', () => {
-      expect(deriveStatusBar(view({ loopActivity: loopActivity('reviewers') })).activity).toEqual({
-        phrase: 'Running reviewers',
+      expect(deriveStatusBar(view({ loopActivity: loopActivity('pickup', { issue: 40 }) })).activity).toEqual({
+        phrase: 'Bootstrapping #40',
       });
     });
 
@@ -163,12 +163,12 @@ describe('status bar model (§22.3.1)', () => {
       const m = deriveStatusBar(
         view({
           refs: { pr: 57 },
-          loopActivity: loopActivity('consolidate'),
+          loopActivity: loopActivity('pickup', { issue: 12 }),
           loop: loop({ status: 'awaiting-human-pr-approval', humanNeeded: true }),
         }),
       );
       expect(m.title).toEqual({ kind: 'pr', number: 57 });
-      expect(m.activity).toEqual({ phrase: 'Consolidating reviews' });
+      expect(m.activity).toEqual({ phrase: 'Bootstrapping #12' });
       expect(m.alert).not.toBeNull();
     });
   });

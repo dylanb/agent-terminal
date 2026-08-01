@@ -14,13 +14,6 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 
-// §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
-// into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
-const RETIRED_SENTINEL = (turnKey: string): string => `<<<agent-loop:turn-done:${turnKey}>>>`;
-
-/** How long a falsely-completed work turn would need to fan the reviewers out. Comfortably longer than the
- *  chain's own settle, and well under the stall watchdog, so the absence it proves is a real absence. */
-const FALSE_COMPLETION_GRACE_MS = 6_000;
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 // Every launch pins APP_SHELL=bash so the bash-only shell-integration path (OSC 7/133, §15.5)
@@ -298,7 +291,7 @@ test('the terminal view carries no selection toolbar (Send/Capture/Clear removed
 
 test('the CMD-3 Todos/Review-gate view is gone (view 3 + gate mock removed)', async () => {
   // The fixture-mocked view 3 (Todos beside the Review-gate mock) and its ⌘3 nav button were
-  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the §26 panel.
+  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the docked loop panel.
   await expect(page.locator('[data-viewpane="3"]')).toHaveCount(0);
   await expect(page.locator('[data-viewbtn="3"]')).toHaveCount(0);
   await expect(page.locator('#gate-panel')).toHaveCount(0);
@@ -1675,6 +1668,10 @@ function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
 // §24.2.3 T3 — second step is a loop with `bootstrap: pickup` and a required typed input
 // (§18.3/§18.4): entering prompts via the modal, Confirm injects `agent-loop pickup <input>`
 // (subject to the §19.3 busy refusal) and persists the value.
+// A §27 loop step (explicit `loop_namespace: app`) with a REQUIRED github-ticket input, so entering it
+// opens the typed-input modal (§18.4). Bound to `impl-loop`, which declares NO `pickup:` block, so entry
+// runs only a work turn (no git/gh bootstrap ports) — the input-resolution and input-clearing behaviours
+// under test are engine-neutral and unaffected by that turn.
 function seedBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1683,35 +1680,17 @@ function seedBootstrapFlowRepo(prefix: string): string {
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
-      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+      '  - id: plan\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
-  );
-  return dir;
-}
-
-// §26 D42a — a chain flow whose plan loop step is FOLLOWED by an `implement` loop step (no bootstrap):
-// approving the plan gate reaches a success terminal, so the flow auto-advances plan → implement. Same
-// pickup-driven plan step as seedBootstrapFlowRepo, plus the successor the auto-advance lands on.
-function seedChainFlowRepo(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(dir, '.git'), { recursive: true });
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n' +
-      '  - id: groom\n    kind: manual\n' +
-      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
-      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
-      '  - id: implement\n    kind: loop\n    loop: impl-loop\n',
   );
   return dir;
 }
 
 const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 
-// §26.13 test seam — the orchestrator's in-app pickup (§26.9) shells real git/gh. e2e prepends a fake
-// gh + git on PATH that record their argv and emit canned output (no network/auth/remote), so the run
-// is deterministic on a real PTY: the PTY + shell are real, only the bootstrap helpers are stubbed.
+// The §27 bootstrap shells real git/gh. e2e prepends a fake gh + git on PATH that record their argv
+// and emit canned output (no network/auth/remote), so the run is deterministic on a real PTY: the PTY
+// + shell are real, only the bootstrap helpers are stubbed.
 // Returns the bin dir to prepend to PATH and the log file the fakes append every invocation to.
 function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   const binDir = mkdtempSync(join(tmpdir(), prefix));
@@ -1724,10 +1703,10 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
-    // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
+    // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
     'if [ "$1" = "status" ] && [ "$2" = "--porcelain" ] && [ "$#" -eq 2 ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
-    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
+    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a bootstrap branch conflict.
     'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
     'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
     // show-ref --verify is the local half of the §27.10 conflict probe: exit 1 (not 128) when the ref is
@@ -1773,19 +1752,19 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
-    // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
+    // epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; exit 0; fi\n' +
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
-    // pickup mid-flight (the branch is created, state.yaml not yet written) long enough to terminate the
-    // flow and prove the async completion drops as stale (§26.9).
+    // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
+    // flow and prove the async completion drops as stale.
     'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo "[]"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.pr-label"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then echo "$3" > "$FAKE_GHGIT_LOG.pr-ready"; exit 0; fi\n' +
-    // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
+    // CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
     // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
     // test can hold the snapshot's RESULT back to prove the loop reaches its gate before the snapshot lands.
@@ -1796,242 +1775,39 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   return { binDir, logFile };
 }
 
-// §26.13 test seam — the deterministic fake hosted agent (the analogue of the engine's `fakeclaude`).
-// Written into the same PATH-prepended bin dir as the fake gh/git; launched as the terminal's
-// foreground REPL so the orchestrator's injected work-{phase} prompt reaches its stdin. Each injected
-// line drives the scripted turn for `mode`: `write-plan` writes the artifact + emits BOTH done-signals
-// (sentinel line + `.agent-loop/turn-done`), `plan-only` writes the artifact but NO signal (drives the
-// manual mark-complete path), `noop` produces nothing (drives retry-then-error). The sentinel + file
-// name are generated from the shared contract so the seam cannot drift from the detectors.
-// The plan-loop reviewer roster (§26.4) — the real six personas the fan-out turn must satisfy. `missing`
-// mode omits the last one so the orchestrator sees a partial fan-out and drives retry-then-error.
-const PLAN_PERSONAS = [
-  'review-principal',
-  'review-security',
-  'review-architecture',
-  'review-intent',
-  'review-maintainability',
-  'review-contracts',
-];
-
-// Signal a turn done by writing the turn-done FILE (§26.3/D47a — the sole completion signal since §26 D42a
-// retired the printable sentinel line). Contents are exactly the turn key, which main key-matches.
-function doneSignal(turnKey: string): string {
-  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
-}
-
-// Alias kept for the tests that name the file half explicitly — identical to doneSignal now that
-// completion is file-only.
-function fileOnlySignal(turnKey: string): string {
-  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
-}
-
-function seedFakeAgent(
-  binDir: string,
-  opts: {
-    work: 'write-plan' | 'file-only' | 'plan-only' | 'noop';
-    reviews?: 'all' | 'missing';
-    consolidate?: 'clean' | 'needs-work';
-    // §26.6/L6 — when set, iteration 1's consolidate verdict is this INSTEAD of `consolidate` (later
-    // iterations use `consolidate`). Lets an e2e reach a gate at iteration 1 (e.g. clean → approval) and
-    // then exercise needs-work cap routing on the following iterations without extra rounds.
-    consolidateIter1?: 'clean' | 'needs-work';
-    // §26.8/L6 — the consolidated `findings_kept` the stuck detector signs. `stable` writes the same
-    // finding every iteration (identical signature → stuck at x2); `changing` stamps the iteration into
-    // the finding (a fresh signature each round → never stuck). Absent → no kept findings (empty signature).
-    findings?: 'stable' | 'changing';
-    // §26.10/L7 — when set, the work turn writes a deterministic session-JSONL token fixture into the
-    // test-controlled log root ($APP_SESSION_LOG_ROOT) so the cost meter has tokens to price without an
-    // LLM. 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the checked-in pricing table.
-    costFixture?: boolean;
-    // §26.9/L8 — when set, the work turn writes a plan.md whose frontmatter classifies it an epic with a
-    // three-sub-ticket breakdown, so epic-promote at the plan-approval gate creates the N-1 (=2) sub-issues.
-    epicPlan?: boolean;
-    // §26.11/L8 — when set, each turn appends to `.agent-loop/<turn>-ran` when it runs, so a resume e2e can
-    // prove a completed turn was NOT re-executed (the marker for a skipped turn stays absent).
-    turnMarkers?: boolean;
-    // §8.3/§26.2 — when set, the agent enters the alt screen and repaints an IDENTICAL idle frame on a
-    // ~200ms timer (< QUIET_MS) from a background writer that never reads stdin, modelling a full-screen TUI
-    // agent (Claude Code, Codex) that is never byte-silent even at rest. This is the one agent shape the
-    // line-oriented REPL cannot otherwise produce. Under byte-presence quiescence the repaint pins
-    // agentState 'active' forever, so the §26.2 gate reads `busy` and defers the work turn indefinitely;
-    // content-diff quiescence (§8.3) sees an unchanged frame, reaches quiet, and the turn injects.
-    idleRepaint?: boolean;
-    // §26.3 — when set, the work turn STREAMS changing lines (~9s of new content faster than the stall
-    // window) BEFORE it writes plan.md and signals done. Each changed line is a §8.3 content edge that
-    // resets the stall watchdog, so a turn that runs far past a short APP_TURN_TIMEOUT_MS still advances.
-    // Under a wall-clock deadline (or with the activity reset unwired) the same turn is killed mid-stream.
-    slowWork?: boolean;
-    // §26 D42a — when set, the work turn PRINTS the retired done-signal sentinel line (alone on a line) but
-    // writes NO turn-done file. Pair with work:'plan-only' to reproduce the false-completion the retired
-    // line-scanner caused (a real TUI reflowed the injected instruction's echo onto its own line): under
-    // the fix, a printed sentinel must NOT complete the turn — only the file does.
-    printBareSentinel?: boolean;
-  },
-): void {
-  // A per-turn execution marker (§26.11 resume): its presence proves that turn actually ran this session.
-  const mark = (turn: string): string => (opts.turnMarkers ? `mkdir -p .agent-loop; printf x >> .agent-loop/${turn}-ran; ` : '');
-  const writePlan = opts.epicPlan
-    ? "mkdir -p .agent-loop; printf '%s\\n' '---' 'classification: epic' 'sub_tickets:' " +
-      "'  - title: Slice one' '  - title: Slice two' '  - title: Slice three' '---' '' '# Plan' > .agent-loop/plan.md"
-    : "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
-  // The token log the §26.10 meter reads (Claude Code's private JSONL shape). Guarded on the env var so only
-  // the L7 test (which sets it) writes a fixture. It reproduces the four shapes a real project dir holds:
-  //   stale.jsonl    a session from BEFORE this flow began (opus, 1M input = $15) — outside the run's window
-  //   session.jsonl  this run's work turn (sonnet-5, 1M input = $3.00), written TWICE under one billing
-  //                  identity, as a resumed session replays it — the API billed it once
-  //   subagents/     a reviewer subagent nested under the session dir (sonnet-5, 100k output = $1.50)
-  //   <synthetic>    Claude Code's zero-token API-error turn — bills nothing, so no `+unknown`
-  // A correctly scoped, deduped, recursive, synthetic-skipping meter reads exactly $4.50.
-  const jsonl = (ts: string, id: string, model: string, usage: string): string =>
-    `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
-  const emit = (obj: string, file: string, redirect = '>'): string =>
-    `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'")}' ${redirect} "${file}"; `;
-  const root = '$APP_SESSION_LOG_ROOT';
-  const writeTokens = opts.costFixture
-    ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "${root}/session-uuid/subagents"; ` +
-      // The current second at .999 — always at or after the instant the flow started, which lies in this
-      // second or an earlier one, whatever the sub-second offset.
-      `NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ` +
-      emit(jsonl('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${root}/stale.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'rev', 'claude-sonnet-5', '"output_tokens":100000'), `${root}/session-uuid/subagents/agent-x.jsonl`) +
-      `fi`
-    : '';
-  // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
-  // must reset the watchdog. Runs BEFORE plan.md so a killed turn leaves no artifact (a clean RED landing).
-  const workStream = opts.slowWork ? "for i in $(seq 1 30); do printf 'working %s\\n' \"$i\"; sleep 0.3; done; " : '';
-  // §26 D42a — print the retired sentinel alone on a line (no file). Proves a printed line never completes.
-  const bareSentinel = opts.printBareSentinel ? `; printf '\\n<<<agent-loop:turn-done:work-plan>>>\\n'` : '';
-  const workAct =
-    opts.work === 'noop'
-      ? ':'
-      : opts.work === 'plan-only'
-        ? `${mark('work')}${writePlan}${writeTokens}${bareSentinel}`
-        : opts.work === 'file-only'
-          ? `${mark('work')}${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
-          : `${mark('work')}${workStream}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
-  // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
-  // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
-  const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
-  // §26.4 — on the reviewers turn, write each roster persona's JSON for the iteration then signal done.
-  // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
-  const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
-  // §26.5/L6 — stamp the iteration into each review so a carried-forward (reused) review is distinguishable
-  // from a freshly-written one: a pruned persona's reviews/<iter>/ file keeps the PRIOR iteration's stamp.
-  const writeReviews =
-    `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
-    personas
-      .map((p) => `printf '{\"verdict\":\"clean\",\"seen_iter\":%s}' \"$iter\" > .agent-loop/reviews/$iter/${p}.json`)
-      .join('; ');
-  const reviewAct = opts.reviews === undefined ? ':' : `${mark('reviewers')}${writeReviews}; ${doneSignal('review-plan')}`;
-  // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
-  // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
-  const verdictExpr = opts.consolidateIter1
-    ? `if [ "$iter" = "1" ]; then verdict='${opts.consolidateIter1}'; else verdict='${opts.consolidate}'; fi`
-    : `verdict='${opts.consolidate}'`;
-  // §26.8/L6 — the kept findings the signature is computed over. `stable` is identical each iteration
-  // (single-quoted, no expansion); `changing` stamps $iter (double-quoted so bash expands it).
-  const keptAssign =
-    opts.findings === 'stable'
-      ? `kept='[{"severity":"major","message":"stable finding"}]'`
-      : `kept="[{\\"severity\\":\\"major\\",\\"message\\":\\"iter $iter\\"}]"`;
-  const findingsSetup = opts.findings ? `${keptAssign}; ` : '';
-  const printfFmt = opts.findings ? `{\"verdict\":\"%s\",\"findings_kept\":%s}` : `{\"verdict\":\"%s\"}`;
-  const printfArgs = opts.findings ? `\"$verdict\" \"$kept\"` : `\"$verdict\"`;
-  const consolidateAct =
-    opts.consolidate === undefined
-      ? ':'
-      : `${mark('consolidate')}${getIter}; ${verdictExpr}; ${findingsSetup}mkdir -p .agent-loop/reviews/$iter; ` +
-        `printf '${printfFmt}' ${printfArgs} > .agent-loop/reviews/$iter/consolidated.json; ` +
-        `${doneSignal('consolidate-plan')}`;
-  // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
-  // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
-  // §8.3 — before the read loop, a repainting agent enters the alt screen and repaints an identical idle
-  // frame every 200ms from a background writer redirected off stdin (so the REPL below still owns injected
-  // input). The EXIT trap reaps the writer when the process closes. Bytes never stop; the frame never changes.
-  const repaintPrelude = opts.idleRepaint
-    ? "printf '\\x1b[?1049h'\n" +
-      "( while :; do printf '\\x1b[2J\\x1b[Hclaude idle >'; sleep 0.2; done ) </dev/null &\n" +
-      'RPID=$!\n' +
-      "trap 'kill $RPID 2>/dev/null' EXIT\n"
-    : '';
-  const script =
-    '#!/usr/bin/env bash\n' +
-    '# Fake hosted agent REPL; each injected prompt line drives the scripted turn (§26.13).\n' +
-    repaintPrelude +
-    'while IFS= read -r line; do\n' +
-    '  [ -z "$line" ] && continue\n' +
-    '  case "$line" in\n' +
-    // §26.3/D46 — record each injected `/clear` boundary so the e2e can assert the orchestrator issued it
-    // (the echo scrolls out of the visible xterm-rows behind the next prompt, so a marker file is stable).
-    '    /clear) mkdir -p .agent-loop; printf x >> .agent-loop/clear-seen ;;\n' +
-    `    *turn-done:work-plan*) ${workAct} ;;\n` +
-    `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
-    `    *turn-done:consolidate-plan*) ${consolidateAct} ;;\n` +
-    // §26 D42a — record that the IMPL loop's first work prompt reached the agent, then COMPLETE the turn by
-    // writing the turn-done file (the impl work turn produces code, not a plan.md deliverable, so completion
-    // is the turn-done file alone — §26.3/D47a). Completing advances the run to the impl reviewers turn.
-    `    *turn-done:work-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-work-ran; ${fileOnlySignal('work-impl')} ;;\n` +
-    // Record that the impl REVIEWERS prompt reached the agent — proof the impl work turn completed on the
-    // turn-done file and the run advanced into the impl loop's fan-out (turnKey review-impl).
-    '    *turn-done:review-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-review-ran ;;\n' +
-    '  esac\n' +
-    'done\n';
-  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
-}
-
 // LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
 // defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
 const exampleConfigDir = join(process.cwd(), 'example');
 
-// §24.2.3 T2 — step 2 is a `loop` bound to a LoopDef, plus a real v4 agent-loop state.yaml the app
-// mirrors read-only. Returns the state.yaml path so the test hand-edits it (standing in for the
-// human driving agent-loop) and watches the strip update.
-function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
+// §24.2.3 T7 — refs come from the flow's TYPED INPUTS now (§18.4); the retired engine's state-mirror
+// source (linked_issues/pr) went with the bridge (§F item 12). A pre-loop MANUAL `groom` step then a
+// `work` step declaring the ticket/PR typed inputs, whose values are pre-resolved in flow-state.yaml, so
+// the refs are progress-gated on entering `work` (they render as the §24.2.3 T7 "Flow" refs read-out). A
+// residual `.agent-terminal/loop/run-state.yaml` sits on disk that the app never writes — a test proves the
+// display clears without that run-state being touched. Returns its path for that assertion.
+function seedRefsFlowRepo(prefix: string, ticket = '25', pr = '179'): { dir: string; runStateFile: string } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n',
+    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
+      '  - id: work\n    kind: manual\n    inputs:\n' +
+      '      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n',
   );
-  // Hermetic LoopDef resolution (§18.1): a repo-local .agent-loop.yaml registry override points at a
-  // working-tree LoopDef copy, so the gate model resolves without the machine's ~/.claude/loops install.
-  writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
   writeFileSync(
-    join(dir, 'impl-loop.yaml'),
-    'name: impl-loop\nschema_version: "4"\ngates:\n' +
-      '  - id: awaiting-human-pr-approval\n    kind: approve-required\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-human-impl-triage\n    kind: triage\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-team-review\n    kind: terminal\n    human_options: []\n',
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: groom\nstatus: not_started\ninputs:\n  ticket: "${ticket}"\n  pr: "${pr}"\n`,
   );
-  const loopDir = join(dir, '.agent-loop');
+  const loopDir = join(dir, '.agent-terminal', 'loop');
   mkdirSync(loopDir, { recursive: true });
-  return { dir, stateFile: join(loopDir, 'state.yaml') };
-}
-
-// §24.2.3 T7 — a single MANUAL step plus a state.yaml carrying a PR + linked_issues, so the
-// ticket/PR refs resolve and surface even though the step is not a loop step. Returns the state.yaml
-// path for the test to seed.
-function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(dir, '.git'), { recursive: true });
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: work\n    kind: loop\n    loop: work-loop\n',
-  );
-  const loopDir = join(dir, '.agent-loop');
-  mkdirSync(loopDir, { recursive: true });
-  return { dir, stateFile: join(loopDir, 'state.yaml') };
+  const runStateFile = join(loopDir, 'run-state.yaml');
+  writeFileSync(runStateFile, 'schema_version: 1\nloop: work-loop\nstep: work\nturn_key: t1\nstatus: complete\nround: 9\n');
+  return { dir, runStateFile };
 }
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
-const statusActivity = () => page.locator('#status-bar .sb-activity');
 const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 
 // Fire main's flow:revealLoop push directly (§24.2.3 T4) so the real renderer reveal path runs. The
@@ -2217,45 +1993,48 @@ test('todo edits during an active flow are recorded; none when no flow is active
   rmSync(home, { recursive: true, force: true });
 });
 
-// Phase 2 (§25.5): the agent-loop bridge feeds the run. Entering a loop step records the state.yaml
-// mirror; a hand-edit (the human driving agent-loop) appends the change live.
-test('a loop step records the state.yaml mirror and live edits append loop.status (§25.5)', { tag: '@ownapp' }, async () => {
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-audit-loop-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+// Phase 2 (§25.5): the §27 engine's run-state feeds the audit. Entering a loop step records the run
+// state; its status changes append live.
+test('a §27 loop step records its run-state and its status changes append loop.status + an empty outputs.snapshot (§25.5)', { tag: '@ownapp' }, async () => {
+  // The §27 engine's OWN run-state changes (through `working` to the `complete` gate) are what the §25
+  // recorder observes now — the retired external state-mirror source is gone (§F). Driven by a real turn.
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-audit-loop-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-audit-loop-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom (manual): run opens
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Start → enter the app plan-loop step → run opens, the §27 work turn starts
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
-  await flowControl().click(); // Advance → build (loop): the state.yaml mirror is observed
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   const file = (): string => auditRunFiles(home, repo)[0];
+  // loop.status appends on each run-state status change; the round the consolidator judged appends
+  // loop.iteration. pr.assoc CANNOT fire — the §27 run-state carries no PR number (§F).
   await expect
     .poll(() => readAuditRun(home, repo, file()).events.map((e) => e.type))
-    .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration', 'pr.assoc']));
-  const pr = readAuditRun(home, repo, file()).events.find(
-    (e): e is Extract<AuditEvent, { type: 'pr.assoc' }> => e.type === 'pr.assoc',
-  );
-  expect(pr?.pr).toBe(179);
-  // The status change snapshots the .agent-loop/ files (path + bytes) — here state.yaml itself (§25.5).
-  const snap = readAuditRun(home, repo, file()).events.find(
-    (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
-  );
-  expect(snap?.files.map((f) => f.path)).toContain('.agent-loop/state.yaml');
-
-  // A hand-edit of state.yaml (no app action) re-pulls the mirror and appends the status change.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+    .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration']));
+  expect(readAuditRun(home, repo, file()).events.some((e) => e.type === 'pr.assoc')).toBe(false);
+  // The turn passes through `working` then `complete`, so at least two distinct loop.status events append.
   await expect
     .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'loop.status').length)
     .toBeGreaterThanOrEqual(2);
+  // Each status change still snapshots the retired .agent-loop/ area read-only (§25.5); a §27 repo has no
+  // such directory, so the snapshot is empty — a documented residue of the retired engine (§F).
+  const snap = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
+  );
+  expect(snap?.files).toEqual([]);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', { tag: '@ownapp' }, async () => {
@@ -2286,53 +2065,6 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
     (e): e is Extract<AuditEvent, { type: 'ticket.assoc' }> => e.type === 'ticket.assoc',
   );
   expect(ticket?.ticket).toBe(176);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-});
-
-test('in-app pickup records a `pickup` command event with its exit (§26.9 / §25.5)', { tag: '@ownapp' }, async () => {
-  // The retired §24.2.3 T3 injected `agent-loop pickup` (recorded via an OSC-133 span). §26.9 runs
-  // pickup out-of-band in the app, so the audit `command` event now comes from the runner directly,
-  // with source `pickup` and exit 0 on success (the fake gh/git make it deterministic).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-cmd-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-cmd-home-'));
-  const { binDir } = seedFakeGhGit('agent-term-e2e-cmd-bin-');
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: join(binDir, 'calls.log'),
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom: run opens
-  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
-  await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-
-  const file = (): string => auditRunFiles(home, repo)[0];
-  await expect
-    .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'command').length, { timeout: 15_000 })
-    .toBeGreaterThanOrEqual(1);
-  const cmd = readAuditRun(home, repo, file()).events.find(
-    (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
-  );
-  expect(cmd?.source).toBe('pickup');
-  expect(cmd?.cmd).toContain('176');
-  expect(cmd?.exit).toBe(0); // fake gh/git succeed, so the pickup reports success
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -2410,7 +2142,7 @@ function installEnv(home: string, configDir: string): Record<string, string> {
   };
 }
 
-test('installing the bundled examples seeds the flow, app and legacy loop definitions, skills and commands (§18.1/§23.4/§26.5 #41/#78)', { tag: '@ownapp' }, async () => {
+test('installing the bundled examples seeds the flow, app and commands (§18.1/§23.4 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group — and that a repo with no local flow
   // renders the bundled steps.
@@ -2431,11 +2163,10 @@ test('installing the bundled examples seeds the flow, app and legacy loop defini
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'appLoops', 'loops', 'skills', 'commands']) {
+  for (const dest of ['flow', 'appLoops', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
   await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
-  await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
@@ -2444,12 +2175,6 @@ test('installing the bundled examples seeds the flow, app and legacy loop defini
   expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
-  // The persona skills fanned in to the location Claude Code loads skills from.
-  expect(existsSync(join(configDir, 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
-  expect(existsSync(join(configDir, 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
 
@@ -2533,9 +2258,10 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   // bundle, which is exactly the content that pushed the footer off-screen.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
-  // The manifest lists only files that are present AND differ, so seeding ONE conflicting file would
-  // render a ONE-path manifest — and the footer assertion below would pass against content that never
-  // overflowed anything. Conflict the WHOLE loops bundle, which is the content that clipped the footer.
+  // The manifest lists only files that are present AND differ, so a one-file conflict would render a
+  // one-path manifest — and the footer assertion below would pass against content that never overflowed
+  // anything. Conflict the WHOLE example bundle across all three install destinations (flow, appLoops,
+  // commands), which is the content that clipped the footer (§27.15: the loops tier is loops-v2 now).
   const seedConflicts = (src: string, dest: string): number => {
     let n = 0;
     mkdirSync(dest, { recursive: true });
@@ -2548,7 +2274,11 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
     }
     return n;
   };
-  const conflicting = seedConflicts(join(process.cwd(), 'example', 'loops'), join(configDir, 'loops'));
+  const ex = join(process.cwd(), 'example');
+  const conflicting =
+    seedConflicts(join(ex, 'flow'), join(home, '.agent-terminal')) +
+    seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
+    seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -2558,12 +2288,15 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   await installExamplesBtn().click();
   await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
 
-  const box = consentBox('loops');
+  // Grade the FIRST consent checkbox — the one the dialog gives initial focus. Destinations render in the
+  // contract's order (flow, appLoops, commands), so with all three conflicting the first box is `flow`.
+  const box = consentBox('flow');
   await expect(box).toBeVisible();
   // The dialog is genuinely rendering the long manifest — otherwise the footer check below grades a
-  // dialog that never overflowed and cannot fail.
-  const manifest = page.locator('#install-examples-view .flow-modal .ic-files').first();
-  expect((await manifest.innerText()).length).toBeGreaterThan(500);
+  // dialog that never overflowed and cannot fail. Sum every destination's file list (the first section is
+  // `flow`'s short one), so the length reflects the whole manifest that pushed the footer off-screen.
+  const manifestText = (await page.locator('#install-examples-view .flow-modal .ic-files').allInnerTexts()).join('');
+  expect(manifestText.length).toBeGreaterThan(500);
 
   // The dialog gives the first checkbox its INITIAL focus programmatically, and a programmatic focus need
   // not match :focus-visible. Focus has to ARRIVE by keyboard, so step off the control and come back.
@@ -2790,936 +2523,6 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   rmSync(home, { recursive: true, force: true });
 });
 
-test('entering a bootstrap loop step prompts for its input; Confirm runs in-app pickup: state.yaml + draft PR, mirror plan-draft, nothing injected (§26.9 / L1)', { tag: '@ownapp' }, async () => {
-  // L1 — the app OWNS state.yaml and bootstraps in-app. Confirm runs pickup (gh/git, driven by the real
-  // plan-loop pickup_contract), opening a draft PR and WRITING the initial whole-document v4 state.yaml;
-  // the T2 mirror renders plan-draft. The retired §24.2.3 T3 `agent-loop pickup` is NOT injected.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-l1boot-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-l1boot-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l1-bin-');
-  seedFakeAgent(binDir, { work: 'noop' }); // present at the prompt so the post-pickup work turn injects (not `absent`) and sits in-flight, keeping plan-draft stable (§26.2)
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '60000', // long: the noop turn stays in-flight (never auto-errors) during the assertions
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await typeCommand('fake-agent'); // the hosted agent REPL owns the prompt (present), so the work turn injects rather than erroring
-
-  await flowControl().click(); // Start → groom (manual): no input prompt
-  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
-  await expect(inputModal()).toHaveCount(0);
-
-  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await expect(inputModal().locator('.field .nm')).toHaveText('ticket');
-  await expect(inputModal().locator('.field .ty')).toHaveText('github-ticket');
-
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0);
-
-  // Land: a whole-document valid-v4 state.yaml is app-written (status plan-draft, bound_loop plan-loop).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
-  const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('bound_loop: plan-loop');
-  expect(stateText).toContain('schema_version: 4');
-
-  // Land: a draft PR was opened (recorded by the fake gh), and pickup forked the templated branch.
-  const calls = readFileSync(logFile, 'utf8');
-  expect(calls).toContain('gh pr create --draft');
-  expect(calls).toContain(
-    'git push -u origin plan-loop/issue-176',
-  );
-
-  // Land: the T2 mirror renders the freshly-written state live (the watcher re-pull after the write) —
-  // the rail read-out shows the tone + iteration, and the docked panel the exact v4 status string.
-  await expect(loopReadout()).toContainText('iter 1', { timeout: 10_000 });
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('plan-draft', { timeout: 10_000 });
-
-  // The retired T3 command is never typed into the PTY.
-  await expect(termRows()).not.toContainText('agent-loop pickup');
-
-  // The resolved input still persists to flow-state.yaml so it threads to later steps (§18.3).
-  await expect.poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 }).toContain('176');
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a busy shell does NOT block pickup: it runs out-of-band and still writes state.yaml (§26.2 / §26.6)', { tag: '@ownapp' }, async () => {
-  // §26 redefines "injectable" and runs pickup out-of-band (gh/git, not terminal injection), so unlike
-  // the retired T3 injection a busy foreground process must NOT refuse it: state.yaml is still written.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootbusy-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootbusy-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-busy-bin-');
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom
-
-  // A live foreground process holds the shell off its ready prompt → busy (a live OSC-133 span).
-  await typeCommand('echo BUSY_NOW; cat');
-  await expect(termRows()).toContainText('BUSY_NOW');
-
-  await flowControl().click(); // Advance → plan: the modal still prompts
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-
-  // Out-of-band: pickup runs despite the busy shell — state.yaml gets written, no busy refusal, and
-  // nothing is typed into the (busy) PTY.
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
-  // No §19.3 busy refusal is raised for pickup (it is out-of-band), so the transient notice never shows.
-  await expect(page.locator('#flow-strip .flow-notice')).toHaveCount(0);
-  await expect(termRows()).not.toContainText('agent-loop pickup');
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it shows an error dialog, rolls the flow back to the previous step, and writes no state.yaml (§26.9)', { tag: '@ownapp' }, async () => {
-  // Slice B — the async in-app pickup (§26.9) aborts on a dirty tree. The failure must be surfaced (a
-  // blocking error dialog with the reason) and the half-entered loop step rolled back to the previous
-  // step (Option C), never stranding the flow. No state.yaml is written and no PR is opened.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootdirty-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootdirty-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-dirty-bin-');
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      FAKE_GIT_DIRTY: '1', // git status --porcelain reports a non-.agent-loop change → pickup aborts
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-
-  await flowControl().click(); // Start → groom
-  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
-
-  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0);
-
-  // The failure surfaces: a blocking error dialog carries the reason (never silent).
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('working tree is not clean');
-
-  // The flow is rolled back to the previous step (groom), still in progress — not stranded on plan.
-  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
-  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-
-  // No state.yaml was written and no PR was opened — the bootstrap aborted before either.
-  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
-  expect(readFileSync(logFile, 'utf8')).not.toContain('gh pr create');
-
-  // Dismiss restores the app; the operator can fix the tree and re-advance.
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a pickup that completes AFTER the operator terminates the flow drops as stale: no work turn is injected against the abandoned flow (§26.9)', { tag: '@ownapp' }, async () => {
-  // §26.9 — the in-app pickup is fire-and-forget. If the operator TERMINATES the flow while pickup is still
-  // running, its async completion must NOT drive a work turn against the now-abandoned flow (the
-  // decidePickupAction stale-guard drops it). FAKE_PICKUP_DELAY holds `gh pr create` open so the terminate
-  // lands mid-pickup; a hosted agent IS present, so a broken guard WOULD inject the work prompt and the
-  // fake-agent would write plan.md — its absence is the observable proof the stale result was dropped.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootstale-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootstale-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stale-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan' }); // present + would write plan.md if a work turn were injected
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '60000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      FAKE_PICKUP_DELAY: '4', // gh pr create sleeps 4s → pickup stays in-flight long enough to terminate
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await typeCommand('fake-agent'); // a hosted agent IS at the prompt: a leaked work turn would inject here
-
-  await flowControl().click(); // Start → groom
-  await flowControl().click(); // Advance → plan (loop, bootstrap): typed-input modal
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0); // pickup fires and is now sleeping in `gh pr create`
-
-  // Terminate the flow WHILE pickup is still in-flight (state.yaml is written only after the delayed PR create).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  expect(existsSync(stateFile)).toBe(false); // still mid-pickup
-  await page.locator('#flow-strip .flow-terminate').click();
-  const confirm = page.locator('#flow-confirm-host .flow-modal');
-  await expect(confirm).toBeVisible({ timeout: 10_000 });
-  await confirm.locator('.confirm').click();
-  await expect(confirm).toHaveCount(0);
-  await expect(flowControl()).toHaveText('Start'); // flow terminated → not_started
-
-  // Pickup runs to completion past the sleep and writes state.yaml — the positive signal its async `.then`
-  // has executed.
-  await expect.poll(() => existsSync(stateFile), { timeout: 20_000 }).toBe(true);
-
-  // A FIFO happens-after barrier so the negative assertions can't false-pass on the injection round-trip's
-  // latency: the fake-agent REPL reads its stdin in order, and no `/clear` precedes the FIRST work turn
-  // (startWorkTurn does not clear). So a `/clear` typed now is drained AFTER any work prompt a broken guard
-  // leaked — meaning `clear-seen` appears only once plan.md would already have been written. Waiting on it
-  // converts the poll's incidental margin into an engineered one.
-  await typeCommand('/clear');
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 10_000 }).toBe(true);
-
-  // The stale-guard must have dropped the result: NO work turn ran, so no plan.md, no turn audit event,
-  // and nothing leaked into the shell.
-  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // stale → no work turn injected
-  expect(turnEvents(home, repo)).toEqual([]); // no turn was ever requested
-  await expect(termRows()).not.toContainText('# Work agent'); // nothing leaked into the shell
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks first, then wipes + bootstraps on Confirm (§26.9)', { tag: '@ownapp' }, async () => {
-  // §26.9 wipe-and-retry — the vendored plan-loop declares it. The wipe is destructive + outward-facing
-  // (deletes the branch on origin, closes its PR), so the app CONFIRMS first: a conflict raises a confirm
-  // dialog; Confirm wipes the branch and bootstraps cleanly (state.yaml plan-draft).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootconf-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootconf-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-conf-bin-');
-  seedFakeAgent(binDir, { work: 'noop' }); // present so the post-wipe work turn injects (not `absent`), keeping plan-draft stable
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '60000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      FAKE_GIT_BRANCH_EXISTS: '1', // git branch --list reports the target branch → a pickup conflict
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await typeCommand('fake-agent');
-
-  await flowControl().click(); // Start → groom
-  await flowControl().click(); // Advance → plan (loop, bootstrap): typed-input modal
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0);
-
-  // Ask first: a confirm dialog naming the conflicting branch — nothing wiped yet.
-  const conflict = page.locator('#flow-confirm-host .flow-modal');
-  await expect(conflict).toBeVisible({ timeout: 15_000 });
-  await expect(conflict).toContainText('plan-loop/issue-176');
-  await expect(conflict).toContainText('closes its PR');
-  expect(readFileSync(logFile, 'utf8')).not.toContain('git branch -D plan-loop/issue-176'); // not wiped before confirmation
-
-  // Confirm → the branch is wiped, then a clean bootstrap writes plan-draft.
-  await conflict.locator('.confirm').click();
-  await expect(conflict).toHaveCount(0);
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
-  const calls = readFileSync(logFile, 'utf8');
-  expect(calls).toContain('git branch -D plan-loop/issue-176'); // the wipe ran
-  expect(calls).toContain('git push origin --delete plan-loop/issue-176');
-  expect(calls).toContain('gh pr create --draft'); // a fresh PR opened after the wipe
-  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // flow stayed on the loop step
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the flow back (§26.9)', { tag: '@ownapp' }, async () => {
-  // The safe half of confirm-first: declining the wipe must destroy nothing and never strand the flow.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootcancel-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootcancel-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cancel-bin-');
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      FAKE_GIT_BRANCH_EXISTS: '1',
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-
-  await flowControl().click(); // Start → groom
-  await flowControl().click(); // Advance → plan
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-
-  const conflict = page.locator('#flow-confirm-host .flow-modal');
-  await expect(conflict).toBeVisible({ timeout: 15_000 });
-
-  // Cancel → nothing wiped, no state.yaml, and the flow rolls back to the previous step.
-  await conflict.locator('.cancel').click();
-  await expect(conflict).toHaveCount(0);
-
-  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
-  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
-  expect(readFileSync(logFile, 'utf8')).not.toContain('git branch -D plan-loop/issue-176'); // never wiped
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L2 — one work-agent turn + completion detection. The shared sequence: cd into the repo,
-// launch the fake-agent REPL as the foreground program, then drive the flow into the bootstrap loop
-// step. After pickup writes plan-draft (§26.9/L1) the orchestrator injects the work-plan prompt into
-// the fake-agent and advances on the done-signal + plan.md (§26.3/D47a), retrying once then `error`.
-async function driveToWorkTurn(
-  repo: string,
-  home: string,
-  binDir: string,
-  logFile: string,
-  turnTimeoutMs: string,
-  extraEnv: Record<string, string> = {},
-  // §26.2 — when false, no hosted agent is started: the shell stays at a bare ready prompt, so the work
-  // turn injected after pickup finds `no hosted agent` (`absent`) and stops in error instead of leaking
-  // the prompt into the shell. The caller then asserts the error landing rather than plan-draft.
-  startAgent = true,
-): Promise<void> {
-  await app.close();
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: turnTimeoutMs,
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      ...extraEnv,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  if (startAgent) await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
-
-  await flowControl().click(); // Start → groom: opens the audit run
-  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
-  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0);
-
-  // With an agent present, bootstrap lands plan-draft and the work turn injects; without one the caller
-  // asserts the `absent` error landing itself (pickup still writes plan-draft first, then the turn errors).
-  if (startAgent) {
-    const stateFile = join(repo, '.agent-loop', 'state.yaml');
-    await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
-  }
-}
-
-// §26 D42a — a printed done-signal sentinel line must NOT complete a turn; only the .agent-loop/turn-done
-// FILE does. This regression pins the fix for the premature-completion bug: a real Claude Code TUI reflowed
-// the injected prompt on echo so the retired line-scanner matched the sentinel inside its own "print this
-// line" instruction and fired the NEXT turn while the agent was still working. Here the work turn writes
-// plan.md (so the artifact check would PASS) and prints the sentinel alone on a line, but writes NO
-// turn-done file — under the old line-scanner the reviewers fan-out would start; under the fix it must not.
-test('a printed done-signal sentinel line never completes a turn — only the turn-done file does (§26 D42a)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-sentinel-nofile-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sentinel-nofile-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-sentinel-nofile-bin-');
-  // Work turn: write plan.md (artifact present) + print the retired sentinel alone on a line, but write NO
-  // turn-done file. reviews would only appear if the printed line falsely completed the work turn.
-  seedFakeAgent(binDir, { work: 'plan-only', printBareSentinel: true, reviews: 'all' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // The work turn produced plan.md and the sentinel was printed to the PTY…
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 15_000 }).toBe(true);
-  await expect(termRows()).toContainText(RETIRED_SENTINEL('work-plan'), { timeout: 10_000 });
-  // …but with no turn-done file the work turn never completes, so the reviewers fan-out never starts. Give
-  // it a generous window (well under the stall watchdog) — the reviews dir must stay absent.
-  await new Promise((r) => setTimeout(r, FALSE_COMPLETION_GRACE_MS));
-  expect(existsSync(join(repo, '.agent-loop', 'reviews', '1'))).toBe(false);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-const turnEvents = (home: string, repo: string): Array<Extract<AuditEvent, { type: 'command' }>> => {
-  const files = auditRunFiles(home, repo);
-  if (files.length === 0) return [];
-  return readAuditRun(home, repo, files[0]).events.filter(
-    (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command' && e.source === 'turn',
-  );
-};
-
-test('a work-agent turn injected after pickup advances on plan.md + the done-signal (§26.13 / L2)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-ok-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-ok-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-ok-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' }); // full chain: work → reviewers → consolidate
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Land: the fake-agent received the injected work-plan prompt and wrote plan.md, and the orchestrator
-  // detected the done-signal and recorded the turn complete (exit 0) — never auto-erroring.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
-  await expect.poll(() => turnEvents(home, repo).map((e) => ({ cmd: e.cmd, exit: e.exit })), { timeout: 20_000 }).toEqual(
-    expect.arrayContaining([expect.objectContaining({ exit: 0 })]),
-  );
-  expect(turnEvents(home, repo).some((e) => e.cmd.includes('complete'))).toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a repainting (never byte-silent) hosted agent still reaches quiet, so the work turn injects (§8.3 / §26.2)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-repaint-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-repaint-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-repaint-bin-');
-  // A full-screen TUI agent: on the alt screen, repainting an identical idle frame faster than QUIET_MS
-  // forever. Byte-presence quiescence would pin agentState 'active', so the §26.2 gate reads `busy` and
-  // defers the work turn indefinitely — plan.md would never appear. This is the exact production shape
-  // (Claude Code, Codex) the plain line-oriented REPL cannot model and that let the original bug ship.
-  seedFakeAgent(binDir, { work: 'write-plan', idleRepaint: true });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Land: content-diff quiescence (§8.3) reaches quiet on the unchanged frame, the §26.2 gate reads `idle`,
-  // and the injected work-plan prompt reaches the agent — which writes plan.md. plan.md is a file, immune to
-  // the screen-clearing repaint, so its appearance is the stable proof injection happened. Never auto-errors.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 25_000 }).toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a work turn that streams past the stall window still advances to the reviewers on its done-signal (§26.3)', async () => {
-  // The regression this guards: a turn that legitimately runs far longer than the (short, here) stall
-  // window must NOT be killed as long as its screen keeps changing. The fake-agent streams changing lines
-  // for ~9s — well past the 3s window — before it writes plan.md and signals. Each line is a §8.3 content
-  // edge that resets the stall watchdog, so the done-signal lands while the turn is still in flight and the
-  // work→reviewers chain runs. Under a wall-clock deadline (or with the §8.3 activity reset unwired) the
-  // same turn stalls at 3s: plan.md never appears and no review is written.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-slow-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slow-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slow-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
-
-  // §22.3.1 — while the work turn streams, the STATUS BAR shows what the engine is doing (a phrase + the
-  // animated braille spinner) so an in-flight turn is visibly "doing work". The ~9s stream is a comfortable
-  // window to observe it before plan.md lands. The rail shows no busy signal: one busy surface, one place.
-  await expect(statusActivity()).toBeVisible({ timeout: 20_000 });
-  await expect(statusActivity().locator('.phrase')).not.toBeEmpty();
-  await expect(statusActivity().locator('.spin')).toHaveCount(1);
-  await expect(page.locator('#flow-strip .flow-activity')).toHaveCount(0);
-
-  // Decision 16 / §22.3.1: under space pressure the phrase FLOORS and ellipsizes — it never sheds to a
-  // bare spinner. Squeeze hard and assert a legible phrase and its spinner both survive with real width.
-  await page.setViewportSize({ width: 360, height: 700 });
-  const phrase = statusActivity().locator('.phrase');
-  await expect(phrase).toBeVisible();
-  expect((await phrase.boundingBox())!.width).toBeGreaterThan(0);
-  await expect(statusActivity().locator('.spin')).toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 800 });
-
-  // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
-  // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
-  const reviewFile = join(repo, '.agent-loop', 'reviews', '1', 'review-contracts.json');
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 30_000 }).toBe(true);
-  await expect.poll(() => existsSync(reviewFile), { timeout: 30_000 }).toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a work turn whose screen stays frozen for the stall window stops in a recoverable error (§26.3 / D48)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-err-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-err-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-err-bin-');
-  seedFakeAgent(binDir, { work: 'noop' }); // produces nothing — no artifact, no output: the screen never changes
-
-  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short stall window: the silent turn stalls fast
-
-  // Land: with no visible activity for the whole stall window, the run is written to `error` and the turn
-  // failure is recorded (exit 1). The mirror renders the app-only error status with a recovery affordance.
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).toContain('status: error');
-  expect(readFileSync(stateFile, 'utf8')).toContain('stalled: no terminal activity');
-  expect(turnEvents(home, repo).some((e) => e.cmd.includes('failed') && e.exit === 1)).toBe(true);
-  // §26.3/D48 (Theme B, v2.120) — a run-time turn failure is never silent: it raises the blocking error
-  // dialog. Dismiss it so the modal does not trap focus over the panel exercised below.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a work turn with NO hosted agent at the prompt errors instead of leaking the prompt into the shell; the panel shows the reason + a Retry (§26.2 / D48)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-noagent-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-noagent-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-noagent-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan' }); // on PATH but never launched — the shell stays bare
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000', {}, /* startAgent */ false);
-
-  // Land: no foreground agent occupies the prompt, so the injected work turn is refused — the run stops in
-  // `error` with the reason, and NOTHING is typed into the shell (no plan.md, no leaked prompt echo).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 20_000 }).toContain('status: error');
-  expect(readFileSync(stateFile, 'utf8')).toContain('error_reason: no hosted agent at the prompt');
-  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // nothing produced the artifact
-  await expect(termRows()).not.toContainText('# Work agent'); // the prompt never reached the shell
-
-  // §26.3/D48 (v2.120) — a run-time turn failure is never silent: it raises the blocking error dialog with
-  // the reason (the same surface bootstrap failures use), in addition to the panel pill. Dismiss it so it
-  // does not trap focus over the panel/Retry exercised below.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('no hosted agent at the prompt');
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
-
-  // The panel surfaces WHY + a recovery affordance (never a Terminate-only dead-end).
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('no hosted agent at the prompt', { timeout: 10_000 });
-  await expect(loopPanel().locator('[data-loop-retry]')).toBeVisible();
-
-  // D48 recovery — the whole point of Retry: start the agent so the prompt is now injectable, click Retry,
-  // and observe the run actually RE-DRIVE (leave `error`, inject the work turn into the agent, produce
-  // plan.md — which did not exist while the shell was bare). A regressed retryActiveTurn would leave the
-  // run stuck in `error` with plan.md still absent, so this observes the recovery, not just the button.
-  await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt
-  await loopPanel().locator('[data-loop-retry]').click();
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('the loop panel "mark turn complete" control advances a sentinel-less turn (§26.13 / L2 / D47a c)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-mark-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-mark-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-mark-bin-');
-  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all', consolidate: 'clean' }); // plan.md but NO work signal; the chain settles after the manual advance
-  await driveToWorkTurn(repo, home, binDir, logFile, '60000'); // long timeout: no auto-error races the click
-
-  // The artifact is present but no done-signal fired, so the turn sits in flight. The operator's manual
-  // control advances it: open the docked panel and click "mark turn complete".
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
-  expect(turnEvents(home, repo).length).toBe(0); // not yet completed automatically
-  await loopReadout().click();
-  await loopPanel().locator('[data-loop-mark-complete]').click();
-
-  // Land: the manual override completes the turn (exit 0), and the run never errors.
-  await expect.poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('complete') && e.exit === 0), { timeout: 15_000 }).toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a work turn stranded in error with plan.md present is accepted after a relaunch, advancing to the reviewers without re-running the plan (§26.3 / D48)', { tag: '@ownapp' }, async () => {
-  // The stranded-plan recovery (the live `.one` shape): a work turn that wrote plan.md but then stopped in
-  // `error` (here: plan.md written, no done-signal, a short stall window). On a RELAUNCH the run is not
-  // auto-driven, but the panel's "mark turn complete" must ACCEPT the present plan and advance to the
-  // reviewers WITHOUT re-running the work turn — the whole point is to not regenerate a finished plan.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-accept-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-accept-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-accept-bin-');
-  // turnMarkers so we can prove the work turn is NOT re-run on accept (its marker count stays put).
-  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all', consolidate: 'clean', turnMarkers: true });
-  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short stall window: the silent post-plan turn errors
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 20_000 }).toContain('status: error');
-  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(true);
-  const workRuns = (): number => {
-    const f = join(repo, '.agent-loop', 'work-ran');
-    return existsSync(f) ? readFileSync(f, 'utf8').length : 0;
-  };
-  const runsBeforeAccept = workRuns();
-  expect(runsBeforeAccept).toBeGreaterThan(0); // the work turn ran once, live
-
-  // Relaunch into the stranded repo with the fake-agent AS the shell so the accepted turn's chained
-  // reviewers fan-out injects straight into the agent (no bootstrap, no live turn — a cold reopen).
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: join(binDir, 'fake-agent'),
-      APP_LAUNCH_DIR: repo,
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '30000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-
-  // The reconstructed error still shows in the panel with its recovery controls; accept it. (The fake-agent
-  // shell prints nothing, so wait on the flow strip's loop read-out, not terminal text.)
-  await expect(loopReadout()).toBeVisible({ timeout: 15_000 });
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
-  await loopPanel().locator('[data-loop-mark-complete]').click();
-
-  // Land: the reviewers fan-out ran (per-persona JSON), the run left error, and the work turn was NOT
-  // re-run (its marker count is unchanged — the plan was accepted, not regenerated).
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '1', 'review-contracts.json')), { timeout: 25_000 }).toBe(true);
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
-  expect(workRuns()).toBe(runsBeforeAccept);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26 D42a / §26.11 — resume/error-recovery must be keyed to the repo the operator is IN, not only the
-// launch root. `resumeLoop` ran once at launch against launchRoot; if the operator launched elsewhere and
-// cd'd into a repo whose run is stranded in `error`, the errored turn was never reconstructed, so the loop
-// panel's Retry / mark-turn-complete (which need the reconstructed activeTurn) did nothing. Fix: re-run the
-// resume reconstruction on cd-into-repo. Here the app launches in a NON-repo dir, then cd's into a repo
-// stranded in `error`; Retry must reconstruct the work turn and re-drive it (the run leaves error).
-test('cd into a repo stranded in error reconstructs the turn so Retry re-drives it (§26 D42a / §26.11)', { tag: '@ownapp' }, async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-'));
-  mkdirSync(join(repo, '.git'), { recursive: true });
-  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
-  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
-  // The flow is parked at its plan loop step (so the loop mirror + its recovery controls render); its run
-  // is stranded in `error`.
-  writeFileSync(
-    join(repo, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
-      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
-  );
-  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), "step: plan\nstatus: in_progress\ninputs:\n  ticket: '176'\n");
-  // A run stranded in `error` at the work turn: plan.md present (rewritten in place), but NO iteration-scoped
-  // reviews, so the reconstruction infers the WORK turn stopped. bound_loop plan-loop resolves + has a
-  // resume_contract.
-  writeFileSync(
-    join(repo, '.agent-loop', 'state.yaml'),
-    ['schema_version: 4', 'status: error', 'iteration: 1', 'bound_loop: plan-loop', 'pr: 4242', 'branch: plan-loop/issue-176',
-      'linked_issues:', '  - 176', 'phase2_active: false', 'persona_state: {}', 'impasse: {}', 'sessions: {}', 'terminated: false',
-      'error_reason: done-signal received but the turn artifact is missing', ''].join('\n'),
-  );
-  writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\nstranded mid-run\n');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-home-'));
-  const launchDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-elsewhere-')); // NOT the repo
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cd-resume-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
-
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      APP_LAUNCH_DIR: launchDir, // launch OUTSIDE the stranded repo
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '30000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`); // OSC-7 cwd change → resume reconstruction runs for THIS repo
-  await typeCommand('fake-agent'); // host the agent so the re-driven turn injects
-
-  // The reconstructed error surfaces its recovery controls; Retry re-drives the work turn.
-  await expect(loopReadout()).toBeVisible({ timeout: 15_000 });
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
-  await loopPanel().locator('[data-loop-retry]').click();
-
-  // Land: the work turn re-ran (its execution marker appears) and the run left error — proving activeTurn
-  // was reconstructed on cd (under the launch-root-only resume it would stay error, Retry a no-op).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 }).toBe(true);
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(launchDir, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a work turn completes on the turn-done FILE alone, with no sentinel line (§26.13 / L2 / D47a)', async () => {
-  // §26.3/D47a's done-signal is "the sentinel LINE OR the turn-done FILE". The other L2 happy-path tests
-  // emit both, so the file-watch path is never proven alone. Here the fake-agent writes plan.md and the
-  // turn-done file but prints NO sentinel line, so completion can ONLY come via watchTurnDone.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-fileonly-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-fileonly-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-fileonly-bin-');
-  seedFakeAgent(binDir, { work: 'file-only', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
-  await expect
-    .poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('work-plan') && e.cmd.includes('complete') && e.exit === 0), {
-      timeout: 20_000,
-    })
-    .toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// The reviews/<iter> directory for the plan phase's fan-out (§26.4).
-const reviewsDir = (repo: string): string => join(repo, '.agent-loop', 'reviews', '1');
-
-test('the work turn chains into the reviewer fan-out; all persona JSONs advance it (§26.13 / L3)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l3-ok-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l3-ok-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l3-ok-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Land: the work turn completes on plan.md, then the orchestrator injects the spawn-reviewers prompt;
-  // the fake-agent writes every roster persona's review JSON and the fan-out turn advances (exit 0).
-  await expect.poll(() => existsSync(join(reviewsDir(repo), 'review-contracts.json')), { timeout: 20_000 }).toBe(true);
-  for (const p of PLAN_PERSONAS) expect(existsSync(join(reviewsDir(repo), `${p}.json`))).toBe(true);
-  await expect
-    .poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('complete') && e.exit === 0), {
-      timeout: 20_000,
-    })
-    .toBe(true);
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a reviewer fan-out missing one persona JSON retries once then stops in error (§26.13 / L3 / D48)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l3-err-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l3-err-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l3-err-bin-');
-  // The work turn completes cleanly; the reviewers turn writes only five of six persona JSONs.
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'missing' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short timeout so the two reviewer attempts elapse fast
-
-  // Land: the fan-out is incomplete every attempt, so after retry the run stops in error and the loop
-  // panel raises it. The missing persona never appears; the failed turn is recorded (exit 1).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 }).toContain('status: error');
-  expect(existsSync(join(reviewsDir(repo), 'review-contracts.json'))).toBe(false);
-  expect(turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('failed') && e.exit === 1)).toBe(true);
-  // §26.3/D48 (Theme B, v2.120) — the incomplete fan-out error raises the blocking dialog; dismiss it so
-  // the modal does not trap focus over the panel exercised below.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('the fan-out chains into consolidate; a clean verdict stops at the plan-approval gate (§26.13 / L4)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l4-clean-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l4-clean-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l4-clean-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Land: work → reviewers → /clear → consolidate writes a clean verdict → the orchestrator advances the
-  // run to the phase's post-clean human gate and STOPs (it does not re-iterate to a second iteration).
-  await expect.poll(() => existsSync(join(reviewsDir(repo), 'consolidated.json')), { timeout: 25_000 }).toBe(true);
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1'); // stopped, never re-iterated
-  expect(readFileSync(stateFile, 'utf8')).not.toContain('status: error');
-  // The orchestrator injected a /clear at the reviewers→consolidate boundary (D46): the fake instance
-  // received it and recorded the marker (the terminal echo scrolls out of view behind the next prompt).
-  expect(existsSync(join(repo, '.agent-loop', 'clear-seen'))).toBe(true);
-  // The gate status is human-needed, so the docked panel renders the exact awaiting-human status string.
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('awaiting-human-plan-approval', { timeout: 10_000 });
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a needs-work verdict /clears and re-iterates to the next iteration (§26.13 / L4)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l4-needswork-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l4-needswork-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l4-needswork-bin-');
-  // Every consolidate verdict is needs-work, so each iteration re-iterates; the run climbs past iter 1.
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Land: the first iteration's consolidate returns needs-work → the orchestrator writes the next
-  // iteration and re-runs the work→reviewers→consolidate cycle, so a second iteration's consolidated.json
-  // appears. It re-iterated rather than taking the clean branch (the post-clean approval gate), and never
-  // errored. (At the def's iteration cap the run then routes to the triage gate, §26.8 — asserted by L6.)
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
-    .toBe(true);
-  const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
-  expect(stateText).not.toContain('status: error');
-  expect(stateText).not.toContain('awaiting-human-plan-approval'); // never took the clean branch
-  // The /clear at the consolidate→re-iterate boundary (D46) reached the instance before the re-run.
-  expect(existsSync(join(repo, '.agent-loop', 'clear-seen'))).toBe(true);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a needs-work verdict at the iteration cap routes to the plan-triage gate (§26.13 / L6)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-cap-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-cap-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-cap-bin-');
-  // Every consolidate is needs-work. plan-loop's exit_predicate.severity_cap is 2: iteration 1 (below the
-  // cap) re-iterates; iteration 2 (at the cap) routes a needs-work verdict to the triage gate (§26.8).
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
-    .toContain('status: awaiting-human-plan-triage');
-  const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('iteration: 2'); // reached the cap, then STOPped for the human
-  expect(stateText).not.toContain('status: error');
-  // The triage gate is a human-needed status, so the docked panel raises it with its option buttons.
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('awaiting-human-plan-triage', { timeout: 10_000 });
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
 function seedCompletedAppBootstrap(dir: string, issue = 176): void {
   mkdirSync(join(dir, '.agent-terminal', 'loop'), { recursive: true });
   writeFileSync(
@@ -3739,6 +2542,25 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
   writeFileSync(
     join(dir, '.agent-terminal', 'flow-state.yaml'),
     'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n',
+  );
+  seedCompletedAppBootstrap(dir);
+  return dir;
+}
+
+// A pre-loop MANUAL `groom` step then a pre-bootstrapped §27 `build` loop step — so a test can watch the
+// loop read-out appear only once the flow ENTERS the loop step (progress-gating, §24.2.3 T2), driven by a
+// real §27 turn. The bound loop's ticket input is pre-resolved so entry drives the turn without a modal.
+function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    `name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
   return dir;
@@ -3860,12 +2682,12 @@ const appReport1 = (repo: string): string => join(repo, '.agent-terminal', 'loop
 const appRunState = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
 const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 
-test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, leaving §26 untouched (§27.3/§27.6 / AC1,2,3,5,6,10)', { tag: '@ownapp' }, async () => {
+test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, leaving a pre-existing .agent-loop/state.yaml untouched (§27.3/§27.6 / AC1,2,3,5,6,10)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-work-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-work-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-work-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
-  // A prior §26 run sits on disk: the §27 engine must never touch it (AC10 — neither engine perturbs the other).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 engine must never touch it (AC10 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -3901,7 +2723,7 @@ test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean
   // The persisted run-state records the round number the consolidator judged.
   expect(readIf(appRunState(repo))).toContain('round: 1');
 
-  // AC10 — the §26 state.yaml is byte-for-byte unchanged, and no §26 artifact was written.
+  // AC10 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged, and no legacy artifact was written.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
   expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false);
 
@@ -3995,7 +2817,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approve-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approve-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
-  // A prior §26 run sits on disk: the §27 approve must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 approve must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -4033,7 +2855,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 approve never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 approve wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -4103,13 +2925,7 @@ function withPickup(yaml: string, block: string): string {
   return yaml.replace(PICKUP_BLOCK, block);
 }
 
-function seedRepoPlanLoopOverride(repo: string): void {
-  const target = join(repo, 'defs', 'plan-loop');
-  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
-  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
-}
-
-test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never §26 state or terminal injection (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
@@ -4223,6 +3039,271 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a def resolved from the REPOSITORY tier declaring a pickup contract bootstraps — branch, draft PR and its own initial_labels reach gh (§B.13a / §F item 18)', { tag: '@ownapp' }, async () => {
+  // The operator's origin decision made visible (§F item 18): the executor no longer refuses a
+  // non-operator-tier def, so a repo whose .agent-loop.yaml maps the bound name to an IN-REPO v2 def with a
+  // pickup: block reaches branch creation and the draft PR. The repo def's initial_labels are DISTINCT from
+  // the app-bundled def's, so a passing label assertion can only have come from the repo def (§B.13a).
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-repo-pickup-');
+  const repoDef = join(repo, 'loops', 'plan-loop');
+  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), repoDef, { recursive: true });
+  const defFile = join(repoDef, 'plan-loop.yaml');
+  writeFileSync(
+    defFile,
+    withPickup(
+      readFileSync(defFile, 'utf8'),
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  initial_labels:\n' +
+        '    - target: issue\n      action: add\n      label: repo-tier/active\n' +
+        '    - target: pr\n      action: remove\n      label: repo-tier/stale\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  // The repo registry the resolver reads FIRST (loopDefV2 repoCandidate), pointing at the in-repo def.
+  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: ./loops/plan-loop/plan-loop.yaml\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-repo-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-repo-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  // No CLAUDE_CONFIG_DIR: the operator tier is empty and the repo tier resolves the def (proving the repo
+  // route). The def carries its own prompts (copied), so the work turn resolves without an operator config.
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → plan (loop): the required-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // The repo-tier def's pickup reaches branch creation and the draft PR — the origin gate no longer refuses it.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 15_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+  // The REPO def's DISTINCT initial_labels reach gh under the operator's own credentials — proving the repo
+  // def (not the app bundle) resolved, and grading the widened blast radius the origin-gate deletion opens.
+  await expect.poll(() => readIf(`${logFile}.issue-label`).trim(), { timeout: 15_000 }).toBe('176:--add-label:repo-tier/active');
+  await expect.poll(() => readIf(`${logFile}.pr-label`).trim(), { timeout: 15_000 }).toBe('4242:--remove-label:repo-tier/stale');
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false); // §27 writes no legacy mirror
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC 6 tracer, assertion (a) + the bootstrap half of (f) — the sweep's grep-invisible AC 10 change made
+// visible end-to-end. A pre-N1 flow file that names NO loop_namespace now binds the SURVIVING §27 engine
+// (absence → app, §B.4) and runs to its gate; before the sweep the same file bound the retired in-terminal
+// engine. Its `bootstrap: pickup` entry action still sets up the branch + draft PR (AC 10). Full-stack
+// acceptance pin; its RED sibling is the committed namespace-vocabulary unit test (a namespace-less binding
+// selected the retired engine pre-sweep, §B.4) and the position-4 bootstrap-preparer test. A hosted agent
+// holds the shell here (busy, §19.3), so a
+// `skill` would be refused — the skill half of (f) is proven at a ready prompt in the next test.
+test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (§B.4 / AC 10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: tracer-a\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      // NO loop_namespace on this loop step — absence binds the surviving engine (§B.4).
+      '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
+      '    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: groom\nstatus: not_started\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-a-config-', (yaml) =>
+    withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-a-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'build', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work-prompt injection
+
+  await flowControl().click(); // Start → enter groom (manual)
+  await flowControl().click(); // Advance → enter the NAMESPACE-LESS build loop step → prompts for the ticket
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // (f) bootstrap: pickup — the namespace-less step set up its branch + draft PR through the surviving
+  // engine's own bootstrap contract; the fake gh/git recorded both.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+
+  // (a) binds §27 and reaches its gate — only the surviving engine drives work → review → consolidate to a
+  // `verdict: clean` gate; the retired engine never produced that run-state. Reaching it proves the
+  // namespace-less step bound §27.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false); // and wrote no legacy mirror
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC 6 tracer, the skill half of (f) — a namespace-less step's `skill` entry action is honoured too. At a
+// READY prompt (no hosted agent holding the shell, so the §19.3 refusal does not fire) the coordinator
+// injects the skill on its bootstrap-success hand-off (§B.5 item 6), so its invocation reaches the PTY while
+// the SAME step's `bootstrap: pickup` sets up the branch. Before the sweep the app dispatch short-circuited
+// both (§D.4 row 2844 RED). A raised submit delay keeps the injected skill line alone in the viewport: its
+// own submit `\r` — and the work prompt the coordinator chains after it — land after this test observes it.
+test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pickup sets up the branch — AC 6 tracer (f) (§B.5 item 6 / AC 10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: tracer-f\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      // NO loop_namespace → binds §27 (§B.4) — declaring BOTH per-step entry actions AC 10 preserves.
+      '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
+      '    skill: /tracer-skill\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: groom\nstatus: not_started\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-f-config-', (yaml) =>
+    withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-f-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '3000', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  // No hosted agent is started — the shell stays at a ready prompt, so the skill is injected on the hand-off.
+  await flowControl().click(); // Start → enter groom (manual)
+  await flowControl().click(); // Advance → enter the NAMESPACE-LESS build loop step → prompts for the ticket
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // bootstrap: pickup ran out-of-band and set up the branch + draft PR.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+
+  // The skill invocation reached the PTY on the coordinator's success hand-off (§B.5 item 6).
+  await expect(termRows()).toContainText('/tracer-skill', { timeout: 15_000 });
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC 6 tracer, assertions (c) + (d) — the shipped app-namespace flow still drives on a machine that never
+// migrated its config, and the named cost of the re-point is PAID by migrating rather than failing (AC 5).
+// The config carries ONLY the retired operator tier (loops/), no loops-v2/, so the app-namespace step
+// resolves plan-loop from the APP BUNDLE, writes its own copy into the surviving loops-v2 tier, tells the
+// operator once, and runs to its gate — while the retired tree is left byte-for-byte untouched (§B.6).
+test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its def, notifies once and drives to its gate — AC 6 tracer (c)/(d) (§B.6 / AC 5)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-tracer-cd-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-cd-home-'));
+  // A config carrying ONLY the retired operator tier (loops/), and NO surviving loops-v2/ — the un-migrated
+  // machine AC 5 / AC 6 exist for.
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-cd-config-'));
+  const retiredDir = join(config, 'loops', 'plan-loop');
+  mkdirSync(retiredDir, { recursive: true });
+  const retiredDef = join(retiredDir, 'plan-loop.yaml');
+  const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
+  writeFileSync(retiredDef, retiredContent);
+  const migratedDef = join(config, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
+  expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter the app plan-loop step: resolves from the app bundle → migrates
+
+  // (d) the app wrote its OWN copy of the def into the SURVIVING tier (loops-v2), and told the operator once.
+  await expect.poll(() => existsSync(migratedDef), { timeout: 15_000 }).toBe(true);
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('Copied the built-in', { timeout: 10_000 });
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('plan-loop');
+  // The retired tier is left byte-for-byte untouched — the app does not read, move or rewrite files it retired.
+  expect(readFileSync(retiredDef, 'utf8')).toBe(retiredContent);
+
+  // (c) the shipped flow still drives — the migrated def runs work → review → consolidate to its clean gate.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC 6 tracer, assertion (b) — a step that names the RETIRED namespace fails per-step with a route out and
+// strands nothing, while a MISSPELLED namespace fails the whole load with a reason naming the real cause
+// (§B.3/§B.4 / AC 4). RED siblings: the committed namespace-vocabulary + flowDefinition load-reason units.
+test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (§B.4 / AC 4)', { tag: '@ownapp' }, async () => {
+  const legacyRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-legacy-'));
+  mkdirSync(join(legacyRepo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(legacyRepo, '.agent-terminal', 'flow.yaml'),
+    'name: legacy-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: legacy\n',
+  );
+  writeFileSync(join(legacyRepo, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: not_started\n');
+  const badRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-bad-'));
+  mkdirSync(join(badRepo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(badRepo, '.agent-terminal', 'flow.yaml'),
+    'name: bad-ns-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: aap\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // The legacy-bound step LOADS (the retired namespace is still recognized, §B.4) and enters, but its loop
+  // view is an error naming the retired engine — with the rest of the flow still operable (Advance routes out).
+  await typeCommand(`cd "${legacyRepo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → enter the legacy-bound step → error loop view, no turn
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('retired "legacy" engine', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Advance'); // a route off the step, no file hand-editing
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 }); // the flow still advanced to done
+
+  // A MISSPELLED namespace is unrecognized → the WHOLE file is rejected at load, with a reason naming the
+  // real cause (the unrecognized value), not a bare parse error.
+  await typeCommand(`cd "${badRepo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toContainText('unrecognized def namespace "aap"', { timeout: 10_000 });
+
+  await app.close();
+  for (const dir of [legacyRepo, badRepo, home]) rmSync(dir, { recursive: true, force: true });
 });
 
 // §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
@@ -4476,49 +3557,6 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   expect(bootstrapLog).toContain(
     'git update-ref --create-reflog -m agent-terminal-bootstrap:',
   );
-
-  await app.close();
-  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
-});
-
-test('a repo-resident pickup def is refused by the wired executor before any bootstrap git or gh operation (ST2 origin gate)', { tag: '@ownapp' }, async () => {
-  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-origin-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-origin-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-origin-bin-');
-  seedRepoPlanLoopOverride(repo);
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await flowControl().click();
-  await flowControl().click();
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  const refusedPickupLogStart = readGhLog(logFile).length;
-  await inputModal().locator('.confirm').click();
-
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText(/operator-authored|origin/i);
-  const calls = readGhLog(logFile).slice(refusedPickupLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh repo view');
-  expect(calls).not.toContain('gh issue view 176 --json title,url');
-  expect(calls).not.toContain('gh issue edit');
-  expect(calls).not.toContain('gh pr create');
-  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -4886,7 +3924,7 @@ test('a §27 request-changes opens the composer; submitting returns the loop to 
       { id: 'rc-todo-done', repoKey: repo, text: DONE_TODO_TEXT, status: 'done', order: 2, createdAt: '2026-07-20T00:00:00.000Z' },
     ]),
   );
-  // A prior §26 run sits on disk: the §27 request-changes must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 request-changes must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -4945,7 +3983,7 @@ test('a §27 request-changes opens the composer; submitting returns the loop to 
   expect(readIf(appFlowState(repo))).toContain('step: plan'); // still on the loop step, not advanced to `done`
   expect(readGhLog(logFile)).not.toContain('gh pr ready'); // request-changes ran NO gh side-effect (that is approve's)
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 request-changes never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 request-changes wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -4959,7 +3997,7 @@ test('a §27 redo opens the composer; submitting re-runs the WORK turn on a clea
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-redo-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-redo-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
-  // A prior §26 run sits on disk: the §27 redo must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 redo must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -5000,7 +4038,7 @@ test('a §27 redo opens the composer; submitting re-runs the WORK turn on a clea
   // redo is not terminal: the flow did NOT advance off the step and ran NO gh side-effect (that is approve's).
   expect(readIf(appFlowState(repo))).toContain('step: plan');
   expect(readGhLog(logFile)).not.toContain('gh pr ready');
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 redo never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 redo wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -5072,7 +4110,7 @@ test('a §27 polish stands the orchestrator down, survives a relaunch, and appro
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 polish/approve never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 polish/approve wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -5134,11 +4172,15 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → enter the step bound to an unresolvable §27 def: no turn starts (AC6)
 
-  // The reason is readable in the panel, and the Advance control is still present — the route off the
-  // failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was written (no turn).
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('no-such-v2-loop', { timeout: 10_000 });
+  // The reason surfaces on the shared blocking loop-error dialog (the §27 error surface for a def that
+  // never resolved), naming the def that could not be found. The Advance control stays present behind it —
+  // the route off the failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was
+  // written (no turn ran). Dismiss the dialog so it does not intercept the control exercised below.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toContainText('no-such-v2-loop', { timeout: 10_000 });
   expect(existsSync(appRunState(repo))).toBe(false);
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
   await expect(flowControl()).toHaveText('Advance');
   await flowControl().click(); // the route out completes the flow
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
@@ -5171,7 +4213,7 @@ test('a §27 work turn with no valid artifact retries then errors, offering all 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2); // initial + one retry, then stop
 
-  // The turn failure is never silent: it raises the blocking error dialog (§26.3/D48 surface, reused).
+  // The turn failure is never silent: it raises the shared blocking error-dialog surface.
   // Dismiss it so it does not intercept the panel controls exercised below.
   const errorDialog = page.locator('#flow-error-host .flow-modal');
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
@@ -5462,180 +4504,32 @@ test('an armed §27 interrupt routes to the gate with the would-be verdict state
   for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
 });
 
-test('a legacy (§26) loop step still runs the §26 work path unchanged, writing no §27 loop state (§27.15 / AC10)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-v2-legacy-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-legacy-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-legacy-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '60000');
-
-  // The §26 work path runs exactly as today: it writes its §26 artifact under .agent-loop/.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
-  // …and the §27 engine is entirely absent — no §27 loop state was written for a legacy step (AC10).
-  expect(existsSync(appRunState(repo))).toBe(false);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a persona clean last iteration with an unchanged plan is pruned; its review is reused (§26.13 / L6 / §26.5)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-skip-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-skip-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-skip-bin-');
-  // Every consolidate is needs-work (drives iteration 1 → 2) with the personas reviewing clean and the
-  // work-agent writing an IDENTICAL plan.md each iteration. So on iteration 2 every persona is clean-at-1
-  // with an unchanged plan digest → all pruned: the fan-out is skipped and iteration 1's reviews are
-  // carried forward. Observable: reviews/2/<persona>.json keeps the iteration-1 stamp (reused, not re-run).
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // Iteration 2 was reached (its consolidated.json exists) and its persona reviews are the reused ones.
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 40_000 })
-    .toBe(true);
-  const reused = readFileSync(join(repo, '.agent-loop', 'reviews', '2', 'review-principal.json'), 'utf8');
-  expect(reused).toContain('"seen_iter":1'); // carried forward from iteration 1, not freshly reviewed at 2
-  // persona_state recorded the clean personas' skip footprints (§26.5).
-  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).toContain('persona_state');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('two consecutive iterations with an identical finding signature flag the run stuck (§26.13 / L6 / §26.8)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-stuck-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-stuck-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-stuck-bin-');
-  // needs-work every iteration with a STABLE finding: iteration 1 signs the finding once; iteration 2
-  // signs the identical finding, so the signature repeats (x2) and the stuck detector flags it (§26.8) —
-  // observable as impasse.consecutive_identical: 2 persisted in state.yaml, and a STOP at the triage gate.
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work', findings: 'stable' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
-    .toContain('consecutive_identical: 2');
-  const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('last_findings_sig:'); // the running signature is persisted
-  expect(stateText).toContain('status: awaiting-human-plan-triage'); // stuck STOPs for the human
-  expect(stateText).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('request-changes resets the per-loop cap window; a following needs-work verdict re-iterates instead of routing to triage (§26.13 / L6)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-capreset-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-capreset-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-capreset-bin-');
-  // plan-loop's severity_cap is 2, counted over the per-loop window `iteration - cap_baseline`. Iteration 1
-  // consolidates clean → the approval gate; request-changes there RESETS the window (cap_baseline := 1) and
-  // re-iterates. Iterations 2+ consolidate needs-work: under the RETIRED phase-2 routing the first would have
-  // re-gated at iteration 2 at once; with the window reset, iteration 2 (window count 1) auto-iterates and the
-  // run reaches iteration 3 — the observable that phase-2 is gone. Empty findings keep the stuck detector quiet.
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work', consolidateIter1: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('request-changes').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // The window reset let iteration 2's needs-work AUTO-ITERATE past the triage gate the retired phase-2
-  // routing would have STOPped at; at iteration 3 the window (3 - 1 = 2) reaches the cap, so the run STOPs
-  // at the triage gate rather than iterating unbounded — pinning BOTH that phase-2 is gone AND the reset
-  // window still bounds the loop.
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
-    .toContain('status: awaiting-human-plan-triage');
-  const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('iteration: 3'); // auto-iterated past the iteration-2 phase-2 STOP
-  expect(stateText).toContain('cap_baseline: 1'); // the window origin request-changes set at iteration 1
-  expect(stateText).not.toContain('phase2_active: true'); // phase-2 routing is retired
-  expect(stateText).not.toContain('status: error');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L5 — the human's gate decision, executed app-internally. Drive to the plan-approval gate
-// (clean verdict), open the docked panel, click a gate button, and assert the transition + gh side-effect.
 const gateButton = (option: string) => loopPanel().locator(`[data-gate-option="${option}"]`);
 
-async function driveToPlanGate(repo: string, home: string, binDir: string, logFile: string): Promise<void> {
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  await loopReadout().click();
-  await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
-}
-
-// §26 D42a (Slice 3 / Q3) — the FIRST work turn of a freshly-bootstrapped loop step is preceded by the same
-// actor-boundary /clear (§26.3/D46) as every other loop-step entry, so the loop starts from a clean agent
-// context (e.g. the human's grooming conversation is cleared before the plan work begins). `plan-only` never
-// signals done, so the loop never advances past this first work turn — clear-seen can ONLY come from the
-// bootstrap /clear, not a later reviewers/consolidate boundary. That isolates this slice's behavior.
-test('the plan bootstrap first work turn is preceded by an actor-boundary /clear (§26 D42a)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-bootstrap-clear-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-bootstrap-clear-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-bootstrap-clear-bin-');
-  seedFakeAgent(binDir, { work: 'plan-only' }); // no reviews/consolidate: the only possible /clear is the bootstrap work turn's
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-
-  // The bootstrapped loop's first work turn injected /clear before its work prompt (clear-seen), and that
-  // /clear preceded a REAL work prompt (plan.md written) — no other turn boundary has occurred.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 15_000 }).toBe(true);
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 15_000 }).toBe(true);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('approve at the plan gate marks the PR ready and terminates the loop (§26.13 / L5)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-approve-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-approve-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-approve-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('approve').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
-  expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
-  // The gate's mark-pr-ready action ran out of band (§26.6/D53): the fake gh recorded `pr ready`.
-  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', async () => {
+test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', { tag: '@ownapp' }, async () => {
   // The whole point of the alert→panel seam: a keyboard user who activates the red alert is routed ONTO
   // the decision, not merely shown the panel. This drives the REAL alert through the composition root
   // (openLoopPanel + the panel's own focusDecision) and observes focus land — the un-hide-then-focus
-  // ordering jsdom cannot exercise.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-alertfocus-');
+  // ordering jsdom cannot exercise. Re-driven onto a §27 consolidator gate (the retired in-terminal work path is gone).
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-alertfocus-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-alertfocus-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-alertfocus-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent IS at the prompt; the §27 work prompt reaches it
+  await flowControl().click(); // Start → enter the app plan-loop step → work → review → consolidate → the clean gate
+
+  // The run stops at the consolidator's clean gate, awaiting a human decision (the human-needed state).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
 
   // The panel is still closed; the alert is the status bar's attention state.
   await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
@@ -5649,530 +4543,49 @@ test('activating the status-bar alert opens the docked panel and lands focus on 
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §26 D42a — reaching a SUCCESS terminal (approve at the plan gate) auto-advances the flow into the next
-// step (Slice 1), and entering that `implement` loop step — which has no `bootstrap: pickup` — RESUMES the
-// existing run under impl-loop (Slice 2, `agent-loop resume --loop`): state.yaml is rebound to impl-loop at
-// its impl-draft entry status with the per-loop internal counters reset to a new-run baseline — EXCEPT the
-// run's MONOTONIC iteration, which carries forward (plan's 1 → impl's 2) — but the SAME PR/branch/issue
-// carried, and the impl loop's first work turn is driven behind an actor-boundary /clear.
-test('approve at the plan gate auto-advances the flow and resumes into the impl loop (§26 D42a)', async () => {
-  const repo = seedChainFlowRepo('agent-term-e2e-chain-advance-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-chain-advance-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-chain-advance-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  // Pre-approve: the flow is still at the plan step, bound to plan-loop.
-  const flowStateFile = join(repo, '.agent-terminal', 'flow-state.yaml');
-  expect(readFileSync(flowStateFile, 'utf8')).toContain('step: plan');
-
-  await gateButton('approve').click();
-
-  // Slice 1 — the success terminal auto-advanced the flow: the strip's active station moves to the
-  // implement step and the progression persists to flow-state.yaml.
-  await expect.poll(() => readFileSync(flowStateFile, 'utf8'), { timeout: 20_000 }).toContain('step: implement');
-  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('implement', { timeout: 10_000 });
-
-  // Slice 2 — entering the non-pickup implement step rebound the run to impl-loop at impl-draft, carrying the
-  // plan run's PR/branch/issue (a resume, never a fresh pickup). §26 D42a — iteration is a single MONOTONIC
-  // counter across the whole run (ai-deque parity): the plan loop finished at iteration 1, so the impl loop
-  // continues at iteration 2, NOT reset to 1. That climb is what keeps impl's reviews/<iter>/ from colliding
-  // with the plan loop's (impl writes reviews/2/, not over reviews/1/).
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('bound_loop: impl-loop');
-  const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('status: impl-draft');
-  expect(stateText).toMatch(/^iteration: 2$/m); // monotonic: carried forward from the plan loop's 1, never reset
-  expect(stateText).toContain('cap_baseline: 1'); // the impl loop opens its OWN cap window at the plan loop's final iteration
-  expect(stateText).toContain('branch: plan-loop/issue-176'); // same branch — resume kept the plan PR
-  expect(stateText).toMatch(/linked_issues:\s*\n\s*- 176/); // the plan run's issue carried, not reset
-
-  // The DISPLAYED iteration is the monotonic counter verbatim — the count climbs to "iter 2" and never
-  // resets to 1 when the successor loop begins.
-  await expect(loopReadout()).toContainText('iter 2', { timeout: 10_000 });
-
-  // The actor-boundary /clear fired (§26.3/D46), THEN the impl loop's OWN work prompt reached the agent
-  // (turnKey work-impl) — the resumed loop drove its first work turn.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 10_000 }).toBe(true);
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'impl-work-ran')), { timeout: 15_000 }).toBe(true);
-  // The impl WORK turn completed on the turn-done file ALONE (§26.3/D47a — impl produces code, not a plan.md
-  // deliverable, so its completion is not gated on any .agent-loop artifact) and the run advanced into the
-  // impl loop's reviewer fan-out: the review-impl prompt reached the agent.
-  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'impl-review-ran')), { timeout: 15_000 }).toBe(true);
-  // Resume, not pickup: no new impl branch was created (the fake git/gh log carries no impl-loop branch).
-  expect(readFileSync(logFile, 'utf8')).not.toContain('impl-loop/');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.6 — the exec gate action (ticket-body publish). The vendored plan-loop's plan-approve gate carries
-// `exec: [gh, issue, edit, {{state.linked_issues[0]}}, --body-file, {{artifact.ticket-body}}]`; approving
-// interpolates it against the run (issue 176, .agent-loop/ticket.md) and runs it out of band. Allowed by
-// default; a repo opts a loop out via `.agent-loop.yaml` loops_deny_exec.
-test('approve at the plan gate runs the exec ticket-body publish out of band (§26.6)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-exec-on-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-exec-on-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-exec-on-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('approve').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
-  // The exec ran: fake gh recorded `gh issue edit 176 --body-file <repo>/.agent-loop/ticket.md`, its
-  // placeholders resolved from the run's linked issue + the LoopDef ticket-body artifact path.
-  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('issue edit 176 --body-file');
-  expect(readFileSync(logFile, 'utf8')).toContain(join('.agent-loop', 'ticket.md'));
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('a repo that opts the loop out via loops_deny_exec runs no exec at the plan gate (§26.6)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-exec-off-');
-  // Opt plan-loop out of exec; no `loops:` registry, so LoopDef resolution still falls back to config dir.
-  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops_deny_exec:\n  plan-loop: true\n');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-exec-off-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-exec-off-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('approve').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
-  // The transition + mark-pr-ready still ran, but the opted-out exec did not. Scope to the exec's
-  // `--body-file` ticket-body publish — pickup legitimately runs `gh issue edit` for label/assignee moves.
-  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
-  expect(readFileSync(logFile, 'utf8')).not.toContain('issue edit 176 --body-file');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('request-changes at the plan gate writes a human note, resets the cap window, and re-iterates (§26.13 / L5)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-changes-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-changes-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-changes-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('request-changes').click();
-
-  // Land: the note is written for the critiqued iteration (1), the per-loop cap window resets to that
-  // iteration (cap_baseline: 1), and the loop re-iterates (a second iteration's consolidated.json appears).
-  // No PR is readied (request-changes has no such action).
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'human-notes', '1.md')), { timeout: 15_000 })
-    .toBe(true);
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
-    .toBe(true);
-  const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
-  expect(stateText).toContain('cap_baseline: 1');
-  expect(stateText).not.toContain('phase2_active: true');
-  expect(stateText).toContain('iteration: 2');
-  expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-test('impasse at the plan gate terminates the loop at the impasse status (§26.13 / L5)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-impasse-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-impasse-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-impasse-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('impasse').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: impasse');
-  expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
-  expect(existsSync(join(repo, '.agent-loop', 'human-notes', '1.md'))).toBe(true);
-  expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
-  // §26 D42a — impasse is a human-owned FAILURE terminal: the flow does NOT auto-advance (it stays at the
-  // plan step, never advancing to `done`), so the human resolves the impasse rather than the flow marching on.
-  const flowStateText = readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8');
-  expect(flowStateText).toContain('step: plan');
-  expect(flowStateText).not.toContain('status: done');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L8 — epic-promote. The work-agent classifies the plan an epic (three sub-tickets) in plan.md;
-// approving at the plan gate reuses the current PR for sub-ticket-1 and creates the remaining N-1 (=2)
-// sub-issues out of band, appending them to linked_issues + recording `epic` in state.yaml.
-test('approve on an epic plan creates N-1 sub-issues and records epic in state.yaml (§26.13 / L8)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l8-epic-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-epic-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-epic-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', epicPlan: true });
-  await driveToPlanGate(repo, home, binDir, logFile);
-
-  await gateButton('approve').click();
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
-  const stateText = readFileSync(stateFile, 'utf8');
-  // Epic-promote created the N-1 sub-issues (Slice one reuses the current PR) and recorded them.
-  expect(stateText).toContain('epic:');
-  expect(stateText).toContain('sub_issues:');
-  expect(stateText).toContain('terminated: true');
-  // The two created issue numbers (501, 502 from the fake-gh counter) are appended to linked_issues.
-  expect(stateText).toContain('- 501');
-  expect(stateText).toContain('- 502');
-  // Exactly the two remaining sub-tickets were created out of band (sub-ticket-1 reused the PR).
-  const calls = readFileSync(logFile, 'utf8');
-  const creates = calls.split('\n').filter((l) => l.startsWith('gh issue create'));
-  expect(creates).toHaveLength(2);
-  expect(calls).toContain('--title Slice two');
-  expect(calls).toContain('--title Slice three');
-  expect(calls).not.toContain('--title Slice one');
-  // The plan-approval mark-pr-ready still ran.
-  expect(calls).toContain('pr ready');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L7 — the cost meter. The fake-agent writes a deterministic session-JSONL token fixture at a
-// test-controlled log root ($APP_SESSION_LOG_ROOT); completing an iteration prices those tokens against the
-// checked-in table, surfaces the dollars on the status-strip loop read-out, and records a §25 cost event.
-test('completing an iteration prices the fixture tokens: strip readout + audit cost event (§26.13 / L7)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l7-cost-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l7-cost-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l7-cost-bin-');
-  const logRoot = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l7-cost-logs-'));
-  // A clean verdict stops at the plan-approval gate on iteration 1 — one completed iteration. The work turn
-  // writes the §26.10 session-log fixture: $3.00 of work tokens (replayed twice under one billing identity)
-  // + $1.50 of reviewer-subagent tokens, beside $15 of a session that predates this flow and a zero-token
-  // `<synthetic>` turn. Only this run's distinct, priced turns count → exactly $4.50, with no pricing gap.
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', costFixture: true });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000', { APP_SESSION_LOG_ROOT: logRoot });
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  // Land (state): the iteration boundary persisted the priced cost into the app-owned extension.
-  expect(readFileSync(stateFile, 'utf8')).toContain('usd: 4.5');
-
-  // Land (strip): the read-out shows this run's dollars — the pre-flow session, the replayed turn, and the
-  // zero-token `<synthetic>` model all excluded, the reviewer subagent's tokens included.
-  const cost = loopReadout().locator('.loop-cost');
-  await expect(cost).toHaveText('$4.50', { timeout: 15_000 });
-
-  // Land (strip layout): a value too wide for the 200px rail must stay on ONE line and overflow the row,
-  // never wrap inside itself. A shrinkable flex item breaks mid-value, interleaving `iter N` and the dollars
-  // into unreadable columns (the reported defect: `iter $4104.09` above `1 +unknown`). Drive the widest
-  // readout the meter can produce through the real state.yaml → reader → strip path.
-  const widened = readFileSync(stateFile, 'utf8').replace('usd: 4.5\n  unpriced: []', 'usd: 4104.09\n  unpriced:\n    - claude-made-up-9');
-  expect(widened, 'the cost block moved; re-anchor this rewrite').toContain('usd: 4104.09');
-  writeFileSync(stateFile, widened);
-  await expect(cost).toHaveText('$4104.09 +unknown', { timeout: 15_000 });
-  for (const value of [cost, loopReadout().locator('.loop-iter')]) {
-    const lines = await value.evaluate((el) => {
-      const one = parseFloat(getComputedStyle(el).fontSize) * 2; // a generous single line box
-      return { height: el.getBoundingClientRect().height, oneLine: one };
-    });
-    expect(lines.height, 'loop read-out value wrapped onto a second line').toBeLessThan(lines.oneLine);
-  }
-
-  // Land (audit): the run's YAML carries the per-iteration cost event with the priced dollars.
-  const costEvents = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter(
-    (e): e is Extract<AuditEvent, { type: 'loop.cost' }> => e.type === 'loop.cost',
-  );
-  expect(costEvents).toEqual(
-    expect.arrayContaining([expect.objectContaining({ type: 'loop.cost', iteration: 1, usd: 4.5, unpriced: [] })]),
-  );
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-  rmSync(logRoot, { recursive: true, force: true });
-});
-
-// §26.13 / L8 — CI runs, it does not block (§26.7). At the iteration boundary the app takes a best-effort,
-// NON-BLOCKING `gh pr checks` snapshot of the non-draft PR and records it (display-only). A pending check
-// must not stall the loop: it still reaches its gate on the same iteration, and the snapshot is recorded.
-test('completing an iteration snapshots CI without blocking; records a loop.ci audit event (§26.13 / L8)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l8-ci-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-ci-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-ci-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  // Hold the `gh pr checks` RESULT back 5s (the invocation still logs immediately). A blocking snapshot
-  // implementation could not reach the gate until that delay elapsed AND would record loop.ci by then;
-  // the fire-and-forget one reaches the gate at once, with loop.ci landing only after the delay.
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000', { FAKE_GH_CHECKS_DELAY: '5' });
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // Land (no block): despite `gh pr checks` reporting a pending check AND being held back 5s, the clean
-  // iteration still reached the plan-approval gate on iteration 1 — the loop never waited on CI (§26.7).
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1');
-
-  // Teeth for "without blocking": at the moment the gate is reached the snapshot is still in flight, so no
-  // loop.ci event exists yet — a blocking impl would have recorded it before advancing. (`gh pr checks` was
-  // already invoked — it logs before the delay — proving the snapshot fired, just hasn't returned.)
-  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr checks');
-  expect(
-    readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'loop.ci'),
-  ).toEqual([]);
-
-  // Land (snapshot): once the held-back `gh pr checks` returns, the best-effort loop.ci event is recorded
-  // with the current bucket counts (one pass, one pending).
-  await expect
-    .poll(
-      () =>
-        readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'loop.ci'),
-      { timeout: 15_000 },
-    )
-    .toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: 'loop.ci', iteration: 1, total: 2, passed: 1, failed: 0, pending: 1 }),
-      ]),
-    );
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L8 — auto-resume from state.yaml. A run interrupted mid-iteration (plan.md + all reviews on
-// disk, consolidated absent) is resumed on launch at the consolidate turn — NOT re-running the completed
-// work/reviewers turns. Proven on a real relaunch: the app launches into the repo (APP_LAUNCH_DIR) with the
-// fake-agent AS the shell (APP_SHELL) so the resumed turn injects into the agent, and the run drives forward
-// to its plan-approval gate while the work/reviewers execution markers stay absent (no double-execution).
-function seedResumeRepo(
-  prefix: string,
-  opts: { iteration?: number; reviews?: 'all' | 'none'; consolidated?: boolean } = {},
-): string {
-  const iteration = opts.iteration ?? 1;
-  const reviews = opts.reviews ?? 'all';
-  const repo = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(repo, '.agent-loop', 'reviews', String(iteration)), { recursive: true });
-  writeFileSync(
-    join(repo, '.agent-loop', 'state.yaml'),
-    [
-      'schema_version: 4',
-      'status: plan-draft',
-      `iteration: ${iteration}`,
-      'bound_loop: plan-loop',
-      'pr: 4242',
-      'branch: plan-loop/issue-176',
-      'linked_issues:',
-      '  - 176',
-      'phase2_active: false',
-      'persona_state: {}',
-      'impasse: {}',
-      'sessions: {}',
-      'terminated: false',
-      '',
-    ].join('\n'),
-  );
-  // plan.md is always on disk (it is rewritten in place, so it can be stale from a prior iteration). What
-  // varies is the iteration-scoped downstream evidence — reviews and the consolidated verdict.
-  writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\ninterrupted mid-run\n');
-  if (reviews === 'all') {
-    for (const p of PLAN_PERSONAS) {
-      writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), `${p}.json`), `{"verdict":"clean","seen_iter":${iteration}}`);
-    }
-  }
-  if (opts.consolidated) {
-    writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), 'consolidated.json'), '{"verdict":"clean","findings_kept":[]}');
-  }
-  return repo;
-}
-
-test('an interrupted run resumes at the consolidate turn on launch without re-running completed turns (§26.13 / L8)', { tag: '@ownapp' }, async () => {
-  const repo = seedResumeRepo('agent-term-e2e-l8-resume-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
-
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      // The fake-agent IS the shell, so the resumed turn injects straight into the agent REPL (no bash to
-      // race). The app launches into the repo, so resumeLoop reads its state.yaml on startup.
-      APP_SHELL: join(binDir, 'fake-agent'),
-      APP_LAUNCH_DIR: repo,
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '30000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // Land (resumed forward): the consolidate turn ran, wrote consolidated.json, and the clean verdict drove
-  // the run to its plan-approval gate — all from a cold launch, with no human action.
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '1', 'consolidated.json')), { timeout: 25_000 })
-    .toBe(true);
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1');
-
-  // Land (no double-execution): the consolidate turn ran exactly once; the already-complete work and
-  // reviewers turns were NOT re-run (their execution markers never appear).
-  expect(existsSync(join(repo, '.agent-loop', 'consolidate-ran'))).toBe(true);
-  expect(existsSync(join(repo, '.agent-loop', 'work-ran'))).toBe(false);
-  expect(existsSync(join(repo, '.agent-loop', 'reviewers-ran'))).toBe(false);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L8 — a re-iteration interrupted BEFORE its work turn rewrote plan.md leaves a stale prior-iteration
-// plan.md with no iteration-scoped review for the new iteration. Resume must re-enter WORK (regenerating the
-// plan), never skip to reviewers and grade the stale plan — plan.md is not iteration-stamped, so only a
-// downstream artifact for the current iteration proves the work turn ran.
-test('resume re-enters the work turn when a re-iteration has a stale plan but no review for the new iteration (§26.13 / L8)', { tag: '@ownapp' }, async () => {
-  // Alone among the resume tests this one re-enters at WORK and drives the FULL chain (work → reviewers →
-  // consolidate → gate) from a cold launch. Its first poll lands on `work-ran`, an EARLY artifact, so the
-  // gate poll below must absorb the entire reviewers→consolidate→gate tail on its own — a 3-turn tail where
-  // the single-turn siblings' gate poll covers one. 25s (the siblings' budget) is too tight for that tail
-  // under Podman/Xvfb load, and widening it collides with the 60s global per-test cap; grant this test the
-  // proportionally larger wall-clock budget the longest chain needs.
-  test.setTimeout(90_000);
-  const repo = seedResumeRepo('agent-term-e2e-l8-resume-stale-', { iteration: 2, reviews: 'none' });
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-stale-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-stale-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
-
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: join(binDir, 'fake-agent'),
-      APP_LAUNCH_DIR: repo,
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '30000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // Land: the WORK turn ran this session (its marker appears) — resume did NOT skip to reviewers on the
-  // stale plan — and the freshly-produced iteration drove forward to the plan-approval gate.
-  await expect
-    .poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 })
-    .toBe(true);
-  // The whole reviewers→consolidate→gate tail runs inside THIS poll (work-ran, above, is an early artifact),
-  // so it gets the full-chain budget, not the single-turn siblings' 25s.
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
-    .toContain('status: awaiting-human-plan-approval');
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
-// §26.13 / L8 — an interrupted run whose work, reviewers AND consolidate turns all completed (every
-// iteration artifact on disk, including consolidated.json) resumes straight into the post-consolidate
-// verdict branch: it re-injects NO turn, reads the recorded clean verdict, and drives to the gate.
-test('resume runs only the post-consolidate branch when every iteration artifact already exists (§26.13 / L8)', { tag: '@ownapp' }, async () => {
-  const repo = seedResumeRepo('agent-term-e2e-l8-resume-post-', { iteration: 1, reviews: 'all', consolidated: true });
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-post-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-post-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
-
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: join(binDir, 'fake-agent'),
-      APP_LAUNCH_DIR: repo,
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: '30000',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // Land: the recorded clean verdict drove the run to its gate with NO turn re-injected — every turn
-  // marker stays absent (work/reviewers/consolidate all already complete on disk).
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  expect(existsSync(join(repo, '.agent-loop', 'work-ran'))).toBe(false);
-  expect(existsSync(join(repo, '.agent-loop', 'reviewers-ran'))).toBe(false);
-  expect(existsSync(join(repo, '.agent-loop', 'consolidate-ran'))).toBe(false);
-
-  await app.close();
-  rmSync(repo, { recursive: true, force: true });
-  rmSync(home, { recursive: true, force: true });
-  rmSync(binDir, { recursive: true, force: true });
-});
-
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', { tag: '@ownapp' }, async () => {
-  // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
-  // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-restart-reprompt-');
+  // The user supplies the plan step's ticket once (a §27 loop step's REQUIRED typed input, resolved via the
+  // modal); after completing and Restarting the flow, the ticket must be re-requested — Restart wipes
+  // resolved inputs (unlike Undo). A fake agent completes the driven §27 turn so it reaches a clean gate
+  // rather than erroring for want of a hosted agent; that is incidental to the Restart-clears-input behavior.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  seedCompletedAppBootstrap(repo);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-restart-reprompt-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStation(1).locator('.nm')).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the §27 work turn
 
   await flowControl().click(); // Start → groom (manual, no prompt)
-  await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
+  await flowControl().click(); // Advance → plan (loop): the required-input modal opens
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
   await expect(inputModal()).toHaveCount(0);
-  // The resolved input persists to flow-state.yaml (no CLAUDE_CONFIG_DIR here, so pickup itself no-ops —
-  // this test isolates the Restart-clears-input behavior, not the pickup side-effects).
+  // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
     .toContain('176');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
-  await flowControl().click(); // Advance → done (plan is the last step)
+  await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
@@ -6185,16 +4598,14 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
-test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // The loop's linked_issues ticket and state.yaml PR are agent-loop state: progress-gated, they stay
-  // hidden on the pre-loop manual step and appear only once the flow enters a loop step (§24.2.3 T7).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('typed-input ticket + PR surface only once the flow enters the step that declares them (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
+  // Refs are the flow's typed inputs (§18.4): progress-gated, they stay hidden on the pre-`work` step and
+  // appear only once the flow enters the `work` step that declares them — even though the resolved values
+  // sit in flow-state.yaml from the start (§24.2.3 T7).
+  const { dir: repo } = seedRefsFlowRepo('agent-term-e2e-refs-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -6204,16 +4615,15 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → in_progress on the manual `groom` step
   await expect(flowStepName()).toHaveText('groom');
-  // The loop step has not been entered, so nothing loop-derived shows — even though state.yaml carries it.
+  // The `work` step has not been entered, so nothing ref-derived shows — even though flow-state carries it.
   await expect(loopReadout()).toHaveCount(0);
 
-  await flowControl().click(); // Advance → enter the `work` loop step
+  await flowControl().click(); // Advance → enter the `work` step that declares the typed inputs
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
-  // A display-only loop step (no resumable def/run) must NOT pop a blocking error dialog — entering it is a
-  // legitimate no-op, not a failure (§26 D42a; the round-1 raise regressed this by intercepting all clicks).
+  // Entering a ref-bearing step must NOT pop a blocking error dialog — it is a legitimate no-op.
   await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
-  // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
-  // temp repo is not on GitHub for gh to resolve titles/links).
+  // The docked popout's "Working on" section carries the ticket + PR (bare numbers, since the temp repo is
+  // not on GitHub for gh to resolve titles/links).
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).toContainText('Working on');
@@ -6227,15 +4637,11 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate resets the flow to its
-  // first step, closing the loop-step gate, so the rail read-out and docked popout empty (loop
-  // dismissed, not deleted).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('Terminate clears the ticket/PR display even though the loop run-state still carries it (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
+  // Terminate resets the flow to its first step and wipes the resolved typed inputs, so the rail read-out
+  // and docked popout empty — the refs display is a projection, not the source. The residual loop
+  // run-state.yaml the app never writes is untouched by the clear.
+  const { dir: repo, runStateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -6244,7 +4650,7 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → groom (manual)
-  await flowControl().click(); // Advance → work (loop): the display appears
+  await flowControl().click(); // Advance → work: the refs display appears
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   await loopReadout().click(); // open the docked popout
   await expect(loopPanel()).toContainText('Working on');
@@ -6253,28 +4659,24 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   await expect(confirmModal()).toBeVisible();
   await confirmModal().locator('.confirm').click();
 
-  // Back at Not started: the loop step is no longer entered, so the display is gone — read-out removed,
-  // popout closed and emptied — despite state.yaml still holding the PR.
+  // Back at Not started: the `work` step is no longer entered and its inputs are wiped, so the display is
+  // gone — read-out removed, popout closed and emptied — while the loop's run-state.yaml still holds it.
   await expect(flowControl()).toHaveText('Start');
   await expect(loopReadout()).toHaveCount(0);
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).not.toContainText('Working on');
-  expect(readFileSync(stateFile, 'utf8')).toContain('pr: 179'); // the read-only mirror is untouched
+  expect(readFileSync(runStateFile, 'utf8')).toContain('status: complete'); // the run-state the app never writes is untouched
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // Restart returns the flow to its first step, closing the loop-step gate; the display clears with no
-  // state.yaml write and returns only once the flow re-enters the loop step — then reflecting whatever
-  // loop state.yaml now holds (a fresh pickup).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('Restart clears the ticket/PR display and wipes its resolved inputs (§24.2.3 T7 / §18.4)', { tag: '@ownapp' }, async () => {
+  // Restart returns the flow to its first step and wipes resolved inputs (§18.4, unlike Undo). The refs
+  // display clears with no run-state write, and — because the source is the wiped inputs, not a re-read
+  // external mirror — it stays cleared on re-entry until the inputs are provided again.
+  const { dir: repo, runStateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -6283,52 +4685,43 @@ test('Restart clears the ticket/PR display until the flow re-enters a loop step 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → groom (manual)
-  await flowControl().click(); // Advance → work (loop): the display appears
+  await flowControl().click(); // Advance → work: the refs display appears
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   await flowControl().click(); // Advance → done (past the last step)
   await expect(flowControl()).toHaveText('Restart');
-  await expect(loopReadout()).toBeVisible(); // still shown at done — the loop step was entered this run
+  await expect(loopReadout()).toBeVisible(); // still shown at done — the `work` step was entered this run
 
-  await flowControl().click(); // Restart → in_progress at the groom step
+  await flowControl().click(); // Restart → in_progress at the groom step, resolved inputs wiped
   await expect(flowStepName()).toHaveText('groom');
-  await expect(loopReadout()).toHaveCount(0); // cleared — the loop step is no longer entered
+  await expect(loopReadout()).toHaveCount(0); // cleared — the `work` step is no longer entered
 
-  // A fresh pickup rewrites state.yaml; re-entering the loop step shows the NEW ticket/PR.
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 200\nbranch: agent-loop/issue-42\niteration: 1\nstatus: planning\nlinked_issues:\n  - 42\n',
-  );
-  await flowControl().click(); // Advance → work (loop): the new loop's display appears
-  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('Working on');
-  const ticketRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'Ticket' }) });
-  const prRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'PR' }) });
-  await expect(ticketRow).toContainText('#42');
-  await expect(prRow).toContainText('#200');
+  // Re-entering `work` shows nothing: Restart wiped the inputs, and (unlike the retired mirror) there is no
+  // external source to re-read — flow-state.yaml no longer carries the ticket/PR.
+  expect(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')).not.toContain('179');
+  await flowControl().click(); // Advance → work again
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // on `work` (station 2), yet…
+  await expect(loopReadout()).toHaveCount(0); // …no refs: the inputs were wiped and there is nothing to re-read
+  expect(readFileSync(runStateFile, 'utf8')).toContain('status: complete'); // the run-state the app never writes is untouched
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', { tag: '@ownapp' }, async () => {
-  // The app DRIVES NOTHING — it mirrors agent-loop's v4 state.yaml read-only, updating live as the
-  // file changes (§24.2.3 T2).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-loop-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n',
-  );
+test('a §27 loop step shows a Loop read-out that expands a docked panel reflecting the run-state; advancing at the gate warns (§24.2.3 T2 / §19.2)', { tag: '@ownapp' }, async () => {
+  // The read-out is progress-gated: absent on the pre-loop `groom` step, it appears once the flow enters
+  // the `build` loop step and reflects the §27 engine's run-state (driven by a real turn). Advancing while
+  // the loop sits at its (human-needed) gate is a §19.2 override: it warns but proceeds.
+  const repo = seedManualThenAppLoopFlowRepo('agent-term-e2e-loop-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-loop-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'build', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Rail: [Not started] · groom · build · [Completed]. Although state.yaml carries a PR, the
-  // loop-derived display is progress-gated (§24.2.3 T7): the pre-loop manual `groom` step shows no
-  // read-out at all, so there is certainly no loop STATUS pill (`.spill`) yet.
+  // Rail: [Not started] · groom · build · [Completed]. The pre-loop manual `groom` step shows no read-out.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
@@ -6337,30 +4730,24 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
-  await flowControl().click(); // Advance → build (loop): the compact Loop STATUS read-out appears
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Advance → build (loop): the §27 work turn runs to its gate
   await expect(flowStation(2)).toHaveClass(/\bactive\b/);
-  await expect(loopReadout().locator('.spill')).toHaveText('awaiting', { timeout: 10_000 });
-  await expect(loopReadout().locator('.spill')).toHaveClass(/\bawait\b/); // awaiting-human → needs-you tone
-  await expect(loopReadout()).toContainText('iter 9');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  // The compact Loop STATUS read-out appears, reflecting the run-state.
+  await expect(loopReadout().locator('.spill')).toBeVisible({ timeout: 10_000 });
+  await expect(loopReadout()).toContainText('iter 1');
 
-  // Clicking the read-out opens the docked panel with the full v4 vocabulary (it starts closed).
+  // Clicking the read-out opens the docked panel with the run's status and the def's gate options.
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
-  await expect(loopPanel()).toContainText('awaiting-human-pr-approval'); // exact status, not the tone
-  await expect(loopPanel()).toContainText('#179');
-  await expect(loopPanel()).toContainText('agent-loop/issue-176');
-  // The bound LoopDef (resolved via the repo's .agent-loop.yaml registry) drives the gate-options row
-  // from this gate's human_options [approve, request-changes, impasse].
+  await expect(loopPanel()).toContainText('complete'); // the run-state status, not the tone
+  // The bound §27 def drives the gate-options row from plan-loop's gate [approve, request-changes, redo, polish].
   const gateRow = loopPanel().locator('.ldl .lrow', { has: page.locator('.lk', { hasText: 'gate options' }) });
-  await expect(gateRow.locator('.lv')).toHaveText('approve · changes · impasse');
+  await expect(gateRow.locator('.lv')).toHaveText('approve · changes · redo · polish');
 
-  // A hand-edit of state.yaml (no app write, no user action) must re-pull the open panel live.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
-  await expect(loopPanel()).toContainText('awaiting-human-impl-triage', { timeout: 10_000 });
-  await expect(loopPanel()).toContainText('11');
-
-  // Advancing while the loop still needs a human is a §19.2 override: it warns but proceeds.
+  // Advancing while the loop still sits at its (human-needed) gate is a §19.2 override: it warns but proceeds.
   await flowControl().click();
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('still needs you', { timeout: 10_000 });
   await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — advanced anyway
@@ -6369,6 +4756,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', { tag: '@ownapp' }, async () => {
@@ -6403,12 +4791,13 @@ test('a flow transition whose write cannot land surfaces a blocking error and st
 });
 
 test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', { tag: '@ownapp' }, async () => {
-  // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works
-  // (§24.2.3 T4).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-reveal-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works. The §27
+  // loop is driven to its (human-needed) gate so the status-bar alert is present throughout (§24.2.3 T4).
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-reveal-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-reveal-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -6416,9 +4805,10 @@ test('the reveal signal lands the user on the loop read-out, from another view a
     `cd "${repo}" && rm -rf .git && git init -q && git config user.email t@t && git config user.name T && ` +
       `git add -A && git commit -qm init && printf '# Doc\\n' > doc.md && pwd`,
   );
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom
-  await flowControl().click(); // Advance → build (loop) active, human-needed
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Start → enter the plan loop → the §27 work turn drives to its gate
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
   await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
   await expect(statusAlert()).toBeVisible();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
@@ -6429,7 +4819,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await fireRevealLoop();
   await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
-  await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
+  await expect(loopPanel()).toContainText('complete');
 
   // Reveal from viewer-fullscreen (rail/strip hidden) must exit full-screen and re-open the read-out
   // on Terminal — and the alert must stay perceivable in the always-visible main region throughout.
@@ -6449,6 +4839,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('changing directories swaps flow state; each repo is independent and visiting writes nothing (§24.2.2 / §19.1)', { tag: '@ownapp' }, async () => {

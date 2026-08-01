@@ -1,6 +1,6 @@
-// Claude Code's user-level config directories (§24.2.3, §26.10). One definition of the root, consumed by
-// the loop-name resolver's no-override branch, by the install action's targets, and by the cost meter's
-// session logs — so a CLAUDE_CONFIG_DIR redirect can never move one of them without the others.
+// Claude Code's user-level config directories (§24.2.3). One definition of the root, consumed by
+// the loop-name resolver's no-override branch and by the install action's targets — so a
+// CLAUDE_CONFIG_DIR redirect can never move one of them without the others.
 
 import os from 'node:os';
 import path from 'node:path';
@@ -13,9 +13,9 @@ const trimmed = (v: string | undefined): string | undefined => {
 /** The root, resolved against a supplied environment and home dir — for callers that take both injected.
  *  `null` when an override is set to something no cwd could make right: a RELATIVE path. Claude Code is a
  *  separate process with its own cwd and resolves the same variable against that, so a relative value has no
- *  single meaning; anchoring it at ours seeds a directory Claude Code never reads, and — when the app was
- *  launched from a repo — lands it in the working tree, where `loopDef` would stamp it `operator-config`,
- *  the origin §26.6 grants `exec` authority on (CWE-829). Callers surface the refusal; none guess. */
+ *  single meaning; anchoring it at ours seeds a directory Claude Code never reads, and a relative
+ *  CLAUDE_CONFIG_DIR would anchor the config root at the process cwd, which a cloned repo can influence
+ *  (CWE-829). Callers surface the refusal; none guess. */
 export function userConfigRootFrom(
   env: NodeJS.ProcessEnv,
   home: string,
@@ -44,16 +44,11 @@ export function userConfigLoopsDir(configDir?: string): string | null {
   return branch('loops', configDir);
 }
 
-/** The operator tier for §27 (v2) loop defs, `<root>/loops-v2/<name>/<name>.yaml` — a sibling of the §26
+/** The operator tier for §27 (v2) loop defs, `<root>/loops-v2/<name>/<name>.yaml` — a sibling of the
  *  `loops` dir, never nested in it, so the two schemas' operator trees stay disjoint (§27.15). `null` when
  *  the root is refused (the same relative-override / CWE-829 gate as every other branch). */
 export function userConfigLoopsV2Dir(configDir?: string): string | null {
   return branch('loops-v2', configDir);
-}
-
-/** Where Claude Code — a separate process — discovers a skill, as `<root>/skills/<skill name>/`. */
-export function userConfigSkillsDir(configDir?: string): string | null {
-  return branch('skills', configDir);
 }
 
 /** Where Claude Code — a separate process — discovers a slash command, as `<root>/commands/<name>.md`. */

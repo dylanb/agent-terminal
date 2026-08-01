@@ -5,7 +5,7 @@
 import { stripDisplayControlChars } from './controlChars';
 
 export function isHumanNeededStatus(status: string): boolean {
-  // `error` is the app-only step-failed-twice status the in-app orchestrator writes (§26.3/D48); it
+  // `error` is the app-only step-failed-twice status the in-app orchestrator writes (§27.12); it
   // blocks on a human exactly like an awaiting-human gate, so it joins this family.
   return status.startsWith('awaiting-human') || status === 'impasse' || status === 'error';
 }

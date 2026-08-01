@@ -121,7 +121,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 /* §22.3.1 */
 .status-bar .sb-activity .phrase { min-width:5ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-/* §26 */
+/* §27.10 */
 .spin { font-family:"IBM Plex Mono",ui-monospace,monospace; color:var(--signal); flex:none; }
 .spin::after { content:'\2809'; animation:braille 0.8s steps(1) infinite; }
 @keyframes braille {
@@ -160,7 +160,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .cli-status.err { color:var(--danger); }
 .cli-status:empty { min-height:0; margin:0; color:transparent; }
 
-/* Install-examples per-destination consent + grouped result panel (§18.1/§26.5 / #41). */
+/* Install-examples per-destination consent + grouped result panel (§18.1/§27.8 / #41). */
 .install-report { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:10px; }
 .install-report > li { padding:10px 12px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
 .install-report .ir-dest { font-size:12.5px; font-weight:600; }
@@ -286,9 +286,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .flow-error { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--danger); }
 /* §19.3 busy refusal / one-shot transient notice — caution, not a hard load error (no mockup). */
 .flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
-/* §24.2.3 T2 — the read-only agent-loop mirror (design/shell/loop-flow.html). The rail shows a
+/* §24.2.3 T2 — the read-only loop read-out (design/shell/loop-flow.html). The rail shows a
    COMPACT Loop read-out (a 3-tone status pill + iteration) that opens the docked panel; the full
-   v4 vocabulary lives in that panel. */
+   loop read-out lives in that panel. */
 .flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
 .flowstrip .loopstat:hover { background:var(--hair2); }
 /* Open-state cue is a signal border, NOT a background wash: a wash would stack under the spill pill's
@@ -296,10 +296,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .loopstat[aria-expanded="true"] { border-color:var(--signal); }
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 /* Values wrap as whole items onto a second row, never inside themselves: a shrinkable flex item breaks
-   `$4104.09 +unknown` mid-value and interleaves it with `iter N` into unreadable columns in the 200px rail. */
+   the `iter N` read-out mid-value and interleaves it with the status pill into unreadable columns in the 200px rail. */
 .flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.flowstrip .loopstat .loop-iter,
-.flowstrip .loopstat .loop-cost { font-size:11px; color:var(--dim); white-space:nowrap; flex-shrink:0; }
+.flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); white-space:nowrap; flex-shrink:0; }
 .flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
 
 /* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an
@@ -310,7 +309,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .spill.work { color:var(--signal-text); border-color:color-mix(in srgb,var(--signal) 45%,var(--hair)); background:var(--signal-wash); }
 .spill.settle { color:var(--pass-text); border-color:color-mix(in srgb,var(--pass) 45%,var(--hair)); }
 
-/* (§24.2.3 T2) FULL-HEIGHT docked loop panel — the expanded state mirror; "makes room" via the grid
+/* (§24.2.3 T2) FULL-HEIGHT docked loop panel — the expanded loop read-out; "makes room" via the grid
    column, internally scrollable so it never truncates. The gate decision section is T5/T6. */
 .loop-panel { background:var(--card); border-right:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
 .loop-panel .lhead { display:flex; align-items:center; gap:9px; padding:15px 15px 13px; border-bottom:1px solid var(--hair); flex:none; }
@@ -324,7 +323,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .loop-panel .ldl .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
 .loop-panel .ldl .lrow .lv.sig { color:var(--signal-text); }
 .loop-panel .ldl .lrow .lv.bad { color:var(--attn-text); }
-/* §24.2.3 T7 — the ticket/PR "Working on" refs section, above the state mirror. */
+/* §24.2.3 T7 — the ticket/PR "Working on" refs section, above the loop read-out. */
 .loop-panel .refs { padding:16px 16px 0; flex:none; }
 .loop-panel .refs .rrow { padding:4px 0 10px; border-bottom:1px solid var(--hair); margin-bottom:10px; }
 .loop-panel .refs .rrow:last-child { border-bottom:none; }

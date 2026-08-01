@@ -1,5 +1,7 @@
 # Requirements — Agent Terminal as a Task-Flow Management Application
 
+> **Retired-engine note (as of 2026-07-30, post-N8):** this companion describes the app in the present tense as a management layer over the **external `agent-loop` engine** — `.agent-loop/state.yaml`, LoopDef yaml, injected `/agent-loop-*` slash-command gates. That engine (spec §26) is **retired**; the shipped engine is the in-app §27 loop engine. This document is left standing as history — its `agent-loop` mechanics are dated, not current.
+
 **Document status:** Rationale companion (interview complete). Folded into the spec 2026-06-16.
 **Relationship to existing docs:** The **normative** design is now in `terminal-web-ui-spec.md` **§17–§24** (v2.27); capture changes in **§15/§16** (v2.27). **The spec is authoritative on any conflict.** This document is retained as the **intent + decisions-log companion** — it records *why* (D1–D40) behind the spec's *what*.
 
