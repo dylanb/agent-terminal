@@ -12,7 +12,6 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
   return {
     version: 'v2',
     name: 'plan-loop',
-    origin: 'app-bundled',
     work: { recipe: '/tiers/plan-loop/prompts/work.md', artifact: 'plan' },
     reviewers: [
       { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md', tools: ['Read'] },

@@ -55,14 +55,9 @@ export const CH = {
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
   flowOnLoopError: 'flow:onLoopError',
-  flowOnBootstrapConflict: 'flow:onBootstrapConflict',
-  flowResolveBootstrapConflict: 'flow:resolveBootstrapConflict',
   flowOnAppBootstrapConflict: 'flow:onAppBootstrapConflict',
   flowResolveAppBootstrapConflict: 'flow:resolveAppBootstrapConflict',
   flowGithubRef: 'flow:githubRef',
-  flowMarkTurnComplete: 'flow:markTurnComplete',
-  flowGateDecision: 'flow:gateDecision',
-  flowRetryTurn: 'flow:retryTurn',
   flowAppRouteOut: 'flow:appRouteOut',
   flowAppGateDecision: 'flow:appGateDecision',
   flowAppRequestChanges: 'flow:appRequestChanges',
@@ -365,7 +360,6 @@ export interface ChannelPayloads {
   'flow:revealLoop': FlowRevealLoopMsg;
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
   'flow:onLoopError': FlowLoopErrorMsg;
-  'flow:onBootstrapConflict': FlowBootstrapConflictMsg;
   'flow:onAppBootstrapConflict': FlowAppBootstrapConflictMsg;
 }
 
@@ -446,77 +440,74 @@ export interface FlowDerived {
   ready: boolean;
 }
 
-/** The read-only mirror of a loop step's agent-loop v4 state.yaml (§24.2.3 T2): the live engine
- *  vocabulary the app surfaces. `status` is the per-LoopDef state-machine string (unbounded — the
+/** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip
+ *  render, produced by the bound engine — not a mirror of any file the app reads.
+ *  `status` is the per-LoopDef state-machine string (unbounded — the
  *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
  *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
  *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
 export interface FlowLoopView {
   status: string;
-  /** The run's iteration counter (§26 D42a). Absent means NO ROUND HAS RUN — the honest value for a
+  /** The run's iteration counter (§27.5). Absent means NO ROUND HAS RUN — the honest value for a
    *  §27 def that resolved before any round (a run-less view) and for a def that failed to resolve;
    *  a coalesce-to-zero would fabricate a round identity the dedup key and the audit both key on. Every
-   *  consumer (panel, strip, cost/dedup) omits its iteration read-out when absent rather than showing 0. */
+   *  consumer (panel, strip, dedup) omits its iteration read-out when absent rather than showing 0. */
   iteration?: number;
   pr: number | null;
   branch: string | null;
   ready: boolean;
   /** Whether this view's `gateOptions` are ACTIONABLE — the human can click them to decide the gate.
-   *  Read through the shared `loopGateActionable`, whose default governs: absent means actionable, so the
-   *  §26 provider and every hand-constructed awaiting-gate view keep their controls; the §27 provider sets
-   *  `actionable: false` to mark its run-less view display-only, so the same `gateOptions` field never means
-   *  two things. The default lives once, in `loopGateActionable`. */
+   *  Read through the shared `loopGateActionable`, whose default governs: a producer marks a view
+   *  display-only by opting in — the §27 run-less view sets `actionable: false` — and anything that does not
+   *  opt in is actionable, so every hand-constructed awaiting-gate view keeps its controls and the same
+   *  `gateOptions` field never means two things. The default lives once, in `loopGateActionable`. */
   actionable?: boolean;
   /** The current status's gate `human_options` (§18.1/§19.4) — the gate UI's variable option set
    *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.
    *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
-  /** The §26.10 cost-meter readout: the display-only priced dollars for the run (`$X.XX`, `unknown`, or
-   *  `$X.XX +unknown` when some model was unpriced), formatted by the shared `formatCost`. Present once an
-   *  iteration boundary has recorded a cost; absent before then. Display-only — it never gates the loop. */
-  cost?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
    *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef
    *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
    *  a derived loop view — the `?` is for hand-constructed views only. */
   humanNeeded?: boolean;
-  /** §26.3/D48 — the reason the current turn failed, present only at `status: 'error'`. Lets the loop
-   *  panel show WHY the loop stopped (e.g. "no Claude at the prompt") rather than a bare "error", and is
-   *  cleared the moment the status recovers. Absent on every non-error view. */
+  /** §27.12 — the reason the current turn failed (or, on a marked binding, why the step names no surviving
+   *  engine), present only at `status: 'error'`. Lets the loop panel show WHY the loop stopped (e.g. "no
+   *  Claude at the prompt") rather than a bare "error", and is cleared the moment the status recovers.
+   *  Absent on every non-error view. */
   errorReason?: string;
   /** §27.12/§27.15 — the identity of the §27 (app-namespace) work turn this view reflects: the flow step it
    *  runs against and its turn key. Present ONLY on a live §27 run view (working/error/complete); absent on
-   *  every §26 view and on the §27 run-less/def-failure view (no turn has started). The panel carries this
-   *  onto the §27-only error route-out (retry / accept / terminate) so the receiver acts on the identity it
-   *  names, never ambient state (§6). Additive and §27-only — no §26 concept crosses the seam (§27.15). */
+   *  the §27 run-less/def-failure view (no turn has started). The panel carries this onto the §27-only error
+   *  route-out (retry / accept / terminate) so the receiver acts on the identity it names, never ambient
+   *  state (§6). Additive and §27-only (§27.15). */
   appTurn?: { step: string; turnKey: string };
   /** §27.4/§27.6/AC8 — the def's reviewer catalog (every persona the loop can invoke) and, once the
    *  consolidator has chosen, `chosenRoster` (the personas the next/current round runs). Both are the SAME
    *  parsed-def data the round is drawn from, so the displayed roster and the round's actual roster cannot
-   *  drift. Additive and §27-only — the §26 provider populates neither. */
+   *  drift. Additive and §27-only. */
   catalog?: string[];
   chosenRoster?: string[];
   /** §27.6/AC5/AC9 — the round's consolidator verdict, the closed `ConsolidatorVerdict` set the engine and
    *  loop-state already carry, so a fourth value cannot cross the wire. Only under `stop for a human` does
    *  `verdictReason` accompany it. The panel surfaces the verdict at the gate, and the would-be verdict on an
-   *  armed interrupt. Additive and §27-only; the §26 provider populates neither. */
+   *  armed interrupt. Additive and §27-only. */
   verdict?: ConsolidatorVerdict;
   verdictReason?: string;
   /** §27.9/AC6/AC11 — the polish stand-down is active for this step: the orchestrator has stood down and the
    *  operator owns the keyboard, so the panel shows the polish view (only the approve control, which ends it)
    *  rather than the full gate options. App-owned loop state, persisted independently of the run-state so it
-   *  survives a relaunch until the operator approves. Additive and §27-only; the §26 provider never sets it. */
+   *  survives a relaunch until the operator approves. Additive and §27-only. */
   polish?: boolean;
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
  *  and url are fetched lazily via `flow:githubRef` so `flow:state` stays synchronous and best-effort.
- *  `ticket` is the value of the flow's `github-ticket`-typed input, falling back to the loop's
- *  `linked_issues`; `pr` is the value of the flow's `pr`-typed input, falling back to the loop's
- *  state.yaml `pr`. Either may be absent; the whole field is absent when neither resolves. Visibility is
- *  gated on flow progress (§24.2.3 T7): a typed-input ref surfaces only once a step requesting that
- *  input is entered, and the loop's `linked_issues`/`pr` only once a loop step is entered. */
+ *  `ticket` is the value of the flow's `github-ticket`-typed input; `pr` is the value of the flow's
+ *  `pr`-typed input. Either may be absent; the whole field is absent when neither resolves. Visibility is
+ *  gated on flow progress (§24.2.3 T7): a typed-input ref surfaces only once a step requesting that input
+ *  is entered. */
 export interface FlowRefs {
   ticket?: number;
   pr?: number;
@@ -571,9 +562,10 @@ export interface FlowStateView {
   total: number;
   status: FlowStatus;
   error?: string;
-  /** A one-shot transient notice carried only on a `start`/`restart` response — e.g. the §19.3
-   *  running-process refusal when a skill couldn't be injected over a busy shell (§24.2.2 S4).
-   *  Never part of `state()`: the strip shows it once, then a re-pull clears it. */
+  /** A one-shot transient notice — the §19.3 running-process refusal when a skill couldn't be injected
+   *  over a busy shell, or AC 5's migration notice (§24.2.2 S4). Carried on a transition response, or on a
+   *  `state` response when an asynchronous producer (the bootstrap coordinator) has one pending; the strip
+   *  holds it across passive re-pulls and clears it on the next transition (§B.5 carrier). */
   notice?: string;
   /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
    *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
@@ -581,26 +573,25 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
-  /** What the loop MECHANICS are doing right now (§26): a phrase — bootstrapping, waiting for the agent,
-   *  working, running reviewers, consolidating. The descriptor's PRESENCE is "the loop is busy"; there is
-   *  no idle descriptor. Top-level (NOT under `loop`) because a bootstrap runs before
-   *  `.agent-loop/state.yaml` exists; absent when the loop mechanics are idle. */
+  /** What the loop MECHANICS are doing right now: the surviving `bootstrapping` phrase (§27.10). The
+   *  descriptor's PRESENCE is "the loop is busy"; there is no idle descriptor. Top-level (NOT under `loop`)
+   *  because a bootstrap runs before the §27 run state exists; absent when the loop mechanics are idle. */
   loopActivity?: LoopActivity;
-  /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
-   *  (and stays for the run, including any later manual step) with a parseable v4 state.yaml. Parallel
-   *  to `derived` (NOT nested) — loop state outlives the manual in_progress window that gates `derived`. */
+  /** The §27 loop view (§27.15): present once a `loop` step has been entered (and stays for the run,
+   *  including any later manual step), produced by the §27 provider — not a mirror of any file the app
+   *  reads. Parallel to `derived` (NOT nested) — loop state outlives the manual in_progress window. */
   loop?: FlowLoopView;
-  /** The ticket + PR the flow is working (§24.2.3 T7): numbers resolved synchronously from the flow
-   *  inputs and the loop's state.yaml, gated on flow progress (see `FlowRefs`). The renderer fetches each
-   *  one's title/body/url lazily via `flow:githubRef`. */
+  /** The ticket + PR the flow is working (§24.2.3 T7): numbers resolved synchronously from the flow's
+   *  typed inputs, gated on flow progress (see `FlowRefs`). The renderer fetches each one's title/body/url
+   *  lazily via `flow:githubRef`. */
   refs?: FlowRefs;
   /** The name the user gave this worktree's work (§22.3.1), persisted in flow-state.yaml. The status bar
    *  shows it only when neither a PR nor a ticket supplies a title (`deriveStatusBar`) — it is outranked,
    *  never discarded, so it returns if the refs go away. Absent when the user has named nothing. */
   userTitle?: string;
   /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
-   *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
-   *  opens its modal and answers via `flow:provideInput`. Like `notice`, never part of `state()`. */
+   *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
+   *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
 }
 
@@ -619,12 +610,11 @@ export interface FlowRevealLoopMsg {
   sessionId: SessionId;
 }
 
-/** flow:onBootstrapError push (§26.9/§27.10): main signals that a loop step's async in-app pickup FAILED and the
- *  flow was rolled back to the previous step (revertStep). The failure is never silent — the renderer
- *  raises a blocking error dialog carrying `reason` (the human-readable cause: dirty tree, unresolvable
- *  base, conflicting branch). `repoKey` and `step` name the failed resource, so a late push cannot be
- *  attributed to ambient flow state. Distinct from the transient strip `notice`: an async failure has no
- *  transition response to ride, so it needs its own push. */
+/** flow:onBootstrapError push (§27.10): main signals that a loop step's bootstrap could not proceed — an
+ *  async in-app pickup that failed and rolled back to the previous step (revertStep), OR (AC 10) a declared
+ *  `bootstrap` the bound def carries no contract for. The failure is never silent — the renderer raises a
+ *  blocking error dialog carrying `reason` (the human-readable cause). `repoKey` and `step` name the failed
+ *  resource, so a late push cannot be attributed to ambient flow state. */
 export interface FlowBootstrapErrorMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -632,7 +622,7 @@ export interface FlowBootstrapErrorMsg {
   reason: string;
 }
 
-/** flow:onLoopError push (§26.3/§26.6/D48): main signals that a loop-MECHANICS operation FAILED after the
+/** flow:onLoopError push (§27.12): main signals that a loop-MECHANICS operation FAILED after the
  *  loop was bootstrapped — a turn-runner error (no hosted agent, a stall, a missing artifact, a compose
  *  failure) or a gate transition that could not be persisted. Like the bootstrap-error push, the failure is
  *  never silent: the renderer raises a blocking error dialog carrying `reason`. Distinct channel from
@@ -640,29 +630,6 @@ export interface FlowBootstrapErrorMsg {
 export interface FlowLoopErrorMsg {
   sessionId: SessionId;
   reason: string;
-}
-
-/** flow:onBootstrapConflict push (§26.9): main signals that an in-app pickup hit an EXISTING branch/PR
- *  under a `wipe-and-retry` policy. Nothing destructive has been done — the flow stays on the loop step
- *  and the renderer raises a confirm dialog offering to wipe `branch` (which deletes it on origin and
- *  closes its PR) and retry. The operator's answer returns on `flow:resolveBootstrapConflict`. */
-export interface FlowBootstrapConflictMsg {
-  sessionId: SessionId;
-  branch: string;
-  /** The repo the conflict was raised for. The operator's answer on `flow:resolveBootstrapConflict` is
-   *  keyed by this — never the terminal's current cwd — so a conflict for one repo cannot resolve against
-   *  another the user has since cd'd to (§26.9; the wipe is destructive). */
-  repoKey: string;
-}
-
-/** flow:resolveBootstrapConflict request (§26.9): the operator's answer to a bootstrap conflict. `wipe`
- *  true → the app wipes the conflicting branch and re-runs pickup; false (Cancel/dismiss) → the app rolls
- *  the flow back one step (the §26.9 rollback). One-way; the result surfaces through the state.yaml watch
- *  → flow:onStateChanged (on wipe success) or a rolled-back flow:state re-pull (on cancel). */
-export interface FlowResolveBootstrapConflictMsg {
-  sessionId: SessionId;
-  repoKey: string;
-  wipe: boolean;
 }
 
 /** §6/§27.10. */
@@ -708,40 +675,20 @@ export interface FlowSetTitleMsg {
   title: string;
 }
 
-/** flow:markTurnComplete request (§26.3/D47a c): the operator's manual "this turn is done" override
- *  for the in-flight loop turn whose automatic done-signal the orchestrator missed. One-way; the
- *  result surfaces through the existing state.yaml watch → flow:onStateChanged push. */
-export interface FlowMarkTurnCompleteMsg {
-  sessionId: SessionId;
-  repoKey: string;
-}
-
-/** The human's gate decision (§26.6 / L5): the option picked at a data-driven awaiting-human gate. The
- *  set mirrors the LoopDef `human_options` the gate offers. One runtime source (`GATE_DECISION_OPTIONS`)
- *  drives both the type and the §6 validator, so main, renderer, and the wire cannot drift on the set. §27
- *  widens it ADDITIVELY by `redo` and `polish` — the one additive change §27 makes to the gate surface
- *  (§27.9/§27.15). Because the widened set admits every option on both the §26 and §27 messages, the guard
- *  that a legacy step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced at the
- *  operation, validated against the bound def's declared options — never inferred from this type (AC9). */
+/** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
+ *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
+ *  source (`GATE_DECISION_OPTIONS`) drives both the type and the §6 validator, so main, renderer, and the
+ *  wire cannot drift on the set. The guard that a step never runs an option its bound def does not declare
+ *  is enforced at the operation, validated against the def's declared options — never inferred from this
+ *  type (AC9). */
 export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish'] as const;
 export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
-
-/** flow:gateDecision request (§26.6 / L5): the human picks an option at an awaiting-human gate. The app
- *  executes that option's LoopDef `on_*` action list in-app (gh side-effects out of band) and advances /
- *  re-iterates / stops. One-way; the result surfaces through the state.yaml watch → flow:onStateChanged
- *  push. `note` carries an optional request-changes/impasse reason (written to human-notes/{iter}.md). */
-export interface FlowGateDecisionMsg {
-  sessionId: SessionId;
-  repoKey: string;
-  option: GateDecisionOption;
-  note?: string;
-}
 
 /** The §27-only work-turn error route-out (§27.12c): the human recovers a stopped §27 work turn by
  *  re-running it (`retry`), accepting a present artifact without re-running (`accept`), or moving the flow
  *  off the step (`terminate`). ONE runtime source drives both the type and the §6 validator, so main,
- *  renderer, and the wire cannot drift on the set. Disjoint from `GATE_DECISION_OPTIONS` — a §27 concept,
- *  never a §26 one (§27.15). */
+ *  renderer, and the wire cannot drift on the set. Disjoint from `GATE_DECISION_OPTIONS` — a §27-only
+ *  route-out concept (§27.15). */
 export const APP_ROUTE_OUT_ACTIONS = ['retry', 'accept', 'terminate'] as const;
 export type AppRouteOutAction = (typeof APP_ROUTE_OUT_ACTIONS)[number];
 
@@ -760,12 +707,10 @@ export interface FlowAppRouteOutMsg {
 /** flow:appGateDecision request (§27.9/§27.13 / N5): the human's decision at a §27 (app-namespace) human
  *  gate. Like the §27 route-out it carries the identity of the `step` and `turnKey` it acts on (§6) — the
  *  receiver acts on that identity, never ambient loop state — so a decision for one gate can never fire
- *  against another (AC7). `option` is typed on the SHARED `GATE_DECISION_OPTIONS` set (§27 widens it
- *  additively by `redo`/`polish`), so the wire, main, and renderer cannot drift; the guard
- *  that a legacy-bound step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced
- *  at the operation, validated against the bound def's declared options — never inferred from this type
- *  (AC9). Distinct from the §26 `flow:gateDecision`, which carries no identity and never fires the §27 path
- *  (AC8). One-way; the result surfaces through the §27 run state → flow:onStateChanged re-pull. */
+ *  against another (AC7). `option` is typed on the SHARED `GATE_DECISION_OPTIONS` set, so the wire, main,
+ *  and renderer cannot drift; the guard that a step never runs an option its bound def does not declare is
+ *  enforced at the operation, validated against the def's declared options — never inferred from this type
+ *  (AC9). One-way; the result surfaces through the §27 run state → flow:onStateChanged re-pull. */
 export interface FlowAppGateDecisionMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -871,14 +816,12 @@ export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
-// ---- Install bundled examples (§18.1/§23.4/§26.5) ----
+// ---- Install bundled examples (§18.1/§23.4/§27.15) ----
 
-/** §18.1/§23.4/§26.5/§27.15. */
+/** §18.1/§23.4/§27.15. */
 export const INSTALL_DESTINATION_IDS = [
   'flow',
   'appLoops',
-  'loops',
-  'skills',
   'commands',
 ] as const;
 
@@ -1065,22 +1008,15 @@ export interface FlowApi {
   /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
    *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
   onRevealLoop(cb: () => void): () => void;
-  /** Subscribe to main's flow:onBootstrapError push (§26.9/§27.10): `cb` fires with the human-readable
-   *  `reason` and the failed repo/step identity when an async pickup rolled back; the renderer raises a
-   *  blocking error dialog. Returns an unsubscribe. */
+  /** Subscribe to main's flow:onBootstrapError push (§27.10): `cb` fires with the human-readable `reason`
+   *  and the failed repo/step identity when a loop step's bootstrap could not proceed (an async pickup that
+   *  rolled back, or a declared bootstrap the bound def has no contract for); the renderer raises a blocking
+   *  error dialog. Returns an unsubscribe. */
   onBootstrapError(cb: (reason: string, repoKey: string, step: string) => void): () => void;
-  /** Subscribe to main's flow:onLoopError push (§26.3/§26.6/D48): `cb` fires with the human-readable
+  /** Subscribe to main's flow:onLoopError push (§27.12): `cb` fires with the human-readable
    *  `reason` when a loop-mechanics operation failed after bootstrap (a turn-runner error or an
    *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */
   onLoopError(cb: (reason: string) => void): () => void;
-  /** Subscribe to main's flow:onBootstrapConflict push (§26.9): `cb` fires with the conflicting `branch`
-   *  and the `repoKey` the conflict is for when a pickup hit an existing branch under a wipe-and-retry
-   *  policy; the renderer raises a confirm dialog and answers via `resolveBootstrapConflict` keyed by that
-   *  same repoKey (not the current cwd). Returns an unsubscribe. */
-  onBootstrapConflict(cb: (branch: string, repoKey: string) => void): () => void;
-  /** Answer a bootstrap conflict (§26.9): `wipe` true wipes the branch + retries, false rolls the flow
-   *  back. One-way; the result surfaces through the state.yaml watch / a rolled-back state re-pull. */
-  resolveBootstrapConflict(repoKey: string, wipe: boolean): void;
   /** §6/§27.10. */
   onAppBootstrapConflict(
     cb: (
@@ -1100,16 +1036,6 @@ export interface FlowApi {
   /** Open a ref's GitHub `url` in the OS browser (§24.2.3 T7); resolves to whether it was opened
    *  (false when main rejects the url as non-GitHub/non-https). */
   openExternal(url: string): Promise<boolean>;
-  /** §26.3/D47a(c) — manually mark the in-flight loop turn complete for `repoKey`. One-way: the loop
-   *  panel re-pulls via flow:onStateChanged when the orchestrator's resulting state lands. */
-  markTurnComplete(repoKey: string): void;
-  /** §26.6 / L5 — submit the human's gate decision for `repoKey`. One-way: the app executes the option's
-   *  transition and the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
-  gateDecision(repoKey: string, option: GateDecisionOption, note?: string): void;
-  /** §26.3/D48 — recover a loop stopped in `error` for `repoKey`: re-drive the failed turn (e.g. after the
-   *  operator starts Claude for a `no hosted agent` stop). One-way: the app clears the error status and
-   *  re-injects; the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
-  retryTurn(repoKey: string): void;
   /** §27.12c — the §27-only work-turn route-out for `repoKey`, carrying the `step`+`turnKey` identity it
    *  acts on (§6). `retry` re-runs the turn, `accept` advances a present artifact without re-running,
    *  `terminate` moves the flow off the step. One-way: the loop panel re-pulls via flow:onStateChanged. */
@@ -1141,7 +1067,7 @@ export interface CliApi {
   install(): Promise<CliInstallResult>;
 }
 
-/** Install bundled examples (§18.1/§23.4/§26.5): the settings organism's only seam to the install action.
+/** Install bundled examples (§18.1/§23.4/§27.15): the settings organism's only seam to the install action.
  *  Observing a preview never writes anything. */
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;

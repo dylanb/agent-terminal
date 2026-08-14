@@ -28,8 +28,8 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom-ticket', status: 'done' });
   });
 
-  // §26.10 — the instant the flow began, so the cost meter can scope its token sweep to this run rather
-  // than to every session ever logged against the repo.
+  // Retained only to DECODE pre-sweep documents (§H.2): no producer writes startedAt now — the cost meter
+  // that once stamped it is gone — but a persisted store may still carry it, so the round-trip must hold.
   it('round-trips the instant the flow started', () => {
     const store = createFlowStateStore(dir);
     store.write({ step: 'plan', status: 'in_progress', startedAt: 1_752_062_400_000 });

@@ -14,7 +14,6 @@ import {
   type FlowApi,
   type FlowBootstrapErrorMsg,
   type FlowLoopErrorMsg,
-  type FlowBootstrapConflictMsg,
   type FlowAppBootstrapConflictMsg,
   type FlowStateView,
   type GithubRef,
@@ -149,13 +148,6 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowOnLoopError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },
-  onBootstrapConflict: (cb) => {
-    const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch, msg.repoKey);
-    ipcRenderer.on(CH.flowOnBootstrapConflict, handler);
-    return () => ipcRenderer.removeListener(CH.flowOnBootstrapConflict, handler);
-  },
-  resolveBootstrapConflict: (repoKey, wipe) =>
-    ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
       cb({
@@ -181,10 +173,6 @@ const flowApi: FlowApi = {
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,
-  markTurnComplete: (repoKey) => ipcRenderer.send(CH.flowMarkTurnComplete, { sessionId: SESSION_ID, repoKey }),
-  gateDecision: (repoKey, option, note) =>
-    ipcRenderer.send(CH.flowGateDecision, { sessionId: SESSION_ID, repoKey, option, ...(note !== undefined ? { note } : {}) }),
-  retryTurn: (repoKey) => ipcRenderer.send(CH.flowRetryTurn, { sessionId: SESSION_ID, repoKey }),
   appRouteOut: (repoKey, step, turnKey, action) =>
     ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
   appGateDecision: (repoKey, step, turnKey, option) =>

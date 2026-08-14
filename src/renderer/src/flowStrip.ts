@@ -62,23 +62,17 @@ export interface FlowStrip {
  *  composition root (§24.2.3 T2) — it routes the data to the sibling docked panel without the strip
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
  *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
- *  on window.flow, not through the strip (interface segregation — the strip never reveals). So is
- *  `markTurnComplete` (§26.3/D47a c), `retryTurn` (§26.3/D48), `appRouteOut` (§27.12c) and `appGateDecision`
- *  (§27.9/N5): the loop panel owns those controls, not the strip. */
+ *  on window.flow, not through the strip (interface segregation — the strip never reveals). So are
+ *  `appRouteOut` (§27.12c) and `appGateDecision` (§27.9/N5): the loop panel owns those controls, not the strip. */
 export type FlowStripDeps = Omit<
   FlowApi,
   | 'onRevealLoop'
   | 'onBootstrapError'
   | 'onLoopError'
-  | 'onBootstrapConflict'
-  | 'resolveBootstrapConflict'
   | 'onAppBootstrapConflict'
   | 'resolveAppBootstrapConflict'
   | 'githubRef'
   | 'openExternal'
-  | 'markTurnComplete'
-  | 'gateDecision'
-  | 'retryTurn'
   | 'appRouteOut'
   | 'appGateDecision'
   | 'appRequestChanges'
@@ -128,30 +122,31 @@ function derivedText(state: FlowStateView): string | null {
  *  equal signature differ only in those live values, so the existing nodes can be updated without a
  *  teardown — and a teardown is exactly what detaches a focused control, an in-flight click target,
  *  or a confirm dialog's captured opener (§24.2.2 S5). */
-function structuralSig(state: FlowStateView): string {
+function structuralSig(state: FlowStateView, effectiveNotices: string[]): string {
   return JSON.stringify([
     state.status,
     state.status === 'error' ? state.error ?? '' : '',
     state.steps,
     state.position,
     !!state.loop,
-    // The §26.10 cost node's PRESENCE (not its value) is structural: it appears once a cost is recorded,
-    // so a first-cost push forces a full render; thereafter value-only changes patch in place.
-    state.loop ? state.loop.cost !== undefined : false,
-    // The iteration read-out's PRESENCE is likewise structural — absent for a §27 run-less view — so a
+    // The iteration read-out's PRESENCE is structural — absent for a §27 run-less view — so a
     // run-less↔run transition forces a full render rather than a value-only patch of a missing node.
     state.loop ? state.loop.iteration !== undefined : false,
     // The refs read-out (§24.2.3 T7) renders the actual numbers with no patch handler, so any refs
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    state.notice ?? '',
+    // Keyed on the EFFECTIVE notices the strip holds (§B.10 carrier), NOT `state.notice`: a passive
+    // re-pull whose only delta is the absent transport notice leaves the effective set unchanged, so the
+    // signature is unchanged, the held `.flow-notice` node stays, and the notice is not re-announced
+    // into the role=status region (WCAG 4.1.3).
+    effectiveNotices,
   ]);
 }
 
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
- *  the docked panel (the shell wires the click). The exact v4 vocabulary lives in that panel. */
+ *  the docked panel (the shell wires the click). The full loop read-out lives in that panel. */
 function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HTMLElement {
   const stat = doc.createElement('span');
   stat.className = 'stat loopstat';
@@ -184,16 +179,6 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
     iter.className = 'mono loop-iter';
     iter.textContent = `iter ${loop.iteration}`;
     v.append(iter);
-  }
-  // §26.10 — the display-only cost readout, present once an iteration boundary has recorded a cost.
-  if (loop.cost !== undefined) {
-    const cost = doc.createElement('span');
-    cost.className = 'mono loop-cost';
-    cost.textContent = loop.cost;
-    // The visible figure is bare; under aria-atomic=false only this node is announced, so it carries the
-    // "cost" context in its accessible name (WCAG SC 1.3.1) — the label `.loop-iter` keeps in its text.
-    cost.setAttribute('aria-label', `cost ${loop.cost}`);
-    v.append(cost);
   }
   v.append(car);
 
@@ -243,6 +228,19 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
   let refreshGeneration = 0;
+  // §B.10 carrier (AC 5): a transition-supplied notice — and the coordinator's asynchronous §19.3 refusal
+  // (§B.5 item 6) — is held here rather than in `state.notice`, because the ordinary success push drives a
+  // passive `flow:state` re-pull whose view carries no `notice`, which would otherwise wipe the migration
+  // line before the operator reads it. Held across passive re-pulls, cleared by the next TRANSITION (or a
+  // repo change). A re-pull carrying its OWN notice JOINS it — the two arrive on different responses, so the
+  // seam's single-field composition cannot reach them and this is the only place they can both render.
+  let heldNotices: string[] = [];
+
+  /** Fold a re-pull's own transport notice into the held set, de-duplicated (a repeated push must not
+   *  grow the list or re-announce). */
+  const absorbNotice = (notice: string | undefined): void => {
+    if (notice && !heldNotices.includes(notice)) heldNotices = [...heldNotices, notice];
+  };
 
   const onActFailed = (e: unknown): void => {
     deps.onError?.(e instanceof Error ? e.message : String(e));
@@ -316,7 +314,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   function render(state: FlowStateView): void {
-    lastSig = structuralSig(state); // this paint defines the structure a later passive push compares to
+    lastSig = structuralSig(state, heldNotices); // this paint defines the structure a later passive push compares to
     deps.onStatusBar(deriveStatusBar(state), repoKey);
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
@@ -396,12 +394,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(terminateButton());
     }
 
-    // The §19.3 busy refusal (and any transient notice) rides the transition response only; a later
-    // state() re-pull carries none, so the line self-clears.
-    if (state.notice) {
+    // §B.10 carrier (AC 5): a notice rides a transition response, OR a `state` response when an
+    // asynchronous producer (the coordinator's §19.3 refusal) has one pending; the strip holds it across
+    // passive re-pulls and clears it at the next transition. Each held notice renders its own line so a
+    // migration notice and a later busy-refusal both show (neither drops the other).
+    for (const text of heldNotices) {
       const notice = doc.createElement('div');
       notice.className = 'flow-notice';
-      notice.textContent = state.notice;
+      notice.textContent = text;
       host.append(notice);
     }
 
@@ -412,9 +412,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root's modal via the contract
-   *  seam. The prompt is TRANSITION-driven (one-shot, like `notice`): only `applyTransition` calls
-   *  this, never a passive `state()` re-pull — a flow:onStateChanged refresh must NOT close an open
-   *  modal. `submit` records the typed values (provideInput) and re-applies the response. */
+   *  seam. The prompt is TRANSITION-driven: only `applyTransition` calls this, never a passive
+   *  `state()` re-pull — a flow:onStateChanged refresh must NOT close an open modal. `submit` records
+   *  the typed values (provideInput) and re-applies the response. */
   function emitPrompt(state: FlowStateView): void {
     const boundRepo = repoKey; // bind the submit to the repo the prompt was raised for
     const boundStep = state.stepName;
@@ -436,6 +436,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  close if absent). Distinct from a plain render: a `state()` re-pull repaints without touching
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
+    // A TRANSITION resets the held notice set to whatever it carries (§B.10 carrier): the prior held
+    // notices — a migration line, the coordinator's async refusal — clear here, never on a passive re-pull.
+    heldNotices = view.notice ? [view.notice] : [];
     render(view);
     // WCAG 2.4.3
     if (!host.contains(doc.activeElement)) {
@@ -462,11 +465,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       const iter = host.querySelector('.loop-iter');
       if (iter && state.loop.iteration !== undefined) iter.textContent = `iter ${state.loop.iteration}`;
-      const cost = host.querySelector('.loop-cost');
-      if (cost && state.loop.cost !== undefined) {
-        cost.textContent = state.loop.cost;
-        cost.setAttribute('aria-label', `cost ${state.loop.cost}`);
-      }
     }
     // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
     // ride along so a value-only patch never clears the panel's "Working on" section.
@@ -490,10 +488,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return; // keep the last rendered UI
     }
     if (disposed || repoKey !== key || generation !== refreshGeneration) return;
+    // §B.10 carrier: a passive re-pull carrying its OWN notice (the coordinator's async §19.3 refusal)
+    // joins the held set before the signature is computed, so it forces a render and both lines show; a
+    // re-pull with no notice leaves the set unchanged and self-clears nothing.
+    absorbNotice(view.notice);
     // A passive push only ever changes live-derived values, so when the structure is unchanged patch
     // in place — a full teardown would detach a focused control, an in-flight click target, or a
     // confirm dialog's captured opener (§24.2.2 S5). Any structural change falls back to a render.
-    if (lastSig !== null && host.childElementCount > 0 && structuralSig(view) === lastSig) {
+    if (lastSig !== null && host.childElementCount > 0 && structuralSig(view, heldNotices) === lastSig) {
       patchInPlace(view);
     } else {
       render(view);
@@ -516,6 +518,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const changed = repoKey !== key;
       repoKey = key;
       lastSig = null; // force a full structural render for the new repo — never patch across repos
+      heldNotices = []; // §B.10 — a notice never survives a repo change (it belongs to the prior repo's step)
       if (changed) {
         host.replaceChildren();
         deps.onStatusBar(IDLE_STATUS_BAR, null);

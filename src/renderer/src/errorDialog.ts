@@ -1,8 +1,11 @@
-// Blocking error-alert dialog (§26.9) — a placement-agnostic blocking dialog (UI-STANDARDS §5), NOT the
+// Blocking error-alert dialog (§27.10) — a placement-agnostic blocking dialog (UI-STANDARDS §5), NOT the
 // §4 Alert live-region pattern. Raised when an async bootstrap fails (a pickup that could not run) so the
 // failure is never silent. Composes createModalShell (shared focus trap) and, unlike confirmDialog,
-// carries no destructive action — a single Dismiss acknowledges it.
+// carries no destructive action — a single Dismiss acknowledges it. The title and message can carry
+// repo-authored bytes (a repo-tier def's branch_template / a step id reach this surface), so both sinks
+// neutralise through the one shared display-control strip before render (CWE-117, §16.3).
 
+import { stripDisplayControlChars } from '../../shared/controlChars';
 import { createModalShell } from './modalShell';
 
 export interface ErrorDialogOptions {
@@ -33,11 +36,11 @@ export function createErrorDialog(host: HTMLElement, opts?: { onFocusLost?: () =
         const h3 = doc.createElement('h3');
         h3.className = 'serif';
         h3.id = titleId;
-        h3.textContent = opts.title;
+        h3.textContent = stripDisplayControlChars(opts.title);
         const ph = doc.createElement('p');
         ph.className = 'ph';
         ph.id = describedById;
-        ph.textContent = opts.message;
+        ph.textContent = stripDisplayControlChars(opts.message);
         card.append(h3, ph);
 
         const foot = doc.createElement('div');

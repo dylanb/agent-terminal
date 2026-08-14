@@ -9,7 +9,6 @@ import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
-import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { wireAppBootstrapConflict } from './wireAppBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog, type ErrorDialogOptions } from './errorDialog';
@@ -165,11 +164,6 @@ if (flowStripHost) {
       confirmations: confirmDialog,
       cancelPendingConfirmation: () => requestTerminate?.cancelPending(),
     });
-    wireBootstrapConflict({
-      onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
-      confirm: (opts) => flowModals!.showConfirmation(opts),
-      resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
-    });
     wireAppBootstrapConflict({
       onConflict: (cb) => window.flow.onAppBootstrapConflict(cb),
       confirm: (opts) => flowModals!.showConfirmation(opts),
@@ -184,18 +178,6 @@ if (flowStripHost) {
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
         openExternal: (url) => void window.flow.openExternal(url),
-        markTurnComplete: () => {
-          const key = repo.repoKey();
-          if (key) window.flow.markTurnComplete(key);
-        },
-        gateDecision: (option) => {
-          const key = repo.repoKey();
-          if (key) window.flow.gateDecision(key, option as GateDecisionOption);
-        },
-        retryTurn: () => {
-          const key = repo.repoKey();
-          if (key) window.flow.retryTurn(key);
-        },
         appRouteOut: (step, turnKey, action) => {
           const key = repo.repoKey();
           if (!key) return;

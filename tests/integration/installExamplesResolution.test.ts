@@ -4,13 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
-import { parseLoopDef, resolveLoopDir } from '../../src/main/loopDef';
 import { loadFlowDefinitionLocalFirst, flowHomeDir } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 
 const BUNDLE_FLOW = path.resolve('example', 'flow');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
-const BUNDLE_LOOPS = path.resolve('example', 'loops');
 
 function walk(dir: string, base: string = dir): string[] {
   if (!existsSync(dir)) return [];
@@ -31,7 +29,6 @@ let home: string;
 let configRoot: string;
 let repo: string;
 let dirs: InstallDestination[];
-const loopsTargetDir = (): string => (dirs.find((d) => d.id === 'loops') as InstallDestination).targetDir as string;
 const appLoopsTargetDir = (): string => (dirs.find((d) => d.id === 'appLoops') as InstallDestination).targetDir as string;
 
 beforeEach(() => {
@@ -57,10 +54,11 @@ describe('after the install, every loop name the shipped flow binds resolves on 
         tiers: {
           operator: appLoopsTargetDir(),
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
-      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
+      if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     }
   });
 
@@ -79,7 +77,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
     for (const name of boundLoopNames()) {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
-        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS },
+        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null },
       });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
@@ -98,6 +96,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.definition.steps).toEqual([
+      { id: 'preparation', kind: 'manual' },
       {
         id: 'groom',
         kind: 'loop',
@@ -122,6 +121,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         loopNamespace: 'app',
         todoTemplate: 'impl-loop-review',
       },
+      { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
     ]);
   });
 
@@ -142,6 +142,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         tiers: {
           operator: null,
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
@@ -157,7 +158,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     expect(defs[2].outputs).toEqual([]);
   });
 
-  it('installs the §27 defs into the operator tier used by the bootstrap origin gate', () => {
+  it('installs the §27 defs into the operator tier', () => {
     applyInstallExamples(dirs, []);
     for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
       const resolved = resolveLoopDefV2(name, {
@@ -165,45 +166,68 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         tiers: {
           operator: appLoopsTargetDir(),
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
-      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
+      if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     }
   });
 });
 
-describe('the install is global — a repo-local override never redirects where definitions land', () => {
-  const overrideRel = path.join('my-loops', 'plan-loop');
+describe('the install is global — a repo-local override never redirects where §27 definitions land', () => {
+  const overrideDirRel = path.join('my-loops', 'plan-loop');
 
-  // resolveLoopDefPath returns the symlink-resolved real path (§20.2), and a temp dir is reached through
-  // a symlink on darwin — so the override's real path is what resolution answers with.
+  // A repo `.agent-loop.yaml` `loops:` entry is resolveLoopDefV2's highest-precedence tier (§20.2), so the
+  // override must be a def the SURVIVING parser accepts — a bare `name:` stub the retired reader answered
+  // without parsing would make the resolver surface a parse reason instead of the override, and the
+  // precedence this block pins could never be exercised (a strictly weaker pin). Minimal well-formed v2:
+  // recipe/consolidator refs need not exist (they confine as absent tail segments), only be present.
+  const V2_OVERRIDE_DEF = [
+    'version: v2',
+    'work:',
+    '  recipe: work.md',
+    '  artifact: plan',
+    'consolidator:',
+    '  recipe: consolidate.md',
+    'reviewers: []',
+    'boundaries: []',
+    'report:',
+    '  sections: []',
+    'gate: []',
+    '',
+  ].join('\n');
+
+  const tiers = () => ({ operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null });
+
   function seedOverride(): string {
-    const overrideDir = path.join(repo, overrideRel);
+    const overrideDir = path.join(repo, overrideDirRel);
     mkdirSync(overrideDir, { recursive: true });
-    writeFileSync(path.join(overrideDir, 'plan-loop.yaml'), 'name: plan-loop\nlocal: true\n');
-    writeFileSync(path.join(repo, '.agent-loop.yaml'), `loops:\n  plan-loop: ${overrideRel}/plan-loop.yaml\n`);
+    writeFileSync(path.join(overrideDir, 'plan-loop.yaml'), V2_OVERRIDE_DEF);
+    writeFileSync(path.join(repo, '.agent-loop.yaml'), `loops:\n  plan-loop: ${overrideDirRel}/plan-loop.yaml\n`);
     return realpathSync(overrideDir);
   }
 
-  it('resolves plan-loop to the override in that repo — the precondition this test rests on', () => {
+  it('resolves plan-loop to the repo override in that repo — the precondition this test rests on', () => {
+    seedOverride();
+    const resolved = resolveLoopDefV2('plan-loop', { repoDir: repo, tiers: tiers() });
+    expect(resolved.ok).toBe(true);
+    // The repo tier root is the repository itself (§20.2) — proof the override won over the operator and
+    // app-bundled tiers, not either of them. (repoCandidate roots on path.resolve(repoDir), not its realpath.)
+    if (resolved.ok) expect(resolved.tierRoot).toBe(repo);
+  });
+
+  it('writes every app-loop definition into the operator tier, neither the override nor under the repo', () => {
     const overrideDir = seedOverride();
-    expect(resolveLoopDir(repo, 'plan-loop', configRoot)).toBe(overrideDir);
-  });
-
-  it('writes every definition file into the user-config loops directory, not the override', () => {
-    seedOverride();
     applyInstallExamples(dirs, []);
-    for (const rel of walk(BUNDLE_LOOPS)) {
-      expect(existsSync(path.join(loopsTargetDir(), rel))).toBe(true);
-    }
-  });
-
-  it('writes every app-loop definition into the operator tier, not the repo override', () => {
-    seedOverride();
-    applyInstallExamples(dirs, []);
+    const operator = appLoopsTargetDir();
+    // The precedence-aware-writer corollary: the writer targets the named user-config tier, never a
+    // precedence resolution rooted at the repo — which, wired wrong, would land the defs in the override.
+    expect(operator).not.toBe(overrideDir);
+    expect(operator.startsWith(repo + path.sep)).toBe(false);
+    expect(operator.startsWith(realpathSync(repo) + path.sep)).toBe(false);
     for (const rel of walk(BUNDLE_APP_LOOPS)) {
-      expect(existsSync(path.join(appLoopsTargetDir(), rel))).toBe(true);
+      expect(existsSync(path.join(operator, rel))).toBe(true);
     }
   });
 
@@ -211,22 +235,23 @@ describe('the install is global — a repo-local override never redirects where 
     const overrideDir = seedOverride();
     const before = readFileSync(path.join(overrideDir, 'plan-loop.yaml'), 'utf8');
 
-    const res = applyInstallExamples(dirs, ['flow', 'loops', 'skills', 'commands']);
+    const res = applyInstallExamples(dirs, ['flow', 'appLoops', 'commands']);
     expect(res.ok).toBe(true);
 
     expect(walk(overrideDir)).toEqual(['plan-loop.yaml']);
     expect(readFileSync(path.join(overrideDir, 'plan-loop.yaml'), 'utf8')).toBe(before);
   });
 
-  it('seeds the loops directory the packaged app reads even from a repo carrying an override', () => {
+  it('seeds the operator tier the packaged app reads even from a repo carrying an override', () => {
     seedOverride();
     applyInstallExamples(dirs, []);
-    // A repo with NO override (a different repo, or the packaged app opened against none) now resolves
-    // plan-loop to the seeded global copy. This is what a global install buys.
+    // A DIFFERENT repo (no override) now resolves plan-loop to the seeded operator copy — what a global
+    // install buys: the def is readable from any repo, not only the one that carried the override.
     const otherRepo = mkdtempSync(path.join(tmpdir(), 'install-res-other-'));
     try {
-      expect(resolveLoopDir(otherRepo, 'plan-loop', configRoot)).toBe(path.join(loopsTargetDir(), 'plan-loop'));
-      expect(parseLoopDef(otherRepo, 'plan-loop', configRoot)).not.toBeNull();
+      const resolved = resolveLoopDefV2('plan-loop', { repoDir: otherRepo, tiers: tiers() });
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     } finally {
       rmSync(otherRepo, { recursive: true, force: true });
     }

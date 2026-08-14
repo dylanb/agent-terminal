@@ -1,4 +1,4 @@
-// Install-examples VIEW organism — §18.1/§23.4/§26.5; blocking-dialog pattern per UI-STANDARDS §5.
+// Install-examples VIEW organism — §18.1/§23.4; blocking-dialog pattern per UI-STANDARDS §5.
 
 import {
   INSTALL_DESTINATION_IDS,
@@ -28,8 +28,6 @@ export interface InstallExamples {
 const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flow: 'Flow home',
   appLoops: 'App loop definitions',
-  loops: 'Legacy loop definitions',
-  skills: 'Claude Code skills',
   commands: 'Claude Code commands',
 };
 
@@ -66,7 +64,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'sub',
-      'Install the bundled feature-dev flow, its app and legacy loop definitions, reviewer persona skills, and commands so a new instance can render and run them.',
+      'Install the bundled feature-dev flow, its app loop definitions, and commands so a new instance can render and run them.',
     ),
   );
 
@@ -77,7 +75,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'kp-help',
-      'Copies the flow to ~/.agent-terminal, and the app loops, legacy loops, persona skills and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
+      'Copies the flow to ~/.agent-terminal, and the app loop definitions and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
     ),
   );
   const btn = el('button', 'pill signal', 'Install examples');

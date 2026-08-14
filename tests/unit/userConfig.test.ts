@@ -5,13 +5,12 @@ import {
   userConfigRoot,
   userConfigRootFrom,
   userConfigLoopsDir,
-  userConfigSkillsDir,
   userConfigCommandsDir,
 } from '../../src/main/userConfig';
 
-// The user-level Claude config root is ONE definition (§24.2.3): the engine's loop-config location, the
-// skills location and the commands location all hang off it, so a single CLAUDE_CONFIG_DIR redirect
-// covers every destination the installer writes.
+// The user-level Claude config root is ONE definition (§24.2.3): the engine's loop-config location and the
+// commands location all hang off it, so a single CLAUDE_CONFIG_DIR redirect covers every destination the
+// installer writes.
 
 const priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
 afterEach(() => {
@@ -54,7 +53,6 @@ describe('userConfigRoot', () => {
       process.env.CLAUDE_CONFIG_DIR = v;
       expect(userConfigRoot()).toBeNull();
       expect(userConfigLoopsDir()).toBeNull();
-      expect(userConfigSkillsDir()).toBeNull();
       expect(userConfigCommandsDir()).toBeNull();
     },
   );
@@ -83,7 +81,6 @@ describe('userConfigRoot', () => {
     delete process.env.CLAUDE_CONFIG_DIR;
     for (const dir of [
       userConfigLoopsDir(configDir),
-      userConfigSkillsDir(configDir),
       userConfigCommandsDir(configDir),
     ]) {
       expect(dir).not.toBeNull();
@@ -92,17 +89,16 @@ describe('userConfigRoot', () => {
   });
 });
 
-describe('the three destination branches all derive from the one root', () => {
-  it('places loops, skills and commands directly under the root', () => {
+describe('the destination branches all derive from the one root', () => {
+  it('places loops and commands directly under the root', () => {
     const root = '/cfg';
     expect(userConfigLoopsDir(root)).toBe(path.join(root, 'loops'));
-    expect(userConfigSkillsDir(root)).toBe(path.join(root, 'skills'));
     expect(userConfigCommandsDir(root)).toBe(path.join(root, 'commands'));
   });
 
-  it('redirects all three together when CLAUDE_CONFIG_DIR moves', () => {
+  it('redirects both together when CLAUDE_CONFIG_DIR moves', () => {
     process.env.CLAUDE_CONFIG_DIR = '/redirected';
-    for (const dir of [userConfigLoopsDir(), userConfigSkillsDir(), userConfigCommandsDir()]) {
+    for (const dir of [userConfigLoopsDir(), userConfigCommandsDir()]) {
       expect(dir).not.toBeNull();
       expect((dir as string).startsWith('/redirected' + path.sep)).toBe(true);
     }

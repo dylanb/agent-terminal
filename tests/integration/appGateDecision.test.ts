@@ -12,7 +12,7 @@ import type { GateDecisionOption } from '../../src/shared/ipc';
 // bound def's declared side-effect out of band, then reaches the terminal accept and advances the flow; a
 // failed side-effect is surfaced + audited but never aborts the accept (AC3). It acts only on the step+turn
 // identity the decision names (AC7) and only when the run is AT the gate, and validates the option against the
-// bound def at the operation (AC9). It never writes §26 state — its persist port is the §27 writer (AC8).
+// bound def at the operation (AC9). It never writes retired-engine state — its persist port is the §27 writer (AC8).
 
 const GATE_RUN: AppLoopRunState = {
   loop: 'plan-loop',
@@ -73,7 +73,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const rec: Recorder = { sideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
-    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY) }),
+    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
@@ -150,7 +150,7 @@ describe('runAppGateDecision — a failed side-effect never strands the flow (§
   });
 });
 
-describe('runAppGateDecision — an unpersisted accept never advances the flow (§27.13 / AC3, §26 D48)', () => {
+describe('runAppGateDecision — an unpersisted accept never advances the flow (§27.13 / AC3, D48)', () => {
   it('surfaces + audits the persist failure and runs no side-effect and no advance', async () => {
     const { deps, rec } = mkDeps({
       persistAccept: () => {
@@ -205,7 +205,7 @@ describe('runAppGateDecision — validates the option against the bound def (AC9
     expect(rec.advances).toEqual([]);
   });
 
-  it('is inert for a DECLARED option §27 does not execute — impasse is a §26-only concept', async () => {
+  it('is inert for a DECLARED option §27 does not execute — impasse is a retired-engine-only concept', async () => {
     // impasse is never a §27 option. A def declaring it still gets no §27 execution for it — the executor runs
     // only approve, request-changes, redo, and polish.
     const gate: GateOptionDef[] = [

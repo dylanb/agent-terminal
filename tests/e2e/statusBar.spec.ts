@@ -16,10 +16,14 @@ const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 const flowStepName = () => page.locator('#flow-strip .flow.vert .stn').nth(1).locator('.nm');
 const flowControl = () => page.locator('#flow-strip .flow-control');
 
+// The §27 loop defs (impl-loop, …) resolve from the bundled example config, so a seeded loop step binds a
+// real def with gate options — the app-bundle resolution the §27 tests rely on.
+const exampleConfigDir = join(process.cwd(), 'example');
+
 async function launch(): Promise<void> {
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' },
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir },
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -49,25 +53,44 @@ function temp(prefix: string): string {
   return dir;
 }
 
-function seedLoopRepo(prefix: string): { dir: string; stateFile: string } {
+// A repo whose flow sits AT the §27 loop's clean consolidator gate — a human-needed state (§27.9). The flow
+// is persisted already on the loop step (in_progress) with a run-state at the gate, so a passive load
+// reconstructs the human-needed loop view WITHOUT an entry action re-driving a turn (the §27 resume path
+// never re-drives a reached gate). `impl-loop` resolves from the bundled example config. Returns the
+// run-state path — the file the app itself never writes.
+function seedLoopAtGateRepo(prefix: string): { dir: string; runStateFile: string } {
   const dir = temp(prefix);
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n',
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
   );
-  writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
-  writeFileSync(
-    join(dir, 'impl-loop.yaml'),
-    'name: impl-loop\nschema_version: "4"\ngates:\n' +
-      '  - id: awaiting-human-pr-approval\n    kind: approve-required\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-human-impl-triage\n    kind: triage\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-team-review\n    kind: terminal\n    human_options: []\n',
-  );
-  const loopDir = join(dir, '.agent-loop');
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: in_progress\n');
+  const loopDir = join(dir, '.agent-terminal', 'loop');
   mkdirSync(loopDir, { recursive: true });
-  return { dir, stateFile: join(loopDir, 'state.yaml') };
+  const runStateFile = join(loopDir, 'run-state.yaml');
+  writeFileSync(
+    runStateFile,
+    'schema_version: 1\nloop: impl-loop\nstep: build\nturn_key: consolidate-build\nstatus: complete\nverdict: clean\nround: 1\n',
+  );
+  return { dir, runStateFile };
+}
+
+// A repo whose flow declares a `pr` typed input pre-resolved in flow-state.yaml (§18.4). The PR ref is
+// progress-gated: it surfaces (and outranks a user title in the bar) only once the flow enters the step
+// that declares it — a pre-`work` manual `groom` step keeps it hidden until Advance.
+function seedRefsFlowRepo(prefix: string, pr = '179'): string {
+  const dir = temp(prefix);
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
+      '  - id: work\n    kind: manual\n    inputs:\n      - name: pr\n        type: pr\n',
+  );
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: groom\nstatus: not_started\ninputs:\n  pr: "${pr}"\n`);
+  return dir;
 }
 
 test.beforeEach(async () => {
@@ -81,31 +104,40 @@ test.afterEach(async () => {
   for (const dir of cleanup.reverse()) rmSync(dir, { recursive: true, force: true });
 });
 
-test('is always visible and enters attention only while the loop needs a human (§22.3.1 / §24.2.3 T4)', async () => {
-  const { dir, stateFile } = seedLoopRepo('agent-term-e2e-statusbar-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+test('is always visible and enters attention only while the §27 loop needs a human (§22.3.1 / §24.2.3 T4)', async () => {
+  // The bar is always visible; the attention alert appears ONLY when the loop is blocked on a human. A repo
+  // with no loop shows none; a repo whose flow sits at the §27 loop's human-needed gate does. The alert is a
+  // projection of the derived loop view — cd-ing away from the gated repo clears it with no file write.
+  const plain = temp('agent-term-e2e-statusbar-plain-');
+  mkdirSync(join(plain, '.git'), { recursive: true });
+  const { dir: gate } = seedLoopAtGateRepo('agent-term-e2e-statusbar-gate-');
 
   await expect(statusBar()).toBeVisible();
   await expect(statusTitle()).toBeVisible();
   await expect(statusAlert()).toHaveCount(0);
-  await enterRepo(dir, 'groom');
-  await flowControl().click();
-  await flowControl().click();
-  await expect(statusAlert()).toContainText('awaiting-human-pr-approval', { timeout: 10_000 });
-  await expect(statusTitle()).toContainText('PR #179');
+
+  await enterRepo(plain);
+  await expect(statusAlert()).toHaveCount(0);
+
+  await enterRepo(gate);
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 }); // the §27 clean consolidator gate is human-needed
   await expect(page.locator('#status-bar [data-attn-dismiss]')).toHaveCount(0);
 
   await statusAlert().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
-  await expect(page.locator('#loop-panel')).toContainText('awaiting-human-pr-approval');
+  await expect(page.locator('#loop-panel')).toContainText('complete');
 
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
+  // cd back to the loop-less repo → the loop view is gone → attention clears; the bar stays visible.
+  await enterRepo(plain);
   await expect(statusAlert()).toHaveCount(0, { timeout: 10_000 });
   await expect(statusBar()).toBeVisible();
 });
 
 test('persists a user title across relaunch and keeps it while a PR outranks it (§22.3.1)', async () => {
-  const { dir, stateFile } = seedLoopRepo('agent-term-e2e-sbname-');
+  // The user names the work on the pre-`work` step (its `pr` typed input is not yet in view). The name
+  // persists to flow-state.yaml and survives a relaunch. Advancing into `work` surfaces the pr ref, which
+  // OUTRANKS the name in the bar's display — yet the name is never lost from flow-state (§18.4).
+  const dir = seedRefsFlowRepo('agent-term-e2e-sbname-');
   await enterRepo(dir, 'groom');
   await statusTitle().click();
   const editor = page.locator('#status-bar input[data-sb-title-edit]');
@@ -116,28 +148,31 @@ test('persists a user title across relaunch and keeps it while a PR outranks it 
 
   await relaunch();
   await enterRepo(dir, 'groom');
-  await expect(statusTitle()).toHaveText('Refactor the shadow parser');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 1\nstatus: impl-draft\n');
-  await flowControl().click();
-  await flowControl().click();
+  await expect(statusTitle()).toHaveText('Refactor the shadow parser'); // persisted; the pr ref is hidden pre-`work`
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → work: the pr typed-input ref surfaces and outranks the user name
   await expect(statusTitle()).toContainText('PR #179', { timeout: 10_000 });
-  expect(readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8')).toContain('Refactor the shadow parser');
+  expect(readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8')).toContain('Refactor the shadow parser'); // the name is not lost
 });
 
 test('keeps title, activity, and alert perceptible under pressure and honors reduced motion (§22.3.1)', async () => {
-  const { dir, stateFile } = seedLoopRepo('agent-term-e2e-sblayout-');
-  writeFileSync(stateFile, 'schema_version: 4\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
-  await enterRepo(dir, 'groom');
+  const plain = temp('agent-term-e2e-sblayout-plain-');
+  mkdirSync(join(plain, '.git'), { recursive: true });
+  const { dir: gate } = seedLoopAtGateRepo('agent-term-e2e-sblayout-');
+  await enterRepo(plain);
   const height = async () => (await statusBar().boundingBox())!.height;
   const idleHeight = await height();
+  await expect(statusAlert()).toHaveCount(0);
+
+  await enterRepo(gate); // its flow loads at the §27 human-needed gate → the alert appears
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  expect(await height()).toBe(idleHeight); // the alert does not grow the bar
+
   await statusTitle().click();
   const editor = page.locator('#status-bar input[data-sb-title-edit]');
   await editor.fill('Refactor the shadow parser and its quiescence detector');
   expect(await height()).toBe(idleHeight);
   await editor.press('Enter');
-  await flowControl().click();
-  await flowControl().click();
-  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
   expect(await height()).toBe(idleHeight);
 
   await page.locator('#status-bar .sb-activity').evaluate((region) => {

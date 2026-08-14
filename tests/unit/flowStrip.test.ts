@@ -245,11 +245,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.getAttribute('aria-atomic')).toBe('false');
   });
 
-  // A phrase moving 'Working' -> 'Running reviewers' arrives on a PASSIVE push, which the strip answers by
-  // patching in place. The status bar must still be handed the new phrase — otherwise the one surface that
-  // shows what the engine is doing freezes on the first phrase of the run.
+  // A phrase moving 'Bootstrapping #12' -> 'Bootstrapping #13' arrives on a PASSIVE push, which the strip
+  // answers by patching in place. The status bar must still be handed the new phrase — otherwise the one
+  // surface that shows what the engine is doing freezes on the first phrase of the run.
   it('keeps the status bar live across a passive push that patches the strip in place', async () => {
-    let phrase = 'Working';
+    let phrase = 'Bootstrapping #12';
     let fire = (): void => {};
     const onStatusBar = vi.fn();
     const deps = {
@@ -272,11 +272,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
     const stationBefore = host.querySelector('.stn')!;
 
-    phrase = 'Running reviewers';
+    phrase = 'Bootstrapping #13';
     fire();
 
     await vi.waitFor(() =>
-      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Running reviewers' }),
+      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Bootstrapping #13' }),
     );
     expect(host.querySelector('.stn')).toBe(stationBefore); // the strip itself was patched, not rebuilt
   });
@@ -363,21 +363,57 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.flow-undo')).toBeNull();
   });
 
-  it('renders a one-shot notice returned by start(), and a re-pull clears it (§24.2.2 S4)', async () => {
-    const notified: FlowStateView = {
-      stepName: '/repo-step',
-      steps: ['/repo-step'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      notice: 'agent is busy — wait or interrupt, then retry',
-    };
+  const inProgress = (notice?: string): FlowStateView => ({
+    stepName: '/repo-step',
+    steps: ['/repo-step'],
+    position: 1,
+    total: 1,
+    status: 'in_progress',
+    ...(notice ? { notice } : {}),
+  });
+
+  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (§B.10 carrier, AC5)', async () => {
+    // AC 5's migration notice arrives on the transition that enters the step; the ordinary success push
+    // then drives a passive state re-pull carrying NO notice. Under the pre-sweep one-shot rule that
+    // re-pull erased it before the operator could read it — the defect §B.5 position 6 names. The strip
+    // now holds it across passive re-pulls and drops it only on the next transition.
     const deps = {
-      state: vi.fn(
-        async (): Promise<FlowStateView> => ({ stepName: '/repo-step', steps: ['/repo-step'], position: 1, total: 1, status: 'not_started' }),
-      ),
-      start: vi.fn(async (): Promise<FlowStateView> => notified),
-      advance: vi.fn(),
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()), // passive pulls carry no notice
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress()), // the clearing transition
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    deps.advance.mockResolvedValueOnce(inProgress('migrated: retired-schema customizations were not carried across'));
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+
+    control()!.click(); // transition #1 raises the migration notice
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('migrated'));
+    const noticeNode = host.querySelector('.flow-notice'); // the node the transition created
+
+    await strip.refresh(); // passive re-pull, state() carries no notice → HELD, not erased
+    // §D.4 row 2838(c) / WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
+    // role=status region would re-announce the unchanged notice to assistive tech. Identity, not presence.
+    expect(host.querySelector('.flow-notice')).toBe(noticeNode);
+
+    control()!.click(); // transition #2 carries no notice → clears the held line
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
+  });
+
+  it('joins a passive re-pull\'s own notice to the held transition notice — both render (§B.10 carrier, AC5+AC10)', async () => {
+    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal (§B.5 item
+    // 6) arrives on a LATER passive state push. They are on different responses, so the seam cannot join
+    // them — the strip must, and neither may drop the other.
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress('migrated: retired-schema customizations were not carried across')),
       restart: vi.fn(),
       undo: vi.fn(),
       terminate: vi.fn(),
@@ -387,15 +423,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    control()!.click(); // transition raises the migration notice
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('migrated'));
 
+    // A later passive push carries the coordinator's own busy-shell refusal.
+    deps.state.mockResolvedValueOnce(inProgress('agent is busy — wait or interrupt, then retry'));
+    await strip.refresh();
+
+    const notices = [...host.querySelectorAll('.flow-notice')].map((n) => n.textContent).join(' | ');
+    expect(notices).toContain('migrated');
+    expect(notices).toContain('agent is busy');
+  });
+
+  it('clears the held notice on a repo change — it belongs to the prior repo\'s step (§B.10 carrier)', async () => {
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress('migrated: retired-schema customizations were not carried across')),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     control()!.click();
-    await vi.waitFor(() =>
-      expect(host.querySelector('.flow-notice')?.textContent).toContain('agent is busy'),
-    );
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).not.toBeNull());
 
-    await strip.refresh(); // state() carries no notice → the one-shot line clears (§24.2.2 S4)
-    expect(host.querySelector('.flow-notice')).toBeNull();
+    strip.onRepoChanged('/other-repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
   });
 
   it('carries no template picker — that moved to the todo overlay (§4.1/§9.1)', async () => {
@@ -582,17 +642,18 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-iter')).toBeNull();
   });
 
-  it('renders the §26.10 cost readout on the loop read-out when the view carries one, omits it otherwise', async () => {
-    const withCost: FlowStateView = {
-      stepName: 'build',
-      steps: ['build'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      loop: { status: 'plan-draft', iteration: 2, pr: null, branch: null, ready: false, cost: '$0.42' },
-    };
+  it('renders no running-cost read-out on the loop rail — the retired cost node is gone (AC 9)', async () => {
     const deps = {
-      state: vi.fn(async (): Promise<FlowStateView> => withCost),
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'impl-review', iteration: 3, pr: 12, branch: 'agent-loop/x', ready: false },
+        }),
+      ),
       start: vi.fn(),
       advance: vi.fn(),
       restart: vi.fn(),
@@ -603,49 +664,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
-    expect(host.querySelector<HTMLElement>('.loop-cost')!.textContent).toBe('$0.42');
-
-    // A view with no cost renders no cost node (the strip shows nothing before an iteration records one).
-    deps.state.mockResolvedValue({ ...withCost, loop: { ...withCost.loop!, cost: undefined } });
-    createFlowStrip(host, deps).onRepoChanged('/repo2');
     await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    // the retired running-cost node — its structure and its value — no longer renders; no surface asserts a cost
     expect(host.querySelector('.loop-cost')).toBeNull();
-  });
-
-  it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
-    let view: FlowStateView = {
-      stepName: 'build',
-      steps: ['build'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      loop: { status: 'plan-draft', iteration: 1, pr: null, branch: null, ready: false, cost: '$0.10' },
-    };
-    let fire: () => void = () => {};
-    const deps = {
-      state: vi.fn(async (): Promise<FlowStateView> => view),
-      start: vi.fn(),
-      advance: vi.fn(),
-      restart: vi.fn(),
-      undo: vi.fn(),
-      terminate: vi.fn(),
-      provideInput: vi.fn(),
-      onStatusBar: vi.fn(),
-      onStateChanged: (cb: () => void) => {
-        fire = cb;
-        return () => {};
-      },
-    };
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.10'));
-    // A live value-only push (iteration + cost changed, structure identical) patches the existing node.
-    view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
-    fire();
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
-    // WCAG SC 4.1.3 / 1.3.1: with the host aria-atomic=false, only the changed cost node is announced.
-    // Its visible text is a bare figure, so it must carry the "cost" context in its accessible name.
-    expect(host.querySelector('.loop-cost')?.getAttribute('aria-label')).toBe('cost $0.42');
+    expect(host.querySelector<HTMLElement>('.loopstat')!.textContent).not.toMatch(/\$\s*\d/);
   });
 
   it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {
@@ -990,8 +1012,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(seen.at(-1)).toBeNull();
   });
 
-  // §24.2.3 T3 — the prompt is transition-driven and one-shot (like `notice`): a passive `state()`
-  // re-pull must NOT pop it, else a background flow:onStateChanged refresh reopens the modal under the user.
+  // §24.2.3 T3 — the prompt is transition-driven: a passive `state()` re-pull must NOT pop it, else a
+  // background flow:onStateChanged refresh reopens the modal under the user.
   it('hands a step-entry input prompt to the composition root on a transition, and submit calls provideInput (§24.2.3 T3)', async () => {
     const seen: Array<{ names: string[]; stepName: string }> = [];
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
@@ -1518,7 +1540,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   });
 
   // A passive flow:onStateChanged push (§24.2.2 S5) carries only LIVE-DERIVED change — todo counts,
-  // agent activity, the loop's state.yaml mirror — never a structural change (status/steps/controls
+  // agent activity, the loop's live view — never a structural change (status/steps/controls
   // move only via a user transition). Repainting it by tearing the whole subtree down detaches any
   // node the user (or an open modal) is mid-interaction with: the focused control loses focus to
   // <body>, an in-flight click target keeps detaching so the click never lands, and a confirm

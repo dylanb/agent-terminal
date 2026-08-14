@@ -141,7 +141,7 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
-  it('records loop status/iteration/pr changes from the state.yaml mirror to the open run file', () => {
+  it('records loop status/iteration/pr changes from the §27 loop view to the open run file', () => {
     const rec = recorder();
     rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
@@ -163,31 +163,6 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
   it('records nothing for a loop observation when no run is open', () => {
     recorder().recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
-  });
-
-  // §26.10 — the per-iteration cost event: the priced dollars + any unpriced model ids, tagged by iteration.
-  it('records a per-iteration cost event to the open run file', () => {
-    const rec = recorder();
-    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    rec.recordCost(repo, 2, { usd: 0.42, unpricedModels: ['x-unknown'] });
-    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
-    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.cost']);
-    expect(events[1]).toMatchObject({ type: 'loop.cost', iteration: 2, usd: 0.42, unpriced: ['x-unknown'] });
-  });
-
-  it('records nothing for a cost event when no run is open', () => {
-    recorder().recordCost(repo, 1, { usd: 1, unpricedModels: [] });
-    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
-  });
-
-  // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.
-  it('records a per-iteration CI snapshot event to the open run file', () => {
-    const rec = recorder();
-    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    rec.recordCi(repo, 2, { total: 4, passed: 2, failed: 1, pending: 1 });
-    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
-    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.ci']);
-    expect(events[1]).toMatchObject({ type: 'loop.ci', iteration: 2, total: 4, passed: 2, failed: 1, pending: 1 });
   });
 
   // §24.2.3 T4 — the OS can refuse to deliver a raise (macOS denies an unsigned bundle outright). A
@@ -212,11 +187,6 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
 
   it('records nothing for a rejected notification when no run is open', () => {
     recorder().recordNotifyFailed(repo, 'denied');
-    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
-  });
-
-  it('records nothing for a CI event when no run is open', () => {
-    recorder().recordCi(repo, 1, { total: 1, passed: 1, failed: 0, pending: 0 });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
@@ -420,4 +390,25 @@ describe('audit recorder — terminate finalization (§25.4 / #26)', () => {
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     expect(runFiles()).toHaveLength(2);
   });
+});
+
+// §H.1 — `loop.cost` and `loop.ci` are CLOSED to new writers. The READER still folds both (audit.test.ts)
+// so a pre-sweep stream reconstructs whole, but the writer half is retired (§B.14): NO production emitter may
+// produce either kind, or one union member would carry two meanings on the unversioned, never-migrated
+// append-only log and `reconstructTimeline` would merge pre- and post-sweep records (N7/#92 takes distinct
+// `app.cost`/`app.ci` names instead). This guards the failure mode the sweep left unpinned: a re-added emitter
+// method on the §25 writer compiles clean and leaves the behavioural suite green because nothing drives it.
+describe('audit writer — the retired cost/ci kinds stay closed to new writers (§H.1)', () => {
+  const writerSrc = readFileSync(new URL('../../src/main/auditRecorder.ts', import.meta.url), 'utf8');
+
+  // The writer neither declares the retired union (that is the reader, `audit.ts`) nor reads these kinds, so
+  // the token appears in the writer ONLY if something emits it. Match the whole `loop.cost` / `loop.ci` token
+  // (a trailing non-word boundary rules out `loop.circular`) in ANY quote form — `'…'`, `"…"`, or a template
+  // `` `…` `` — so the guard cannot be evaded by swapping quotes, the exact escape a string-literal match left open.
+  for (const kind of ['loop.cost', 'loop.ci']) {
+    it(`the §25 writer constructs no ${kind} event`, () => {
+      const token = new RegExp(`\\bloop\\.${kind.slice('loop.'.length)}\\b`);
+      expect(token.test(writerSrc), `src/main/auditRecorder.ts must not name a ${kind} event (§H.1: closed to new writers)`).toBe(false);
+    });
+  }
 });

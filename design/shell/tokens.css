@@ -66,7 +66,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .trace i:nth-child(2){animation-delay:.1s}.trace i:nth-child(3){animation-delay:.2s}.trace i:nth-child(4){animation-delay:.3s}.trace i:nth-child(5){animation-delay:.4s}.trace i:nth-child(6){animation-delay:.5s}
 @keyframes tr { 0%,100%{height:3px} 50%{height:13px} }
 
-/* §26 loop-mechanics activity: a phrase + an animated braille spinner (the glyph cycles via `content`). */
+/* §27.10 loop-mechanics activity: a phrase + an animated braille spinner (the glyph cycles via `content`). */
 .flow-activity { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim); margin-top:6px; }
 .flow-activity .phrase { font-family:"IBM Plex Mono",monospace; }
 .spin { font-family:"IBM Plex Mono",monospace; color:var(--signal); }

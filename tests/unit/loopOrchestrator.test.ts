@@ -2,15 +2,14 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   classifyHostedAgent,
   createTurnRunner,
-  decideConsolidateOutcome,
   hostedAgentPresent,
   type TurnRunnerDeps,
 } from '../../src/main/loopOrchestrator';
 
-// §26.2 — the mapping from presence + §8.3 activity to injection-readiness. `agentPresent` is the domain
+// §27.2 — the mapping from presence + §8.3 activity to injection-readiness. `agentPresent` is the domain
 // fact "a hosted agent occupies the prompt" (how the host derives it from OSC-133 spans is its concern);
 // not present → `absent` (a bare shell, where an injected turn would leak), regardless of quiescence.
-describe('classifyHostedAgent (§26.2 presence + idleness)', () => {
+describe('classifyHostedAgent (§27.2 presence + idleness)', () => {
   it('a bare ready prompt (no foreground command) is absent — no agent to inject into, regardless of quiescence', () => {
     expect(classifyHostedAgent(false, 'quiet')).toBe('absent');
     expect(classifyHostedAgent(false, 'active')).toBe('absent');
@@ -23,11 +22,11 @@ describe('classifyHostedAgent (§26.2 presence + idleness)', () => {
   });
 });
 
-// §26.2 — deriving "a hosted agent occupies the prompt" from the OSC-133 command spans. A running span
+// §27.2 — deriving "a hosted agent occupies the prompt" from the OSC-133 command spans. A running span
 // is the foreground agent; ZERO spans means the agent is itself the PTY program (no bash prompt to sit
 // idle at — e.g. APP_SHELL=<agent>), also present. The absent case is the leak-prone one: instrumented
 // spans exist but NONE is running — a bare ready prompt where an injected turn would type into the shell.
-describe('hostedAgentPresent (§26.2 — present iff no bare idle prompt)', () => {
+describe('hostedAgentPresent (§27.2 — present iff no bare idle prompt)', () => {
   it('no span data at all is present (the agent is the PTY program, no bash prompt)', () => {
     expect(hostedAgentPresent([])).toBe(true);
   });
@@ -41,10 +40,10 @@ describe('hostedAgentPresent (§26.2 — present iff no bare idle prompt)', () =
   });
 });
 
-// §26.3/D47a + D48 — the work-agent turn runner. Asserted purely from the outside: which prompts get
+// §27.12/D47a + D48 — the work-agent turn runner. Asserted purely from the outside: which prompts get
 // injected, whether the stall watchdog is armed/reset/cancelled, when onComplete fires, and when the run
 // is written to `error`. No PTY, no real timers — the host drives onDoneSignal/onStall/onInjectable/noteActivity.
-describe('loop turn runner (§26.3/D47a, D48)', () => {
+describe('loop turn runner (§27.12/D47a, D48)', () => {
   let hosted: 'idle' | 'busy' | 'absent';
   let artifact: boolean;
   let compose: Mock<(turnKey: string) => string | null>;
@@ -94,7 +93,21 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('a stall stops the run in error directly, without retrying the injection (§26.3)', () => {
+  it('forceChained defers an INITIAL turn to a fresh settle instead of injecting on the current quiet (§B.5 item 4b)', () => {
+    // A default initial turn injects synchronously against the already-idle agent (test above). Forced
+    // chained, it must re-arm quiescence and wait for a FRESH active→quiet edge, so a work turn requested
+    // in the same tick as a just-submitted skill injection cannot race that injection (CWE-74).
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan', { forceChained: true });
+    expect(inject).not.toHaveBeenCalled();
+    expect(noteSettle).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('in-flight');
+    r.onInjectable();
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith('PROMPT for work-plan');
+  });
+
+  it('a stall stops the run in error directly, without retrying the injection (§27.12)', () => {
     // The wall-clock completion deadline is gone: onStall means the screen went silent for the whole
     // (long) stall window while a turn was in flight — a genuine freeze, not a slow-but-working turn.
     // Re-injecting a frozen instance cannot help, so it errors straight to the human (recoverable Retry).
@@ -147,7 +160,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
-  it('never injects over a busy instance: defers until injectable (§26.2)', () => {
+  it('never injects over a busy instance: defers until injectable (§27.2)', () => {
     hosted = 'busy';
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
@@ -158,7 +171,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(inject).toHaveBeenCalledTimes(1);
   });
 
-  it('no hosted agent at the prompt: errors instead of leaking the prompt into the bare shell (§26.2)', () => {
+  it('no hosted agent at the prompt: errors instead of leaking the prompt into the bare shell (§27.2)', () => {
     // The motivating defect: injecting on raw quiescence typed a whole work-agent prompt into bash when
     // no Claude instance was at the prompt. `absent` (normal buffer / no agent) must NEVER inject — it
     // stops in `error` (D48, human-needed) so the operator is told to start Claude, not left with a
@@ -171,7 +184,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
-  it('a deferred turn errors if the agent leaves the prompt while waiting (Claude quit mid-wait, §26.2)', () => {
+  it('a deferred turn errors if the agent leaves the prompt while waiting (Claude quit mid-wait, §27.2)', () => {
     // Busy → deferred (wait it out). If the agent then disappears (operator quits Claude → normal buffer),
     // the next injectable poke must resolve to `error`, not re-inject into the now-bare shell.
     hosted = 'busy';
@@ -197,7 +210,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(inject).toHaveBeenCalledTimes(2);
   });
 
-  it('the manual mark-complete advances a sentinel-less turn whose artifact is present (§26.3/D47a c)', () => {
+  it('the manual mark-complete advances a sentinel-less turn whose artifact is present (§27.12/D47a c)', () => {
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
     inject.mockClear();
@@ -210,7 +223,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   // The operator's override is "this turn is done", never "run it again". Routing it through the
   // done-signal's missing-artifact retry re-injects the whole prompt into the agent the operator was
   // trying to move past — and does so silently, leaving no error to see and nothing to retry.
-  it('the manual mark-complete never re-injects the turn when the artifact is absent (§26.3/D47a c)', () => {
+  it('the manual mark-complete never re-injects the turn when the artifact is absent (§27.12/D47a c)', () => {
     artifact = false;
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
@@ -222,7 +235,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(onComplete).not.toHaveBeenCalled();
   });
 
-  it('the manual mark-complete surfaces a recoverable error when the artifact is absent (§26.3/D48)', () => {
+  it('the manual mark-complete surfaces a recoverable error when the artifact is absent (§27.12/D48)', () => {
     artifact = false;
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
@@ -235,7 +248,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   });
 
   // A done-signal is the AGENT's claim; a missing artifact means it lied or crashed, so one retry is right.
-  it('a done-signal with the artifact absent still retries the turn (unchanged, §26.3/D48)', () => {
+  it('a done-signal with the artifact absent still retries the turn (unchanged, §27.12/D48)', () => {
     artifact = false;
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
@@ -262,7 +275,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('idle');
   });
 
-  it('a turn deferred on a busy instance that never becomes injectable stalls into error (§26.3/D48)', () => {
+  it('a turn deferred on a busy instance that never becomes injectable stalls into error (§27.12/D48)', () => {
     // The failure-safety gap D48 closes: a turn requested while the instance is busy defers. The stall
     // watchdog runs during the wait (armed on defer, reset by any visible activity), so an instance that
     // stays busy but goes silent — never returning to injectable — still resolves to `error` (human-needed)
@@ -292,10 +305,10 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('accepts a fresh turn after one completes (the §26.4 work→reviewers chain runs sequential turns)', () => {
+  it('accepts a fresh turn after one completes (the §27.3 work→reviewers chain runs sequential turns)', () => {
     // L3 chains the reviewers turn off the work turn's completion: the host calls requestTurn again from
     // the `complete` state. The runner must start the new turn (a different key), not ignore it as re-entry.
-    // §26.3/D46 — a CHAINED turn must not inject on the stale post-done-signal quiet level: it re-arms
+    // §27.12/D46 — a CHAINED turn must not inject on the stale post-done-signal quiet level: it re-arms
     // quiescence (noteSettle) and injects only once a fresh settle arrives (onInjectable).
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
@@ -312,7 +325,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('a follow-on turn re-arms quiescence and waits for a fresh settle before injecting (§26.3/D46 race fix)', () => {
+  it('a follow-on turn re-arms quiescence and waits for a fresh settle before injecting (§27.12/D46 race fix)', () => {
     // The reported data-loss bug: the follow-on prompt was injected the instant the previous turn's
     // done-signal FILE appeared — a written file is not §8.3 quiescence, so the agent was often still
     // streaming and the prompt was swallowed. A chained turn must instead re-arm the quiescence window
@@ -344,7 +357,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(inject).toHaveBeenCalledTimes(1);
   });
 
-  it('injects a turn preamble (/clear) first — gated — then the prompt only after a further settle (§26.3/D46)', () => {
+  it('injects a turn preamble (/clear) first — gated — then the prompt only after a further settle (§27.12/D46)', () => {
     // The actor-boundary /clear must itself be quiescence-gated and ORDERED before the turn prompt: an
     // un-gated /clear (fired on the done-signal file) races the agent and swallows the follow-on prompt,
     // losing context. The boundary is a serialized pair of gated injections [/clear, prompt]: /clear on
@@ -369,94 +382,5 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(inject).toHaveBeenCalledTimes(2);
     expect(inject).toHaveBeenLastCalledWith('PROMPT for consolidate-plan'); // the prompt, no preamble flag
     expect(r.state()).toBe('in-flight');
-  });
-});
-
-// §26.13 L4/L6 / §26.6/§26.8 — after the consolidate turn completes, the normalized verdict decides the
-// branch: `clean` STOPs at the phase post-clean gate; `needs-work` normally re-iterates, but routes to
-// the phase's post-needs-work TRIAGE gate (a STOP for the human) at the iteration cap or flagged stuck
-// (signature x2, §26.8). The cap counts the PER-LOOP internal window `iteration - capBaseline`, not the
-// monotonic run-wide iteration: a chained-loop rebind and a request-changes both advance `capBaseline`,
-// which resets the window (retiring phase-2's permanent gate-every-round routing).
-describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () => {
-  const base = {
-    postCleanGate: 'awaiting-human-plan-approval',
-    postNeedsWorkGate: 'awaiting-human-plan-triage',
-    capBaseline: 0,
-    iterationCap: 0,
-    stuck: false,
-  };
-
-  it('routes a clean verdict to the phase post-clean gate (STOP for the human)', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'clean', iteration: 3 })).toEqual({
-      kind: 'gate',
-      status: 'awaiting-human-plan-approval',
-    });
-  });
-
-  it('re-iterates a needs-work verdict when not at cap, not stuck', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 3 })).toEqual({
-      kind: 'reiterate',
-      nextIteration: 4,
-    });
-  });
-
-  it('routes a needs-work verdict to the triage gate at the iteration cap (§26.8)', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, iterationCap: 2 })).toEqual({
-      kind: 'gate',
-      status: 'awaiting-human-plan-triage',
-    });
-  });
-
-  it('re-iterates a needs-work verdict below the iteration cap', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, iterationCap: 2 })).toEqual({
-      kind: 'reiterate',
-      nextIteration: 2,
-    });
-  });
-
-  it('measures the cap from capBaseline, not the monotonic iteration (§26.6/§26.8)', () => {
-    // internal = iteration - capBaseline = 7 - 2 = 5, which reaches the cap of 5.
-    expect(
-      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 7, capBaseline: 2, iterationCap: 5 }),
-    ).toEqual({ kind: 'gate', status: 'awaiting-human-plan-triage' });
-  });
-
-  it('re-iterates at the monotonic cap when the window was just reset (request-changes / rebind)', () => {
-    // internal = iteration - capBaseline = 5 - 5 = 0: the reset gave a fresh window, so a verdict that
-    // WOULD be at the monotonic cap (iteration >= cap) still auto-iterates (retires phase-2 routing).
-    expect(
-      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 5, capBaseline: 5, iterationCap: 5 }),
-    ).toEqual({ kind: 'reiterate', nextIteration: 6 });
-  });
-
-  it('clamps a hostile out-of-range capBaseline (> iteration) so the cap still fires (CWE-20/770)', () => {
-    // cap_baseline is read from attacker-plantable .agent-loop/state.yaml and is always a PRIOR iteration
-    // (<= the current one). A planted value larger than `iteration` would drive `iteration - capBaseline`
-    // negative — the cap never reaches `>= iterationCap`, defeating the §26.8 runaway backstop. An
-    // out-of-range baseline degrades to the monotonic window (`iteration - 0`), so the cap fires as it
-    // would with no reset. Passing the reader's non-negative-integer gate is not enough on its own.
-    expect(
-      decideConsolidateOutcome({
-        ...base,
-        verdict: 'needs-work',
-        iteration: 6,
-        capBaseline: Number.MAX_SAFE_INTEGER,
-        iterationCap: 5,
-      }),
-    ).toEqual({ kind: 'gate', status: 'awaiting-human-plan-triage' });
-  });
-
-  it('routes a needs-work verdict to the triage gate when flagged stuck (signature x2, §26.8)', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, stuck: true })).toEqual({
-      kind: 'gate',
-      status: 'awaiting-human-plan-triage',
-    });
-  });
-
-  it('falls back to re-iteration when a triage condition holds but the def names no triage gate', () => {
-    expect(
-      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, iterationCap: 2, postNeedsWorkGate: '' }),
-    ).toEqual({ kind: 'reiterate', nextIteration: 3 });
   });
 });

@@ -1,6 +1,8 @@
 # §18.1/§27.10
 name: feature-dev
 steps:
+  - id: preparation
+    kind: manual
   - id: groom
     kind: loop
     loop: groom-loop
@@ -20,3 +22,6 @@ steps:
     loop: impl-loop
     loop_namespace: app
     todo_template: impl-loop-review
+  - id: finalize
+    kind: manual
+    todo_template: polish

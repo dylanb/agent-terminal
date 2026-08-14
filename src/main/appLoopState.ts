@@ -144,7 +144,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   }
   if (!isRecord(doc)) return null;
   // Version-gate by String() coercion so a bare `1` and a quoted `"1"` both match, and any other value is
-  // rejected rather than mis-parsed (mirrors agentLoopBridge's §26 gate).
+  // rejected rather than mis-parsed.
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
   const { loop, step, turn_key: turnKey, status } = doc;
   if (typeof loop !== 'string' || typeof step !== 'string' || typeof turnKey !== 'string') return null;

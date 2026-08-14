@@ -159,9 +159,9 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     });
   });
 
-  // §26.9 — the wipe-and-retry confirmation must tell main to roll the flow back when the operator
+  // §18.3 — the wipe-and-retry confirmation must tell main to roll the flow back when the operator
   // declines, so an optional onCancel fires on every dismiss path EXCEPT confirm (which runs onConfirm).
-  describe('onCancel (dismiss signal, §26.9)', () => {
+  describe('onCancel (dismiss signal, §18.3)', () => {
     it('fires onCancel on the Cancel button, and does NOT run onConfirm', () => {
       const onConfirm = vi.fn();
       const onCancel = vi.fn();
@@ -187,7 +187,7 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
       expect(onCancel).not.toHaveBeenCalled();
     });
 
-    // The Terminate confirm and the §26.9 bootstrap-conflict confirm share one dialog instance. If a new
+    // The Terminate confirm and the §18.3 bootstrap-conflict confirm share one dialog instance. If a new
     // dialog is rendered while an unanswered one is open, the displaced dialog's onCancel must still run —
     // otherwise a conflict confirm silently displaced by another dialog would leave main's pendingConflict
     // set and the flow un-rolled-back (the never-strand rule).

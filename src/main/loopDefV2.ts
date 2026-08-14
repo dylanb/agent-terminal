@@ -1,10 +1,9 @@
-// The §27 (v2) LoopDef parser + tier resolver. Independent of the §26 parser (loopDef.ts): it shares no
-// schema and no engine semantics — only the engine-neutral primitives (isSafePathSegment, confinedPath).
-// It NEVER throws: every failure mode returns a surfaced reason (AC 6). The declared version and the tier
-// a def resolves from are the two things engine selection keys on; a def's origin is assigned by the
-// resolver from its tier, never read from def content (a content-declared `origin` is an unknown key).
+// The §27 (v2) LoopDef parser + tier resolver. It shares no schema and no engine semantics with any other
+// parser — only the engine-neutral primitives (isSafePathSegment, confinedPath). It NEVER throws: every
+// failure mode returns a surfaced reason (AC 6). The declared version and the tier a def resolves from are
+// the two things engine selection keys on.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -27,18 +26,16 @@ import type {
  *  bumps it. A def declaring any other version fails to resolve (never partially parsed). */
 export const LOOP_DEF_V2_VERSION = 'v2';
 
-/** The tier a def resolved from, assigned by the resolver — NEVER a schema-authorable field. `operator` is
- *  the user's own config tier, `app-bundled` is the default shipped with the app, and `repo` is the
- *  untrusted repository tier. Capability slices key their privilege on this label, so no def content can
- *  forge it. */
-export type LoopDefV2Origin = 'operator' | 'app-bundled' | 'repo';
-
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
- *  bundled default tree's root. A repo registry override is resolved separately before these tiers. */
+ *  bundled default tree's root. A repo registry override is resolved separately before these tiers.
+ *  `retired` is the retired engine's operator def dir (`userConfigLoopsDir()`), read for PRESENCE only
+ *  when no surviving tier answers (AC 5) — its content is never read, parsed, moved or deleted; null when the
+ *  root is refused. */
 export interface LoopDefV2Tiers {
   operator: string | null;
   appBundled: string;
+  retired: string | null;
 }
 
 /** One reviewer-catalog entry (§27.4/§27.8): a persona, its charter carried BY REFERENCE (§18.6 — never an
@@ -59,8 +56,9 @@ export interface BoundaryPolicy {
 
 /** One human-gate option's declared side-effects (§27.9/§27.13) — the app-implemented `gh` vocabulary,
  *  an open def-declared set. NOT the §27.8 executable capability: a program a def names is declared once,
- *  on the top-level `exec` field (`ExecSideEffect`), which `toGate` refuses to let a gate side-effect name
- *  so there is a single origin-gated executable surface for sub-ticket 2 to guard (CWE-829). */
+ *  on the top-level `exec` field (`ExecSideEffect`), which `toGate` refuses to let a gate side-effect name —
+ *  one surface, not scattered (CWE-829). Def tiers carry no trust distinction and the executable side-effect
+ *  is unshipped; shipping it requires deciding trust afresh (v2.129). */
 export interface GateSideEffect {
   kind: string;
   args: Record<string, unknown>;
@@ -108,18 +106,18 @@ export interface ReportStructure {
 }
 
 /** The def-supplied executable side-effect (§27.8): a def MAY name a program to run. INERT in this slice —
- *  no untrusted tier authors one and no execution surface runs one. Origin gates it (sub-ticket 2). */
+ *  no execution surface runs one. Def tiers carry no trust distinction; shipping the executable side-effect
+ *  requires deciding trust afresh (v2.129). */
 export interface ExecSideEffect {
   program: string;
 }
 
 /** A fully-parsed §27 def. Every path-valued field (`work.recipe`, each `reviewers[].charter`,
  *  `consolidator`, each `inputs[]`/`outputs[]` path) is already confined to the boundary its role dictates;
- *  an escape is a resolution failure, so a parsed def carries no escaping path. `origin` is resolver-assigned. */
+ *  an escape is a resolution failure, so a parsed def carries no escaping path. */
 export interface LoopDefV2 {
   version: string;
   name: string;
-  origin: LoopDefV2Origin;
   work: WorkRecipe;
   reviewers: ReviewerCatalogEntry[];
   consolidator: string;
@@ -132,8 +130,10 @@ export interface LoopDefV2 {
   exec: ExecSideEffect | null;
 }
 
-/** Resolution result: the parsed def, or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2 } | { ok: false; reason: string };
+/** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
+ *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
+ *  label), or a human-readable reason surfaced in the UI (AC 6). */
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | { ok: false; reason: string };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
@@ -256,7 +256,8 @@ function toGate(raw: unknown): GateOptionDef[] {
       const seRec = requireRecord(se, `gate option ${option} side-effect`);
       const kind = requireString(seRec.kind, `gate option ${option} side-effect kind`);
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
-      // through a gate side-effect, so origin-gating (sub-ticket 2) has a single surface (CWE-829).
+      // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
+      // tiers carry no trust distinction (v2.129).
       if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
@@ -311,7 +312,7 @@ function toPickup(raw: unknown): PickupContractV2 | null {
   };
 }
 
-function parse(body: string, tierRoot: string, defDir: string, name: string, origin: LoopDefV2Origin, repoDir: string): LoopDefV2 {
+function parse(body: string, tierRoot: string, defDir: string, name: string, repoDir: string): LoopDefV2 {
   let doc: unknown;
   try {
     doc = yaml.load(body);
@@ -325,8 +326,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
     if (!ALLOWED_TOP_KEYS.has(key)) fail(`unknown key: ${key}`);
   }
   if (rec.version !== LOOP_DEF_V2_VERSION) fail(`unknown schema version: ${String(rec.version)} (expected ${LOOP_DEF_V2_VERSION})`);
-  // `name` is resolver-assigned from the resolving path — like `origin`, def content cannot forge it. A
-  // declared `name` is accepted only when it agrees, so the parsed def has one source of truth for its id.
+  // `name` is resolver-assigned from the resolving path — def content cannot forge it. A declared `name` is
+  // accepted only when it agrees, so the parsed def has one source of truth for its id.
   if (rec.name !== undefined && rec.name !== name) fail(`declared name ${String(rec.name)} disagrees with the resolved name ${name}`);
 
   const work = requireRecord(rec.work, 'work');
@@ -348,7 +349,6 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
   return {
     version: LOOP_DEF_V2_VERSION,
     name,
-    origin,
     work: { recipe: workRecipe, artifact: workArtifact },
     reviewers: toReviewers(rec.reviewers, tierRoot, defDir),
     consolidator,
@@ -364,12 +364,15 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
 
 /** Resolve a §27 loop NAME through a repo registry override, then the operator and app-bundled tiers (first
  *  EXISTING file wins). The loop name is held to a single safe segment BEFORE it is joined to any tier root.
- *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. */
+ *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. Each
+ *  candidate carries the jail its own construction site resolved and a plain display name used only to
+ *  compose failure messages — no tier carries a trust label (v2.129). */
 interface DefCandidate {
   tierRoot: string;
   defDir: string;
   defPath: string;
-  origin: LoopDefV2Origin;
+  tierName: string;
+  jail: string;
 }
 
 function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
@@ -389,13 +392,16 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
   const root = path.resolve(repoDir);
   const target = path.resolve(root, doc.loops[name]);
+  // The repo tier root is a jail sitting INSIDE untrusted content, where a link can be planted at the jail's
+  // own final segment — resolveJail. A null here REFUSES with a reason (unlike a tier candidate, which falls
+  // through to the next tier).
   const jail = resolveJail(root);
   if (jail === null || (target !== root && !target.startsWith(root + path.sep))) {
     return { reason: `repo loop override for ${name} escapes the repository` };
   }
   const defPath = confinedRealPath(jail, target);
   if (defPath === null) return { reason: `repo loop override for ${name} is unresolvable` };
-  return { tierRoot: root, defDir: path.dirname(defPath), defPath, origin: 'repo' };
+  return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
 }
 
 export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
@@ -404,37 +410,32 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
   const repo = repoCandidate(name, ctx.repoDir);
   if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
   if (repo) candidates.push(repo);
+  // The operator and app-bundled tier roots are ground the app derives itself and either may be absent (the
+  // operator's on a first run) — resolveOwnedDirJail. A tier whose jail is unresolvable FALLS THROUGH to the
+  // next tier (an absent ~/.claude must not turn every loop step unresolvable), so a null jail is simply not
+  // pushed as a candidate.
   if (ctx.tiers.operator !== null) {
-    const defDir = path.join(ctx.tiers.operator, name);
-    candidates.push({
-      tierRoot: ctx.tiers.operator,
-      defDir,
-      defPath: path.join(defDir, `${name}.yaml`),
-      origin: 'operator',
-    });
+    const jail = resolveOwnedDirJail(ctx.tiers.operator);
+    if (jail !== null) {
+      const defDir = path.join(ctx.tiers.operator, name);
+      candidates.push({ tierRoot: ctx.tiers.operator, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: 'operator', jail });
+    }
   }
-  const appDefDir = path.join(ctx.tiers.appBundled, name);
-  candidates.push({
-    tierRoot: ctx.tiers.appBundled,
-    defDir: appDefDir,
-    defPath: path.join(appDefDir, `${name}.yaml`),
-    origin: 'app-bundled',
-  });
+  const appJail = resolveOwnedDirJail(ctx.tiers.appBundled);
+  if (appJail !== null) {
+    const appDefDir = path.join(ctx.tiers.appBundled, name);
+    candidates.push({ tierRoot: ctx.tiers.appBundled, defDir: appDefDir, defPath: path.join(appDefDir, `${name}.yaml`), tierName: 'app-bundled', jail: appJail });
+  }
 
-  for (const { tierRoot, defDir, defPath, origin } of candidates) {
-    const jail =
-      origin === 'repo'
-        ? resolveJail(tierRoot)
-        : resolveOwnedDirJail(tierRoot);
-    if (jail === null) continue;
+  for (const { tierRoot, defDir, defPath, tierName, jail } of candidates) {
     const confinedDefPath = confinedRealPathResult(jail, defPath);
     if (!confinedDefPath.ok) {
       return {
         ok: false,
         reason:
           confinedDefPath.cause === 'escapes'
-            ? `def ${name} in the ${origin} tier escapes its tier root`
-            : `def ${name} in the ${origin} tier is unresolvable`,
+            ? `def ${name} in the ${tierName} tier escapes its tier root`
+            : `def ${name} in the ${tierName} tier is unresolvable`,
       };
     }
     let body: string;
@@ -445,11 +446,34 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, origin, ctx.repoDir) };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot };
     } catch (e) {
       if (e instanceof DefError) return { ok: false, reason: e.message };
       return { ok: false, reason: e instanceof Error ? e.message : String(e) };
     }
   }
-  return { ok: false, reason: `no §27 def named ${name} in any tier` };
+  const bareReason = `no §27 def named ${name} in any tier`;
+  // AC 5 (§B.6): with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
+  // turns the bare miss into a reason naming why it stopped resolving, on the same per-step loop-error path
+  // AC 4 uses. PRESENCE only: the retired def's content is never read, parsed, moved or deleted. The retired
+  // root is the operator's own ground and may be absent on a first run, so it jails through resolveOwnedDirJail
+  // (a null jail — no ~/.claude — is simply "no retired def", the bare reason); the reason-surfacing branch
+  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape (§B.6).
+  if (ctx.tiers.retired !== null) {
+    const retiredJail = resolveOwnedDirJail(ctx.tiers.retired);
+    if (retiredJail !== null) {
+      // The retired-schema def is `<retired>/<name>/<name>.yaml` (the retired engine's own path convention) —
+      // a bare directory of that name is not a def. Confine FIRST (realpathBounded appends an absent tail, so
+      // `.ok` alone means "bounded", not "exists"), then test existence of the FILE on the bounded path —
+      // presence, no content read.
+      const probe = confinedRealPathResult(retiredJail, path.join(ctx.tiers.retired, name, `${name}.yaml`));
+      if (probe.ok && existsSync(probe.path)) {
+        return {
+          ok: false,
+          reason: `${bareReason}; a retired-schema def named ${name} is present in your config and is no longer read — re-create it under loops-v2`,
+        };
+      }
+    }
+  }
+  return { ok: false, reason: bareReason };
 }

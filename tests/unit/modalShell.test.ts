@@ -63,7 +63,7 @@ describe('modal shell focus trap honors all focusable elements', () => {
   });
 });
 
-// §26.9 — an optional onDismiss lets a caller (confirmDialog) distinguish a user DISMISS (Escape / scrim /
+// §18.3 — an optional onDismiss lets a caller (confirmDialog) distinguish a user DISMISS (Escape / scrim /
 // the build's close) from its own programmatic teardown (render(null) / dispose), so a dialog that must
 // report cancellation to main can. onDismiss fires exactly on a user-driven close of an open dialog.
 describe('modal shell onDismiss (user-dismiss signal)', () => {

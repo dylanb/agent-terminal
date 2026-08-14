@@ -3,12 +3,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   resolveExampleFlowDir,
-  resolveExampleLoopsDir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
 import type { BundleLocation } from '../../src/main/bundleLocation';
 
-// The bundled example assets must resolve in BOTH a dev run and a packaged build (§18.1/§26.5) via an
+// The bundled example assets must resolve in BOTH a dev run and a packaged build (§18.1) via an
 // injected location, never a repo-relative path — the same dev-vs-packaged split appIcon uses.
 
 describe('resolveExampleFlowDir', () => {
@@ -30,34 +29,6 @@ describe('resolveExampleFlowDir', () => {
     const fixtureRoot = path.resolve(__dirname, '..', '..'); // repo root standing in for appPath
     const dir = resolveExampleFlowDir({ packaged: false, appPath: fixtureRoot });
     expect(readFileSync(path.join(dir, 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
-  });
-});
-
-describe('resolveExampleLoopsDir', () => {
-  it('resolves to the extraResources copy in a packaged app', () => {
-    expect(
-      resolveExampleLoopsDir({ packaged: true, resourcesPath: '/app/resources' }),
-    ).toBe(path.join('/app/resources', 'example', 'loops'));
-  });
-
-  it('resolves to example/loops under the app path in an unpackaged build', () => {
-    expect(
-      resolveExampleLoopsDir({ packaged: false, appPath: '/out/main' }),
-    ).toBe(path.join('/out/main', 'example', 'loops'));
-  });
-
-  it('resolves to the real bundled definitions when the app path is a fixture root (§26.5)', () => {
-    const fixtureRoot = path.resolve(__dirname, '..', '..');
-    const dir = resolveExampleLoopsDir({ packaged: false, appPath: fixtureRoot });
-    expect(readFileSync(path.join(dir, 'plan-loop', 'plan-loop.yaml'), 'utf8')).toContain('name: plan-loop');
-    expect(readFileSync(path.join(dir, 'impl-loop', 'impl-loop.yaml'), 'utf8')).toContain('name: impl-loop');
-  });
-
-  it('carries the persona skills nested inside it, so no separate skills bundle needs resolving (§26.5)', () => {
-    const fixtureRoot = path.resolve(__dirname, '..', '..');
-    const dir = resolveExampleLoopsDir({ packaged: false, appPath: fixtureRoot });
-    expect(existsSync(path.join(dir, 'plan-loop', 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
-    expect(existsSync(path.join(dir, 'impl-loop', 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
   });
 });
 
@@ -103,7 +74,6 @@ describe('extraResources packaged-path coupling', () => {
   // `to: example/flow` stays green when the resolver is renamed and the packaged app breaks.
   for (const [tree, resolve] of [
     ['flow', resolveExampleFlowDir],
-    ['loops', resolveExampleLoopsDir],
     ['commands', resolveExampleCommandsDir],
   ] as const) {
     it(`ships example/${tree} under the exact path its packaged resolver reads back`, () => {

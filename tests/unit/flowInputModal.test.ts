@@ -32,10 +32,14 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(f).toBeTruthy();
     expect(f!.querySelector('.ty')?.textContent).toBe('github-ticket');
     expect(f!.querySelector('input')).toBeTruthy();
-    // The helper names the in-app bootstrap action that runs on entry (§26.9).
+    // The helper names the bound def's OWN bootstrap contract that runs on entry (AC 10), scoped to the
+    // element aria-describedby resolves to — its accessible description — and cites no retired section (AC 9).
     expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
     expect(host.textContent).toContain('pickup');
-    expect(host.textContent).toContain('§26.9');
+    const helpId = f!.querySelector('input')!.getAttribute('aria-describedby')!;
+    const help = host.querySelector(`#${helpId}`)!;
+    expect(help.textContent).toContain("bound loop definition's own branch-and-draft-PR setup");
+    expect(help.textContent).not.toContain('§');
   });
 
   it('Confirm collects the typed values and calls submit with the name→value map', () => {
@@ -233,7 +237,10 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     const input = field('ticket')!.querySelector('input')!;
     const describedby = input.getAttribute('aria-describedby');
     expect(describedby).toBeTruthy();
-    expect(host.querySelector(`#${describedby}`)?.classList.contains('help')).toBe(true);
+    const help = host.querySelector(`#${describedby}`);
+    expect(help?.classList.contains('help')).toBe(true);
+    // The association carries the rewritten AC 10 description, so it cannot silently lapse as the text changes.
+    expect(help?.textContent).toContain("bound loop definition's own branch-and-draft-PR setup");
   });
 
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {

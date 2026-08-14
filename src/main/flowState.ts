@@ -16,8 +16,9 @@ export interface PersistedFlowState {
   step: string;
   status: FlowStatus;
   inputs?: Record<string, string>;
-  /** Epoch ms at which this run of the flow began (§26.10) — the lower bound the cost meter sweeps
-   *  session logs from. Absent for a flow that never started, and for one persisted before this field. */
+  /** Epoch ms at which this run of the flow began. No producer writes it anymore; retained so
+   *  `decodeStrict` still accepts a document a pre-sweep run stamped, and `writeTitle` does not throw
+   *  on it (§H.2). Absent for a flow that never started, and for one persisted before this field. */
   startedAt?: number;
   /** The name the user gave this worktree's work (§22.3.1). Absent until they name one. */
   title?: string;
@@ -50,8 +51,9 @@ function readInputs(raw: unknown): Record<string, string> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-/** Null unless the value is a real instant: an ill-typed or non-positive `started_at` would hand the cost
- *  meter a run window that never happened, so it degrades to "no recorded start" (§26.10). */
+/** Null unless the value is a real instant: an ill-typed or non-positive `started_at` degrades to
+ *  absent on the lenient read path, and rejects the whole document on the strict write path so
+ *  `writeTitle` throws rather than silently discarding it (§H.2's decode-tolerance boundary). */
 function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }

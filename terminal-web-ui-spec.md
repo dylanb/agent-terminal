@@ -1,7 +1,7 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.140
-**Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + the **task-flow management** phase (§17–§24): requirements drafted, and **Phase 1 — the three-view UI shell with real cores and fixture-mocked machinery (§24.1) — shipped** + the **in-terminal loop engine**, which is **being replaced, not extended**: **§26 (v2.99, tracer bullets L1–L8) shipped, works, and is RETIRED-BUT-RUNNING**; **§27 (v2.135) is the live design** and is built alongside it. §26 is superseded because its cost and latency are symptoms of machinery the loop does not need. The §27 loop: reviewers are handed **only the ticket and their charter** and pull what they need with tools (the mechanism by which per-round cost is expected not to grow with round depth); the **work turn runs once**; **review-and-fix is a single turn** in which the main instance hears its reviewers and fixes what they raise; the **consolidator judges the round** from the last two round reports and picks the next roster; and the same shape runs **groom → plan → impl**, each artifact feeding the next. The two engines **coexist behind one engine-neutral app-side contract** until the **N8 sweep** deletes §26 whole (§27.15)
+**Document status:** Draft v2.142
+**Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + the **task-flow management** phase (§17–§24): requirements drafted, and **Phase 1 — the three-view UI shell with real cores and fixture-mocked machinery (§24.1) — shipped** + the **in-terminal loop engine**, which **replaced its predecessor rather than extending it**: **§26 (v2.99, tracer bullets L1–L8) shipped, worked, and was retired and deleted whole by the N8 sweep (§27.15)**; **§27 (v2.135) is the live design and the app's only loop engine**. §26 was superseded because its cost and latency were symptoms of machinery the loop does not need. The §27 loop: reviewers are handed **only the ticket and their charter** and pull what they need with tools (the mechanism by which per-round cost is expected not to grow with round depth); the **work turn runs once**; **review-and-fix is a single turn** in which the main instance hears its reviewers and fixes what they raise; the **consolidator judges the round** from the last two round reports and picks the next roster; and the same shape runs **groom → plan → impl**, each artifact feeding the next.
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
 ---
@@ -34,5 +34,4 @@
 - [23. Multi-instance & epics](docs/spec/23-multi-instance-and-epics.md)
 - [24. Build plan — UI-inwards](docs/spec/24-build-plan-ui-inwards.md)
 - [25. Flow audit record (per-run, append-only)](docs/spec/25-flow-audit-record-per-run-append-only.md)
-- [26. In-terminal loop engine, v2.99 — RETIRED, superseded by §27](docs/spec/26-in-terminal-loop-engine-v2-99-retired-superseded-by-section-27.md)
 - [27. In-terminal loop engine — the live design](docs/spec/27-in-terminal-loop-engine-the-live-design.md)
