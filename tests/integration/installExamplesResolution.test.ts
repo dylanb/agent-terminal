@@ -96,6 +96,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.definition.steps).toEqual([
+      { id: 'preparation', kind: 'manual' },
       {
         id: 'groom',
         kind: 'loop',
@@ -120,6 +121,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         loopNamespace: 'app',
         todoTemplate: 'impl-loop-review',
       },
+      { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
     ]);
   });
 

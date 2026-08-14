@@ -863,7 +863,7 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       expect(load.ok).toBe(true);
       if (!load.ok) return;
       expect(load.definition.name).toBe('feature-dev');
-      expect(load.definition.steps.map((s) => s.id)).toEqual(['groom', 'plan', 'implement']);
+      expect(load.definition.steps.map((s) => s.id)).toEqual(['preparation', 'groom', 'plan', 'implement', 'finalize']);
     } finally {
       rmSync(localWithoutFlow, { recursive: true, force: true });
     }
