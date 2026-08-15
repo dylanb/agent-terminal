@@ -1775,8 +1775,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   return { binDir, logFile };
 }
 
-// LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
-// defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
+// LoopDef resolution for e2e: the §27 engine resolves defs from $CLAUDE_CONFIG_DIR/loops-v2/<name>/<name>.yaml,
+// so the committed example defs (example/loops-v2, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR
+// points at example/.
 const exampleConfigDir = join(process.cwd(), 'example');
 
 // §24.2.3 T7 — refs come from the flow's TYPED INPUTS now (§18.4); the retired engine's state-mirror
