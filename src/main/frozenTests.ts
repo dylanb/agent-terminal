@@ -13,6 +13,7 @@ import { isGitObjectId } from '../shared/appBootstrap';
 import { run } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
+import { loadLoopCapabilities } from './loopCapabilities';
 
 export interface FrozenTestsQuery {
   /** The checked-out repo working tree; git runs here as cwd. */
@@ -73,12 +74,13 @@ export type ChangedTestPathsResult =
   | { ok: true; paths: string[] }
   | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
 
-// STUB (RED): composition surface present, sources nothing yet.
 export async function changedTestPathsFromCapabilities(query: {
   repoDir: string;
   baseline: string;
   head: string;
 }): Promise<ChangedTestPathsResult> {
-  void query;
-  return { ok: true, paths: [] };
+  const capabilities = loadLoopCapabilities(query.repoDir);
+  if (!capabilities.ok) return capabilities;
+  const paths = await changedTestPaths({ ...query, testGlobs: capabilities.value.testGlobs });
+  return { ok: true, paths };
 }
