@@ -12,6 +12,13 @@ import {
   type OriginDirection,
 } from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
+import { coreExecHardeningArgs } from './gitHardening';
+
+// STUB (RED): the byte-equality pin's target; the real factory below still uses its inline literal until GREEN.
+export function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
+  void disabledHooksPath;
+  return [];
+}
 import {
   createGitHubRepositorySource,
   type GitHubRepositorySource,
