@@ -783,11 +783,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   return {
-    // STUB (RED): a fresh toolkit, not the injected one, so the identity assertion fails until GREEN.
-    completionPredicates: {
-      classifyOutcome: () => null,
-      changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'stub' }),
-    },
+    // §28.5.3 — surface the injected machine completion predicates; S3/S4's gate calls through this.
+    completionPredicates: deps.completionPredicates,
     canEnter() {
       return runner.state() !== 'in-flight' && !awaitingTrigger;
     },
