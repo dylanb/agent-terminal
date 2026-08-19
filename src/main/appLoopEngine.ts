@@ -20,6 +20,7 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
@@ -126,9 +127,16 @@ export interface AppLoopEngineDeps {
    *  back to gate the turn and the repo-relative path the consolidator writes, from ONE resolver; null when
    *  the loop area is unresolvable. */
   resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
+  /** §28.5.3 — the machine completion predicates (phase-outcome recognition + frozen-tests detection) the
+   *  RED/GREEN completion gate consults. Injected now so the seam exists on the engine's surface; S3/S4 make
+   *  the gate call through it. A domain-concept seam ("the machine ground truth about a turn"), not the
+   *  git/yaml mechanisms behind it. */
+  completionPredicates: LoopCompletionPredicates;
 }
 
 export interface AppLoopEngine {
+  /** §28.5.3 — the injected machine completion predicates, surfaced for the RED/GREEN gate (S3/S4). */
+  completionPredicates: LoopCompletionPredicates;
   /** §27.10 — free to accept a new turn: the runner is idle AND no accepted-but-not-yet-requested turn
    *  occupies it (the §B.20a deferral gap counts as in-flight, so a second entry in the gap is refused). */
   canEnter(): boolean;
@@ -775,6 +783,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   return {
+    // STUB (RED): a fresh toolkit, not the injected one, so the identity assertion fails until GREEN.
+    completionPredicates: {
+      classifyOutcome: () => null,
+      changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'stub' }),
+    },
     canEnter() {
       return runner.state() !== 'in-flight' && !awaitingTrigger;
     },

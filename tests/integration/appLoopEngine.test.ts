@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
+import { createLoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
@@ -47,6 +48,8 @@ let artifactPath: string;
 let hosted: HostedAgentState;
 let injected: string[];
 let deps: AppLoopEngineDeps;
+// §28.5.3 — a stable injected toolkit so a test can assert the engine surfaces the SAME instance (identity).
+const completionPredicatesSentinel = createLoopCompletionPredicates();
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;
 let terminateFlow: Mock<(repoDir: string) => void>;
@@ -142,9 +145,16 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
       const abs = consolidatorOutputFile(repoDir, round);
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
     },
+    completionPredicates: completionPredicatesSentinel,
   };
   return createAppLoopEngine(deps);
 }
+
+describe('§28.5.3 — the engine surfaces the injected machine completion predicates', () => {
+  it('exposes the same completionPredicates instance it was constructed with', () => {
+    expect(makeEngine().completionPredicates).toBe(completionPredicatesSentinel);
+  });
+});
 
 /** Write a well-formed round-N report; `failed` names personas recorded as failed-to-run (§27.5/AC7). */
 function writeRoundReport(round: number, failed: string[] = []): void {

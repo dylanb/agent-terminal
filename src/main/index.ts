@@ -101,6 +101,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
+import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
@@ -323,6 +324,9 @@ async function createWindow(): Promise<void> {
   let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
+    // §28.5.3 — the machine completion predicates the RED/GREEN gate (S3/S4) will consult. Wired onto the
+    // engine's surface now; the gate call through it lands with those slices.
+    completionPredicates: createLoopCompletionPredicates(),
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
     // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the
