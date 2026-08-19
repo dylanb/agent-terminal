@@ -65,3 +65,20 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   const matched = changed.filter((path) => matchesAnyGlob(path, testGlobs));
   return [...new Set(matched)].sort();
 }
+
+/** The changed test paths, sourcing the globs from the repo's own loop-capabilities.yaml. Its failure arm is
+ *  the capabilities-load failure (absent/malformed/confinement) so a consumer can degrade or refuse; a git or
+ *  baseline failure still rejects (fail toward firing). This is the seam S3/S4 gate a turn on. */
+export type ChangedTestPathsResult =
+  | { ok: true; paths: string[] }
+  | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
+
+// STUB (RED): composition surface present, sources nothing yet.
+export async function changedTestPathsFromCapabilities(query: {
+  repoDir: string;
+  baseline: string;
+  head: string;
+}): Promise<ChangedTestPathsResult> {
+  void query;
+  return { ok: true, paths: [] };
+}
