@@ -10,6 +10,7 @@ import {
   type AppGateCommitOperations,
   type AppGateCommitOutcome,
 } from '../../src/main/appGateCommit';
+import { APP_STATE_DIRS } from '../../src/main/appStateDirs';
 
 // §28.3 — the commit gate side-effect. L1 drives the real adapter against real temp git repos (no git
 // mock — CLAUDE.md); L2 drives the ports-injected port with a fake seam. Assertions are all observable:
@@ -145,26 +146,27 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     expect(existsSync(sentinel)).toBe(false); // no command substitution ran
   });
 
-  it('T3c: excludes engine state even when the operated repo does NOT gitignore it (CWE-200)', async () => {
-    const bare = fx.makeGitRepo('noignore'); // no .gitignore covering .agent-terminal/
+  it('T3c: excludes ALL app state dirs from a phase commit even without a gitignore (CWE-200, coupling)', async () => {
+    const bare = fx.makeGitRepo('noignore'); // no .gitignore covering the app state dirs
     fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
     fx.commitAll(bare, 'baseline');
     fx.writeRepoFile(bare, 'src/g.ts', 'export const g = 7;\n');
-    fx.writeRepoFile(bare, '.agent-terminal/loop/monitor-events.json', 'SECRET=xyz\n');
+    for (const dir of APP_STATE_DIRS) fx.writeRepoFile(bare, `${dir}/state.json`, 'SECRET=xyz\n');
     const before = headCount(bare);
     const outcome = await createRealAppGateCommit(bare)({ label: 'GREEN: enforced' });
     expect(outcome).toBe('committed');
     expect(headCount(bare)).toBe(before + 1);
     const files = headFiles(bare);
     expect(files).toContain('src/g.ts');
-    expect(files).not.toContain('.agent-terminal'); // engine state never swept, gitignore or not
+    // iterating APP_STATE_DIRS pins the coupling to the clean-tree set: a dir added there is excluded here too
+    for (const dir of APP_STATE_DIRS) expect(files).not.toContain(dir);
   });
 
-  it('T3d: nothing-to-commit stays reachable without a gitignore when only engine state changed (CWE-754)', async () => {
+  it('T3d: nothing-to-commit stays reachable without a gitignore when only app state changed (CWE-754)', async () => {
     const bare = fx.makeGitRepo('noignore2');
     fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
     fx.commitAll(bare, 'baseline');
-    fx.writeRepoFile(bare, '.agent-terminal/loop/run-state.yaml', 'status: accepted\n'); // engine state only
+    for (const dir of APP_STATE_DIRS) fx.writeRepoFile(bare, `${dir}/state.json`, 'x\n'); // app state only
     const before = headCount(bare);
     const outcome = await createRealAppGateCommit(bare)({ label: 'refactor: noop-enforced' });
     expect(outcome).toBe('nothing-to-commit');

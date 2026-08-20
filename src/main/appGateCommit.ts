@@ -3,6 +3,7 @@
 
 import { CommandFailure, run } from './appBootstrapCommand';
 import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
+import { APP_STATE_DIRS } from './appStateDirs';
 
 /** The identity of what a commit side-effect commits (§28.3 / §6): the phase label the declaring
  *  descriptor carries — never re-derived from run-state or the branch. */
@@ -43,13 +44,6 @@ function commitHardeningArgs(disabledHooks: string): string[] {
   return [...coreExecHardeningArgs(disabledHooks), '-c', 'commit.gpgSign=false'];
 }
 
-// The app's own engine/tooling dirs — unstaged after `git add -A` so they can never land in a phase commit
-// (CWE-200) and can never make `nothing-to-commit` unreachable (CWE-754), independent of whether the
-// operated repo gitignores them (the app must not write `.gitignore`). Legitimate phase work never lives here.
-// (A pathspec `:(exclude)` on `git add` instead trips git's ignored-path advice with exit 1 when the dir is
-// also gitignored — the common case — so unstage-after-add is the form that works either way.)
-const ENGINE_STATE_DIRS = ['.agent-terminal', '.agent-loop'];
-
 /** Whether the index differs from HEAD. `git diff --cached --quiet` exits 1 when there ARE staged changes
  *  and 0 when there are none (git's contract); any other failure rethrows. */
 async function hasStagedChanges(repoDir: string, harden: string[]): Promise<boolean> {
@@ -70,10 +64,13 @@ export function createRealAppGateCommit(
       const harden = commitHardeningArgs(freshDisabledHooksDir());
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
       await run('git', [...harden, 'add', '-A'], repoDir, 'commit side-effect: git add failed');
-      // AC1's tree-clean still assumes the operated repo gitignores `.agent-terminal/` (appGateDecision's
-      // advanceFlow writes there AFTER this commit); unstaging the engine dirs keeps that state out of the
-      // commit even when it is NOT gitignored (§28.3). `git reset` on a non-staged path is a clean no-op.
-      await run('git', [...harden, 'reset', '-q', '--', ...ENGINE_STATE_DIRS], repoDir, 'commit side-effect: git reset failed');
+      // Unstage the app's OWN state dirs — APP_STATE_DIRS, the SAME set the clean-tree gate uses (never a
+      // parallel copy) — so they never land in a phase commit (CWE-200) and never make nothing-to-commit
+      // unreachable (CWE-754), independent of the operated repo's `.gitignore`. (A `:(exclude)` pathspec on
+      // `git add` instead trips git's ignored-path advice with exit 1 when the dir is also gitignored — the
+      // common case — so unstage-after-add is the form that works either way. `git reset` of a non-staged
+      // path is a clean no-op.)
+      await run('git', [...harden, 'reset', '-q', '--', ...APP_STATE_DIRS], repoDir, 'commit side-effect: git reset failed');
       if (!(await hasStagedChanges(repoDir, harden))) return 'nothing-to-commit';
       await run('git', [...harden, 'commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
       return 'committed';
