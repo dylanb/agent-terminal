@@ -144,7 +144,7 @@ const flowApi: FlowApi = {
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
   },
   onLoopError: (cb) => {
-    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason);
+    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason, msg.kind ?? 'error');
     ipcRenderer.on(CH.flowOnLoopError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },

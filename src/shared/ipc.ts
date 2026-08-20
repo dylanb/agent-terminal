@@ -622,14 +622,22 @@ export interface FlowBootstrapErrorMsg {
   reason: string;
 }
 
-/** flow:onLoopError push (§27.12): main signals that a loop-MECHANICS operation FAILED after the
- *  loop was bootstrapped — a turn-runner error (no hosted agent, a stall, a missing artifact, a compose
- *  failure) or a gate transition that could not be persisted. Like the bootstrap-error push, the failure is
- *  never silent: the renderer raises a blocking error dialog carrying `reason`. Distinct channel from
- *  `flow:onBootstrapError` so pickup-time and run-time failures keep their own dialog titles. */
+/** The severity a flow:onLoopError message carries: a genuine `error` (the default — a failed loop
+ *  mechanic, framed as a blocking error dialog) or a benign `notice` (a completed no-op the operator should
+ *  see, e.g. §28.3 nothing-to-commit — framed so it never reads as a failure). One definition the main
+ *  writer and the renderer both key on (CLAUDE.md shared-vocabulary). */
+export type FlowLoopMessageKind = 'error' | 'notice';
+
+/** flow:onLoopError push (§27.12/§28.3): main signals a loop-MECHANICS outcome after the loop was
+ *  bootstrapped. `kind: 'error'` (default) is a FAILURE — a turn-runner error (no hosted agent, a stall, a
+ *  missing artifact, a compose failure) or an un-persistable gate transition; the renderer raises a blocking
+ *  error dialog carrying `reason`. `kind: 'notice'` is a benign completed no-op (§28.3 nothing-to-commit),
+ *  surfaced on the same channel but framed as a notice, not a failure. Distinct channel from
+ *  `flow:onBootstrapError` so pickup-time and run-time messages keep their own dialog titles. */
 export interface FlowLoopErrorMsg {
   sessionId: SessionId;
   reason: string;
+  kind?: FlowLoopMessageKind;
 }
 
 /** §6/§27.10. */
@@ -1013,10 +1021,10 @@ export interface FlowApi {
    *  rolled back, or a declared bootstrap the bound def has no contract for); the renderer raises a blocking
    *  error dialog. Returns an unsubscribe. */
   onBootstrapError(cb: (reason: string, repoKey: string, step: string) => void): () => void;
-  /** Subscribe to main's flow:onLoopError push (§27.12): `cb` fires with the human-readable
-   *  `reason` when a loop-mechanics operation failed after bootstrap (a turn-runner error or an
-   *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */
-  onLoopError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onLoopError push (§27.12/§28.3): `cb` fires with the human-readable
+   *  `reason` and its `kind` — `'error'` (a loop-mechanics failure → blocking error dialog) or `'notice'`
+   *  (a benign completed no-op → framed as a notice, not a failure). Returns an unsubscribe. */
+  onLoopError(cb: (reason: string, kind: FlowLoopMessageKind) => void): () => void;
   /** §6/§27.10. */
   onAppBootstrapConflict(
     cb: (

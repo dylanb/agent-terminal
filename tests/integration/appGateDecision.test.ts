@@ -62,6 +62,7 @@ interface Recorder {
   advances: string[];
   audits: Array<{ cmd: string; exit: number | null }>;
   errors: string[];
+  notices: string[];
   views: number;
   feedbacks: Array<{ step: string; turnKey: string; feedback: string }>;
   redos: Array<{ step: string; turnKey: string; instruction: string }>;
@@ -73,7 +74,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -95,6 +96,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     advanceFlow: (r) => void rec.advances.push(r),
     audit: (_r, cmd, exit) => void rec.audits.push({ cmd, exit }),
     emitError: (reason) => void rec.errors.push(reason),
+    emitNotice: (reason) => void rec.notices.push(reason),
     onViewChanged: () => void (rec.views += 1),
     deliverFeedback: (_repoDir, step, turnKey, feedback) => {
       rec.feedbacks.push({ step, turnKey, feedback });
@@ -182,16 +184,17 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     expect(rec.advances).toEqual(['/repo']);
   });
 
-  it('surfaces a benign nothing-to-commit as a live completed-notice (not a failure) and still advances (T11b, AC3)', async () => {
+  it('surfaces a benign nothing-to-commit as a live NOTICE (not an error) and still advances (T11b, AC3)', async () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('refactor: slice-z'), commitOutcome: 'nothing-to-commit' });
     await approve(deps);
     // machine-distinct in the audit (decision B) — skipped at exit 0, never the failed token
     expect(rec.audits.some((a) => a.cmd.includes('side-effect skipped') && a.exit === 0)).toBe(true);
     expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
-    // AC3 — surfaced LIVE to the operator as a NOTICE: names the condition, never reads as a failure
-    expect(rec.errors).toHaveLength(1);
-    expect(rec.errors[0]).toMatch(/nothing to commit/i);
-    expect(rec.errors[0]).not.toMatch(/fail/i);
+    // AC3 — surfaced LIVE as a NOTICE (not the error channel), naming the condition, never reading as a failure
+    expect(rec.notices).toHaveLength(1);
+    expect(rec.notices[0]).toMatch(/nothing to commit/i);
+    expect(rec.notices[0]).not.toMatch(/fail/i);
+    expect(rec.errors).toEqual([]); // a benign no-op is NOT surfaced as an error
     // the notice never blocks completion — the accept persisted and the flow advanced
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toEqual(['/repo']);

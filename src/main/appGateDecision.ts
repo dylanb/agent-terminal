@@ -59,6 +59,9 @@ export interface AppGateDecisionDeps {
   clearPolish(repoDir: string): void;
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(reason: string): void;
+  /** §28.3 — surface a benign completed no-op (nothing-to-commit) to the operator as a notice, framed so
+   *  it never reads as a failure. Same operator channel as emitError, distinct severity (`kind: 'notice'`). */
+  emitNotice(reason: string): void;
   onViewChanged(): void;
 }
 
@@ -200,7 +203,7 @@ export async function runAppGateDecision(
           // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
           // wording must never read as a failure, and this path must not throw (the accept/advance run below).
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect-skipped', option, 'commit: nothing to commit'), 0);
-          deps.emitError(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
+          deps.emitNotice(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);

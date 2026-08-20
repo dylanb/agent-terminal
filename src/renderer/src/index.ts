@@ -111,7 +111,11 @@ if (errorDialog) {
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
-  window.flow.onLoopError((reason) => showError({ title: 'Loop error', message: reason }));
+  // §28.3 — a `notice` (a benign completed no-op like nothing-to-commit) is framed so it never reads as a
+  // failure; only a genuine `error` gets the "Loop error" title.
+  window.flow.onLoopError((reason, kind) =>
+    showError({ title: kind === 'notice' ? 'Notice' : 'Loop error', message: reason }),
+  );
 }
 
 // §22.3.1.
