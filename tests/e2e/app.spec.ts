@@ -1696,6 +1696,11 @@ const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): { binDir: string; logFile: string } {
   const binDir = mkdtempSync(join(tmpdir(), prefix));
   const logFile = join(binDir, 'calls.log');
+  // Resolve REAL git once from the test process (whose PATH lacks binDir, so this is never the shim) rather
+  // than hard-coding a path — keeps the shim-escape without coupling to the container base image's git location.
+  const realGit = opts.realCommitOps
+    ? execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+    : '';
   const fakeGit =
     '#!/usr/bin/env bash\n' +
     // The bootstrap port runs remote operations in a throwaway bare git dir, so the shim sees
@@ -1704,7 +1709,7 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
-    (opts.realCommitOps ? 'case "$1" in add|reset|commit|diff) exec /usr/bin/git "$@";; esac\n' : '') +
+    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff) exec ${realGit} "$@";; esac\n` : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.

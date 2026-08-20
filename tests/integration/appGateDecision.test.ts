@@ -179,6 +179,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     await approve(deps);
     expect(rec.errors).toHaveLength(1);
     expect(rec.errors[0]).toMatch(/side-effect failed: git commit failed/);
+    expect(rec.notices).toEqual([]); // a real failure is an error, never a benign notice (channel isolation)
     expect(rec.audits.some((a) => a.cmd.includes('side-effect failed') && a.exit === 1)).toBe(true);
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toEqual(['/repo']);
