@@ -4,6 +4,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { load } from 'js-yaml';
@@ -1692,7 +1693,7 @@ const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 // and emit canned output (no network/auth/remote), so the run is deterministic on a real PTY: the PTY
 // + shell are real, only the bootstrap helpers are stubbed.
 // Returns the bin dir to prepend to PATH and the log file the fakes append every invocation to.
-function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
+function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): { binDir: string; logFile: string } {
   const binDir = mkdtempSync(join(tmpdir(), prefix));
   const logFile = join(binDir, 'calls.log');
   const fakeGit =
@@ -1701,6 +1702,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // `--git-dir <tmp>` ahead of the neutralizing -c pairs.
     'if [ "$1" = "--git-dir" ]; then shift 2; fi\n' +
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
+    // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
+    // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
+    (opts.realCommitOps ? 'case "$1" in add|reset|commit|diff) exec /usr/bin/git "$@";; esac\n' : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
@@ -5651,4 +5655,137 @@ test('the in-app install affordance is reachable in the scrolling Settings colum
     return b.width > 0 && b.height > 0 && b.top >= p.top - 1 && b.bottom <= p.bottom + 1;
   });
   expect(within).toBe(true);
+});
+
+// ─── §28.3 — the `commit` gate side-effect, end-to-end (tracer bullet) ─────────────────────────────────
+// A REAL git repo + a plan-loop whose approve gate declares a `commit` side-effect (swapped into a per-test
+// CLAUDE_CONFIG_DIR copy of `example/`, so the shared `gh`-gate def other tests depend on is untouched). The
+// fake-agent drives to a clean gate; approve fires the commit APP-SIDE, agent-uninvolved. The gate side-effect
+// yaml is FLAT — `kind` + `label` are siblings (a nested `args:` would leave se.args.label undefined).
+function seedCommitGateConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
+  const def = readFileSync(defPath, 'utf8');
+  const swapped = def.replace(
+    '      - kind: gh\n        action: mark-ready',
+    '      - kind: commit\n        label: "GREEN: s2-tracer"',
+  );
+  if (swapped === def) throw new Error('seedCommitGateConfig: plan-loop gh gate not found to swap');
+  writeFileSync(defPath, swapped);
+  return cfg;
+}
+
+const gitIn = (repo: string, ...args: string[]): string =>
+  execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+const gitCount = (repo: string): number => Number(gitIn(repo, 'rev-list', '--count', 'HEAD'));
+
+// A REAL git repo carrying the same flow/bootstrap `.agent-terminal` state the fake-git gate test uses, so
+// the drive (canned via the fake git+gh) reaches a clean gate while the commit side-effect's delegated ops
+// land in a genuine repo. `.gitignore` excludes the engine state dirs (so AC1's tree-clean survives
+// advanceFlow's post-commit write); `withChange` leaves one uncommitted file the commit will record.
+function seedCommitFlowRepo(prefix: string, withChange: boolean): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
+  g('init', '-q');
+  g('config', 'user.email', 't@t');
+  g('config', 'user.name', 'T');
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
+  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  );
+  seedCompletedAppBootstrap(dir);
+  g('add', '-A');
+  g('commit', '-qm', 'baseline');
+  if (withChange) writeFileSync(join(dir, 'feature.ts'), 'export const x = 1;\n');
+  return dir;
+}
+
+test('§28.3 — approve on a gate declaring a commit side-effect advances HEAD by exactly one with the phase label, tree clean, .gitignore untouched', { tag: '@ownapp' }, async () => {
+  const repo = seedCommitFlowRepo('agent-term-e2e-commit-', true);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-home-'));
+  const cfg = seedCommitGateConfig('agent-term-e2e-commit-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+  const gitignoreBefore = readFileSync(join(repo, '.gitignore'), 'utf8');
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // AC1 — the commit side-effect fired app-side: HEAD advanced by EXACTLY one carrying the declared label.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  expect(gitIn(repo, 'log', '-1', '--format=%s')).toBe('GREEN: s2-tracer');
+  expect(gitIn(repo, 'status', '--porcelain')).toBe(''); // tree left clean (engine state gitignored)
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('feature.ts');
+  // AC2 — a pre-existing .gitignore is byte-for-byte unchanged.
+  expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toBe(gitignoreBefore);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a Loop error) and does not advance HEAD', { tag: '@ownapp' }, async () => {
+  const repo = seedCommitFlowRepo('agent-term-e2e-commit-noop-', false); // clean tree — nothing to stage
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-noop-home-'));
+  const cfg = seedCommitGateConfig('agent-term-e2e-commit-noop-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-noop-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // AC3 — nothing to commit is surfaced as a NOTICE (not a failure) and no empty commit is made.
+  const dialog = page.locator('#flow-error-host .flow-modal');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog).toContainText('Notice');
+  await expect(dialog).toContainText('nothing to commit');
+  await expect(dialog).not.toContainText('Loop error');
+  expect(gitCount(repo)).toBe(before); // HEAD did not advance — no empty commit
+
+  await dialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
 });
