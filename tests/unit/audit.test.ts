@@ -411,6 +411,16 @@ describe('§27 gate-decision audit vocabulary', () => {
     expect(clearFailed).toContain('EISDIR');
     expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
   });
+
+  // §28.3 / T13b — a benign nothing-to-commit is a DISTINCT outcome from a real failure, so a reader (a
+  // reconstructed timeline) never mistakes an empty phase for a `git commit` error.
+  it('records a benign skipped side-effect distinctly from a success and a failure', () => {
+    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit');
+    expect(skipped).toContain('approve');
+    expect(skipped).toContain('skipped');
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit'));
+  });
 });
 
 // §27.10/§27.9 / N6 — the chained-transition audit vocabulary lives in this ONE shared module beside the

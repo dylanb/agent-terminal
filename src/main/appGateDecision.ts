@@ -15,6 +15,7 @@ import type {
   LoopDefV2Result,
 } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
+import type { RunAppGateCommitSideEffect } from './appGateCommit';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -31,6 +32,9 @@ export interface AppGateDecisionDeps {
   resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   refs(repoDir: string): AppGateRefs;
   runSideEffect: RunAppGateSideEffect;
+  /** §28.3 — the `commit` side-effect port: a local `git commit` carrying the descriptor's phase label,
+   *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
+  runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
   /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback

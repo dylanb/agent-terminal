@@ -7,6 +7,7 @@ import {
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
+import type { AppGateCommitCtx, AppGateCommitOutcome } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
 // bound def's declared side-effect out of band, then reaches the terminal accept and advances the flow; a
@@ -25,6 +26,7 @@ const GATE_RUN: AppLoopRunState = {
 
 const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [] } as unknown as LoopDefV2);
 const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] }];
+const APPROVE_COMMIT = (label: unknown): GateOptionDef[] => [{ option: 'approve', sideEffects: [{ kind: 'commit', args: label === undefined ? {} : { label } }] }];
 
 describe('resolveGateSideEffectBodyFile', () => {
   it('resolves only the binding explicitly named by the declared side-effect', () => {
@@ -55,6 +57,7 @@ describe('resolveGateSideEffectBodyFile', () => {
 
 interface Recorder {
   sideEffects: Array<{ action: string; ctx: unknown }>;
+  commitSideEffects: AppGateCommitCtx[];
   accepts: AppLoopRunState[];
   advances: string[];
   audits: Array<{ cmd: string; exit: number | null }>;
@@ -66,11 +69,11 @@ interface Recorder {
   polishClears: string[];
 }
 
-function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; pr?: number | null; ticket?: number | null }): {
+function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: AppGateCommitOutcome; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -82,6 +85,11 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     runSideEffect: async (action, ctx) => {
       rec.sideEffects.push({ action, ctx });
       if (over.sideEffectThrows) throw new Error(over.sideEffectThrows);
+    },
+    runCommitSideEffect: async (ctx) => {
+      rec.commitSideEffects.push(ctx);
+      if (over.commitThrows) throw new Error(over.commitThrows);
+      return over.commitOutcome ?? 'committed';
     },
     persistAccept: (_r, state) => void rec.accepts.push(state),
     advanceFlow: (r) => void rec.advances.push(r),
@@ -147,6 +155,48 @@ describe('runAppGateDecision — a failed side-effect never strands the flow (§
     expect(rec.audits.some((a) => a.cmd.includes('side-effect failed') && a.exit === 1)).toBe(true); // recorded
     expect(rec.accepts).toHaveLength(1); // accept NOT aborted
     expect(rec.advances).toEqual(['/repo']); // the flow still advances — a visible next action
+  });
+});
+
+describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
+  it('fires the commit port with the descriptor label, audits it at exit 0, accepts, and advances (T10)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: slice-x') });
+    await approve(deps);
+    // STD-identity — the label is sourced from se.args, not run-state/branch
+    expect(rec.commitSideEffects).toEqual([{ label: 'RED: slice-x' }]);
+    // the audit trail names WHICH commit, at exit 0 (a success, not a failure)
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect') && a.cmd.includes('RED: slice-x') && a.exit === 0)).toBe(true);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+    expect(rec.errors).toEqual([]);
+  });
+
+  it('surfaces + audits a real commit failure at exit 1 but still accepts and advances (T11a, STD-besteffort)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('GREEN: slice-y'), commitThrows: 'git commit failed' });
+    await approve(deps);
+    expect(rec.errors).toHaveLength(1);
+    expect(rec.errors[0]).toMatch(/side-effect failed: git commit failed/);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect failed') && a.exit === 1)).toBe(true);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('records a benign nothing-to-commit as skipped at exit 0 WITHOUT an error, and still advances (T11b, AC3)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('refactor: slice-z'), commitOutcome: 'nothing-to-commit' });
+    await approve(deps);
+    // surfaced DISTINCTLY — a skipped audit at exit 0, never the failed token, never an error banner
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect skipped') && a.exit === 0)).toBe(true);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
+    expect(rec.errors).toEqual([]);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('sources the label verbatim from se.args, passing empty when the descriptor declares none (T12, STD-identity)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT(undefined) });
+    await approve(deps);
+    expect(rec.commitSideEffects).toEqual([{ label: '' }]); // the executor never invents a label from ambient state
+    expect(rec.advances).toEqual(['/repo']);
   });
 });
 

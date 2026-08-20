@@ -339,18 +339,20 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
   }
 }
 
-/** The lifecycle points of a §27 human-gate decision the §25 audit records (§27.9/§27.13 / N5) — one
+/** The lifecycle points of a §27 human-gate decision the §25 audit records (§27.9/§27.13/§28.3 / N5) — one
  *  definition beside the round/consolidate vocabularies so the main-process writer and any future viewer
- *  share it, never re-spelled as ad-hoc strings. `decision` records the option the human took; `side-effect`
- *  and `side-effect-failed` record the approve GitHub call's outcome (a failure is recorded, never swallowed,
- *  yet never aborts the terminal accept — §27.13 / AC3). `accept-failed` records an unpersisted terminal
- *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it.
- *  `decision-dropped` records a request-changes the engine could not start (the runner was mid-turn
- *  or the gate raced out), distinct from `decision` so the audit never claims a round that never ran (AC4).
- *  `clear-polish-failed` records an approve whose best-effort polish-stand-down cleanup threw AFTER the accept
- *  persisted — recorded (never swallowed) yet never aborting the terminal accept, since a residual stand-down
- *  file is harmless once the gate has been accepted (§27.9 / AC6). */
-export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed';
+ *  share it, never re-spelled as ad-hoc strings. `decision` records the option the human took; `side-effect`,
+ *  `side-effect-skipped`, and `side-effect-failed` record an approve side-effect's outcome — a `gh` call
+ *  (§27.13) or a local `commit` (§28.3). `side-effect-skipped` is a benign no-op (e.g. a `commit` with nothing
+ *  to commit): surfaced distinctly at exit 0 so a reader never mistakes it for a failure. `side-effect-failed`
+ *  records a genuine failure — recorded, never swallowed, yet never aborts the terminal accept (§27.13 / AC3).
+ *  `accept-failed` records an unpersisted terminal accept, which — unlike a side-effect failure — DOES abort
+ *  the decision so the flow never advances over it. `decision-dropped` records a request-changes the engine
+ *  could not start (the runner was mid-turn or the gate raced out), distinct from `decision` so the audit
+ *  never claims a round that never ran (AC4). `clear-polish-failed` records an approve whose best-effort
+ *  polish-stand-down cleanup threw AFTER the accept persisted — recorded (never swallowed) yet never aborting
+ *  the terminal accept, since a residual stand-down file is harmless once the gate has been accepted (§27.9 / AC6). */
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed';
 
 export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
   switch (kind) {
@@ -360,6 +362,10 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
       return `§27 gate ${option} dropped: ${detail ?? ''}`;
     case 'side-effect':
       return `§27 gate ${option} side-effect: ${detail ?? ''}`;
+    case 'side-effect-skipped':
+      // RED stub: renders identically to `side-effect-failed` so the vocabulary round-trip test (T13b)
+      // fails on "skipped is not distinct from failed"; GREEN gives it its own `skipped:` rendering.
+      return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
     case 'side-effect-failed':
       return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
     case 'accept-failed':

@@ -107,6 +107,7 @@ import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFil
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
+import { createRealAppGateCommit } from './appGateCommit';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
@@ -799,6 +800,7 @@ async function createWindow(): Promise<void> {
           );
         },
         runSideEffect: createRealAppGateGitHub(repoKey),
+        runCommitSideEffect: createRealAppGateCommit(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
         audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
