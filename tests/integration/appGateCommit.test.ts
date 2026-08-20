@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
@@ -133,6 +134,46 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     await createRealAppGateCommit(repo)({ label: 'GREEN: unsigned' });
     expect(headCount(repo)).toBe(before + 1); // the commit still lands
     expect(existsSync(sentinel)).toBe(false); // gpg.program never ran
+  });
+
+  it('T1b: a shell-metachar label lands verbatim as the subject and is never shell-interpreted (CWE-78)', async () => {
+    const sentinel = join(repo, 'PWNED');
+    const label = 'RED: $(touch ' + sentinel + ') `id`';
+    fx.writeRepoFile(repo, 'src/h.ts', 'export const h = 8;\n');
+    await createRealAppGateCommit(repo)({ label });
+    expect(headSubject(repo)).toBe(label); // verbatim — an argv value to -m, not a shell string
+    expect(existsSync(sentinel)).toBe(false); // no command substitution ran
+  });
+
+  it('T3c: excludes engine state even when the operated repo does NOT gitignore it (CWE-200)', async () => {
+    const bare = fx.makeGitRepo('noignore'); // no .gitignore covering .agent-terminal/
+    fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
+    fx.commitAll(bare, 'baseline');
+    fx.writeRepoFile(bare, 'src/g.ts', 'export const g = 7;\n');
+    fx.writeRepoFile(bare, '.agent-terminal/loop/monitor-events.json', 'SECRET=xyz\n');
+    const before = headCount(bare);
+    const outcome = await createRealAppGateCommit(bare)({ label: 'GREEN: enforced' });
+    expect(outcome).toBe('committed');
+    expect(headCount(bare)).toBe(before + 1);
+    const files = headFiles(bare);
+    expect(files).toContain('src/g.ts');
+    expect(files).not.toContain('.agent-terminal'); // engine state never swept, gitignore or not
+  });
+
+  it('T3d: nothing-to-commit stays reachable without a gitignore when only engine state changed (CWE-754)', async () => {
+    const bare = fx.makeGitRepo('noignore2');
+    fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
+    fx.commitAll(bare, 'baseline');
+    fx.writeRepoFile(bare, '.agent-terminal/loop/run-state.yaml', 'status: accepted\n'); // engine state only
+    const before = headCount(bare);
+    const outcome = await createRealAppGateCommit(bare)({ label: 'refactor: noop-enforced' });
+    expect(outcome).toBe('nothing-to-commit');
+    expect(headCount(bare)).toBe(before); // no empty commit; AC3 reachable independent of .gitignore
+  });
+
+  it('T-fail: a genuine git failure (outside a git repo) rejects rather than silently no-op', async () => {
+    const notARepo = mkdtempSync(join(tmpdir(), 'agent-notgit-'));
+    await expect(createRealAppGateCommit(notARepo)({ label: 'GREEN: nope' })).rejects.toThrow();
   });
 });
 

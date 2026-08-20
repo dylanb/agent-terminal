@@ -16,6 +16,7 @@ import type {
 } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 import type { RunAppGateCommitSideEffect } from './appGateCommit';
+import { stripStatusControlChars } from '../shared/loopStatus';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -196,8 +197,12 @@ export async function runAppGateDecision(
         if (outcome === 'committed') {
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
         } else {
-          // nothing-to-commit — a benign no-op, surfaced DISTINCTLY at exit 0, never the failure token.
+          // nothing-to-commit (§28.3 / AC3): recorded DISTINCTLY in the audit at exit 0 (never the failure
+          // token), and surfaced LIVE to the operator as a NOTICE — worded so it never reads as a failure
+          // or an incomplete step. It is emitted AFTER the audit and never throws, so the accept/advance
+          // below still run: the operation completes regardless of the notice.
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect-skipped', option, 'commit: nothing to commit'), 0);
+          deps.emitError(`nothing to commit for the "${stripStatusControlChars(label)}" phase — no changes were staged; the step completed`);
         }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);

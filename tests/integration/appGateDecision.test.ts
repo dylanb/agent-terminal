@@ -141,6 +141,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     const { deps, rec } = mkDeps({ gate: [{ option: 'approve', sideEffects: [{ kind: 'slack', args: { action: 'post' } }] }] });
     await approve(deps);
     expect(rec.sideEffects).toEqual([]); // the non-gh side-effect never reached the gh runner
+    expect(rec.commitSideEffects).toEqual([]); // nor the commit runner — an unknown kind routes to neither
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toEqual(['/repo']);
   });
@@ -181,13 +182,17 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     expect(rec.advances).toEqual(['/repo']);
   });
 
-  it('records a benign nothing-to-commit as skipped at exit 0 WITHOUT an error, and still advances (T11b, AC3)', async () => {
+  it('surfaces a benign nothing-to-commit as a live completed-notice (not a failure) and still advances (T11b, AC3)', async () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('refactor: slice-z'), commitOutcome: 'nothing-to-commit' });
     await approve(deps);
-    // surfaced DISTINCTLY — a skipped audit at exit 0, never the failed token, never an error banner
+    // machine-distinct in the audit (decision B) — skipped at exit 0, never the failed token
     expect(rec.audits.some((a) => a.cmd.includes('side-effect skipped') && a.exit === 0)).toBe(true);
     expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
-    expect(rec.errors).toEqual([]);
+    // AC3 — surfaced LIVE to the operator as a NOTICE: names the condition, never reads as a failure
+    expect(rec.errors).toHaveLength(1);
+    expect(rec.errors[0]).toMatch(/nothing to commit/i);
+    expect(rec.errors[0]).not.toMatch(/fail/i);
+    // the notice never blocks completion — the accept persisted and the flow advanced
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toEqual(['/repo']);
   });

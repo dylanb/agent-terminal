@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { treeIsClean } from './gitTreeState';
 import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
@@ -12,7 +10,7 @@ import {
   type OriginDirection,
 } from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
-import { coreExecHardeningArgs } from './gitHardening';
+import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
 
 // The remote-op-facing hardening: repository/protocol/credential neutralizers the fetch/push/ref paths need
 // on top of the shared local-exec set. A local read (frozen-tests §28.5.1) deliberately does not use these.
@@ -107,10 +105,7 @@ export function createRealAppBootstrapGit(
   const originConfig = createOriginConfigReader((args) =>
     git(args, 'origin resolution failed'),
   );
-  const disabledHooksPath = join(
-    tmpdir(),
-    `agent-terminal-disabled-hooks-${randomUUID()}`,
-  );
+  const disabledHooksPath = freshDisabledHooksDir();
   const protectedArgs = bootstrapProtectedArgs(disabledHooksPath);
   const git = (args: string[], failure: string): Promise<string> =>
     run('git', [...protectedArgs, ...args], repoDir, failure);

@@ -354,22 +354,28 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  the terminal accept, since a residual stand-down file is harmless once the gate has been accepted (§27.9 / AC6). */
 export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed';
 
+const GATE_DETAIL_MAX = 200;
+
 export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
+  // The detail can carry untrusted content (a def-supplied side-effect action / commit phase label), so it
+  // is neutralized before it lands in the append-only §25 stream — the same CWE-117 treatment loopStatus
+  // mandates for every human-facing sink and notifyFailedEvent already applies.
+  const d = detail === undefined ? '' : stripStatusControlChars(detail).slice(0, GATE_DETAIL_MAX);
   switch (kind) {
     case 'decision':
       return `§27 gate ${option}`;
     case 'decision-dropped':
-      return `§27 gate ${option} dropped: ${detail ?? ''}`;
+      return `§27 gate ${option} dropped: ${d}`;
     case 'side-effect':
-      return `§27 gate ${option} side-effect: ${detail ?? ''}`;
+      return `§27 gate ${option} side-effect: ${d}`;
     case 'side-effect-skipped':
-      return `§27 gate ${option} side-effect skipped: ${detail ?? ''}`;
+      return `§27 gate ${option} side-effect skipped: ${d}`;
     case 'side-effect-failed':
-      return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
+      return `§27 gate ${option} side-effect failed: ${d}`;
     case 'accept-failed':
-      return `§27 gate ${option} accept failed: ${detail ?? ''}`;
+      return `§27 gate ${option} accept failed: ${d}`;
     case 'clear-polish-failed':
-      return `§27 gate ${option} clear-polish failed: ${detail ?? ''}`;
+      return `§27 gate ${option} clear-polish failed: ${d}`;
   }
 }
 
