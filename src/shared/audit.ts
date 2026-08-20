@@ -363,9 +363,7 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
     case 'side-effect':
       return `§27 gate ${option} side-effect: ${detail ?? ''}`;
     case 'side-effect-skipped':
-      // RED stub: renders identically to `side-effect-failed` so the vocabulary round-trip test (T13b)
-      // fails on "skipped is not distinct from failed"; GREEN gives it its own `skipped:` rendering.
-      return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
+      return `§27 gate ${option} side-effect skipped: ${detail ?? ''}`;
     case 'side-effect-failed':
       return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
     case 'accept-failed':

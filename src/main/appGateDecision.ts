@@ -168,24 +168,42 @@ export async function runAppGateDecision(
   }
   deps.onViewChanged();
 
-  // §27.13/AC3
+  // §27.13/§28.3 / AC3 — dispatch each declared side-effect by kind; an unknown kind is silently skipped.
   const refs = deps.refs(repoDir);
   for (const se of gateOpt.sideEffects) {
-    if (se.kind !== 'gh') continue;
-    const action = typeof se.args.action === 'string' ? se.args.action : '';
-    const ctx: AppGateSideEffectCtx = {
-      pr: refs.pr,
-      ticket: refs.ticket,
-      bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-      bootstrap: refs.bootstrap,
-    };
-    try {
-      await deps.runSideEffect(action, ctx);
-      deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `${action}: ${reason}`), 1);
-      deps.emitError(`approve side-effect failed: ${reason}`);
+    if (se.kind === 'gh') {
+      const action = typeof se.args.action === 'string' ? se.args.action : '';
+      const ctx: AppGateSideEffectCtx = {
+        pr: refs.pr,
+        ticket: refs.ticket,
+        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
+        bootstrap: refs.bootstrap,
+      };
+      try {
+        await deps.runSideEffect(action, ctx);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `${action}: ${reason}`), 1);
+        deps.emitError(`approve side-effect failed: ${reason}`);
+      }
+    } else if (se.kind === 'commit') {
+      // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
+      // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
+      const label = typeof se.args.label === 'string' ? se.args.label : '';
+      try {
+        const outcome = await deps.runCommitSideEffect({ label });
+        if (outcome === 'committed') {
+          deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
+        } else {
+          // nothing-to-commit — a benign no-op, surfaced DISTINCTLY at exit 0, never the failure token.
+          deps.audit(repoDir, gateDecisionAuditCmd('side-effect-skipped', option, 'commit: nothing to commit'), 0);
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `commit: ${reason}`), 1);
+        deps.emitError(`approve side-effect failed: ${reason}`);
+      }
     }
   }
 
