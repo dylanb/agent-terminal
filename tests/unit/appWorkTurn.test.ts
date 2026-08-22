@@ -172,7 +172,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-implement',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
       inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
@@ -188,7 +188,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
       recipeBody: '# work turn\nGroom the ticket.',
       turnKey: 'work-groom',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
       inputs: [],
     });
     expect(prompt.toLowerCase()).not.toContain('declared input');
@@ -215,7 +215,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-plan',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body survives
     expect(prompt).toContain('.agent-terminal/loop/artifacts/plan.md'); // the artifact to produce
@@ -243,7 +243,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-plan',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
       instruction: INSTRUCTION,
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads (ticket + plan inputs)

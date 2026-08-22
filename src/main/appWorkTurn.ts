@@ -7,6 +7,8 @@
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
+import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../shared/phaseResult';
+import { PHASE_OUTCOMES } from '../shared/phaseOutcome';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -47,8 +49,13 @@ export interface AppWorkPromptReq {
   turnKey: string;
   /** The repo-relative §27 done-file path the agent writes last (`.agent-terminal/loop/turn-done`). */
   doneRelPath: string;
-  /** The file-producing completion contract, or null for a commit-producing turn (done-signal alone). */
-  completion: { artifactRel: string; marker: string } | null;
+  /** The completion contract, discriminated by how the turn proves it produced its product (never a flat record
+   *  with mode-dead fields, CODE-STANDARDS): `file` — end an artifact with a marker line (§27.12); `red` — write
+   *  the §28.5.5 phase-result file the RED gate classifies; `null` — a commit-producing turn (done-signal alone). */
+  completion:
+    | { kind: 'file'; artifactRel: string; marker: string }
+    | { kind: 'red'; resultRel: string }
+    | null;
   /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
    *  block (the caller passes only a `validInstruction` value). */
@@ -85,14 +92,41 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       req.instruction,
     );
   }
-  if (req.completion) {
+  if (req.completion?.kind === 'file') {
     parts.push(
       '',
       `As the final line of your ${req.completion.artifactRel} artifact, write EXACTLY this marker line so`,
       'the orchestrator can confirm this turn produced it (it is not a judgement of quality):',
       req.completion.marker,
     );
+  } else if (req.completion?.kind === 'red') {
+    // §28.5.5 §7d — the RED phase-result instruction. Every grammar token and every outcome category is
+    // interpolated from the shared descriptors (PHASE_RESULT_GRAMMAR / PHASE_OUTCOMES), never re-spelled here, so
+    // this WRITER and the gate PREDICATE derive from one source. The few-shot is the ONE canonical example
+    // (examplePhaseResult, fence-free by contract) — fenced here without an inner fence closing the block early.
+    const g = PHASE_RESULT_GRAMMAR;
+    parts.push(
+      '',
+      'Run the test command for this change, then classify that run as EXACTLY one of these outcomes:',
+      `  ${PHASE_OUTCOMES.join(', ')}`,
+      `Write the result to ${req.completion.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` line`,
+      `first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
+      '',
+      '```',
+      examplePhaseResult('failed-assertion').trimEnd(),
+      '```',
+      '',
+      `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: failed-assertion\`).`,
+      'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
+      'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+    );
   }
-  parts.push('', doneSignalInstruction(req.turnKey, req.completion?.artifactRel, req.doneRelPath));
+  const verifyRel =
+    req.completion?.kind === 'file'
+      ? req.completion.artifactRel
+      : req.completion?.kind === 'red'
+        ? req.completion.resultRel
+        : undefined;
+  parts.push('', doneSignalInstruction(req.turnKey, verifyRel, req.doneRelPath));
   return `${parts.join('\n')}\n`;
 }

@@ -76,7 +76,7 @@ export interface AppLoopLiveError {
  *  true artifact, never fabricate a pass (CWE-754). */
 type AppCompletion =
   | { kind: 'file'; path: string; marker: string; artifactRel: string }
-  | { kind: 'red'; resultPath: string }
+  | { kind: 'red'; resultPath: string; resultRel: string }
   | { kind: 'commits' }
   | { kind: 'unresolved' };
 
@@ -351,7 +351,7 @@ function activeTurnFor(
         ? // §28.5.5 F1 — a fresh completion:red def is parse-guaranteed to have a result binding; only a
           // resumed turn whose def lost it lands here without one → unresolved (never a free-passing commits).
           artifact
-          ? { kind: 'red', resultPath: artifact.path }
+          ? { kind: 'red', resultPath: artifact.path, resultRel: artifact.rel }
           : { kind: 'unresolved' }
         : artifact
           ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
@@ -607,10 +607,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
-        // TODO(dylanb, #107 S9): a `red` turn composes with `completion: null` here — its agent is not yet told
-        // to WRITE the phase-result file the gate reads (the "writer" half is the S9 integration slice, which
-        // re-adds resultRel to the red variant). The gate validates a file nothing production-writes until then.
-        completion: active.completion.kind === 'file' ? { artifactRel: active.completion.artifactRel, marker: active.completion.marker } : null,
+        // §28.5.5 §7d — a `red` turn tells its agent to WRITE the phase-result file the gate classifies; a
+        // `file` turn ends its artifact with the marker; a commits turn completes on the done-signal alone.
+        completion:
+          active.completion.kind === 'file'
+            ? { kind: 'file', artifactRel: active.completion.artifactRel, marker: active.completion.marker }
+            : active.completion.kind === 'red'
+              ? { kind: 'red', resultRel: active.completion.resultRel }
+              : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
       });
