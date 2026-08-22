@@ -93,12 +93,19 @@ export function validInstruction(instruction: unknown): string | undefined {
   return nonEmptyText(instruction);
 }
 
-/** The confined absolute run-state file path inside the §27 loop area, or null when the loop area cannot be
- *  reduced to a symlink-free real path under the repo (a planted link at `.agent-terminal`, CWE-22/59). */
-export function appLoopStateFile(repoDir: string): string | null {
+/** The confined absolute path of a file directly inside the §27 loop area (<repo>/.agent-terminal/loop/), or
+ *  null when the loop area cannot be reduced to a symlink-free real path under the repo (a planted link at
+ *  `.agent-terminal`, CWE-22/59). The ONE confinement-leaf resolver the per-file resolvers here share (run-state,
+ *  the disjoint step-flags, the baseline), so the jail derivation lives once. */
+function loopAreaFile(repoDir: string, leaf: string): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, RUN_STATE_FILE));
+  return confinedRealPath(jail, path.join(jail, leaf));
+}
+
+/** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
+export function appLoopStateFile(repoDir: string): string | null {
+  return loopAreaFile(repoDir, RUN_STATE_FILE);
 }
 
 export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): string {
@@ -374,11 +381,7 @@ interface StepFlag {
 }
 
 function stepFlag(filename: string, what: string): StepFlag {
-  const fileOf = (repoDir: string): string | null => {
-    const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
-    if (jail === null) return null;
-    return confinedRealPath(jail, path.join(jail, filename));
-  };
+  const fileOf = (repoDir: string): string | null => loopAreaFile(repoDir, filename);
   return {
     set(repoDir, step) {
       if (step.length === 0) return;
@@ -453,19 +456,13 @@ export function isPolishActiveForStep(repoDir: string, step: string): boolean {
 // (CWE-20): a non-object-id sha or blank step is never persisted/read as a baseline.
 const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
 
-function baselineCommitFile(repoDir: string): string | null {
-  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
-  if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, BASELINE_COMMIT_FILE));
-}
-
-/** Record `sha` (the phase commit) under `step` — read by the next phase's frozen check (S4). A blank step or a
- *  non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop area is
- *  unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the caller's
- *  best-effort wrapper keeps it off the critical path. */
+/** Record `sha` (the phase commit) under `step` — read by the next phase's frozen check (§28.5.1). A blank step
+ *  or a non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop area is
+ *  unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the caller
+ *  (§28 approve side-effect) MUST wrap it best-effort so a filesystem error never aborts the accept. */
 export function recordBaselineCommit(repoDir: string, step: string, sha: string): void {
   if (step.length === 0 || !isGitObjectId(sha)) return;
-  const file = baselineCommitFile(repoDir);
+  const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
   if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step, sha }))) {
     throw new Error(`cannot write §27 baseline commit: ${path.dirname(file)} is not a real directory`);
@@ -473,9 +470,12 @@ export function recordBaselineCommit(repoDir: string, step: string, sha: string)
 }
 
 /** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
- *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. */
+ *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. This is
+ *  one repo-keyed single-current baseline, overwritten each phase; the returned `step` is the slice-identity
+ *  key, so the reader (S4's frozen check) MUST compare it to the phase being gated and refuse a mismatch (a
+ *  stale baseline from an abandoned/interleaved chain — there is no clear() yet) — never key on presence alone. */
 export function readBaselineCommit(repoDir: string): { step: string; sha: string } | null {
-  const file = baselineCommitFile(repoDir);
+  const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;
   let text: string;
   try {

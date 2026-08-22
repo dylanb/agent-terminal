@@ -699,15 +699,44 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
     expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
   });
 
-  it('UT-STATE-2: a non-object-id sha reads back unset; a blank step is inert (CWE-20)', () => {
+  // The two CWE-20 guards (write-side + read-side re-validation) are pinned SEPARATELY so neither masks the
+  // other (CLAUDE.md two-non-redundant-places). 2a isolates the write-side by checking NO file is written; 2b
+  // isolates the read-side by PLANTING a bad file the write-side never saw.
+  it('UT-STATE-2a (write-side CWE-20): a non-object-id sha or blank step writes NO file', () => {
     for (const badSha of ['too-short', 'z'.repeat(40), '   ', `${OID}extra`, '../../etc/passwd']) {
       rmSync(baselineFile(), { force: true });
       recordBaselineCommit(repo, 'red-slice1', badSha);
-      expect(readBaselineCommit(repo)).toBeNull(); // a corrupt sha never becomes a baseline
+      expect(existsSync(baselineFile())).toBe(false); // nothing persisted — the write-side guard fired
     }
     rmSync(baselineFile(), { force: true });
-    recordBaselineCommit(repo, '', OID); // a blank step is inert — no phantom baseline on an empty identity
-    expect(readBaselineCommit(repo)).toBeNull();
+    recordBaselineCommit(repo, '', OID); // a blank step is inert
+    expect(existsSync(baselineFile())).toBe(false);
+  });
+
+  it('UT-STATE-2b (read-side CWE-20): a PLANTED baseline with a bad sha or blank step reads unset', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    for (const bad of [
+      `schema_version: 1\nstep: red\nsha: not-a-sha\n`,
+      `schema_version: 1\nstep: red\nsha: ${'z'.repeat(40)}\n`,
+      `schema_version: 1\nstep: ''\nsha: ${OID}\n`,
+      `not-a-mapping\n`, // isRecord guard
+    ]) {
+      writeFileSync(baselineFile(), bad);
+      expect(readBaselineCommit(repo)).toBeNull(); // the read-side re-validation fired (no write-side masking)
+    }
+  });
+
+  it('UT-STATE-first-run: records into a repo with NO .agent-terminal yet, creating the tree', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // fresh machine — nothing seeded
+    recordBaselineCommit(repo, 'red-slice1', OID);
+    expect(existsSync(baselineFile())).toBe(true);
+    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+  });
+
+  it('UT-STATE-overwrite: a second record replaces the first (single current baseline, last-write-wins)', () => {
+    recordBaselineCommit(repo, 'red-slice1', OID);
+    recordBaselineCommit(repo, 'green-slice1', 'b'.repeat(40));
+    expect(readBaselineCommit(repo)).toEqual({ step: 'green-slice1', sha: 'b'.repeat(40) });
   });
 
   it('UT-STATE-3: an absent baseline file reads as unset (null), not an error', () => {
