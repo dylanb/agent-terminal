@@ -8,7 +8,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../shared/phaseResult';
-import { PHASE_OUTCOMES } from '../shared/phaseOutcome';
+import { PHASE_OUTCOMES, RED_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -113,10 +113,10 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       `first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
       '',
       '```',
-      examplePhaseResult('failed-assertion').trimEnd(),
+      examplePhaseResult(RED_COMPLETING_OUTCOME).trimEnd(),
       '```',
       '',
-      `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: failed-assertion\`).`,
+      `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: ${RED_COMPLETING_OUTCOME}\`).`,
       'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
       'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
     );

@@ -307,12 +307,18 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
 
   it('states the RED completion bar (a newly-added test that fails by assertion), distinguishing it from errored', () => {
     const prompt = redPrompt().toLowerCase();
-    expect(prompt).toContain('failed-assertion'); // the outcome a RED turn must reach
-    expect(prompt).toContain('errored'); // named as the NOT-valid-RED sibling (a compile/module error)
+    // The bar PROSE itself (not merely the vocabulary line, which lists every outcome) — deleting the
+    // "valid RED only when …" sentence must fail this, so assert a phrase unique to the bar.
+    expect(prompt).toContain('valid red only when');
+    expect(prompt).toContain('fails by assertion'); // the assertion requirement, distinct from errored
+    expect(prompt).toContain('errored'); // named in the bar as the NOT-valid-RED sibling (a compile/module error)
   });
 
   it('is a distinct shape from a file-with-marker turn: no completion MARKER instruction', () => {
-    // The RED turn completes on the classified result file, never a marker line appended to an artifact.
-    expect(redPrompt()).not.toContain(completionMarker('red-slice1'));
+    // The RED turn completes on the classified result file, never a marker line appended to an artifact. Assert
+    // the prose the file-with-marker branch would emit if it leaked (not a step-specific marker that could never
+    // appear regardless), so a mis-dispatch of a red turn into the file branch fails this.
+    expect(redPrompt().toLowerCase()).not.toContain('marker line');
+    expect(redPrompt()).not.toContain('work-turn-complete');
   });
 });

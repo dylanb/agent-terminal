@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
-import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { RED_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { makeFakeCompletionPredicates, deferredWorkingTree } from '../helpers/fakeCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
@@ -1997,6 +1998,18 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     defResult = resolved(def);
     enterAndInjectWork(engine);
   };
+
+  it('IT-ENGINE-writer: entering a RED-completion def injects a work prompt instructing the phase-result write (§28.5.5 §7d writer wiring)', () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    // The compose-site red branch threads the result binding into the injected work prompt; reverting it to
+    // `null` composes a plain work prompt with NO result instruction (and the done-signal loses its verify
+    // clause) — a real agent would never be told to write the file. This pins that wiring at the injected
+    // boundary, mirroring the file case's injected[1] assertions (recipe + marker + done-signal).
+    expect(injected[1]).toContain('red-result.md'); // the resultRel the engine threaded — the file to write
+    expect(injected[1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // the grammar the agent must emit
+    expect(injected[1]).toContain(RED_COMPLETING_OUTCOME); // the RED bar named in the instruction
+  });
 
   it('IT-ENGINE-1: a failed-assertion result + a test file added completes the RED turn', async () => {
     const engine = makeEngine(undefined, redFake());

@@ -21,6 +21,7 @@ import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type Tur
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
+import { RED_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
@@ -534,7 +535,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // machine-authoritative, not a human-override target).
         const content = deps.readArtifact(active.completion.resultPath);
         if (content === null) return false;
-        return deps.completionPredicates.resultOutcome(content) === 'failed-assertion';
+        return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
       }
     }
   };
@@ -607,8 +608,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
-        // §28.5.5 §7d — a `red` turn tells its agent to WRITE the phase-result file the gate classifies; a
-        // `file` turn ends its artifact with the marker; a commits turn completes on the done-signal alone.
+        // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
             ? { kind: 'file', artifactRel: active.completion.artifactRel, marker: active.completion.marker }

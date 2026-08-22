@@ -2709,14 +2709,17 @@ function seedFakeAgentV2(
   // same generator the prompt few-shot and the predicate happy-path use), base64'd so its newlines/`#` survive
   // the single-line injected shell. The test file sits OUTSIDE .agent-terminal (so it is a real test path and
   // rides into the approve commit); the result file sits UNDER it (gitignored + isUnderAppStateDir-excluded).
+  // Its BODY is never executed — the engine only asks git which test-glob paths changed (§28.5.4), so the
+  // `add`-referencing assertion is inert on-disk text, present only so the path matches the test glob.
+  // Fragments are terminator-free like their `bump`/`done`/`writeArtifact` siblings; redAct joins with `; `.
   const redResultB64 = b64(examplePhaseResult(opts.resultOutcome ?? 'failed-assertion'));
   const writeRedTest =
     opts.writeTest === false
       ? ''
-      : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; `;
+      : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts`;
   const writeRedResult =
-    `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${redResultB64}' | base64 -d > ${opts.artifactRel}; `;
-  const redAct = `${bump}; ${writeRedTest}${writeRedResult}${done(turnKey)}`;
+    `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${redResultB64}' | base64 -d > ${opts.artifactRel}`;
+  const redAct = [bump, writeRedTest, writeRedResult, done(turnKey)].filter((s) => s.length > 0).join('; ');
   const workAct =
     opts.work === 'noop'
       ? ':'
@@ -5718,8 +5721,11 @@ const gitCount = (repo: string): number => Number(gitIn(repo, 'rev-list', '--cou
 // A REAL git repo carrying the same flow/bootstrap `.agent-terminal` state the fake-git gate test uses, so
 // the drive (canned via the fake git+gh) reaches a clean gate while the commit side-effect's delegated ops
 // land in a genuine repo. `.gitignore` excludes the engine state dirs (so AC1's tree-clean survives
-// advanceFlow's post-commit write); `withChange` leaves one uncommitted file the commit will record.
-function seedCommitFlowRepo(prefix: string, withChange: boolean): string {
+// advanceFlow's post-commit write); `withChange` leaves one uncommitted file the commit will record;
+// `capabilities`, when given, is a §28.5.4 loop-capabilities.yaml committed INTO the baseline (the RED
+// working-tree check sources its test globs from it). Shared by the §28.3 commit and §28.5 RED tracers so the
+// flow/flow-state literals have one home.
+function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabilities?: string }): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
@@ -5728,6 +5734,7 @@ function seedCommitFlowRepo(prefix: string, withChange: boolean): string {
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
   writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  if (opts.capabilities !== undefined) writeFileSync(join(dir, 'loop-capabilities.yaml'), opts.capabilities);
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
@@ -5739,12 +5746,12 @@ function seedCommitFlowRepo(prefix: string, withChange: boolean): string {
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
   g('commit', '-qm', 'baseline');
-  if (withChange) writeFileSync(join(dir, 'feature.ts'), 'export const x = 1;\n');
+  if (opts.withChange) writeFileSync(join(dir, 'feature.ts'), 'export const x = 1;\n');
   return dir;
 }
 
 test('§28.3 — approve on a gate declaring a commit side-effect advances HEAD by exactly one with the phase label, tree clean, .gitignore untouched', { tag: '@ownapp' }, async () => {
-  const repo = seedCommitFlowRepo('agent-term-e2e-commit-', true);
+  const repo = seedCommitFlowRepo('agent-term-e2e-commit-', { withChange: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-home-'));
   const cfg = seedCommitGateConfig('agent-term-e2e-commit-cfg-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-bin-', { realCommitOps: true });
@@ -5785,7 +5792,7 @@ test('§28.3 — approve on a gate declaring a commit side-effect advances HEAD 
 });
 
 test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a Loop error) and does not advance HEAD', { tag: '@ownapp' }, async () => {
-  const repo = seedCommitFlowRepo('agent-term-e2e-commit-noop-', false); // clean tree — nothing to stage
+  const repo = seedCommitFlowRepo('agent-term-e2e-commit-noop-', { withChange: false }); // clean tree — nothing to stage
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-noop-home-'));
   const cfg = seedCommitGateConfig('agent-term-e2e-commit-noop-cfg-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-commit-noop-bin-', { realCommitOps: true });
@@ -5844,32 +5851,14 @@ function seedRedGateConfig(prefix: string): string {
   return cfg;
 }
 
-// The RED flow repo: like seedCommitFlowRepo, plus a loop-capabilities.yaml (test globs) committed into the
-// baseline, and NO pre-seeded change — the fake-agent authors the test file this turn, so it is the untracked
-// change the working-tree RED check sees and the approve commit records.
-function seedRedFlowRepo(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
-  g('init', '-q');
-  g('config', 'user.email', 't@t');
-  g('config', 'user.name', 'T');
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
-  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
-  writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n');
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
-  );
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow-state.yaml'),
-    'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
-  );
-  seedCompletedAppBootstrap(dir);
-  g('add', '-A');
-  g('commit', '-qm', 'baseline');
-  return dir;
-}
+// The RED flow repo: seedCommitFlowRepo with NO pre-seeded change (the fake-agent authors the test file this
+// turn — the untracked change the working-tree RED check sees and the approve commit records) plus a
+// loop-capabilities.yaml (test globs = `tests/**`) baked into the baseline.
+const seedRedFlowRepo = (prefix: string): string =>
+  seedCommitFlowRepo(prefix, {
+    withChange: false,
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+  });
 
 test('§28.5 — a RED loop completes on a newly-authored failing test + a failed-assertion result; approve advances HEAD by one and records the §28.5.1 baseline, the result file staying out of the tree', { tag: '@ownapp' }, async () => {
   const repo = seedRedFlowRepo('agent-term-e2e-red-');
@@ -5906,7 +5895,9 @@ test('§28.5 — a RED loop completes on a newly-authored failing test + a faile
   expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('tests/red_added.test.ts');
   // AC3 versioned-both-directions: the raw phase-result is durably on disk under the loop area, but is NOT in
   // the commit (it lives under .agent-terminal/, gitignored + isUnderAppStateDir-excluded — CWE-200).
-  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain('outcome: failed-assertion');
+  const durable = readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8');
+  expect(durable).toContain('outcome: failed-assertion'); // the classification
+  expect(durable).toContain('AssertionError'); // AND the RAW captured run itself (AC3's subject), not just the outcome line
   expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).not.toContain('plan.md');
   // §28.5.1 — approve recorded the baseline: the EXACT sha the side-effect made, under the decision's step.
   const baseline = readBaselineCommit(repo);
