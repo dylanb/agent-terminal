@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
-import { RED_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 import { makeFakeCompletionPredicates, deferredWorkingTree } from '../helpers/fakeCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
@@ -19,6 +20,10 @@ import {
   isPolishActiveForStep,
   readAppLoopState,
   readArmedInterrupt,
+  recordBaselineCommit,
+  readBaselineCommit,
+  recordChangedTests,
+  readChangedTests,
   roundReportFile,
   roundReportRel,
   writeAppLoopState,
@@ -59,10 +64,15 @@ const INJECTED_MARKER = 'injected-toolkit-marker';
 const completionPredicatesSentinel: LoopCompletionPredicates = {
   classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
   resultOutcome: () => null,
+  resultBuildOutcome: () => null,
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   recoverExitCode: async () => null,
 };
+// §28.5.3 — the GREEN flag writer, swappable per-test (default: the REAL recordChangedTests, so IT-GREEN-1/2
+// observe the flag through the real readChangedTests reader — not a capturing fake; a test can override it to
+// throw for the best-effort-wrap case).
+let recordChangedTestsImpl: (repoDir: string, step: string, paths: readonly string[]) => void;
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;
 let terminateFlow: Mock<(repoDir: string) => void>;
@@ -125,6 +135,7 @@ function makeEngine(
   injected = [];
   polishStep = null;
   clearPolishError = null;
+  recordChangedTestsImpl = (repoDir, step, paths) => recordChangedTests(repoDir, step, paths); // the REAL writer
   readArtifact = vi.fn((p: string) => {
     try {
       return readFileSync(p, 'utf8');
@@ -162,6 +173,10 @@ function makeEngine(
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
     },
     completionPredicates: predicatesOverride ?? completionPredicatesSentinel,
+    // §28.5.3 — the GREEN engine ports: record the changed-tests flag (real writer, swappable) and read the RED
+    // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
+    recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
+    readBaseline: (repoDir) => readBaselineCommit(repoDir),
   };
   return createAppLoopEngine(deps);
 }
@@ -2202,5 +2217,228 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     engine.onInjectable();
     expect(emitError).not.toHaveBeenCalled();
     expect(reviewChained()).toBe(true);
+  });
+});
+
+// §28.5.3 — the GREEN completion gate: sync clause (result well-formed + outcome `passed` + build `built`),
+// async gate (baseline present+step-matched, frozen check via changedTestPaths head-omitted, exit-direction),
+// and the NON-blocking detect-and-flag (§28.8.3) recorded at completion. Mirrors the RED gate's Option-C shape.
+describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen flag)', () => {
+  const reviewChained = (): boolean => injected.some((s) => s.includes(ROSTER[0]));
+  const OID = 'a'.repeat(40);
+  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const greenFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
+    makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
+  const greenDef = (withBinding = true): LoopDefV2 => ({
+    ...fileDef(),
+    work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'green-result', completion: 'green' },
+    outputs: withBinding ? [binding('green-result', resultPath)] : [],
+  });
+  const enterGreen = (engine: ReturnType<typeof createAppLoopEngine>, def: LoopDefV2 = greenDef()): void => {
+    defResult = resolved(def);
+    enterAndInjectWork(engine);
+  };
+  const writeGreen = (): void => writeResult(examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME }));
+  const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  it('IT-GREEN-writer: entering a GREEN def injects a work prompt instructing the phase-result write (both classifications)', () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    expect(injected[1]).toContain(basename(resultPath)); // the result file the engine threaded
+    expect(injected[1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    expect(injected[1]).toContain(GREEN_COMPLETING_OUTCOME); // `passed`
+    expect(injected[1]).toContain(GREEN_COMPLETING_BUILD_OUTCOME); // `built`
+  });
+
+  it('IT-GREEN-1: passed+built + no test changed completes the turn and records an EMPTY-paths flag', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(reviewChained()).toBe(true); // completion chained the review turn (the flag did NOT block)
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] }); // checked, none changed (via the REAL reader)
+  });
+
+  it('IT-GREEN-2: a changed test file is FLAGGED (naming it) and the turn STILL completes (§28.8.3 non-blocking)', async () => {
+    const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(reviewChained()).toBe(true); // still completes — detect-and-escalate, not a block
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // the flag names the changed file
+  });
+
+  it('IT-GREEN-2b: the human-ACCEPT (override) route ALSO records the flag', async () => {
+    const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onStall(); // error the turn, so the human takes the accept route
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // sync+gate held → finalized
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // recorded on the accept route too
+  });
+
+  it('IT-GREEN-3a: a failed-assertion outcome (build built) does NOT complete → retry-then-error', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    writeResult(examplePhaseResult('failed-assertion', { build: 'built' }));
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+    expect(readChangedTests(repo)).toBeNull(); // never completed → no flag
+  });
+
+  it('IT-GREEN-3b: passed but build-failed does NOT complete → retry-then-error', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    writeResult(examplePhaseResult('passed', { build: 'build-failed' }));
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-GREEN-3c: passed but NO build line (resultBuildOutcome null) does NOT complete → retry-then-error', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    writeResult(examplePhaseResult('passed')); // no build field → not `built`
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-GREEN-4: exit-direction — exit non-zero rejects a passed claim (OPPOSITE of RED); exit 0 allows it', async () => {
+    // exit 1 -> may not claim GREEN
+    const rejects = makeEngine(undefined, greenFake({ recoverExitCode: async () => 1 }));
+    seedBaseline();
+    enterGreen(rejects);
+    writeGreen();
+    rejects.onDoneSignal();
+    await flushGate();
+    rejects.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+
+    // exit 0 -> GREEN allowed
+    const allows = makeEngine(undefined, greenFake({ recoverExitCode: async () => 0 }));
+    seedBaseline();
+    enterGreen(allows);
+    writeGreen();
+    allows.onDoneSignal();
+    await flushGate();
+    allows.onInjectable();
+    allows.onInjectable();
+    expect(reviewChained()).toBe(true);
+  });
+
+  it('IT-GREEN-baseline-a: NO recorded baseline blocks GREEN (the frozen check cannot run) → retry-then-error, no flag', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    // no seedBaseline()
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline'));
+    expect(reviewChained()).toBe(false);
+    expect(readChangedTests(repo)).toBeNull();
+  });
+
+  it('IT-GREEN-baseline-b: a baseline recorded under a DIFFERENT step blocks GREEN (step-match)', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline('some-other-step', OID); // recorded, but not this turn's step
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline'));
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-GREEN-capfail: an absent loop-capabilities surfaces a DISTINCT reason, not the generic missing-artifact text', async () => {
+    const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+  });
+
+  it('IT-GREEN-recordfail: a throwing recordChangedTests NEVER aborts the advance (best-effort wrap)', async () => {
+    const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    recordChangedTestsImpl = () => { throw new Error('disk full'); }; // the flag write fails...
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(reviewChained()).toBe(true); // ...the turn still advances to review (the write is best-effort)
+    expect(emitError).not.toHaveBeenCalled(); // a flag-write failure is NOT surfaced as a blocking loop error
+    expect(audit).toHaveBeenCalled(); // it is audited
+  });
+
+  it('IT-GREEN-9a: human-accept REFUSES when the sync clause fails (not passed) — no fabricated completion', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline();
+    enterGreen(engine);
+    writeResult(examplePhaseResult('failed-assertion', { build: 'built' }));
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — the sync clause (passed) is unmet
+  });
+
+  it('IT-GREEN-flag-survives: the flag persists through review/consolidate to the gate (disjoint from run-state)', async () => {
+    const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    // drive review → consolidate → the clean gate (many wholesale run-state writes in between):
+    engine.onInjectable();
+    engine.onInjectable();
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    completeConsolidate(engine, 1, 'verdict: clean\n');
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // reached the gate
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
   });
 });
