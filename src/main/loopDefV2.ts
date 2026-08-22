@@ -71,8 +71,7 @@ export interface GateOptionDef {
 
 /** The framework-neutral completion mode a work turn declares (§28.4/§28.5.5) — which machine completion
  *  predicate gates it. A closed set recognized by exact string, single-sourced so the field type AND the
- *  parser's validation both derive from it (mirroring PHASE_OUTCOMES). `red` in S3; extends to green/refactor
- *  in S4/S5. */
+ *  parser's validation both derive from it (mirroring PHASE_OUTCOMES); it grows to green/refactor in S4/S5. */
 export const WORK_COMPLETIONS = ['red'] as const;
 export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
 const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
@@ -81,7 +80,7 @@ export function isWorkCompletion(value: string): value is WorkCompletion {
 }
 
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
- *  §28.4 — the optional completion mode (absent for the existing §27 loops; `red` for the S3 RED turn). */
+ *  §28.4 — the optional completion mode (absent for the existing §27 loops). */
 export interface WorkRecipe {
   recipe: string;
   artifact: string;
@@ -365,6 +364,15 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     exec = { program: requireString(requireRecord(rec.exec, 'exec').program, 'exec program') };
   }
 
+  const outputs = toArtifactBindings(rec.outputs, repoDir, 'output');
+  // §28.5.5 — a declared completion mode validates a result FILE, so `work.artifact` MUST name a real output
+  // binding (unlike a `commits`-producing turn, whose artifact legitimately resolves to none). Fail closed at
+  // parse time: a `completion` def whose artifact does not resolve would otherwise reach the completion gate
+  // with no result-file path to shape-validate — a false-pass on the done-signal alone (F1).
+  if (workCompletion !== undefined && !outputs.some((o) => o.id === workArtifact)) {
+    fail(`work.completion: ${workCompletion} requires work.artifact "${workArtifact}" to name an output binding`);
+  }
+
   return {
     version: LOOP_DEF_V2_VERSION,
     name,
@@ -380,7 +388,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     gate: toGate(rec.gate),
     pickup: toPickup(rec.pickup),
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
-    outputs: toArtifactBindings(rec.outputs, repoDir, 'output'),
+    outputs,
     exec,
   };
 }

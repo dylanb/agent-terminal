@@ -26,11 +26,18 @@ afterEach(() => {
   rmSync(tier, { recursive: true, force: true });
 });
 
-/** Resolve groom-loop from an operator tier whose def yaml has been patched by `patch`. */
+const resolveBundled = (): LoopDefV2Result =>
+  resolveLoopDefV2('groom-loop', { tiers: { operator: null, appBundled: APP_BUNDLED, retired: null }, repoDir });
+
+/** Resolve groom-loop from an operator tier whose def yaml has been patched by `patch` (which MUST change it —
+ *  asserted, so a fixture that drifts off the bundled yaml fails self-explainingly, not as a downstream mismatch). */
 function resolvePatched(patch: (yaml: string) => string): LoopDefV2Result {
   cpSync(join(APP_BUNDLED, 'groom-loop'), join(tier, 'groom-loop'), { recursive: true });
   const defPath = join(tier, 'groom-loop', 'groom-loop.yaml');
-  writeFileSync(defPath, patch(readFileSync(defPath, 'utf8')));
+  const original = readFileSync(defPath, 'utf8');
+  const patched = patch(original);
+  expect(patched, 'the fixture patch did not change the bundled def (anchor drifted?)').not.toBe(original);
+  writeFileSync(defPath, patched);
   return resolveLoopDefV2('groom-loop', { tiers: { operator: tier, appBundled: APP_BUNDLED, retired: null }, repoDir });
 }
 const addCompletion = (value: string) => (y: string): string =>
@@ -52,7 +59,7 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
   });
 
   it('UT-DEF-2: leaves completion undefined when the field is absent (S1/S2 defs still valid)', () => {
-    const r = resolvePatched((y) => y); // the unmodified bundled groom-loop, no completion field
+    const r = resolveBundled(); // the unmodified bundled groom-loop, no completion field
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.work.completion).toBeUndefined();
   });
@@ -61,5 +68,25 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     const r = resolvePatched(addCompletion('purple'));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/completion/i);
+  });
+
+  it('UT-DEF-3b: rejects a non-string completion value', () => {
+    const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, `${ARTIFACT_LINE}  completion: [red]\n`));
+    expect(r.ok).toBe(false);
+  });
+
+  // §28.5.5 F1 fail-closed: a RED turn validates a result FILE, so completion: red requires work.artifact to
+  // name a real output binding. Without this, a completion:red def with an unresolvable artifact would reach
+  // the RED gate with no result-file path to shape-validate (a false-pass on the done-signal alone).
+  it('UT-DEF-5: rejects completion: red when work.artifact names no output binding', () => {
+    const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: red\n'));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
+  });
+
+  it('UT-DEF-5b: an unresolvable artifact WITHOUT completion: red is still accepted (the check is red-specific)', () => {
+    // a `commits`-style artifact legitimately names no binding — only completion: red requires one.
+    const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n'));
+    expect(r.ok).toBe(true);
   });
 });
