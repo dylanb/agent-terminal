@@ -14,6 +14,9 @@ import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { examplePhaseResult } from '../../src/shared/phaseResult';
+import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
+import { readBaselineCommit } from '../../src/main/appLoopState';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -1709,7 +1712,14 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
-    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff) exec ${realGit} "$@";; esac\n` : '') +
+    // §28.5.1 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the baseline
+    // sha+parent capture), ls-files (the working-tree RED test detection, filter-free), and diff (also
+    // workingTreeTestPaths' --numstat arm). rev-parse is delegated ONLY for the EXACT headCommit form
+    // (`--verify --end-of-options HEAD`) — the pre-commit HEAD the parent-linkage guard compares against — so
+    // every canned bootstrap/flow-detection rev-parse arm below (and the plain `rev-parse HEAD` the drive uses)
+    // keeps its scripted answer; a blanket delegation breaks the drive (the loop never starts).
+    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files) exec ${realGit} "$@";; esac\n` : '') +
+    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$4" = "HEAD" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
@@ -2664,7 +2674,12 @@ function seedFakeAgentV2(
   opts: {
     stepId: string;
     artifactRel: string;
-    work: 'complete' | 'no-marker' | 'file-only' | 'noop';
+    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red';
+    // §28.5.5 RED work mode (work: 'red'): the classified outcome the fake writes into the phase-result file
+    // (the completion:red gate reads it back), and whether it authors a test-glob file this turn (the
+    // "a test was added" async clause). Ignored unless work === 'red'.
+    resultOutcome?: PhaseOutcome;
+    writeTest?: boolean;
     // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
     review?: 'full' | 'omit-persona' | 'none' | 'failed';
     // Round-2 review report kind (multi-round runs), default `full`.
@@ -2689,14 +2704,29 @@ function seedFakeAgentV2(
       : `printf '%s\\n' '# plan' 'no marker here' > ${opts.artifactRel}`);
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
+  // §28.5.5 — the RED work turn: (optionally) author a test-glob file this turn, then write the phase-result
+  // file the completion:red gate classifies. The result content is the ONE canonical examplePhaseResult (the
+  // same generator the prompt few-shot and the predicate happy-path use), base64'd so its newlines/`#` survive
+  // the single-line injected shell. The test file sits OUTSIDE .agent-terminal (so it is a real test path and
+  // rides into the approve commit); the result file sits UNDER it (gitignored + isUnderAppStateDir-excluded).
+  const redResultB64 = b64(examplePhaseResult(opts.resultOutcome ?? 'failed-assertion'));
+  const writeRedTest =
+    opts.writeTest === false
+      ? ''
+      : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; `;
+  const writeRedResult =
+    `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${redResultB64}' | base64 -d > ${opts.artifactRel}; `;
+  const redAct = `${bump}; ${writeRedTest}${writeRedResult}${done(turnKey)}`;
   const workAct =
     opts.work === 'noop'
       ? ':'
-      : opts.work === 'file-only'
-        ? `${bump}; ${writeArtifact(true)}`
-        : opts.work === 'no-marker'
-          ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
-          : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
+      : opts.work === 'red'
+        ? redAct
+        : opts.work === 'file-only'
+          ? `${bump}; ${writeArtifact(true)}`
+          : opts.work === 'no-marker'
+            ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
+            : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
   const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
@@ -5788,6 +5818,142 @@ test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a L
   expect(gitCount(repo)).toBe(before); // HEAD did not advance — no empty commit
 
   await dialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+// ─── §28.5 — the RED loop, end-to-end (the S3 tracer bullet) ───────────────────────────────────────────
+// A REAL git repo + the plan-loop set to `work.completion: red` whose approve gate declares a `commit` side-
+// effect (so the phase commit records the §28.5.1 baseline). A `loop-capabilities.yaml` supplies the test
+// globs the working-tree RED check sources. The fake-agent authors a test file + writes the phase-result file
+// the completion:red gate classifies; the git shim delegates the real ops (add/commit/rev-list/ls-files/diff)
+// to real git so HEAD genuinely advances and the working-tree test detection sees the added file.
+function seedRedGateConfig(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
+  const def = readFileSync(defPath, 'utf8');
+  const withRed = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', 'work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: red\n');
+  if (withRed === def) throw new Error('seedRedGateConfig: plan-loop work block not found to set completion: red');
+  const swapped = withRed.replace('      - kind: gh\n        action: mark-ready', '      - kind: commit\n        label: "RED: s3-tracer"');
+  if (swapped === withRed) throw new Error('seedRedGateConfig: plan-loop gh gate not found to swap for commit');
+  writeFileSync(defPath, swapped);
+  return cfg;
+}
+
+// The RED flow repo: like seedCommitFlowRepo, plus a loop-capabilities.yaml (test globs) committed into the
+// baseline, and NO pre-seeded change — the fake-agent authors the test file this turn, so it is the untracked
+// change the working-tree RED check sees and the approve commit records.
+function seedRedFlowRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
+  g('init', '-q');
+  g('config', 'user.email', 't@t');
+  g('config', 'user.name', 'T');
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
+  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  );
+  seedCompletedAppBootstrap(dir);
+  g('add', '-A');
+  g('commit', '-qm', 'baseline');
+  return dir;
+}
+
+test('§28.5 — a RED loop completes on a newly-authored failing test + a failed-assertion result; approve advances HEAD by one and records the §28.5.1 baseline, the result file staying out of the tree', { tag: '@ownapp' }, async () => {
+  const repo = seedRedFlowRepo('agent-term-e2e-red-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-red-home-'));
+  const cfg = seedRedGateConfig('agent-term-e2e-red-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-red-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'red', resultOutcome: 'failed-assertion', writeTest: true, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // The RED work turn's failed-assertion result + the authored test satisfied the completion gate, so the loop
+  // drove through review/consolidate to the clean gate (a passing result would have retried-then-errored).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // approve fired the commit side-effect app-side: HEAD advanced by EXACTLY one carrying the RED label, and the
+  // authored test file rode into that commit.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  const head = gitIn(repo, 'rev-parse', 'HEAD');
+  expect(gitIn(repo, 'log', '-1', '--format=%s')).toBe('RED: s3-tracer');
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('tests/red_added.test.ts');
+  // AC3 versioned-both-directions: the raw phase-result is durably on disk under the loop area, but is NOT in
+  // the commit (it lives under .agent-terminal/, gitignored + isUnderAppStateDir-excluded — CWE-200).
+  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain('outcome: failed-assertion');
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).not.toContain('plan.md');
+  // §28.5.1 — approve recorded the baseline: the EXACT sha the side-effect made, under the decision's step.
+  const baseline = readBaselineCommit(repo);
+  expect(baseline?.sha).toBe(head);
+  expect(baseline?.step).toBe('plan');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5 / AC2 — a RED loop whose test PASSES never completes: it retries then routes out as a loop error, HEAD unchanged and no baseline recorded', { tag: '@ownapp' }, async () => {
+  const repo = seedRedFlowRepo('agent-term-e2e-red-sad-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-red-sad-home-'));
+  const cfg = seedRedGateConfig('agent-term-e2e-red-sad-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-red-sad-bin-', { realCommitOps: true });
+  // A test IS authored, but the fake classifies the run as `passed` — the RED gate requires failed-assertion.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'red', resultOutcome: 'passed', writeTest: true, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // A passing result never satisfies the RED gate → the work turn retries once then routes out (initial + one
+  // retry), never reaching a verdict. The failure is surfaced on the blocking loop-error dialog, never silent.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2);
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('Loop error');
+
+  // AC2 — no clean gate was reached, so HEAD never advanced and no baseline was recorded.
+  expect(gitCount(repo)).toBe(before);
+  expect(readBaselineCommit(repo)).toBeNull();
+
+  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
