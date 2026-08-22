@@ -22,6 +22,8 @@ import {
   writeAppLoopBootstrap,
   writeAppLoopBootstrapIntent,
   readAppLoopBootstrap,
+  recordBaselineCommit,
+  readBaselineCommit,
   type AppLoopBootstrap,
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
@@ -682,5 +684,62 @@ describe('§27 polish stand-down and armed interrupt — disjoint flags', () => 
 
     clearInterrupt(repo);
     expect(readArmedInterrupt(repo)).toBeNull();
+  });
+});
+
+describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-state document', () => {
+  // §28.4 phase-as-a-loop rewrites run-state.yaml wholesale between RED/GREEN/refactor, so the phase-commit
+  // baseline (set on RED approve, read by the next phase's frozen check) lives in its OWN file — a wholesale
+  // run-state write can neither clobber nor resurrect it (the polish/armed-interrupt own-file pattern).
+  const baselineFile = (): string => join(loopDir(), 'baseline-commit.yaml');
+  const OID = 'a'.repeat(40);
+
+  it('UT-STATE-1: round-trips { step, sha }', () => {
+    recordBaselineCommit(repo, 'red-slice1', OID);
+    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+  });
+
+  it('UT-STATE-2: a non-object-id sha reads back unset; a blank step is inert (CWE-20)', () => {
+    for (const badSha of ['too-short', 'z'.repeat(40), '   ', `${OID}extra`, '../../etc/passwd']) {
+      rmSync(baselineFile(), { force: true });
+      recordBaselineCommit(repo, 'red-slice1', badSha);
+      expect(readBaselineCommit(repo)).toBeNull(); // a corrupt sha never becomes a baseline
+    }
+    rmSync(baselineFile(), { force: true });
+    recordBaselineCommit(repo, '', OID); // a blank step is inert — no phantom baseline on an empty identity
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('UT-STATE-3: an absent baseline file reads as unset (null), not an error', () => {
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('UT-STATE-4: neither wholesale write clobbers the other (the disjoint-file rule, RED-first pins)', () => {
+    recordBaselineCommit(repo, 'red-slice1', OID);
+    const baselineBytes = readFileSync(baselineFile(), 'utf8');
+    writeAppLoopState(repo, RUN, FIXED); // a wholesale run-state write...
+    expect(readFileSync(baselineFile(), 'utf8')).toBe(baselineBytes); // ...leaves the baseline byte-for-byte untouched
+    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+
+    const stateBytes = readFileSync(stateFile(), 'utf8');
+    recordBaselineCommit(repo, 'red-slice2', 'b'.repeat(40)); // ...and recording a baseline
+    expect(readFileSync(stateFile(), 'utf8')).toBe(stateBytes); // ...leaves run-state byte-for-byte unchanged
+  });
+
+  it('UT-STATE-5: a wrong schema_version reads unset', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    writeFileSync(baselineFile(), `schema_version: 999\nstep: red-slice1\nsha: ${OID}\n`);
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('UT-STATE-5b: refuses to write through a symlinked loop container (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => recordBaselineCommit(repo, 'red-slice1', OID)).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'baseline-commit.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 });
