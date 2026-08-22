@@ -8,21 +8,31 @@
 // (no RegExp) — the linear-time guarantee on untrusted agent output is load-bearing (CWE-1333/400).
 
 import { isPhaseOutcome, type PhaseOutcome } from './phaseOutcome';
+import { isBuildOutcome, type BuildOutcome } from './buildOutcome';
 import { fieldValue } from './markdownFields';
 
 export interface PhaseResultGrammar {
   outcomeLabel: string;
+  /** §28.5.3 — the GREEN turn's second classification field: the build command's outcome (buildOutcome). Parsed
+   *  exactly like `outcome` but OPTIONAL at the grammar level — a RED result carries no build line and stays
+   *  well-formed; the GREEN gate (not the grammar) requires `build: built`. */
+  buildLabel: string;
   capturedOutputHeading: string;
 }
 
 export const PHASE_RESULT_GRAMMAR: PhaseResultGrammar = {
   outcomeLabel: 'outcome',
+  buildLabel: 'build',
   capturedOutputHeading: '## captured output',
 };
 
 export interface ParsedPhaseResult {
   /** The classified outcome when it is a member of the closed set (exact, trimmed, never normalized); else null. */
   outcome: PhaseOutcome | null;
+  /** §28.5.3 — the classified build outcome when present AND a member of BUILD_OUTCOMES (exact, trimmed, never
+   *  normalized); null when the line is absent or an unknown spelling. Read only from BEFORE the captured-output
+   *  heading, like `outcome`, so a look-alike line in the raw body is never mistaken for it. */
+  build: BuildOutcome | null;
   /** The raw captured run under the heading (trimmed), or null when the section is absent or empty. */
   capturedOutput: string | null;
 }
@@ -45,11 +55,18 @@ export function parsePhaseResult(text: string): ParsedPhaseResult {
 
   const outcomeScanEnd = headingIdx === -1 ? lines.length : headingIdx;
   let outcome: PhaseOutcome | null = null;
+  let build: BuildOutcome | null = null;
   for (let i = 0; i < outcomeScanEnd; i++) {
-    const v = fieldValue(lines[i], PHASE_RESULT_GRAMMAR.outcomeLabel);
-    if (v !== null) {
-      outcome = isPhaseOutcome(v) ? v : null; // exact, trimmed, never normalized — an unknown spelling is null
-      break;
+    if (outcome === null) {
+      const v = fieldValue(lines[i], PHASE_RESULT_GRAMMAR.outcomeLabel);
+      if (v !== null) {
+        outcome = isPhaseOutcome(v) ? v : null; // exact, trimmed, never normalized — an unknown spelling is null
+        continue;
+      }
+    }
+    if (build === null) {
+      const b = fieldValue(lines[i], PHASE_RESULT_GRAMMAR.buildLabel);
+      if (b !== null) build = isBuildOutcome(b) ? b : null; // same exact/never-normalized rule as outcome
     }
   }
 
@@ -59,7 +76,7 @@ export function parsePhaseResult(text: string): ParsedPhaseResult {
     capturedOutput = body.length > 0 ? body : null;
   }
 
-  return { outcome, capturedOutput };
+  return { outcome, build, capturedOutput };
 }
 
 /** Well-formed ⟺ a classified outcome from the closed set AND a non-empty captured-output section (AC3). Shape
@@ -81,15 +98,18 @@ const SAMPLE_CAPTURED: Record<PhaseOutcome, string> = {
 };
 
 /** The ONE canonical example the predicate happy-path test, the fake-agent e2e output, and the prompt few-shot
- *  reference — one artifact so the consumers cannot drift (§28.5.5). One per outcome so any can be scripted. The
- *  captured output carries NO ``` fence: this same string is embedded inside the RED prompt's own fenced
+ *  reference — one artifact so the consumers cannot drift (§28.5.5). One per outcome so any can be scripted. With
+ *  `opts.build` it emits the GREEN turn's `build:` line (§28.5.3) directly after `outcome:` and before the
+ *  captured-output heading; without it the RED shape is byte-for-byte unchanged (a RED result carries no build
+ *  line). The captured output carries NO ``` fence: this same string is embedded inside a prompt's own fenced
  *  few-shot (§28 §7d), where an inner fence would close the outer one early (as exampleRoundReport also avoids). */
-export function examplePhaseResult(outcome: PhaseOutcome): string {
+export function examplePhaseResult(outcome: PhaseOutcome, opts?: { build?: BuildOutcome }): string {
   const g = PHASE_RESULT_GRAMMAR;
   return [
     '# Phase result',
     '',
     `${g.outcomeLabel}: ${outcome}`,
+    ...(opts?.build !== undefined ? [`${g.buildLabel}: ${opts.build}`] : []),
     '',
     g.capturedOutputHeading,
     '',
