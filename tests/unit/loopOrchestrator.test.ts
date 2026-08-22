@@ -160,6 +160,50 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
+  // §28 Option C — an optional pre-evaluated gate the caller (the engine, for a RED turn) ANDs into completion.
+  // Absent (every non-RED turn) preserves the existing behavior; false fails with the caller's reason. Because
+  // resolveCompletion runs while state is still 'in-flight', fail()->retry-then-error works with NO new state.
+  describe('the threaded completion gate (Option C)', () => {
+    it('IT-RUNNER-1: a gate arg is optional — no gate completes on the artifact alone (behavior preserved)', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal(); // no gate
+      expect(onComplete).toHaveBeenCalledWith('work-plan');
+    });
+
+    it('IT-RUNNER-2: a gate {ok:false} fails even when the artifact is present (both required), and retries', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal({ ok: false, reason: 'RED requires a failing test — no test file was added' });
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenCalledTimes(2); // retried, exactly like a missing artifact
+    });
+
+    it('IT-RUNNER-3: a gate {ok:true} still requires the artifact (both conditions)', () => {
+      artifact = false;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal({ ok: true });
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenCalledTimes(2); // artifact absent -> retry
+    });
+
+    it('IT-RUNNER-4: a gate-false done-signal drives retry-then-error carrying the caller reason', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      const reason = 'RED requires a failing test — no test file was added';
+      r.onDoneSignal({ ok: false, reason }); // attempt 1 -> retry
+      r.onDoneSignal({ ok: false, reason }); // attempt 2 -> error
+      expect(inject).toHaveBeenCalledTimes(2);
+      expect(writeError).toHaveBeenCalledTimes(1);
+      expect(writeError.mock.calls[0][0]).toBe(reason); // the caller's reason, not the generic missing-artifact text
+      expect(r.state()).toBe('error');
+    });
+  });
+
   it('never injects over a busy instance: defers until injectable (§27.2)', () => {
     hosted = 'busy';
     const r = createTurnRunner(deps);
