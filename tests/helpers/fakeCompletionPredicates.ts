@@ -1,19 +1,19 @@
 // A scriptable LoopCompletionPredicates for the RED/GREEN engine gate tests (§28.5.3). The domain-seam fake
-// names the concepts, not git/log mechanisms (CLAUDE.md seam rule). resultOutcome/classifyOutcome use the REAL
-// shared grammar (the tests script the result-file CONTENT via the engine's readArtifact, not this fn), so only
-// the git ground-truth (workingTreeTestPaths) and the exit-code recovery are the per-test knobs.
+// INHERITS the real classifyOutcome/resultOutcome (the shared grammar — no re-spelling, so it cannot drift from
+// production's composition) and overrides only the git/log ground truth (workingTreeTestPaths, changedTestPaths,
+// recoverExitCode) a unit test can't drive, with inert defaults + per-test knobs.
 
-import { isPhaseOutcome } from '../../src/shared/phaseOutcome';
-import { phaseResultWellFormed, parsePhaseResult } from '../../src/shared/phaseResult';
-import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
+import {
+  createLoopCompletionPredicates,
+  type LoopCompletionPredicates,
+} from '../../src/main/loopCompletionPredicates';
 import type { TestPathsResult } from '../../src/main/frozenTests';
 
 export function makeFakeCompletionPredicates(
   overrides: Partial<LoopCompletionPredicates> = {},
 ): LoopCompletionPredicates {
   return {
-    classifyOutcome: (raw) => (isPhaseOutcome(raw) ? raw : null),
-    resultOutcome: (content) => (phaseResultWellFormed(content) ? parsePhaseResult(content).outcome : null),
+    ...createLoopCompletionPredicates(), // the REAL classifyOutcome/resultOutcome (shared grammar)
     changedTestPaths: async () => ({ ok: true, paths: [] }),
     workingTreeTestPaths: async () => ({ ok: true, paths: [] }),
     recoverExitCode: async () => null,
@@ -22,7 +22,7 @@ export function makeFakeCompletionPredicates(
 }
 
 /** A `workingTreeTestPaths` that stays pending until `resolve` is called — so the engine-level concurrency test
- *  (IT-ENGINE-8) can fire a concurrent event while the engine awaits the RED git gate. */
+ *  can fire a concurrent event while the engine awaits the RED git gate. */
 export function deferredWorkingTree(): {
   workingTreeTestPaths: LoopCompletionPredicates['workingTreeTestPaths'];
   resolve: (r: TestPathsResult) => void;

@@ -76,7 +76,7 @@ export interface AppLoopLiveError {
  *  true artifact, never fabricate a pass (CWE-754). */
 type AppCompletion =
   | { kind: 'file'; path: string; marker: string; artifactRel: string }
-  | { kind: 'red'; resultPath: string; resultRel: string }
+  | { kind: 'red'; resultPath: string }
   | { kind: 'commits' }
   | { kind: 'unresolved' };
 
@@ -351,7 +351,7 @@ function activeTurnFor(
         ? // §28.5.5 F1 — a fresh completion:red def is parse-guaranteed to have a result binding; only a
           // resumed turn whose def lost it lands here without one → unresolved (never a free-passing commits).
           artifact
-          ? { kind: 'red', resultPath: artifact.path, resultRel: artifact.rel }
+          ? { kind: 'red', resultPath: artifact.path }
           : { kind: 'unresolved' }
         : artifact
           ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
@@ -367,6 +367,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // trigger. Set true from `entered` until `triggerDeferredTurn`/`cancelDeferredTurn`; while true the runner
   // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle (§B.5 item 6(b)).
   let awaitingTrigger = false;
+  // §28.5.3 — the RED turn whose async completion gate (redAsyncGate) is currently in flight. The host
+  // done-file watcher (turnDoneFile) is NOT debounced — it leans on the runner being synchronously idempotent
+  // — but the async RED path breaks that: two done-signals for one write would spawn two gates, and the second
+  // (stale) would land on a just-injected retry, collapsing MAX_ATTEMPTS or (if the working tree flips between
+  // the two git checks) fabricating a pass. This flag suppresses a duplicate signal WHILE a gate is pending; a
+  // genuine retry's real done-signal (after the flag clears) still spawns a fresh gate.
+  let redGatePendingFor: ActiveAppTurn | null = null;
   let runner: TurnRunner;
   // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
@@ -521,10 +528,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       case 'red': {
         // §28.5.3 — the SYNCHRONOUS RED clause: the result file is shape-valid AND classifies `failed-assertion`
         // (via the injected resultOutcome, which returns the outcome only for a well-formed result — AC3). The
-        // async "a test file was added" + exit-direction clauses are the engine's redAsyncGate, threaded to the
-        // runner via the done-signal (§28 Option C). The human-accept OVERRIDE (routeOut) intentionally gates on
-        // this sync clause alone — relaxing the machine async clauses exactly as the review-turn accept relaxes
-        // report well-formedness (§27.12c) — while the normal done-signal path enforces the full gate.
+        // async "a test file was added" + exit-direction clauses are the engine's redAsyncGate; BOTH completion
+        // routes AND it in — the done-signal via the runner's PrecomputedGate (§28 Option C), the human-accept
+        // via routeOut computing the same gate — so AC2 holds on both paths (§28.5.6 keeps "a test was added"
+        // machine-authoritative, not a human-override target).
         const content = deps.readArtifact(active.completion.resultPath);
         if (content === null) return false;
         return deps.completionPredicates.resultOutcome(content) === 'failed-assertion';
@@ -540,7 +547,15 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     try {
       const added = await deps.completionPredicates.workingTreeTestPaths({ repoDir: a.repoDir });
       if (!added.ok) {
-        return { ok: false, reason: 'the repository loop-capabilities are missing or unreadable — RED cannot verify a test was added' };
+        // Surface the CAUSE (a closed enum) as a distinct static reason — never `added.reason`, whose malformed
+        // arm can embed untrusted yaml text (CWE-117).
+        const why =
+          added.cause === 'confinement'
+            ? 'the repository loop-capabilities path is refused'
+            : added.cause === 'malformed'
+              ? 'the repository loop-capabilities file is malformed'
+              : 'the repository has no loop-capabilities file';
+        return { ok: false, reason: `RED cannot verify a test was added — ${why}` };
       }
       if (added.paths.length === 0) {
         return { ok: false, reason: 'RED requires a failing test — no test file was added this turn' };
@@ -592,6 +607,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
+        // TODO(dylanb, #107 S9): a `red` turn composes with `completion: null` here — its agent is not yet told
+        // to WRITE the phase-result file the gate reads (the "writer" half is the S9 integration slice, which
+        // re-adds resultRel to the red variant). The gate validates a file nothing production-writes until then.
         completion: active.completion.kind === 'file' ? { artifactRel: active.completion.artifactRel, marker: active.completion.marker } : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
@@ -882,10 +900,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const a = active;
       if (a?.completion.kind === 'red') {
         // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
-        // re-enter the SYNC runner with the pre-evaluated gate. The runner stays 'in-flight' during the await,
-        // so a concurrent onStall that errors the turn makes this late onDoneSignal a no-op (state guard) and a
-        // turn that changed under us is ignored (active identity).
+        // re-enter the SYNC runner with the pre-evaluated gate. Guards: `redGatePendingFor` dedupes a duplicate
+        // (un-debounced) done-signal while a gate is pending; the runner stays 'in-flight' during the await, so
+        // a concurrent onStall that errors the turn makes this late signal a no-op (runner state guard); and a
+        // turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
+        if (redGatePendingFor === a) return;
+        redGatePendingFor = a;
         void redAsyncGate(a).then((gate) => {
+          redGatePendingFor = null; // cleared before re-checking, so a genuine retry's real signal spawns a fresh gate
           if (active === a) runner.onDoneSignal(gate);
         });
       } else {
@@ -949,6 +971,25 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             return;
           }
           acceptFinalize('the consolidator turn was accepted but could not be saved — retry or terminate', consolidateAuditCmd('accept', active.round), active.round);
+          return;
+        }
+        // §28.5.3 / AC2 — a RED work turn's accept must satisfy BOTH the sync clause (result present +
+        // failed-assertion) AND the async machine gate (a test was added, exit ≠ 0 where recoverable). §28.5.6
+        // assigns the human backstop to the assertion-vs-compile REASON only; "a test was added" is the machine
+        // half, so accept may NOT relax it — AC2 ("adds no test file → does not complete") is unqualified by
+        // route. Compute the gate async (fire-and-forget); the turn stays in `error` during the await, so a
+        // concurrent retry/terminate rebuilds `active` and the identity guard skips the stale finalize.
+        if (active.completion.kind === 'red') {
+          const a = active;
+          void redAsyncGate(a).then((gate) => {
+            if (active !== a) return; // a retry/terminate changed the turn under the await
+            if (!completionSatisfied()) return; // the sync clause fails (missing/malformed result) — Retry re-runs
+            if (!gate.ok) {
+              refuseRouteOut('turn-error', gate.reason);
+              return;
+            }
+            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`);
+          });
           return;
         }
         // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and

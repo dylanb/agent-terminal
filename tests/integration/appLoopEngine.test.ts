@@ -2022,6 +2022,18 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     expect(reviewChained()).toBe(false);
   });
 
+  it('IT-ENGINE-3: an errored result (compile/import — the marquee "not valid RED") drives retry-then-error', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult(examplePhaseResult('errored'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
   it('IT-ENGINE-3b: a no-tests-selected result drives retry-then-error', async () => {
     const engine = makeEngine(undefined, redFake());
     enterRed(engine);
@@ -2114,6 +2126,55 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late...
     await flushRedGate();
     expect(reviewChained()).toBe(false); // ...but the late runner.onDoneSignal(gate) no-ops (state != in-flight)
+  });
+
+  it('IT-ENGINE-8b: a stale gate resolving after a retry rebuilt the turn cannot auto-complete it (identity guard)', async () => {
+    const { workingTreeTestPaths, resolve } = deferredWorkingTree();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ workingTreeTestPaths }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // starts the async gate for turn `a`
+    engine.onStall(); // errors the turn
+    engine.routeOut(repo, STEP, 'work-plan', 'retry'); // rebuilds `active` as a NEW in-flight turn (≠ a)
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the STALE gate for `a` resolves...
+    await flushRedGate();
+    expect(reviewChained()).toBe(false); // ...but active !== a → the identity guard skips; the retry never auto-completed
+    expect(readAppLoopState(repo)?.status).toBe('working'); // the retry turn is running, not fabricated-complete
+  });
+
+  it('IT-ENGINE-dedup: a duplicate done-signal while the gate is pending does not burn a second retry attempt', async () => {
+    // The host watcher is not debounced (turnDoneFile) — the async gate must not let a double-fire consume both
+    // MAX_ATTEMPTS. gate fails (no test file); two rapid signals -> ONE gate -> ONE fail -> retry (not error).
+    const engine = makeEngine(undefined, redFake({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // spawns the gate for `a`
+    engine.onDoneSignal(); // duplicate while the gate is pending -> suppressed by redGatePendingFor
+    await flushRedGate();
+    expect(emitError).not.toHaveBeenCalled(); // only ONE attempt consumed -> retried, not errored
+  });
+
+  it('IT-ENGINE-9a: human-accept ALSO requires the async gate — no test file added → accept REFUSES (AC2 on the human path)', async () => {
+    const engine = makeEngine(undefined, redFake({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onStall(); // error the turn (a stall, independent of the gate)
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, 'work-plan', 'accept');
+    await flushRedGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // accept refused — §28.5.6 keeps "a test was added" machine-authoritative
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-ENGINE-9b: human-accept finalizes when BOTH the sync clause and the async gate hold', async () => {
+    const engine = makeEngine(undefined, redFake()); // workingTreeTestPaths -> paths: ['tests/a.test.ts']
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, 'work-plan', 'accept');
+    await flushRedGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // both clauses held → finalized
   });
 
   it('IT-ENGINE-10: a non-RED (file) turn is unaffected — it completes SYNCHRONOUSLY on the done-signal', () => {
