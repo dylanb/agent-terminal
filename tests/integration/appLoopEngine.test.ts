@@ -9,7 +9,7 @@ import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '.
 import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
-import { makeFakeCompletionPredicates, deferredWorkingTree } from '../helpers/fakeCompletionPredicates';
+import { makeFakeCompletionPredicates, deferredWorkingTree, deferredChangedTestPaths } from '../helpers/fakeCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
@@ -2421,6 +2421,54 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     engine.routeOut(repo, STEP, TURN_KEY, 'accept');
     await flushGate();
     expect(readAppLoopState(repo)?.status).toBe('error'); // refused — the sync clause (passed) is unmet
+  });
+
+  it('IT-GREEN-8: a stall during the async gate errors the turn; the late gate records NO flag and cannot resurrect it', async () => {
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal(); // starts the async gate, awaiting the deferred changedTestPaths
+    engine.onStall(); // the runner errors while the gate is still pending
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late, with a changed test...
+    await flushGate();
+    expect(reviewChained()).toBe(false); // ...the late runner.onDoneSignal(gate) no-ops (state != in-flight)
+    // ...and crucially the stashed flag is NEVER recorded against the errored turn (onComplete never fired):
+    expect(readChangedTests(repo)).toBeNull();
+  });
+
+  it('IT-GREEN-8b: a stale gate resolving after a retry rebuilt the turn records no flag against the fresh turn (identity guard)', async () => {
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal(); // starts the async gate for turn `a`
+    engine.onStall(); // errors the turn
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // rebuilds `active` as a NEW turn (≠ a)
+    engine.onInjectable(); // drain the retry boundary so the retry turn is FULLY in-flight (awaiting its own signal)
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the STALE gate for `a` resolves (ok) against the fresh turn...
+    await flushGate();
+    // ...active !== a → the identity guard skips BOTH the stash write and `runner.onDoneSignal(gate)`, so the stale
+    // gate can neither complete the fresh in-flight turn nor record its paths against it:
+    expect(reviewChained()).toBe(false); // the fresh turn was NOT completed by the stale gate
+    expect(readAppLoopState(repo)?.status).toBe('working'); // the retry turn runs, not fabricated-complete
+    expect(readChangedTests(repo)).toBeNull(); // the stale gate's paths were never recorded against the fresh turn
+  });
+
+  it('IT-GREEN-dedup: a duplicate done-signal while the gate is pending does not burn a second retry attempt', async () => {
+    // The host watcher is not debounced; a double-fire must not consume both MAX_ATTEMPTS. Gate FAILS (exit 1);
+    // two rapid signals → ONE gate (asyncGatePendingFor) → ONE fail → retry (not error).
+    const engine = makeEngine(undefined, greenFake({ recoverExitCode: async () => 1 }));
+    seedBaseline();
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal(); // spawns the gate for `a`
+    engine.onDoneSignal(); // duplicate while the gate is pending → suppressed by asyncGatePendingFor
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled(); // only ONE attempt consumed → retried, not errored
   });
 
   it('IT-GREEN-flag-survives: the flag persists through review/consolidate to the gate (disjoint from run-state)', async () => {

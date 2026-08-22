@@ -387,10 +387,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // pass. This flag suppresses a duplicate signal WHILE a gate is pending; a genuine retry's real done-signal
   // (after the flag clears) still spawns a fresh gate. One slot suffices — only one work turn is active at a time.
   let asyncGatePendingFor: ActiveAppTurn | null = null;
-  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths, computed by greenAsyncGate on the done-signal and
-  // drained by onComplete (which records the flag then enters review). Identity-carrying so a stale gate that
-  // resolves after a retry rebuilt `active` cannot record its paths against the fresh turn.
-  let pendingChangedTests: { turn: ActiveAppTurn; paths: string[] } | null = null;
+  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths, RESOLVED by greenAsyncGate and AWAITING their record
+  // (a distinct sense from `asyncGatePendingFor`, which tracks an in-flight gate). Computed on the done-signal
+  // and drained by onComplete (which records the flag then enters review). Identity-carrying (`turn`) so a stale
+  // gate that resolves after a retry rebuilt `active` cannot record its paths against the fresh turn.
+  let changedTestsToRecord: { turn: ActiveAppTurn; paths: string[] } | null = null;
   let runner: TurnRunner;
   // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
@@ -572,19 +573,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
    *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
    *  rejects — an unexpected throw is a fail-toward-firing gate. */
+  // §28.5.4/CWE-117 — map the closed capabilities-load `cause` enum to a STATIC operator reason, NEVER embedding
+  // the load failure's `.reason` (whose malformed arm can carry untrusted repo yaml text). One definition shared
+  // by both async gates, so the CWE-117 invariant cannot drift when one gate is edited and the other is not.
+  const capabilitiesCauseReason = (cause: 'absent' | 'malformed' | 'confinement'): string =>
+    cause === 'confinement'
+      ? 'the repository loop-capabilities path is refused'
+      : cause === 'malformed'
+        ? 'the repository loop-capabilities file is malformed'
+        : 'the repository has no loop-capabilities file';
+
   const redAsyncGate = async (a: ActiveAppTurn): Promise<PrecomputedGate> => {
     try {
       const added = await deps.completionPredicates.workingTreeTestPaths({ repoDir: a.repoDir });
       if (!added.ok) {
-        // Surface the CAUSE (a closed enum) as a distinct static reason — never `added.reason`, whose malformed
-        // arm can embed untrusted yaml text (CWE-117).
-        const why =
-          added.cause === 'confinement'
-            ? 'the repository loop-capabilities path is refused'
-            : added.cause === 'malformed'
-              ? 'the repository loop-capabilities file is malformed'
-              : 'the repository has no loop-capabilities file';
-        return { ok: false, reason: `RED cannot verify a test was added — ${why}` };
+        return { ok: false, reason: `RED cannot verify a test was added — ${capabilitiesCauseReason(added.cause)}` };
       }
       if (added.paths.length === 0) {
         return { ok: false, reason: 'RED requires a failing test — no test file was added this turn' };
@@ -624,14 +627,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §28.5.3 — the frozen check: which test-glob files changed since the baseline (working tree, head omitted).
       const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
       if (!changed.ok) {
-        // Surface the CAUSE (a closed enum) as a distinct static reason — never `changed.reason` (CWE-117).
-        const why =
-          changed.cause === 'confinement'
-            ? 'the repository loop-capabilities path is refused'
-            : changed.cause === 'malformed'
-              ? 'the repository loop-capabilities file is malformed'
-              : 'the repository has no loop-capabilities file';
-        return { gate: { ok: false, reason: `GREEN cannot run the frozen check — ${why}` }, changedTests: null };
+        return {
+          gate: { ok: false, reason: `GREEN cannot run the frozen check — ${capabilitiesCauseReason(changed.cause)}` },
+          changedTests: null,
+        };
       }
       const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
       // §28.5.2a — exit non-zero ⇒ the agent may not claim GREEN (OPPOSITE of RED's exit-0 clause). DORMANT until
@@ -733,10 +732,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §28.5.3/§28.8.3 — a completed GREEN work turn records its (non-blocking) changed-test flag from the
         // gate's stash before advancing. Identity-guarded (`turn === active`) so a stale gate's paths can never
         // be recorded against a fresh turn; the stash is cleared either way so it never leaks to a later turn.
-        if (active.completion.kind === 'green' && pendingChangedTests?.turn === active) {
-          recordChangedTestsFlag(active, pendingChangedTests.paths);
+        if (active.completion.kind === 'green' && changedTestsToRecord?.turn === active) {
+          recordChangedTestsFlag(active, changedTestsToRecord.paths);
         }
-        pendingChangedTests = null;
+        changedTestsToRecord = null;
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
@@ -1018,7 +1017,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         void greenAsyncGate(a).then(({ gate, changedTests }) => {
           asyncGatePendingFor = null;
           if (active === a) {
-            if (changedTests !== null) pendingChangedTests = { turn: a, paths: changedTests };
+            // A concurrent onStall may have errored `a` while the gate awaited (the runner is then not
+            // 'in-flight', and `active` still points at `a` — onStall does not rebuild it). The stash is still
+            // written here, but it is SAFE: `runner.onDoneSignal(gate)` below no-ops (runner-state guard), so
+            // onComplete never fires for this turn to drain it, and the next work turn's onComplete clears it
+            // unconditionally. IT-GREEN-8 pins that this stashed flag is never recorded against the errored turn.
+            if (changedTests !== null) changedTestsToRecord = { turn: a, paths: changedTests };
             runner.onDoneSignal(gate);
           }
         });

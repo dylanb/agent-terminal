@@ -33,3 +33,17 @@ export function deferredWorkingTree(): {
   });
   return { workingTreeTestPaths: () => pending, resolve };
 }
+
+/** A `changedTestPaths` that stays pending until `resolve` is called — the GREEN-gate twin of
+ *  `deferredWorkingTree`, so an engine-level concurrency test can fire a concurrent event (a stall, a retry, a
+ *  duplicate signal) while the engine awaits the GREEN frozen check. */
+export function deferredChangedTestPaths(): {
+  changedTestPaths: LoopCompletionPredicates['changedTestPaths'];
+  resolve: (r: TestPathsResult) => void;
+} {
+  let resolve!: (r: TestPathsResult) => void;
+  const pending = new Promise<TestPathsResult>((res) => {
+    resolve = res;
+  });
+  return { changedTestPaths: () => pending, resolve };
+}
