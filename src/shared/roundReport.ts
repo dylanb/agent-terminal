@@ -2,6 +2,8 @@
 // readers (this slice's completion validator, N4's consolidator). One definition in the shared layer so the
 // prompt composer (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
 
+import { stripLeadingBullet, fieldValue } from './markdownFields';
+
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
@@ -46,26 +48,6 @@ const DISPOSITION_SET: ReadonlySet<string> = new Set(DISPOSITIONS);
 function isHeading(line: string, prefix: string): string | null {
   const t = line.trim();
   return t.startsWith(prefix) ? t.slice(prefix.length).trim() : null;
-}
-
-/** Strip a leading Markdown list marker — `-`, `*`, `+`, or an ordered `<n>.`/`<n>)` — so an issue is
- *  recognized regardless of which bullet the fixer chose. The glyph is not part of the §27.5 contract, so
- *  binding to one (the composer's `-`) would let an issue under any other valid bullet escape the per-issue
- *  validation (its missing disposition/what-changed unseen). Plain char scan, never a RegExp: the linear-time
- *  parse guarantee on untrusted report content is load-bearing (CWE-1333/400). */
-function stripLeadingBullet(t: string): string {
-  if (t.length > 0 && (t[0] === '-' || t[0] === '*' || t[0] === '+')) return t.slice(1).trimStart();
-  let k = 0;
-  while (k < t.length && t[k] >= '0' && t[k] <= '9') k++;
-  if (k > 0 && k < t.length && (t[k] === '.' || t[k] === ')')) return t.slice(k + 1).trimStart();
-  return t;
-}
-
-function fieldValue(line: string, label: string): string | null {
-  const t = stripLeadingBullet(line.trim());
-  const idx = t.indexOf(':');
-  if (idx < 0) return null;
-  return t.slice(0, idx).trim() === label ? t.slice(idx + 1).trim() : null;
 }
 
 interface IssueBlock {

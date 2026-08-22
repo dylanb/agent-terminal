@@ -8,6 +8,7 @@
 // (no RegExp) — the linear-time guarantee on untrusted agent output is load-bearing (CWE-1333/400).
 
 import { isPhaseOutcome, type PhaseOutcome } from './phaseOutcome';
+import { fieldValue } from './markdownFields';
 
 export interface PhaseResultGrammar {
   outcomeLabel: string;
@@ -26,33 +27,14 @@ export interface ParsedPhaseResult {
   capturedOutput: string | null;
 }
 
-/** Strip a leading Markdown list marker so the field is recognized regardless of bullet glyph — plain char
- *  scan, never a RegExp (linear-time on untrusted content, CWE-1333/400). Mirrors roundReport.stripLeadingBullet. */
-function stripLeadingBullet(t: string): string {
-  if (t.length > 0 && (t[0] === '-' || t[0] === '*' || t[0] === '+')) return t.slice(1).trimStart();
-  let k = 0;
-  while (k < t.length && t[k] >= '0' && t[k] <= '9') k++;
-  if (k > 0 && k < t.length && (t[k] === '.' || t[k] === ')')) return t.slice(k + 1).trimStart();
-  return t;
-}
-
-/** The value of a `label: value` field on a line, or null when the line is not that field. Trimmed; the value
- *  is returned verbatim (never normalized — the caller decides membership). */
-function fieldValue(line: string, label: string): string | null {
-  const t = stripLeadingBullet(line.trim());
-  const idx = t.indexOf(':');
-  if (idx < 0) return null;
-  return t.slice(0, idx).trim() === label ? t.slice(idx + 1).trim() : null;
-}
-
 /** Parse the two contract elements. The captured-output section is everything from its heading to EOF (raw
  *  test output is free-form — `#` lines and code fences inside it are preserved); the outcome field is read only
- *  from BEFORE that heading, so a look-alike line in the raw body is never mistaken for the classification. */
+ *  from BEFORE that heading. */
 export function parsePhaseResult(text: string): ParsedPhaseResult {
   const lines = text.split('\n');
 
-  // The captured-output heading: trim-then-exact (surrounding whitespace tolerated; wrong case / missing space
-  // are NOT this heading), mirroring roundReport's isHeading recognition.
+  // The captured-output heading: trim-then-exact match (surrounding whitespace tolerated; wrong case / missing
+  // space are NOT this heading).
   let headingIdx = -1;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].trim() === PHASE_RESULT_GRAMMAR.capturedOutputHeading) {
@@ -99,7 +81,9 @@ const SAMPLE_CAPTURED: Record<PhaseOutcome, string> = {
 };
 
 /** The ONE canonical example the predicate happy-path test, the fake-agent e2e output, and the prompt few-shot
- *  reference — one artifact so the consumers cannot drift (§28.5.5). One per outcome so any can be scripted. */
+ *  reference — one artifact so the consumers cannot drift (§28.5.5). One per outcome so any can be scripted. The
+ *  captured output carries NO ``` fence: this same string is embedded inside the RED prompt's own fenced
+ *  few-shot (§28 §7d), where an inner fence would close the outer one early (as exampleRoundReport also avoids). */
 export function examplePhaseResult(outcome: PhaseOutcome): string {
   const g = PHASE_RESULT_GRAMMAR;
   return [
@@ -109,9 +93,7 @@ export function examplePhaseResult(outcome: PhaseOutcome): string {
     '',
     g.capturedOutputHeading,
     '',
-    '```',
     SAMPLE_CAPTURED[outcome],
-    '```',
     '',
   ].join('\n');
 }

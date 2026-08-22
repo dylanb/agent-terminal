@@ -63,9 +63,14 @@ describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
   // so the free-form raw output — which may itself contain a line that looks like the field — is never mistaken
   // for the classification.
   it('recognizes the tokens under a bullet and amid extra prose, and never reads the field out of the raw body', () => {
-    const bulleted = `# Phase result\n\n- ${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-    expect(phaseResultWellFormed(bulleted)).toBe(true);
-    expect(parsePhaseResult(bulleted).outcome).toBe('passed');
+    for (const bullet of ['- ', '* ', '1. ']) {
+      const bulleted = `# Phase result\n\n${bullet}${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
+      expect(phaseResultWellFormed(bulleted)).toBe(true);
+      expect(parsePhaseResult(bulleted).outcome).toBe('passed');
+    }
+    // the captured body is returned trimmed (not just present/absent):
+    const paddedBody = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n\n  the raw run  \n\n`;
+    expect(parsePhaseResult(paddedBody).capturedOutput).toBe('the raw run');
 
     const withProse = `# Phase result\n\nSome preamble the agent wrote.\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: failed-assertion\n\nMore prose.\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nE   assert False\n`;
     expect(phaseResultWellFormed(withProse)).toBe(true);

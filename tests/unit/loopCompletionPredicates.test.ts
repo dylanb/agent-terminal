@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createLoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
+import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
@@ -9,6 +10,17 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
     expect(predicates.classifyOutcome('failed-assertion')).toBe('failed-assertion');
     expect(predicates.classifyOutcome('nope')).toBeNull();
     expect(predicates.classifyOutcome('Passed')).toBeNull(); // never normalized
+  });
+
+  it('resultOutcome returns the outcome of a well-formed result file and null for a malformed one', () => {
+    const predicates = createLoopCompletionPredicates();
+    // a well-formed result (outcome ∈ set AND raw captured output present) yields its outcome:
+    expect(predicates.resultOutcome(examplePhaseResult('failed-assertion'))).toBe('failed-assertion');
+    expect(predicates.resultOutcome(examplePhaseResult('passed'))).toBe('passed');
+    // an outcome with NO captured-output section is not well-formed (AC3) → null, even though the outcome parses:
+    expect(predicates.resultOutcome('outcome: failed-assertion\n')).toBeNull();
+    // an unknown outcome spelling → null:
+    expect(predicates.resultOutcome('outcome: flaky\n\n## captured output\n\nx\n')).toBeNull();
   });
 
   describe('changedTestPaths delegates to the capabilities-sourced detection', () => {
