@@ -228,6 +228,30 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     expect(rec.notices).toHaveLength(1); // the S2 nothing-to-commit notice is unchanged
   });
 
+  it('IT-DECISION-3: a throwing baseline store never mis-attributes the LANDED commit as a failed side-effect — the commit is still audited committed, the failure surfaces as its OWN distinct baseline-record-failed audit + a live notice (never emitError), and the accept still advances (best-effort, §28.5.1/§27.13)', async () => {
+    const { deps, rec } = mkDeps({
+      gate: APPROVE_COMMIT('RED: baseline blows up'),
+      // the raw disjoint-file store's fail-loud contract — the executor (not the composition root) wraps it.
+      recordBaseline: () => {
+        throw new Error('§27 loop area is unresolvable');
+      },
+    });
+    await approve(deps);
+    // the commit LANDED — its success audit fires at exit 0 and is NEVER re-attributed to "side-effect failed".
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect:') && a.exit === 0)).toBe(true);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
+    // the baseline failure is recorded on its OWN distinct audit outcome at exit 1 (never swallowed, §25).
+    expect(rec.audits.some((a) => a.cmd.includes('clear-polish failed'))).toBe(false);
+    expect(rec.audits.some((a) => a.cmd.includes('baseline') && a.exit === 1)).toBe(true);
+    // surfaced LIVE as a NOTICE (the accept succeeded — a blocking error would alarm over a landed commit),
+    // naming the degraded state so the operator learns the downstream frozen check will refuse.
+    expect(rec.notices.some((n) => /baseline/i.test(n))).toBe(true);
+    expect(rec.errors).toEqual([]);
+    // best-effort — the accept persisted and the flow advanced regardless (§27.13/AC3).
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
   it('IT-DECISION-4: records NO baseline when the commit side-effect throws (the S2 failure path is unchanged)', async () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: fails'), commitThrows: 'git commit failed' });
     await approve(deps);
