@@ -520,9 +520,12 @@ export interface ChangedTestsRecord {
   paths: string[];
 }
 
-/** Per-entry sanitize shared by the writer and reader: keep only non-blank string entries within the length
- *  cap, deduped and sorted, capped to the count limit. A non-array yields `[]`. Whole-doc invalidity is the
- *  reader's concern (below); this only filters the entries of a known array. */
+/** Per-entry sanitize shared by the writer and reader (whole-doc invalidity stays the reader's concern below).
+ *  Two properties the code alone does not state: entries are kept VERBATIM (a git-exact path, never trimmed —
+ *  the frozen check emits exact repo-relative paths), and the count cap makes `paths` NON-EXHAUSTIVE above the
+ *  cap — a safety bound against a planted/pathological file (a real GREEN turn touches a handful of tests), not
+ *  an expected operational case, so no `truncated` signal is carried; G5/G6 consumers treat an at-cap list as
+ *  advisory. The cap is applied after dedupe+sort so the surviving set is deterministic across writer and reader. */
 function sanitizeChangedTestPaths(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const valid = raw.filter(

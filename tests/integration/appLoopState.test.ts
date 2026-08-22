@@ -841,6 +841,21 @@ describe('§28.5.3 — the changed-tests flag store, disjoint from the run-state
     expect(readChangedTests(repo)).toEqual({ step: 'green', paths: ['tests/ok.test.ts'] });
   });
 
+  // CT-8b (read-side CWE-400/CWE-20, pinned SEPARATELY from the write-side CT-5/CT-6 so neither masks the other,
+  // mirroring baseline-commit's UT-STATE-2a/2b): a PLANTED file (bypassing the writer) whose paths exceed the
+  // count cap and include an over-length entry is re-bounded on READ — the reader independently re-enforces the
+  // caps, since the hosted agent can write this file directly and its paths reach the DOM.
+  it('CT-8b (read-side cap re-enforcement): a planted oversized / over-length file is capped on read', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    const many = Array.from({ length: MAX_CHANGED_TEST_PATHS + 50 }, (_, i) => `tests/f${String(i).padStart(6, '0')}.test.ts`);
+    const overLong = 'tests/' + 'x'.repeat(MAX_CHANGED_TEST_PATH_LEN) + '.test.ts';
+    const paths = [overLong, ...many]; // plain scalars — safe as an unquoted yaml list
+    writeFileSync(changedFile(), `schema_version: 1\nstep: green\npaths:\n${paths.map((p) => `  - ${p}`).join('\n')}\n`);
+    const rec = readChangedTests(repo);
+    expect(rec?.paths.length).toBe(MAX_CHANGED_TEST_PATHS); // count cap re-enforced on read
+    expect(rec?.paths).not.toContain(overLong); // over-length entry dropped on read
+  });
+
   it('CT-9 first-run: records into a repo with NO .agent-terminal yet, creating the tree', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // fresh machine — nothing seeded
     recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts']);
