@@ -3,7 +3,11 @@
 // that domain concept, not the mechanisms behind it (CLAUDE.md injection-seam rule).
 import { isPhaseOutcome, type PhaseOutcome } from '../shared/phaseOutcome';
 import { phaseResultWellFormed, parsePhaseResult } from '../shared/phaseResult';
-import { changedTestPathsFromCapabilities, type TestPathsResult } from './frozenTests';
+import {
+  changedTestPathsFromCapabilities,
+  workingTreeTestPathsFromCapabilities,
+  type TestPathsResult,
+} from './frozenTests';
 
 export interface LoopCompletionPredicates {
   /** Recognize the framework-neutral outcome the agent claimed (§28.5.2); null if it is not a known category. */
@@ -11,11 +15,19 @@ export interface LoopCompletionPredicates {
   /** §28.5.2c/§28.5.3 — the classified outcome of a turn's RESULT FILE: parse + shape-validate the agent-written
    *  result (the phaseResult grammar) and return its outcome ONLY when the file is well-formed (a member of the
    *  closed set AND the raw captured output present — AC3); null when malformed/absent. The RED/GREEN completion
-   *  gate (S3/S4) compares this against the phase's required outcome (`failed-assertion` / `passed`). Injected now
-   *  so the seam exists; the gate call through it lands with the RED clause (S3). */
+   *  gate compares this against the phase's required outcome (`failed-assertion` / `passed`). */
   resultOutcome(content: string): PhaseOutcome | null;
   /** The test-glob files that changed between the RED baseline and head, per the repo's capabilities (§28.5.1). */
   changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<TestPathsResult>;
+  /** §28.5.2a — the test-glob files this turn ADDED LINES to in the working tree (vs HEAD), per the repo's
+   *  capabilities: the RED "a failing test was authored" ground truth. Its failure arm (absent/malformed
+   *  capabilities) lets the RED gate surface a distinct reason. */
+  workingTreeTestPaths(query: { repoDir: string }): Promise<TestPathsResult>;
+  /** §28.5.2a — the test command's real exit code for a turn, recovered best-effort from the session/tool log
+   *  (§27.11), or null when unrecoverable. Where recoverable, the RED gate enforces the direction (exit 0 ⇒ not
+   *  a RED failure). No live source ships today (N7/#92) — the default returns null, so the clause is dormant
+   *  but real (the direction logic is exercised under an injected fake). */
+  recoverExitCode(query: { repoDir: string; turnKey: string }): Promise<number | null>;
 }
 
 export function createLoopCompletionPredicates(): LoopCompletionPredicates {
@@ -23,5 +35,8 @@ export function createLoopCompletionPredicates(): LoopCompletionPredicates {
     classifyOutcome: (raw) => (isPhaseOutcome(raw) ? raw : null),
     resultOutcome: (content) => (phaseResultWellFormed(content) ? parsePhaseResult(content).outcome : null),
     changedTestPaths: (query) => changedTestPathsFromCapabilities(query),
+    workingTreeTestPaths: (query) => workingTreeTestPathsFromCapabilities(query),
+    // TODO(dylanb): wire recoverExitCode to the §27.11 session-log sweep when N7/#92 lands; null = unrecoverable.
+    recoverExitCode: () => Promise.resolve(null),
   };
 }
