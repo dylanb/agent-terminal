@@ -255,6 +255,14 @@ describe('createRealAppGateCommit — real git (§28.3/§28.5.1 L1)', () => {
     expect(files).not.toContain('seed.txt'); // the entangled file is left to the worktree — phase edit NOT committed
     expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('operator wip\nphase edit\n'); // both edits remain on disk
   });
+
+  it('T-rootless: an initialized repo with NO commit (no HEAD) rejects before touching the tree', async () => {
+    const rootless = fx.makeGitRepo('rootless'); // git init, nothing committed → HEAD unresolvable
+    fx.writeRepoFile(rootless, 'src/x.ts', 'export const x = 1;\n');
+    await expect(createRealAppGateCommit(rootless)({ label: 'RED: rootless' })).rejects.toThrow();
+    // headCommit() fails first, so `git add -A` never ran: the change is still UNTRACKED (`??`), not staged (`A`).
+    expect(porcelain(rootless)).toMatch(/^\?\? src\//m);
+  });
 });
 
 describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {

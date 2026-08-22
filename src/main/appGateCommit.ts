@@ -20,10 +20,12 @@ export interface AppGateCommitCtx {
 }
 
 /** The result of firing the side-effect: on `committed`, the new HEAD SHA (§28.5.1); on `nothing-to-commit`,
- *  no SHA — a discriminated union so no field one mode ignores. THROWS only on a genuine failure (empty label,
- *  git error, a commit that raced the window, or a non-object-id SHA); a benign nothing-to-commit is returned. */
+ *  no SHA — a discriminated union so no field one mode ignores. */
 export type AppGateCommitResult = { outcome: 'committed'; sha: string } | { outcome: 'nothing-to-commit' };
 
+/** Fire the commit for the descriptor's label. THROWS only on a genuine failure (empty label, git error, a
+ *  commit whose parent is not the pre-commit head, or a non-object-id SHA); a benign nothing-to-commit is a
+ *  returned value, not a throw. */
 export type RunAppGateCommitSideEffect = (
   ctx: AppGateCommitCtx,
 ) => Promise<AppGateCommitResult>;
@@ -52,12 +54,15 @@ export function createAppGateCommit(
     const before = await git.headCommit();
     const step = await git.commitWorkingTree(ctx.label, ctx.dirtyAtPhaseStart);
     if (step.outcome === 'nothing-to-commit') return { outcome: 'nothing-to-commit' };
-    // §28.5.1 — the operated repo hosts a live agent sharing the working tree. A commit that raced into the
-    // window (between capturing `before` and our commit) would leave the new HEAD, and our captured SHA,
-    // pointing at agent state; its parent would NOT be the head we captured. Refuse to record a poisoned
-    // baseline (fail toward firing — no result; the accept surfaces the failure and stays Retry-recoverable).
+    // §28.5.1 — the operated repo hosts a live agent sharing the working tree. This catches a PARENT-LINKAGE
+    // race (an agent commit that moved HEAD off `before` before ours, or one stacked after ours): the new
+    // commit's parent is then not the head we captured. A passing check proves only that HEAD is a commit
+    // parented on `before` — NOT that its tree is ours; content poisoning that preserves the parent (a `reset`
+    // to `before` then commit, or `--amend`) is left to the human gate + frozen-tests detect-and-escalate
+    // backstop (§28.5.1). Refuse toward firing — no poisoned baseline persists; the failure is surfaced +
+    // audited (recovery is a phase re-run, not a gate retry of this commit).
     if (step.parentSha !== before) {
-      throw new Error('a commit raced the phase commit — refusing to record a poisoned baseline');
+      throw new Error('the phase commit is not parented on the pre-commit head — refusing a poisoned baseline');
     }
     // CWE-20 — a garbage SHA from git must never become a persisted baseline.
     if (!isGitObjectId(step.sha)) {
@@ -91,16 +96,15 @@ async function hasStagedChanges(repoDir: string, harden: string[]): Promise<bool
 export function createRealAppGateCommit(
   repoDir: string,
 ): RunAppGateCommitSideEffect {
-  const revParse = async (rev: string, failure: string): Promise<string> => {
-    const harden = commitHardeningArgs(freshDisabledHooksDir());
-    return (
-      await run('git', [...harden, 'rev-parse', '--verify', '--end-of-options', rev], repoDir, failure)
-    ).trim();
+  // Reads are hardened with the core set (hooks/fsmonitor); `commit.gpgSign=false` is a commit-only concern.
+  const readRev = async (args: string[], failure: string): Promise<string> => {
+    const harden = coreExecHardeningArgs(freshDisabledHooksDir());
+    return (await run('git', [...harden, ...args], repoDir, failure)).trim();
   };
   const git: AppGateCommitOperations = {
     // Rejects on a rootless repo (no HEAD) — the §28 chain always runs post-pickup, so a missing HEAD is a
     // genuine failure, not a baseline story to invent.
-    headCommit: () => revParse('HEAD', 'commit side-effect: git rev-parse HEAD failed'),
+    headCommit: () => readRev(['rev-parse', '--verify', '--end-of-options', 'HEAD'], 'commit side-effect: git rev-parse HEAD failed'),
     commitWorkingTree: async (label, dirtyAtPhaseStart) => {
       const harden = commitHardeningArgs(freshDisabledHooksDir());
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
@@ -121,10 +125,18 @@ export function createRealAppGateCommit(
       );
       if (!(await hasStagedChanges(repoDir, harden))) return { outcome: 'nothing-to-commit' };
       await run('git', [...harden, 'commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
-      // §28.5.1 — read the new commit + its parent in-adapter, chained right after `git commit`, never deferred:
-      // a deferred read could observe a commit the live agent made in the window and poison the baseline.
-      const sha = await revParse('HEAD', 'commit side-effect: git rev-parse HEAD failed');
-      const parentSha = await revParse('HEAD^', 'commit side-effect: git rev-parse parent failed');
+      // §28.5.1 — read the new commit AND its parent from ONE snapshot (`rev-list --parents -n 1`), chained
+      // right after `git commit`: an atomic pair, so the composition's parent-vs-`before` check compares a
+      // single HEAD state (a separate `rev-parse HEAD` then `HEAD^` would straddle two snapshots — a raced
+      // commit between them would spuriously reject a correct commit). Never deferred to a later turn.
+      const parts = (
+        await readRev(['rev-list', '--parents', '-n', '1', '--end-of-options', 'HEAD'], 'commit side-effect: git rev-list failed')
+      ).split(' ');
+      const sha = parts[0];
+      const parentSha = parts[1];
+      // A phase commit always has a parent (headCommit succeeded, so a prior commit exists); a parentless result
+      // is a genuine anomaly, refused rather than returned as an unverifiable baseline.
+      if (parentSha === undefined) throw new Error('commit side-effect: the phase commit has no parent');
       return { outcome: 'committed', sha, parentSha };
     },
   };
