@@ -471,9 +471,14 @@ export function recordBaselineCommit(repoDir: string, step: string, sha: string)
 
 /** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
  *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. This is
- *  one repo-keyed single-current baseline, overwritten each phase; the returned `step` is the slice-identity
- *  key, so the reader (S4's frozen check) MUST compare it to the phase being gated and refuse a mismatch (a
- *  stale baseline from an abandoned/interleaved chain — there is no clear() yet) — never key on presence alone. */
+ *  one repo-keyed single-current baseline, overwritten each phase; the returned `step` is the baseline key the
+ *  writer recorded, so the reader (the GREEN frozen check) MUST match it and refuse a mismatch (a stale baseline
+ *  from an abandoned/interleaved chain — there is no clear() yet), never key on presence alone.
+ *  §12 (phase-stable): when §28.4's RED/GREEN/refactor phase-loops name steps phase-qualified, the writer and
+ *  this reader MUST reduce the step to ONE shared PHASE-STABLE slice identity before comparing — matching the raw
+ *  `red-<slice>` (written) against `green-<slice>` (read) would mismatch on every happy path and disable the
+ *  check. Drive that comparison in a cross-slice test with the real phase-loop step values (not a `plan` fixture,
+ *  which never exercises the key semantics) before the reader ships. */
 export function readBaselineCommit(repoDir: string): { step: string; sha: string } | null {
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;

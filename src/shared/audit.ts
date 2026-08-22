@@ -351,8 +351,12 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  could not start (the runner was mid-turn or the gate raced out), distinct from `decision` so the audit
  *  never claims a round that never ran (AC4). `clear-polish-failed` records an approve whose best-effort
  *  polish-stand-down cleanup threw AFTER the accept persisted — recorded (never swallowed) yet never aborting
- *  the terminal accept, since a residual stand-down file is harmless once the gate has been accepted (§27.9 / AC6). */
-export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed';
+ *  the terminal accept, since a residual stand-down file is harmless once the gate has been accepted (§27.9 / AC6).
+ *  `baseline-record-failed` records an approve whose best-effort §28.5.1 baseline-commit recording threw AFTER the
+ *  phase commit LANDED — recorded distinctly (never re-attributed to `side-effect-failed`, which would falsely
+ *  imply the commit itself failed) and never aborting the accept, since the downstream frozen check safely
+ *  refuses on the absent baseline (fail toward firing, §28.5.1). */
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed' | 'baseline-record-failed';
 
 const GATE_DETAIL_MAX = 200;
 
@@ -376,6 +380,8 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
       return `§27 gate ${option} accept failed: ${d}`;
     case 'clear-polish-failed':
       return `§27 gate ${option} clear-polish failed: ${d}`;
+    case 'baseline-record-failed':
+      return `§27 gate ${option} baseline-record failed: ${d}`;
   }
 }
 

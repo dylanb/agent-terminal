@@ -623,9 +623,10 @@ export interface FlowBootstrapErrorMsg {
 }
 
 /** The severity a flow:onLoopError message carries: a genuine `error` (the default — a failed loop
- *  mechanic, framed as a blocking error dialog) or a benign `notice` (a completed no-op the operator should
- *  see, e.g. §28.3 nothing-to-commit — framed so it never reads as a failure). One definition the main
- *  writer and the renderer both key on (CLAUDE.md shared-vocabulary). */
+ *  mechanic, framed as a blocking error dialog) or a non-blocking `notice` the operator should see but which
+ *  must not raise a blocking dialog — a benign completed no-op (§28.3 nothing-to-commit) or a best-effort
+ *  degradation that left the accept intact (§28.5.1 baseline-record-failed). One definition the main writer and
+ *  the renderer both key on (CLAUDE.md shared-vocabulary). */
 export type FlowLoopMessageKind = 'error' | 'notice';
 
 /** flow:onLoopError push (§27.12/§28.3): main signals a loop-MECHANICS outcome after the loop was

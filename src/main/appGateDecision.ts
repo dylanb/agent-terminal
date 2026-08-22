@@ -63,8 +63,13 @@ export interface AppGateDecisionDeps {
    *  it never reads as a failure. Same operator channel as emitError, distinct severity (`kind: 'notice'`). */
   emitNotice(reason: string): void;
   /** §28.5.1 — record the phase-commit `sha` a `commit` side-effect returned, under the decision's `step`, as
-   *  the baseline the next phase's frozen check diffs from. A domain seam (never `writeAppLoopState`); BEST-
-   *  EFFORT — the composition root wraps the throwing store so a filesystem error never aborts the accept. */
+   *  the baseline the next phase's frozen check diffs from. A domain seam (never `writeAppLoopState`). The raw
+   *  store is fail-loud (throws on an FS/loop-area error); the executor wraps THIS call best-effort itself (as it
+   *  does its `gh`/clear-polish side-effects), so the composition root wires the store directly.
+   *  §12 (cross-slice, phase-stable): `step` is recorded verbatim as the baseline key; when §28.4's RED/GREEN/
+   *  refactor phase-loops exist, the writer and the GREEN reader MUST reduce it to ONE shared PHASE-STABLE slice
+   *  identity before comparing — a raw phase-qualified step (`red-<slice>` written vs `green-<slice>` read) would
+   *  mismatch on every happy path and silently disable the frozen check. */
   recordBaseline(repoDir: string, step: string, sha: string): void;
   onViewChanged(): void;
 }
@@ -204,11 +209,22 @@ export async function runAppGateDecision(
         // executor passes an empty snapshot until then.
         const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
         if (result.outcome === 'committed') {
-          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under THIS
-          // decision's step, from the value the side-effect returned (never a re-derived rev-parse). Only on
-          // `committed`: a nothing-to-commit records no baseline (there is no new commit to diff from).
-          deps.recordBaseline(repoDir, step, result.sha);
+          // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
+          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under THIS decision's
+          // step, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
+          // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
+          // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
+          // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded); the
+          // downstream frozen check refuses on the missing baseline, so the state is recoverable (fail toward
+          // firing). Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
+          try {
+            deps.recordBaseline(repoDir, step, result.sha);
+          } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            deps.audit(repoDir, gateDecisionAuditCmd('baseline-record-failed', option, reason), 1);
+            deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — the next phase's frozen check will refuse until this is resolved: ${reason}`);
+          }
         } else {
           // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
           // wording must never read as a failure, and this path must not throw (the accept/advance run below).
