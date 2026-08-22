@@ -109,7 +109,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null] : null,
   ]);
 }
 
@@ -469,6 +469,18 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         notice.dataset.polishStanddown = '';
         notice.setAttribute('role', 'status');
         notice.textContent = 'Polish mode — the orchestrator has stood down. Converse with the instance directly; approve to end polish and accept the artifact.';
+        body.append(notice);
+      }
+
+      // §28.5.3/§28.8.3 — the changed-tests flag: the machine detected a test-glob file changed during the GREEN
+      // turn. A NON-blocking notice (a live region) naming the files, so the regression-guard persona + the human
+      // at the gate can judge whether it was a legitimate RED correction or a weakening.
+      if (loop.changedTests && loop.changedTests.length > 0) {
+        const notice = doc.createElement('p');
+        notice.className = 'changed-tests-notice';
+        notice.dataset.changedTests = '';
+        notice.setAttribute('role', 'status');
+        notice.textContent = `Test file(s) changed during GREEN — flagged for regression-guard: ${loop.changedTests.join(', ')}`;
         body.append(notice);
       }
 

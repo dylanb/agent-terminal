@@ -11,7 +11,7 @@ import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
-import { readAppLoopState, isPolishActiveForStep } from './appLoopState';
+import { readAppLoopState, isPolishActiveForStep, readChangedTests } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
@@ -68,6 +68,12 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // tier is a supported authoring path), and narrowing that to approve-only yields an empty, actionable gate —
     // an unrecoverable dead end. Fail toward the def's full controls, never toward zero (CLAUDE.md / CWE-20).
     const shownOptions = inPolish && gateOptions.includes('approve') ? gateOptions.filter((o) => o === 'approve') : gateOptions;
+    // §28.5.3/§28.8.3 — the GREEN turn's changed-test flag (recorded in its own file), surfaced when it is for
+    // THIS run's step and names at least one file. Step-matched raw (§12: the phase-stable reduction for S7's
+    // phase-qualified steps is deferred, matching readChangedTests's note); a clean-green empty record does not
+    // show. Read fresh each pull, like the polish flag.
+    const changedRec = readChangedTests(ctx.repoDir);
+    const changedTests = changedRec && changedRec.step === run.step && changedRec.paths.length > 0 ? changedRec.paths : null;
     return {
       status: run.status,
       pr: null,
@@ -86,6 +92,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       ...(catalog ? { catalog } : {}),
       ...(atGate ? { gateOptions: shownOptions } : {}),
       ...(inPolish ? { polish: true } : {}),
+      ...(changedTests ? { changedTests } : {}),
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
