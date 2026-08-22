@@ -91,8 +91,9 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
   });
 
-  it('UT-DEF-5b: an unresolvable artifact WITHOUT completion: red is still accepted (the check is red-specific)', () => {
-    // a `commits`-style artifact legitimately names no binding — only completion: red requires one.
+  it('UT-DEF-5b: an unresolvable artifact with NO completion mode is still accepted (the guard is completion-specific)', () => {
+    // a `commits`-style artifact legitimately names no binding — the binding requirement fires for a DECLARED
+    // completion mode (red or green, UT-DEF-5/5g), never for a completion-less def.
     const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n'));
     expect(r.ok).toBe(true);
   });
