@@ -5864,18 +5864,22 @@ test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a L
 // globs the working-tree RED check sources. The fake-agent authors a test file + writes the phase-result file
 // the completion:red gate classifies; the git shim delegates the real ops (add/commit/rev-list/ls-files/diff)
 // to real git so HEAD genuinely advances and the working-tree test detection sees the added file.
-function seedRedGateConfig(prefix: string): string {
+// Clone the example config, set the plan-loop's work.completion, and swap its gh mark-ready gate for a commit
+// side-effect carrying `label` — the shared shape of the §28.5 RED (S3) and GREEN (S4) tracer configs; they
+// differ only in the completion value and the commit label.
+function seedCompletionGateConfig(prefix: string, completion: 'red' | 'green', label: string): string {
   const cfg = mkdtempSync(join(tmpdir(), prefix));
   cpSync(exampleConfigDir, cfg, { recursive: true });
   const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
   const def = readFileSync(defPath, 'utf8');
-  const withRed = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', 'work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: red\n');
-  if (withRed === def) throw new Error('seedRedGateConfig: plan-loop work block not found to set completion: red');
-  const swapped = withRed.replace('      - kind: gh\n        action: mark-ready', '      - kind: commit\n        label: "RED: s3-tracer"');
-  if (swapped === withRed) throw new Error('seedRedGateConfig: plan-loop gh gate not found to swap for commit');
+  const withCompletion = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', `work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: ${completion}\n`);
+  if (withCompletion === def) throw new Error(`seedCompletionGateConfig: plan-loop work block not found to set completion: ${completion}`);
+  const swapped = withCompletion.replace('      - kind: gh\n        action: mark-ready', `      - kind: commit\n        label: "${label}"`);
+  if (swapped === withCompletion) throw new Error('seedCompletionGateConfig: plan-loop gh gate not found to swap for commit');
   writeFileSync(defPath, swapped);
   return cfg;
 }
+const seedRedGateConfig = (prefix: string): string => seedCompletionGateConfig(prefix, 'red', 'RED: s3-tracer');
 
 // The RED flow repo: seedCommitFlowRepo with NO pre-seeded change (the fake-agent authors the test file this
 // turn — the untracked change the working-tree RED check sees and the approve commit records) plus a
@@ -5983,18 +5987,7 @@ test('§28.5 / AC2 — a RED loop whose test PASSES never completes: it retries 
 // the test globs; a test file (tests/frozen.test.ts) is committed INTO the baseline and its SHA recorded as
 // the §28.5.1 baseline (simulating a completed RED phase). The fake-agent implements + writes a passed/built
 // phase-result; the frozen check (baseline↔working-tree) detects a touched test as a NON-blocking flag.
-function seedGreenGateConfig(prefix: string): string {
-  const cfg = mkdtempSync(join(tmpdir(), prefix));
-  cpSync(exampleConfigDir, cfg, { recursive: true });
-  const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
-  const def = readFileSync(defPath, 'utf8');
-  const withGreen = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', 'work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: green\n');
-  if (withGreen === def) throw new Error('seedGreenGateConfig: plan-loop work block not found to set completion: green');
-  const swapped = withGreen.replace('      - kind: gh\n        action: mark-ready', '      - kind: commit\n        label: "GREEN: s4-tracer"');
-  if (swapped === withGreen) throw new Error('seedGreenGateConfig: plan-loop gh gate not found to swap for commit');
-  writeFileSync(defPath, swapped);
-  return cfg;
-}
+const seedGreenGateConfig = (prefix: string): string => seedCompletionGateConfig(prefix, 'green', 'GREEN: s4-tracer');
 
 // The GREEN flow repo: a committed tests/frozen.test.ts, capabilities (globs = tests/**), and the baseline SHA
 // recorded under the `plan` step (the RED phase's product the GREEN frozen check diffs against).
@@ -6097,6 +6090,8 @@ test('§28.5.3 / AC3 — a GREEN turn whose tests do NOT pass never completes: i
   const cfg = seedGreenGateConfig('agent-term-e2e-green-sad-cfg-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-sad-bin-', { realCommitOps: true });
   // the impl "runs" but the fake classifies the outcome as failed-assertion — the GREEN gate requires `passed`.
+  // (AC3's other half — a broken BUILD, `build: build-failed` — fails the same sync clause and is proven at the
+  // integration layer by IT-GREEN-3b; the `buildOutcome` fake knob exercises it there, so it is not re-run e2e.)
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', resultOutcome: 'failed-assertion', touchTest: false, review: 'full' });
   app = await electron.launch({
     args: ['out/main/index.js'],
