@@ -6,6 +6,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { isErrno } from './errno';
+import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
@@ -442,4 +443,55 @@ export function clearPolish(repoDir: string): void {
  *  `inPolish` (loopViewV2) — so the two cannot drift on which gate is standing down (CLAUDE.md shared-semantics). */
 export function isPolishActiveForStep(repoDir: string, step: string): boolean {
   return polishStandDown.read(repoDir)?.step === step;
+}
+
+// §28.4/§28.5.1 — the phase-commit baseline (the SHA a commit side-effect captured on approve) in its OWN file,
+// `baseline-commit.yaml`, disjoint from run-state.yaml. Phase-as-a-loop (§28.4) rewrites run-state wholesale
+// between RED/GREEN/refactor, so a baseline stored in run-state would be clobbered before the next phase's
+// frozen check reads it; a disjoint file is structurally unclobberable (the polish/armed-interrupt pattern).
+// Confined via resolveJail (the loop area sits in the untrusted repo tree, CWE-22/59); field-local validation
+// (CWE-20): a non-object-id sha or blank step is never persisted/read as a baseline.
+const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
+
+function baselineCommitFile(repoDir: string): string | null {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null) return null;
+  return confinedRealPath(jail, path.join(jail, BASELINE_COMMIT_FILE));
+}
+
+/** Record `sha` (the phase commit) under `step` — read by the next phase's frozen check (S4). A blank step or a
+ *  non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop area is
+ *  unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the caller's
+ *  best-effort wrapper keeps it off the critical path. */
+export function recordBaselineCommit(repoDir: string, step: string, sha: string): void {
+  if (step.length === 0 || !isGitObjectId(sha)) return;
+  const file = baselineCommitFile(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step, sha }))) {
+    throw new Error(`cannot write §27 baseline commit: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
+ *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. */
+export function readBaselineCommit(repoDir: string): { step: string; sha: string } | null {
+  const file = baselineCommitFile(repoDir);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc)) return null;
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+  if (typeof doc.sha !== 'string' || !isGitObjectId(doc.sha)) return null;
+  return { step: doc.step, sha: doc.sha };
 }
