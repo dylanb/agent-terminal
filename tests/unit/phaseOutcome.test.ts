@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { PHASE_OUTCOMES, isPhaseOutcome, type PhaseOutcome } from '../../src/shared/phaseOutcome';
+import {
+  PHASE_OUTCOMES,
+  isPhaseOutcome,
+  GREEN_COMPLETING_OUTCOME,
+  type PhaseOutcome,
+} from '../../src/shared/phaseOutcome';
 
 describe('phaseOutcome vocabulary (§28.5.2 / §28.5.5)', () => {
   it('is exactly the four framework-neutral categories (a closed set; §28.5.5 assigns no order)', () => {
@@ -37,5 +42,12 @@ describe('phaseOutcome vocabulary (§28.5.2 / §28.5.5)', () => {
     } else {
       throw new Error('guard should have recognized a member');
     }
+  });
+
+  // §28.5.3 — the ONE test outcome that completes a GREEN turn is single-sourced here so the GREEN gate and the
+  // GREEN prompt derive from one definition (the RED twin, RED_COMPLETING_OUTCOME, already lives beside it).
+  it('the GREEN-completing outcome is `passed` and is a member of the set', () => {
+    expect(GREEN_COMPLETING_OUTCOME).toBe('passed');
+    expect(isPhaseOutcome(GREEN_COMPLETING_OUTCOME)).toBe(true);
   });
 });

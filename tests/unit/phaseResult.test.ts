@@ -94,6 +94,54 @@ describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
     expect(parsed.outcome).toBeNull(); // no valid outcome in the noise
   });
 
+  // UT-RESULT-9 (§28.5.3 / S4) — the GREEN turn's result file carries a SECOND classification, `build:`, in the
+  // same grammar. It is parsed like `outcome` (before the captured-output heading, exact-string, never
+  // normalized) but is OPTIONAL at the grammar level: a RED file that carries no `build:` stays well-formed
+  // (the grammar is phase-agnostic — the GREEN gate, not the grammar, requires `build: built`).
+  const greenBody = (outcome: string, build: string, captured = '$ pnpm run build\n Build succeeded'): string =>
+    `# Phase result\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${outcome}\n${PHASE_RESULT_GRAMMAR.buildLabel}: ${build}\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n${captured}\n`;
+
+  it('parses the build field of a GREEN-shaped result and leaves RED results unaffected', () => {
+    const parsed = parsePhaseResult(greenBody('passed', 'built'));
+    expect(parsed.outcome).toBe('passed');
+    expect(parsed.build).toBe('built');
+    expect(parsed.capturedOutput).not.toBeNull();
+
+    // a RED-shaped file (no build line) → build is null, and it is STILL well-formed (phase-agnostic grammar):
+    const redDoc = examplePhaseResult('failed-assertion');
+    expect(parsePhaseResult(redDoc).build).toBeNull();
+    expect(phaseResultWellFormed(redDoc)).toBe(true);
+  });
+
+  it('never normalizes the build value and never reads it out of the raw captured body', () => {
+    for (const bad of ['Built', 'BUILT', 'build_failed', 'ok', '']) {
+      expect(parsePhaseResult(greenBody('passed', bad)).build).toBeNull();
+    }
+    // a `build:` look-alike line INSIDE the captured output is evidence, never the classification:
+    const spoof = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nsome log\n${PHASE_RESULT_GRAMMAR.buildLabel}: built\n`;
+    expect(parsePhaseResult(spoof).build).toBeNull();
+    expect(parsePhaseResult(spoof).capturedOutput).toContain('built'); // stays in the raw body
+  });
+
+  // UT-RESULT-10 (§28.5.5 / S4) — the ONE canonical example gains an optional build line: RED callers (no
+  // opts) get the byte-for-byte pre-S4 output (no `build:`); GREEN callers get a well-formed `passed`+`built`
+  // few-shot the predicate round-trips. One generator → the prompt few-shot and the fake-agent output cannot
+  // drift from the predicate.
+  it('emits a build line only when asked, keeping the RED example free of one', () => {
+    // no opts → no build line (the RED few-shot/e2e must not shift):
+    for (const outcome of PHASE_OUTCOMES) {
+      expect(examplePhaseResult(outcome)).not.toContain('build');
+    }
+    // GREEN opts → a `build: built` line, BEFORE the captured-output heading, and well-formed + round-tripping:
+    const green = examplePhaseResult('passed', { build: 'built' });
+    const headingIdx = green.indexOf(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    const buildIdx = green.indexOf(`${PHASE_RESULT_GRAMMAR.buildLabel}: built`);
+    expect(buildIdx).toBeGreaterThanOrEqual(0);
+    expect(buildIdx).toBeLessThan(headingIdx);
+    expect(phaseResultWellFormed(green)).toBe(true);
+    expect(parsePhaseResult(green)).toMatchObject({ outcome: 'passed', build: 'built' });
+  });
+
   // UT-RESULT-8 — the captured-output HEADING recognition rule (trim-then-exact, like roundReport's isHeading),
   // and a whitespace-only body is NOT "present" (parallel to roundReport's reason==='' reject).
   it('pins the captured-output heading rule and rejects a whitespace-only body', () => {

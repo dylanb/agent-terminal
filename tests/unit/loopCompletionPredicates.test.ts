@@ -23,6 +23,18 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
     expect(predicates.resultOutcome('outcome: flaky\n\n## captured output\n\nx\n')).toBeNull();
   });
 
+  it('resultBuildOutcome returns the build classification of a well-formed result and null otherwise', () => {
+    const predicates = createLoopCompletionPredicates();
+    // a well-formed GREEN result → its build classification:
+    expect(predicates.resultBuildOutcome(examplePhaseResult('passed', { build: 'built' }))).toBe('built');
+    expect(predicates.resultBuildOutcome(examplePhaseResult('failed-assertion', { build: 'build-failed' }))).toBe('build-failed');
+    // a well-formed result with NO build line → null (the GREEN gate then refuses it — build not `built`):
+    expect(predicates.resultBuildOutcome(examplePhaseResult('passed'))).toBeNull();
+    // a malformed result (no captured output) → null even if a build line parses:
+    expect(predicates.resultBuildOutcome('outcome: passed\nbuild: built\n')).toBeNull();
+    expect(predicates.resultBuildOutcome('')).toBeNull();
+  });
+
   describe('changedTestPaths delegates to the capabilities-sourced detection', () => {
     let repos: GitRepoFixture;
     beforeEach(() => {
