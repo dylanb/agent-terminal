@@ -8,41 +8,50 @@ import {
   createAppGateCommit,
   createRealAppGateCommit,
   type AppGateCommitOperations,
-  type AppGateCommitOutcome,
+  type AppGateCommitStep,
 } from '../../src/main/appGateCommit';
 import { APP_STATE_DIRS } from '../../src/main/appStateDirs';
+import { isGitObjectId } from '../../src/shared/appBootstrap';
 
-// §28.3 — the commit gate side-effect. L1 drives the real adapter against real temp git repos (no git
-// mock — CLAUDE.md); L2 drives the ports-injected port with a fake seam. Assertions are all observable:
-// HEAD delta, commit subject bytes, the commit's file list, porcelain emptiness, .gitignore bytes, a
-// planted-hook/gpg sentinel, thrown errors — never an argv transcript.
+// §28.3/§28.5.1 — the commit gate side-effect, widened to capture the phase-commit SHA (the baseline the next
+// phase's frozen-tests diffs from) AND to stage ONLY the phase's own paths (the injected phase-start snapshot,
+// §28.5.1). L1 drives the real adapter against real temp git repos (no git mock — CLAUDE.md); L2 drives the
+// ports-injected composition with a fake seam, where the §28.5.1 TOCTOU guard and the object-id validation are
+// exercised (a real single-threaded git can't reproduce a raced commit). Assertions are all observable: HEAD
+// delta, the captured SHA vs rev-parse, commit subject bytes, the commit's file list, porcelain emptiness,
+// .gitignore bytes, a planted-hook/gpg sentinel, the injected snapshot the seam received, thrown errors.
 
 const git = (dir: string, ...args: string[]): string =>
   execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 const headCount = (dir: string): number => Number(git(dir, 'rev-list', '--count', 'HEAD'));
+const headSha = (dir: string): string => git(dir, 'rev-parse', 'HEAD');
 const headSubject = (dir: string): string => git(dir, 'log', '-1', '--format=%s');
 const headFiles = (dir: string): string => git(dir, 'show', '--name-only', '--format=', 'HEAD');
 const porcelain = (dir: string): string => git(dir, 'status', '--porcelain');
 
-describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
+describe('createRealAppGateCommit — real git (§28.3/§28.5.1 L1)', () => {
   let fx: GitRepoFixture;
   let repo: string;
 
   beforeEach(() => {
     fx = createGitRepoFixture();
     repo = fx.makeGitRepo('gatecommit');
-    // Baseline + the AC1/AC3 gitignore coupling precondition (mirrors the real repo, .gitignore:14).
     fx.writeRepoFile(repo, '.gitignore', '.agent-terminal/\n');
     fx.writeRepoFile(repo, 'seed.txt', 'seed\n');
     fx.commitAll(repo, 'baseline');
   });
   afterEach(() => fx.cleanup());
 
-  it('T1: advances HEAD by exactly one commit carrying the label, tree clean', async () => {
+  it('T1: advances HEAD by one carrying the label, tree clean, and returns the new commit SHA', async () => {
     fx.writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
     const before = headCount(repo);
-    const outcome = await createRealAppGateCommit(repo)({ label: 'RED: slice-x', dirtyAtPhaseStart: [] });
-    expect(outcome).toBe('committed');
+    const result = await createRealAppGateCommit(repo)({ label: 'RED: slice-x', dirtyAtPhaseStart: [] });
+    expect(result.outcome).toBe('committed');
+    // §28.5.1 — the captured SHA is exactly the new HEAD, read in-adapter (a valid object id):
+    if (result.outcome === 'committed') {
+      expect(result.sha).toBe(headSha(repo));
+      expect(isGitObjectId(result.sha)).toBe(true);
+    }
     expect(headCount(repo)).toBe(before + 1);
     expect(headSubject(repo)).toBe('RED: slice-x');
     expect(porcelain(repo)).toBe('');
@@ -85,7 +94,7 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     expect(files).toContain('src/c.ts');
     expect(files).not.toContain('.agent-terminal');
     expect(existsSync(join(repo, '.agent-terminal/loop/run-state.yaml'))).toBe(true);
-    expect(porcelain(repo)).toBe(''); // ignored file leaves the tree clean
+    expect(porcelain(repo)).toBe('');
   });
 
   it('T4: creates no .gitignore when none exists', async () => {
@@ -99,11 +108,11 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     expect(existsSync(join(bare, '.gitignore'))).toBe(false);
   });
 
-  it('T5: returns nothing-to-commit and does NOT advance HEAD when the tracked tree is clean', async () => {
+  it('T5: returns nothing-to-commit (no SHA) and does NOT advance HEAD when the tracked tree is clean', async () => {
     fx.writeRepoFile(repo, '.agent-terminal/loop/run-state.yaml', 'status: accepted\n'); // ignored only
     const before = headCount(repo);
-    const outcome = await createRealAppGateCommit(repo)({ label: 'refactor: noop', dirtyAtPhaseStart: [] });
-    expect(outcome).toBe('nothing-to-commit');
+    const result = await createRealAppGateCommit(repo)({ label: 'refactor: noop', dirtyAtPhaseStart: [] });
+    expect(result).toEqual({ outcome: 'nothing-to-commit' }); // no `sha` on the no-op arm
     expect(headCount(repo)).toBe(before); // no empty commit
   });
 
@@ -119,8 +128,8 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     fx.writeRepoFile(repo, 'src/e.ts', 'export const e = 5;\n');
     const before = headCount(repo);
     await createRealAppGateCommit(repo)({ label: 'GREEN: hardened', dirtyAtPhaseStart: [] });
-    expect(headCount(repo)).toBe(before + 1); // the commit still lands
-    expect(existsSync(sentinel)).toBe(false); // the hook never ran
+    expect(headCount(repo)).toBe(before + 1);
+    expect(existsSync(sentinel)).toBe(false);
   });
 
   it('T6b: gpg signing is neutralized — the commit lands unsigned and gpg.program never runs', async () => {
@@ -133,8 +142,8 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     fx.writeRepoFile(repo, 'src/f.ts', 'export const f = 6;\n');
     const before = headCount(repo);
     await createRealAppGateCommit(repo)({ label: 'GREEN: unsigned', dirtyAtPhaseStart: [] });
-    expect(headCount(repo)).toBe(before + 1); // the commit still lands
-    expect(existsSync(sentinel)).toBe(false); // gpg.program never ran
+    expect(headCount(repo)).toBe(before + 1);
+    expect(existsSync(sentinel)).toBe(false);
   });
 
   it('T1b: a shell-metachar label lands verbatim as the subject and is never shell-interpreted (CWE-78)', async () => {
@@ -142,23 +151,22 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     const label = 'RED: $(touch ' + sentinel + ') `id`';
     fx.writeRepoFile(repo, 'src/h.ts', 'export const h = 8;\n');
     await createRealAppGateCommit(repo)({ label, dirtyAtPhaseStart: [] });
-    expect(headSubject(repo)).toBe(label); // verbatim — an argv value to -m, not a shell string
-    expect(existsSync(sentinel)).toBe(false); // no command substitution ran
+    expect(headSubject(repo)).toBe(label);
+    expect(existsSync(sentinel)).toBe(false);
   });
 
   it('T3c: excludes ALL app state dirs from a phase commit even without a gitignore (CWE-200, coupling)', async () => {
-    const bare = fx.makeGitRepo('noignore'); // no .gitignore covering the app state dirs
+    const bare = fx.makeGitRepo('noignore');
     fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
     fx.commitAll(bare, 'baseline');
     fx.writeRepoFile(bare, 'src/g.ts', 'export const g = 7;\n');
     for (const dir of APP_STATE_DIRS) fx.writeRepoFile(bare, `${dir}/state.json`, 'SECRET=xyz\n');
     const before = headCount(bare);
-    const outcome = await createRealAppGateCommit(bare)({ label: 'GREEN: enforced', dirtyAtPhaseStart: [] });
-    expect(outcome).toBe('committed');
+    const result = await createRealAppGateCommit(bare)({ label: 'GREEN: enforced', dirtyAtPhaseStart: [] });
+    expect(result.outcome).toBe('committed');
     expect(headCount(bare)).toBe(before + 1);
     const files = headFiles(bare);
     expect(files).toContain('src/g.ts');
-    // iterating APP_STATE_DIRS pins the coupling to the clean-tree set: a dir added there is excluded here too
     for (const dir of APP_STATE_DIRS) expect(files).not.toContain(dir);
   });
 
@@ -166,11 +174,11 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     const bare = fx.makeGitRepo('noignore2');
     fx.writeRepoFile(bare, 'seed.txt', 'seed\n');
     fx.commitAll(bare, 'baseline');
-    for (const dir of APP_STATE_DIRS) fx.writeRepoFile(bare, `${dir}/state.json`, 'x\n'); // app state only
+    for (const dir of APP_STATE_DIRS) fx.writeRepoFile(bare, `${dir}/state.json`, 'x\n');
     const before = headCount(bare);
-    const outcome = await createRealAppGateCommit(bare)({ label: 'refactor: noop-enforced', dirtyAtPhaseStart: [] });
-    expect(outcome).toBe('nothing-to-commit');
-    expect(headCount(bare)).toBe(before); // no empty commit; AC3 reachable independent of .gitignore
+    const result = await createRealAppGateCommit(bare)({ label: 'refactor: noop-enforced', dirtyAtPhaseStart: [] });
+    expect(result).toEqual({ outcome: 'nothing-to-commit' });
+    expect(headCount(bare)).toBe(before);
   });
 
   it('T-fail: a genuine git failure (outside a git repo) rejects rather than silently no-op', async () => {
@@ -186,8 +194,8 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     fx.writeRepoFile(repo, 'seed.txt', 'operator wip\n'); // operator WIP present when the phase starts
     fx.writeRepoFile(repo, 'src/p.ts', 'export const p = 1;\n'); // the phase's own change
     const before = headCount(repo);
-    const outcome = await createRealAppGateCommit(repo)({ label: 'GREEN: phase', dirtyAtPhaseStart: ['seed.txt'] });
-    expect(outcome).toBe('committed');
+    const result = await createRealAppGateCommit(repo)({ label: 'GREEN: phase', dirtyAtPhaseStart: ['seed.txt'] });
+    expect(result.outcome).toBe('committed');
     expect(headCount(repo)).toBe(before + 1);
     const files = headFiles(repo);
     expect(files).toContain('src/p.ts'); // phase change committed
@@ -210,8 +218,8 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
   it('Tw3: nothing-to-commit when every change was already dirty at phase start (no phase-produced change)', async () => {
     fx.writeRepoFile(repo, 'seed.txt', 'operator wip\n'); // operator WIP only — the phase produced nothing
     const before = headCount(repo);
-    const outcome = await createRealAppGateCommit(repo)({ label: 'refactor: noop', dirtyAtPhaseStart: ['seed.txt'] });
-    expect(outcome).toBe('nothing-to-commit');
+    const result = await createRealAppGateCommit(repo)({ label: 'refactor: noop', dirtyAtPhaseStart: ['seed.txt'] });
+    expect(result).toEqual({ outcome: 'nothing-to-commit' });
     expect(headCount(repo)).toBe(before); // no empty commit
     expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('operator wip\n'); // WIP preserved
   });
@@ -224,15 +232,15 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     fx.writeRepoFile(repo, 'src/keep.ts', 'export const k = 1;\n'); // the phase's own change — MUST be committed
     // Interpreted, `:(glob)src/**` would unstage the phase's own src/keep.ts and drop it from the commit;
     // as a literal path it matches a (non-existent) file of that name and changes nothing.
-    const outcome = await createRealAppGateCommit(repo)({ label: 'GREEN: literal', dirtyAtPhaseStart: [':(glob)src/**'] });
-    expect(outcome).toBe('committed');
+    const result = await createRealAppGateCommit(repo)({ label: 'GREEN: literal', dirtyAtPhaseStart: [':(glob)src/**'] });
+    expect(result.outcome).toBe('committed');
     expect(headFiles(repo)).toContain('src/keep.ts'); // the magic pathspec did NOT steer the reset
   });
 
   it('Tw5: an option-shaped snapshot entry is a pathspec, never an option — no destructive `git reset --hard` (CWE-88)', async () => {
     fx.writeRepoFile(repo, 'src/keep.ts', 'export const k = 1;\n'); // staged phase change a `reset --hard` would destroy
-    const outcome = await createRealAppGateCommit(repo)({ label: 'GREEN: dashdash', dirtyAtPhaseStart: ['--hard'] });
-    expect(outcome).toBe('committed');
+    const result = await createRealAppGateCommit(repo)({ label: 'GREEN: dashdash', dirtyAtPhaseStart: ['--hard'] });
+    expect(result.outcome).toBe('committed');
     expect(headFiles(repo)).toContain('src/keep.ts'); // `--hard` was an inert pathspec, not a worktree-wiping option
     expect(readFileSync(join(repo, 'src/keep.ts'), 'utf8')).toBe('export const k = 1;\n'); // worktree intact
   });
@@ -249,37 +257,59 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
   });
 });
 
-describe('createAppGateCommit — ports-injected (§28.3 L2)', () => {
+describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
+  const OID = (c: string): string => c.repeat(40);
   const fakeOps = (
-    outcome: AppGateCommitOutcome = 'committed',
-  ): { ops: AppGateCommitOperations; calls: { label: string; dirtyAtPhaseStart: readonly string[] }[] } => {
+    step: AppGateCommitStep,
+    headBefore = OID('a'),
+  ): {
+    ops: AppGateCommitOperations;
+    calls: { label: string; dirtyAtPhaseStart: readonly string[] }[];
+  } => {
     const calls: { label: string; dirtyAtPhaseStart: readonly string[] }[] = [];
     return {
       calls,
       ops: {
+        headCommit: async () => headBefore,
         commitWorkingTree: async (label, dirtyAtPhaseStart) => {
           calls.push({ label, dirtyAtPhaseStart });
-          return outcome;
+          return step;
         },
       },
     };
   };
 
-  it('T7: passes the descriptor label AND the phase-start snapshot to the seam unchanged and returns its outcome', async () => {
-    const { ops, calls } = fakeOps('committed');
-    const outcome = await createAppGateCommit(ops)({ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] });
+  it('T7: passes the label AND the phase-start snapshot to the seam and returns { committed, sha } when the parent matches the pre-commit head', async () => {
+    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a') }, OID('a'));
+    const result = await createAppGateCommit(ops)({ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] });
     expect(calls).toEqual([{ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] }]);
-    expect(outcome).toBe('committed');
+    expect(result).toEqual({ outcome: 'committed', sha: OID('c') });
   });
 
   it('T8: throws on an empty/whitespace label before touching the seam', async () => {
-    const { ops, calls } = fakeOps();
+    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a') });
     await expect(createAppGateCommit(ops)({ label: '   ', dirtyAtPhaseStart: [] })).rejects.toThrow();
-    expect(calls).toEqual([]); // never attempted an unlabeled commit
+    expect(calls).toEqual([]);
   });
 
-  it('T9: propagates a benign nothing-to-commit outcome without throwing', async () => {
-    const { ops } = fakeOps('nothing-to-commit');
-    await expect(createAppGateCommit(ops)({ label: 'refactor: noop', dirtyAtPhaseStart: [] })).resolves.toBe('nothing-to-commit');
+  it('T9: propagates a benign nothing-to-commit outcome without throwing (no SHA)', async () => {
+    const { ops } = fakeOps({ outcome: 'nothing-to-commit' });
+    await expect(createAppGateCommit(ops)({ label: 'refactor: noop', dirtyAtPhaseStart: [] })).resolves.toEqual({
+      outcome: 'nothing-to-commit',
+    });
+  });
+
+  // IT-COMMIT-1b — §28.5.1 TOCTOU: the operated repo hosts a live agent sharing the working tree. If a commit
+  // raced into the window, the new commit's parent would NOT be the head we captured before committing → refuse
+  // to record a poisoned baseline (fail toward firing — no result returned).
+  it('T-TOCTOU: refuses when the new commit parent is not the pre-commit head (a raced commit)', async () => {
+    const { ops } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('b') }, OID('a'));
+    await expect(createAppGateCommit(ops)({ label: 'RED: raced', dirtyAtPhaseStart: [] })).rejects.toThrow();
+  });
+
+  // IT-COMMIT-1c — a garbage SHA from git must never become a persisted baseline (CWE-20).
+  it('T-garbage-sha: throws when the seam yields a non-object-id SHA', async () => {
+    const { ops } = fakeOps({ outcome: 'committed', sha: 'not-a-real-object-id', parentSha: OID('a') }, OID('a'));
+    await expect(createAppGateCommit(ops)({ label: 'RED: garbage', dirtyAtPhaseStart: [] })).rejects.toThrow();
   });
 });
