@@ -99,6 +99,22 @@ describe('changedTestPaths (§28.5.1)', () => {
     ]);
   });
 
+  // A REAL git-detected rename (git mv to a NOT-pre-existing destination) — the case the fixture above cannot
+  // exercise (it modifies a pre-seeded src/a.ts, which git classifies as Modify, not a rename). With git's
+  // default rename detection ON, `--name-only base..HEAD` would show only the destination and the moved-out
+  // frozen test would VANISH; `--no-renames` is what decomposes it back to a delete so the frozen check still
+  // sees it. This test fails if `--no-renames` is ever dropped (a silent hole this slice's review found).
+  it('flags a frozen test moved out via a REAL detected rename (pins --no-renames)', async () => {
+    const dir = repos.makeGitRepo('frozen-tests');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'unique frozen body\nl2\nl3\n');
+    const baseline = repos.commitAll(dir, 'seed with test (no dest yet)');
+    repos.git(dir, ['mv', 'tests/a.test.ts', 'moved.ts']); // git-detected rename (identical content)
+    const head = repos.commitAll(dir, 'move test out (rename)');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
   it('accepts a symbolic head ref (HEAD)', async () => {
     const { dir, baseline } = seeded();
     repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
@@ -349,6 +365,19 @@ describe('changedTestPaths (§28.5.1)', () => {
       'tests/sub',
     );
   });
+
+  // The app's own state dirs are never a test path even under a matching glob, on the commit↔commit branch too
+  // (the shared matchedTestPaths applies the exclusion to BOTH modes — pinned here so the commit-mode behavior is
+  // not left to the working-tree block alone; CWE-200).
+  it('never counts the app state dirs as a changed test even under a matching glob (commit↔commit)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n');
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n');
+    const head = repos.commitAll(dir, 'app state + a real test');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: ['**'] })).resolves.toEqual([
+      'tests/real.test.ts',
+    ]);
+  });
 });
 
 // §28.5.3 (S4) — the GREEN frozen check: `changedTestPaths` with `head` OMITTED compares the baseline commit to
@@ -418,6 +447,16 @@ describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)'
   it('returns [] when the working tree matches the baseline (clean GREEN)', async () => {
     const { dir, baseline } = seeded();
     await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('flags a frozen test moved out via a REAL detected rename in the working tree (pins --no-renames)', async () => {
+    const dir = repos.makeGitRepo('frozen-wt');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'unique frozen body\nl2\nl3\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline)');
+    repos.git(dir, ['mv', 'tests/a.test.ts', 'moved.ts']); // staged rename, uncommitted — the working tree
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
   });
 
   it('keys off the RECORDED baseline, so a test committed during the turn (HEAD moved off baseline) still shows', async () => {
