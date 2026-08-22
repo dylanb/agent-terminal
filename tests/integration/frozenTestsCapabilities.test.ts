@@ -28,6 +28,20 @@ describe('changedTestPathsFromCapabilities (§28.5.1 + §28.5.4 composed)', () =
     });
   });
 
+  it('with head omitted, sources globs and returns the working-tree changed tests (§28.5.3 GREEN frozen check)', async () => {
+    const dir = repos.makeGitRepo('frozen-caps-wt');
+    repos.writeRepoFile(dir, LOOP_CAPABILITIES_FILENAME, 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline)');
+    repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a2\n'); // uncommitted working-tree edit
+    repos.writeRepoFile(dir, 'tests/new.test.ts', 'n\n'); // untracked add
+
+    await expect(changedTestPathsFromCapabilities({ repoDir: dir, baseline })).resolves.toEqual({
+      ok: true,
+      paths: ['tests/foo.test.ts', 'tests/new.test.ts'],
+    });
+  });
+
   it('surfaces cause "absent" when the repo has no capabilities file', async () => {
     const dir = repos.makeGitRepo('frozen-caps-absent');
     repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a\n');
