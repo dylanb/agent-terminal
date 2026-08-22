@@ -24,9 +24,11 @@ export interface LoopCompletionPredicates {
    *  set AND raw captured output present); null when malformed/absent or the build line is missing/unknown. The
    *  GREEN completion gate requires this to equal `built` (alongside `resultOutcome === passed`). */
   resultBuildOutcome(content: string): BuildOutcome | null;
-  /** The test-glob files that changed between the RED baseline and head, per the BASELINE's committed
-   *  capabilities (§28.5.1) — a git-blob read, so its failure arm is absent/malformed only (no `confinement`). */
-  changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<ChangedTestPathsResult>;
+  /** The test-glob files that changed since the RED baseline, per the BASELINE's committed capabilities
+   *  (§28.5.1) — a git-blob read, so its failure arm is absent/malformed only (no `confinement`). With `head` →
+   *  commit↔commit; with `head` OMITTED → baseline ↔ WORKING TREE, the GREEN frozen check run at completion
+   *  before the phase commit lands (§28.5.3). */
+  changedTestPaths(query: { repoDir: string; baseline: string; head?: string }): Promise<ChangedTestPathsResult>;
   /** §28.5.2a — the test-glob files this turn ADDED LINES to in the working tree (vs HEAD), per the repo's
    *  WORKING-TREE capabilities: the RED "a failing test was authored" ground truth. Its failure arm
    *  (absent/malformed/confinement — the working-tree loader can refuse) lets the RED gate surface a distinct reason. */
