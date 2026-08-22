@@ -21,7 +21,8 @@ import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type Tur
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
-import { RED_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
@@ -78,6 +79,7 @@ export interface AppLoopLiveError {
 type AppCompletion =
   | { kind: 'file'; path: string; marker: string; artifactRel: string }
   | { kind: 'red'; resultPath: string; resultRel: string }
+  | { kind: 'green'; resultPath: string; resultRel: string }
   | { kind: 'commits' }
   | { kind: 'unresolved' };
 
@@ -131,6 +133,15 @@ export interface AppLoopEngineDeps {
   resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
   /** §28.5.3 — the machine completion predicates the RED/GREEN gate consults (a domain-concept seam). */
   completionPredicates: LoopCompletionPredicates;
+  /** §28.5.3/§28.8.3 — record the GREEN turn's changed-test flag (the test-glob files the frozen check found
+   *  changed since the RED baseline) under the turn's step. Best-effort here: the engine wraps the call so a
+   *  write failure audits and never aborts the turn advance. A domain seam (composition root wires the disjoint
+   *  `changed-tests.yaml` writer). */
+  recordChangedTests(repoDir: string, step: string, paths: readonly string[]): void;
+  /** §28.5.1 — the RED baseline (SHA + the step it was recorded under) the GREEN frozen check diffs the working
+   *  tree against. Null when unset; the GREEN gate blocks on an absent or step-mismatched baseline (D-baseline).
+   *  A domain seam (composition root wires `readBaselineCommit`). */
+  readBaseline(repoDir: string): { step: string; sha: string } | null;
 }
 
 export interface AppLoopEngine {
@@ -348,11 +359,12 @@ function activeTurnFor(
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion:
-      def.work.completion === 'red'
-        ? // §28.5.5 F1 — a fresh completion:red def is parse-guaranteed to have a result binding; only a
+      def.work.completion === 'red' || def.work.completion === 'green'
+        ? // §28.5.5 F1 — a fresh completion:red/green def is parse-guaranteed to have a result binding; only a
           // resumed turn whose def lost it lands here without one → unresolved (never a free-passing commits).
+          // red and green share the result-file payload, differing only in the gate the completion kind selects.
           artifact
-          ? { kind: 'red', resultPath: artifact.path, resultRel: artifact.rel }
+          ? { kind: def.work.completion, resultPath: artifact.path, resultRel: artifact.rel }
           : { kind: 'unresolved' }
         : artifact
           ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
@@ -368,13 +380,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // trigger. Set true from `entered` until `triggerDeferredTurn`/`cancelDeferredTurn`; while true the runner
   // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle (§B.5 item 6(b)).
   let awaitingTrigger = false;
-  // §28.5.3 — the RED turn whose async completion gate (redAsyncGate) is currently in flight. The host
-  // done-file watcher (turnDoneFile) is NOT debounced — it leans on the runner being synchronously idempotent
-  // — but the async RED path breaks that: two done-signals for one write would spawn two gates, and the second
-  // (stale) would land on a just-injected retry, collapsing MAX_ATTEMPTS or (if the working tree flips between
-  // the two git checks) fabricating a pass. This flag suppresses a duplicate signal WHILE a gate is pending; a
-  // genuine retry's real done-signal (after the flag clears) still spawns a fresh gate.
-  let redGatePendingFor: ActiveAppTurn | null = null;
+  // §28.5.3 — the RED/GREEN turn whose async completion gate is currently in flight. The host done-file watcher
+  // (turnDoneFile) is NOT debounced — it leans on the runner being synchronously idempotent — but the async gate
+  // breaks that: two done-signals for one write would spawn two gates, and the second (stale) would land on a
+  // just-injected retry, collapsing MAX_ATTEMPTS or (if git state flips between the two checks) fabricating a
+  // pass. This flag suppresses a duplicate signal WHILE a gate is pending; a genuine retry's real done-signal
+  // (after the flag clears) still spawns a fresh gate. One slot suffices — only one work turn is active at a time.
+  let asyncGatePendingFor: ActiveAppTurn | null = null;
+  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths, computed by greenAsyncGate on the done-signal and
+  // drained by onComplete (which records the flag then enters review). Identity-carrying so a stale gate that
+  // resolves after a retry rebuilt `active` cannot record its paths against the fresh turn.
+  let pendingChangedTests: { turn: ActiveAppTurn; paths: string[] } | null = null;
   let runner: TurnRunner;
   // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
@@ -537,6 +553,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (content === null) return false;
         return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
       }
+      case 'green': {
+        // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
+        // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
+        // result). The async clauses (baseline present+step-matched, the exit-direction, and the NON-blocking
+        // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
+        const content = deps.readArtifact(active.completion.resultPath);
+        if (content === null) return false;
+        return (
+          deps.completionPredicates.resultOutcome(content) === GREEN_COMPLETING_OUTCOME &&
+          deps.completionPredicates.resultBuildOutcome(content) === GREEN_COMPLETING_BUILD_OUTCOME
+        );
+      }
     }
   };
 
@@ -570,6 +598,64 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return { ok: true };
     } catch (e) {
       return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  };
+
+  /** §28.5.3 / §28 Option C — the GREEN turn's ASYNC machine ground truth. Returns the PrecomputedGate (baseline
+   *  present + step-matched, then the exit-direction) AND the frozen-check paths the NON-blocking flag records
+   *  (or `null` when the check could not run — in which case the gate blocks). The frozen RESULT never sets the
+   *  gate false (§28.8.3 detect-and-escalate); only the baseline guard and exit-direction do. Never rejects — an
+   *  unexpected throw is a fail-toward-firing gate. */
+  const greenAsyncGate = async (
+    a: ActiveAppTurn,
+  ): Promise<{ gate: PrecomputedGate; changedTests: string[] | null }> => {
+    try {
+      // §28.5.1/D-baseline — the frozen check keys off the RED baseline; a missing OR step-mismatched baseline
+      // means "tests unchanged" cannot be proven, so the gate BLOCKS (fail toward firing), never silently reading
+      // as "nothing changed". The phase-stable step reduction (S7's phase-qualified steps) is the deferred §12
+      // piece; S4 steps are stable, so a raw `===` match is correct now (see readBaselineCommit's §12 note).
+      const baseline = deps.readBaseline(a.repoDir);
+      if (baseline === null || baseline.step !== a.stepId) {
+        return {
+          gate: { ok: false, reason: 'GREEN cannot run the frozen check — no RED baseline is recorded for this step' },
+          changedTests: null,
+        };
+      }
+      // §28.5.3 — the frozen check: which test-glob files changed since the baseline (working tree, head omitted).
+      const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
+      if (!changed.ok) {
+        // Surface the CAUSE (a closed enum) as a distinct static reason — never `changed.reason` (CWE-117).
+        const why =
+          changed.cause === 'confinement'
+            ? 'the repository loop-capabilities path is refused'
+            : changed.cause === 'malformed'
+              ? 'the repository loop-capabilities file is malformed'
+              : 'the repository has no loop-capabilities file';
+        return { gate: { ok: false, reason: `GREEN cannot run the frozen check — ${why}` }, changedTests: null };
+      }
+      const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
+      // §28.5.2a — exit non-zero ⇒ the agent may not claim GREEN (OPPOSITE of RED's exit-0 clause). DORMANT until
+      // N7/#92 wires a source; injecting an exit code exercises the direction.
+      if (exit !== null && exit !== 0) {
+        return { gate: { ok: false, reason: `the test command exited ${exit} — that is not a GREEN pass` }, changedTests: null };
+      }
+      return { gate: { ok: true }, changedTests: changed.paths };
+    } catch (e) {
+      return {
+        gate: { ok: false, reason: `GREEN completion check failed: ${e instanceof Error ? e.message : String(e)}` },
+        changedTests: null,
+      };
+    }
+  };
+
+  /** §28.5.3/§28.8.3 — record the GREEN changed-test flag best-effort: a write failure is audited and NEVER
+   *  aborts the turn advance (CODE-STANDARDS best-effort side effect, coercing the caught value as unknown).
+   *  Called on both completion routes (the done-signal via onComplete, the human-accept via routeOut). */
+  const recordChangedTestsFlag = (a: ActiveAppTurn, paths: string[]): void => {
+    try {
+      deps.recordChangedTests(a.repoDir, a.stepId, paths);
+    } catch (e) {
+      deps.audit(a.repoDir, `§28 GREEN turn ${a.turnKey} changed-tests flag record failed: ${e instanceof Error ? e.message : String(e)}`, 1);
     }
   };
 
@@ -614,7 +700,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ? { kind: 'file', artifactRel: active.completion.artifactRel, marker: active.completion.marker }
             : active.completion.kind === 'red'
               ? { kind: 'red', resultRel: active.completion.resultRel }
-              : null,
+              : active.completion.kind === 'green'
+                ? { kind: 'green', resultRel: active.completion.resultRel }
+                : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
       });
@@ -642,6 +730,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onComplete: (turnKey) => {
       if (!active) return;
       if (active.phase === 'work') {
+        // §28.5.3/§28.8.3 — a completed GREEN work turn records its (non-blocking) changed-test flag from the
+        // gate's stash before advancing. Identity-guarded (`turn === active`) so a stale gate's paths can never
+        // be recorded against a fresh turn; the stash is cleared either way so it never leaks to a later turn.
+        if (active.completion.kind === 'green' && pendingChangedTests?.turn === active) {
+          recordChangedTestsFlag(active, pendingChangedTests.paths);
+        }
+        pendingChangedTests = null;
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
@@ -904,15 +999,28 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const a = active;
       if (a?.completion.kind === 'red') {
         // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
-        // re-enter the SYNC runner with the pre-evaluated gate. Guards: `redGatePendingFor` dedupes a duplicate
+        // re-enter the SYNC runner with the pre-evaluated gate. Guards: `asyncGatePendingFor` dedupes a duplicate
         // (un-debounced) done-signal while a gate is pending; the runner stays 'in-flight' during the await, so
         // a concurrent onStall that errors the turn makes this late signal a no-op (runner state guard); and a
         // turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
-        if (redGatePendingFor === a) return;
-        redGatePendingFor = a;
+        if (asyncGatePendingFor === a) return;
+        asyncGatePendingFor = a;
         void redAsyncGate(a).then((gate) => {
-          redGatePendingFor = null; // cleared before re-checking, so a genuine retry's real signal spawns a fresh gate
+          asyncGatePendingFor = null; // cleared before re-checking, so a genuine retry's real signal spawns a fresh gate
           if (active === a) runner.onDoneSignal(gate);
+        });
+      } else if (a?.completion.kind === 'green') {
+        // §28.5.3 — the GREEN gate shares the same async machinery (dedup + identity + runner-state guards) and
+        // additionally stashes the non-blocking frozen paths for onComplete. The stash write sits INSIDE the
+        // `active === a` guard so a stale gate resolving after a retry cannot clobber the fresh turn's flag.
+        if (asyncGatePendingFor === a) return;
+        asyncGatePendingFor = a;
+        void greenAsyncGate(a).then(({ gate, changedTests }) => {
+          asyncGatePendingFor = null;
+          if (active === a) {
+            if (changedTests !== null) pendingChangedTests = { turn: a, paths: changedTests };
+            runner.onDoneSignal(gate);
+          }
         });
       } else {
         runner.onDoneSignal();
@@ -993,6 +1101,25 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               return;
             }
             acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`);
+          });
+          return;
+        }
+        // §28.5.3 / AC3 — a GREEN work turn's accept mirrors the RED accept: it requires BOTH the sync clause
+        // (result present + passed + built) AND the async gate (baseline present+step-matched, exit-direction).
+        // It ALSO records the non-blocking changed-test flag on this override route (the done-signal route records
+        // it via onComplete; the accept route has no onComplete, so it records here — else an operator-accepted
+        // GREEN turn with a changed test would complete with the flag never written).
+        if (active.completion.kind === 'green') {
+          const a = active;
+          void greenAsyncGate(a).then(({ gate, changedTests }) => {
+            if (active !== a) return; // a retry/terminate changed the turn under the await
+            if (!completionSatisfied()) return; // the sync clause fails (missing/malformed/not passed+built)
+            if (!gate.ok) {
+              refuseRouteOut('turn-error', gate.reason);
+              return;
+            }
+            if (changedTests !== null) recordChangedTestsFlag(a, changedTests);
+            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (GREEN gate satisfied)`);
           });
           return;
         }
