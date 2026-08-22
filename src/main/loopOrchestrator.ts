@@ -62,6 +62,11 @@ export interface TurnRunnerDeps {
   noteSettle(): void;
 }
 
+/** A completion condition a caller evaluated ahead of the done-signal (the engine's async machine ground truth
+ *  for a RED/GREEN turn, §28 Option C), threaded into `onDoneSignal` and ANDed with the runner's own sync
+ *  `artifactPresent()`. `reason` becomes the error-surface text when `ok` is false. */
+export type PrecomputedGate = { ok: boolean; reason?: string };
+
 export interface TurnRunner {
   /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§27.2).
    *  `opts.preamble` (§27.12) is a command drained BEFORE the turn prompt — the actor-boundary /clear —
@@ -73,8 +78,10 @@ export interface TurnRunner {
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
    *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§27.2). */
   onInjectable(): void;
-  /** A done-signal was observed for the in-flight turn (§27.12). */
-  onDoneSignal(): void;
+  /** A done-signal was observed for the in-flight turn (§27.12). `gate` is an OPTIONAL completion condition the
+   *  caller pre-evaluated (the engine's async RED machine-ground-truth, §28 Option C), ANDed with the runner's
+   *  own `artifactPresent()`; omit it for turn types with no such condition (unchanged behavior). */
+  onDoneSignal(gate?: PrecomputedGate): void;
   /** A visible-content-change edge (§8.3) was observed — reset the in-flight turn's stall watchdog. */
   noteActivity(): void;
   /** The stall watchdog elapsed for the in-flight turn (no visible activity for the whole window). */
@@ -161,10 +168,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     if (k !== null) deps.onComplete(k);
   };
 
-  const resolveCompletion = (): void => {
+  const resolveCompletion = (gate?: PrecomputedGate): void => {
     if (state !== 'in-flight') return;
-    if (deps.artifactPresent()) succeed();
-    else fail('done-signal received but the turn artifact is missing');
+    const g = gate ?? { ok: true };
+    // Both the sync artifact check and the caller's pre-evaluated gate must hold. This runs while state is
+    // still 'in-flight', so a not-satisfied result routes through the existing fail() -> retry-then-error with
+    // NO new runner state (§28 Option C). A false gate carries the caller's reason to the error surface.
+    if (deps.artifactPresent() && g.ok) succeed();
+    else fail(g.reason ?? 'done-signal received but the turn artifact is missing');
   };
 
   return {
@@ -192,8 +203,8 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     onInjectable() {
       if (state === 'in-flight' && awaitingInjectable) tryInject();
     },
-    onDoneSignal() {
-      resolveCompletion();
+    onDoneSignal(gate) {
+      resolveCompletion(gate);
     },
     noteActivity() {
       // Every §8.3 visible-content edge resets the stall watchdog: a streaming turn never stalls, only a
