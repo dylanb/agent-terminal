@@ -17,7 +17,7 @@
 // signal, the stall timer, the §27 loop-state writer, and the flow — never the primitives behind them.
 
 import path from 'node:path';
-import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
+import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
@@ -76,6 +76,7 @@ export interface AppLoopLiveError {
  *  true artifact, never fabricate a pass (CWE-754). */
 type AppCompletion =
   | { kind: 'file'; path: string; marker: string; artifactRel: string }
+  | { kind: 'red'; resultPath: string; resultRel: string }
   | { kind: 'commits' }
   | { kind: 'unresolved' };
 
@@ -345,9 +346,16 @@ function activeTurnFor(
     turnKey: `${WORK_TURN_PREFIX}${stepId}`,
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
-    completion: artifact
-      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
-      : { kind: 'commits' },
+    completion:
+      def.work.completion === 'red'
+        ? // §28.5.5 F1 — a fresh completion:red def is parse-guaranteed to have a result binding; only a
+          // resumed turn whose def lost it lands here without one → unresolved (never a free-passing commits).
+          artifact
+          ? { kind: 'red', resultPath: artifact.path, resultRel: artifact.rel }
+          : { kind: 'unresolved' }
+        : artifact
+          ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
+          : { kind: 'commits' },
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
   };
@@ -510,6 +518,42 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return false; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
       case 'file':
         return artifactWellFormed(deps.readArtifact(active.completion.path), active.completion.marker);
+      case 'red': {
+        // §28.5.3 — the SYNCHRONOUS RED clause: the result file is shape-valid AND classifies `failed-assertion`
+        // (via the injected resultOutcome, which returns the outcome only for a well-formed result — AC3). The
+        // async "a test file was added" + exit-direction clauses are the engine's redAsyncGate, threaded to the
+        // runner via the done-signal (§28 Option C). The human-accept OVERRIDE (routeOut) intentionally gates on
+        // this sync clause alone — relaxing the machine async clauses exactly as the review-turn accept relaxes
+        // report well-formedness (§27.12c) — while the normal done-signal path enforces the full gate.
+        const content = deps.readArtifact(active.completion.resultPath);
+        if (content === null) return false;
+        return deps.completionPredicates.resultOutcome(content) === 'failed-assertion';
+      }
+    }
+  };
+
+  /** §28.5.3 / §28 Option C — the RED turn's ASYNC machine ground truth (git + best-effort exit code), computed
+   *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
+   *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
+   *  rejects — an unexpected throw is a fail-toward-firing gate. */
+  const redAsyncGate = async (a: ActiveAppTurn): Promise<PrecomputedGate> => {
+    try {
+      const added = await deps.completionPredicates.workingTreeTestPaths({ repoDir: a.repoDir });
+      if (!added.ok) {
+        return { ok: false, reason: 'the repository loop-capabilities are missing or unreadable — RED cannot verify a test was added' };
+      }
+      if (added.paths.length === 0) {
+        return { ok: false, reason: 'RED requires a failing test — no test file was added this turn' };
+      }
+      const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
+      // §28.5.2a — exit 0 ⇒ the agent may not claim RED. DORMANT until N7/#92 wires a source (recoverExitCode
+      // returns null today), but a real, tested bound: injecting an exit code exercises this direction.
+      if (exit !== null && exit === 0) {
+        return { ok: false, reason: 'the test command exited 0 — that is not a RED failure' };
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
     }
   };
 
@@ -835,7 +879,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       runner.onInjectable();
     },
     onDoneSignal() {
-      runner.onDoneSignal();
+      const a = active;
+      if (a?.completion.kind === 'red') {
+        // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
+        // re-enter the SYNC runner with the pre-evaluated gate. The runner stays 'in-flight' during the await,
+        // so a concurrent onStall that errors the turn makes this late onDoneSignal a no-op (state guard) and a
+        // turn that changed under us is ignored (active identity).
+        void redAsyncGate(a).then((gate) => {
+          if (active === a) runner.onDoneSignal(gate);
+        });
+      } else {
+        runner.onDoneSignal();
+      }
     },
     noteActivity() {
       runner.noteActivity();
