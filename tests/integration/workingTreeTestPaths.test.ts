@@ -22,23 +22,39 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     return dir;
   }
 
-  // IT-WORKTREE-1
   it('returns an untracked test file added to the working tree (the common RED case)', async () => {
     const dir = committed();
     repos.writeRepoFile(dir, 'tests/new.test.ts', 't\n'); // untracked, uncommitted
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual(['tests/new.test.ts']);
   });
 
-  // IT-WORKTREE-2
-  it('returns a tracked test file modified in the working tree', async () => {
+  it('returns a tracked test file whose modification ADDED lines', async () => {
     const dir = repos.makeGitRepo('worktree-tests');
     repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
     repos.commitAll(dir, 'seed with test');
-    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n'); // modified, uncommitted
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\n'); // +1 line
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual(['tests/a.test.ts']);
   });
 
-  // IT-WORKTREE-3
+  // §28.5.2a is "must ADD lines" — a turn that authored no failing test must NOT satisfy the clause. A pure
+  // DELETION and a line-REMOVAL-only edit both have added-count 0, so both are excluded (the false-pass the
+  // three review lanes caught: `git diff --name-only` would have counted a deletion as "a test was added").
+  it('excludes a tracked test file that was only DELETED this turn (no false pass)', async () => {
+    const dir = repos.makeGitRepo('worktree-tests');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\nc\n');
+    repos.commitAll(dir, 'seed with test');
+    repos.removeRepoFile(dir, 'tests/a.test.ts'); // deleted in the working tree
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('excludes a tracked test file whose edit only REMOVED lines (added-count 0)', async () => {
+    const dir = repos.makeGitRepo('worktree-tests');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\nc\n');
+    repos.commitAll(dir, 'seed with test');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n'); // removed 2 lines, added 0
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
   it('returns [] when only non-test files changed (the "you did not write a test" case)', async () => {
     const dir = committed();
     repos.writeRepoFile(dir, 'src/a.ts', 's2\n'); // modified source
@@ -46,7 +62,6 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
   });
 
-  // IT-WORKTREE-4
   it('returns [] when the working tree is clean', async () => {
     const dir = committed();
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
@@ -64,7 +79,6 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: ['**'] })).resolves.toEqual(['tests/real.test.ts']);
   });
 
-  // IT-WORKTREE-6
   it('returns only paths matching testGlobs, and rejects an empty testGlobs (fail toward firing)', async () => {
     const dir = committed();
     repos.writeRepoFile(dir, 'tests/x.test.ts', 't\n');
@@ -73,7 +87,6 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: [] })).rejects.toThrow();
   });
 
-  // IT-WORKTREE-7 — non-ASCII name (the -z raw-output contract)
   it('detects a test file with a non-ASCII name (the -z contract)', async () => {
     const dir = committed();
     repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\n');
@@ -82,11 +95,34 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     ]);
   });
 
-  // IT-WORKTREE-8 — HEAD unresolvable (no commits) → rejects, never []
+  // HEAD unresolvable (no commits) → rejects, never []
   it('rejects rather than reporting [] when the repo has no commits (fail toward firing)', async () => {
     const dir = repos.makeGitRepo('worktree-empty'); // git init, nothing committed → no HEAD
     repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).rejects.toThrow();
+  });
+
+  it('returns the union of both arms sorted (one path per arm, in unsorted arrival order)', async () => {
+    const dir = repos.makeGitRepo('worktree-tests');
+    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\n');
+    repos.commitAll(dir, 'seed z');
+    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\nz2\n'); // tracked-modified (diff arm) → arrives first
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n'); // untracked (ls-files arm) → arrives second
+    // arrival is [z, a]; the result must be sorted → the .sort() is load-bearing here:
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+      'tests/z.test.ts',
+    ]);
+  });
+
+  it('detects a modified tracked test with a non-ASCII name on the diff arm (the -z contract)', async () => {
+    const dir = repos.makeGitRepo('worktree-tests');
+    repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\n');
+    repos.commitAll(dir, 'seed unicode');
+    repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\nv\n'); // tracked-modified, +1 line → diff arm
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/café-ünïcode.test.ts',
+    ]);
   });
 
   // IT-WORKTREE-CAP — the capabilities-sourced wrapper

@@ -3,7 +3,7 @@
 // that domain concept, not the mechanisms behind it (CLAUDE.md injection-seam rule).
 import { isPhaseOutcome, type PhaseOutcome } from '../shared/phaseOutcome';
 import { phaseResultWellFormed, parsePhaseResult } from '../shared/phaseResult';
-import { changedTestPathsFromCapabilities, type ChangedTestPathsResult } from './frozenTests';
+import { changedTestPathsFromCapabilities, type TestPathsResult } from './frozenTests';
 
 export interface LoopCompletionPredicates {
   /** Recognize the framework-neutral outcome the agent claimed (§28.5.2); null if it is not a known category. */
@@ -15,7 +15,7 @@ export interface LoopCompletionPredicates {
    *  so the seam exists; the gate call through it lands with the RED clause (S3). */
   resultOutcome(content: string): PhaseOutcome | null;
   /** The test-glob files that changed between the RED baseline and head, per the repo's capabilities (§28.5.1). */
-  changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<ChangedTestPathsResult>;
+  changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<TestPathsResult>;
 }
 
 export function createLoopCompletionPredicates(): LoopCompletionPredicates {
