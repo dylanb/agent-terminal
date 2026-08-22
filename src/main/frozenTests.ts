@@ -15,6 +15,8 @@ import {
   MAX_CAPABILITIES_BYTES,
   type LoopCapabilities,
 } from '../shared/loopCapabilities';
+import { loadLoopCapabilities } from './loopCapabilities';
+import { APP_STATE_DIRS } from './appStateDirs';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
@@ -193,5 +195,73 @@ export async function changedTestPathsFromCapabilities(query: {
   const capabilities = await baselineCapabilities(query.repoDir, query.baseline);
   if (!capabilities.ok) return capabilities;
   const paths = await changedTestPaths({ ...query, testGlobs: capabilities.value.testGlobs });
+  return { ok: true, paths };
+}
+
+/** The working-tree detection's result. Unlike the commit↔commit `ChangedTestPathsResult` (baseline-blob
+ *  sourced, so `confinement` is unreachable there and stays out of its type — #105 round 20), the working-tree
+ *  wrapper reads the repo's OWN loop-capabilities.yaml through the working-tree loader, which CAN refuse on
+ *  confinement — so this arm carries the third `cause`. */
+export type WorkingTreeTestPathsResult =
+  | { ok: true; paths: string[] }
+  | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
+
+/** Whether a repo-relative path lies inside one of the app's OWN state dirs (APP_STATE_DIRS — the SAME set the
+ *  commit side-effect unstages). Those are the loop/flow's own per-turn writes, never the turn's test work, so
+ *  they can never satisfy the RED "a test file was added" clause even under a broad glob (CWE-200/754) —
+ *  independent of whether the operated repo gitignores them. */
+function inAppStateDir(path: string): boolean {
+  return APP_STATE_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`));
+}
+
+/** The working-tree paths (tracked-modified ∪ untracked, vs HEAD) matching `testGlobs` — the RED "a test file
+ *  was added this turn" check (§28.5.2a), run BEFORE the RED commit (the commit is the approve side-effect). Two
+ *  hardened git reads, unioned, with NO index mutation: the completion check must never stage into the working
+ *  tree the live agent shares (the commit side-effect does its own `git add -A` later). Fails TOWARD the check
+ *  firing (CWE-20/770): an empty glob list, or an unresolvable HEAD (a repo with no commits — the `git diff
+ *  HEAD` arm rejects), reject rather than reading as "no test added".
+ *
+ *  SECURITY — the `git diff HEAD` arm compares the working tree to HEAD, so git re-hashes a changed file and can
+ *  run a repo-planted `filter.<driver>.clean` (in-tree `.gitattributes` + config). That is the SAME lever the
+ *  S2 commit side-effect documents-and-accepts (the agent already runs the repo's own code in-turn) — NOT the
+ *  commit↔commit `changedTestPaths` posture, which never touches the worktree. The `ls-files -o` arm does not
+ *  hash, so it is filter-free.
+ *  TODO(dylanb): a plumbing `hash-object --no-filters` staging is the deferred full neutralization (§28.3). */
+export async function workingTreeTestPaths(query: {
+  repoDir: string;
+  testGlobs: readonly string[];
+}): Promise<string[]> {
+  const { repoDir, testGlobs } = query;
+  if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
+
+  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
+  const harden = coreExecHardeningArgs(disabledHooks);
+  const trackedOut = await runBuffer(
+    'git',
+    [...harden, 'diff', '--name-only', '-z', '--no-renames', '--end-of-options', 'HEAD'],
+    repoDir,
+    'working-tree tests: git diff failed',
+  );
+  const untrackedOut = await runBuffer(
+    'git',
+    [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
+    repoDir,
+    'working-tree tests: git ls-files failed',
+  );
+
+  const changed = [...strictDecodeNulPaths(trackedOut), ...strictDecodeNulPaths(untrackedOut)];
+  const matched = changed.filter((path) => matchesAnyGlob(path, testGlobs) && !inAppStateDir(path));
+  return [...new Set(matched)].sort();
+}
+
+/** The working-tree test paths, sourcing the globs from the repo's own loop-capabilities.yaml — its failure arm
+ *  is the capabilities-load failure so the RED gate can surface a distinct reason; a git/HEAD failure still
+ *  rejects (fail toward firing). This is the seam the S3 RED completion gate consults. */
+export async function workingTreeTestPathsFromCapabilities(query: {
+  repoDir: string;
+}): Promise<WorkingTreeTestPathsResult> {
+  const capabilities = loadLoopCapabilities(query.repoDir);
+  if (!capabilities.ok) return capabilities;
+  const paths = await workingTreeTestPaths({ repoDir: query.repoDir, testGlobs: capabilities.value.testGlobs });
   return { ok: true, paths };
 }
