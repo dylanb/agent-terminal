@@ -68,13 +68,14 @@ interface Recorder {
   redos: Array<{ step: string; turnKey: string; instruction: string }>;
   polishEnters: Array<{ repoDir: string; step: string }>;
   polishClears: string[];
+  recordBaselines: Array<{ repoDir: string; step: string; sha: string }>;
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -94,6 +95,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
         ? { outcome: 'nothing-to-commit' }
         : { outcome: 'committed', sha: 'a'.repeat(40) };
     },
+    recordBaseline: (repoDir, step, sha) => void rec.recordBaselines.push({ repoDir, step, sha }),
     persistAccept: (_r, state) => void rec.accepts.push(state),
     advanceFlow: (r) => void rec.advances.push(r),
     audit: (_r, cmd, exit) => void rec.audits.push({ cmd, exit }),
@@ -208,6 +210,29 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     await approve(deps);
     expect(rec.commitSideEffects).toEqual([{ label: '', dirtyAtPhaseStart: [] }]); // the executor never invents a label from ambient state
     expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('IT-DECISION-1: records the baseline (repoDir, decision step, EXACT sha) on a committed approve (§28.5.1)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: slice-x') });
+    await approve(deps);
+    // §6 identity — the recorded sha is exactly the one the side-effect returned, under the decision's own step,
+    // never re-derived from ambient git state.
+    expect(rec.recordBaselines).toEqual([{ repoDir: '/repo', step: 'plan', sha: 'a'.repeat(40) }]);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect') && a.exit === 0)).toBe(true); // committed audit unchanged
+  });
+
+  it('IT-DECISION-2: records NO baseline on nothing-to-commit (nothing committed to diff from); the notice still fires', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('refactor: noop'), commitOutcome: 'nothing-to-commit' });
+    await approve(deps);
+    expect(rec.recordBaselines).toEqual([]);
+    expect(rec.notices).toHaveLength(1); // the S2 nothing-to-commit notice is unchanged
+  });
+
+  it('IT-DECISION-4: records NO baseline when the commit side-effect throws (the S2 failure path is unchanged)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: fails'), commitThrows: 'git commit failed' });
+    await approve(deps);
+    expect(rec.recordBaselines).toEqual([]);
+    expect(rec.errors).toHaveLength(1); // surfaced as a side-effect-failed error, no baseline
   });
 });
 
