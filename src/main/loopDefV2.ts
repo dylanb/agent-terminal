@@ -69,10 +69,23 @@ export interface GateOptionDef {
   sideEffects: GateSideEffect[];
 }
 
-/** The work recipe (§27.3): the prompt recipe reference (confined) and the id of the artifact it produces. */
+/** The framework-neutral completion mode a work turn declares (§28.4/§28.5.5) — which machine completion
+ *  predicate gates it. A closed set recognized by exact string, single-sourced so the field type AND the
+ *  parser's validation both derive from it (mirroring PHASE_OUTCOMES). `red` in S3; extends to green/refactor
+ *  in S4/S5. */
+export const WORK_COMPLETIONS = ['red'] as const;
+export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
+const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
+export function isWorkCompletion(value: string): value is WorkCompletion {
+  return WORK_COMPLETION_SET.has(value);
+}
+
+/** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
+ *  §28.4 — the optional completion mode (absent for the existing §27 loops; `red` for the S3 RED turn). */
 export interface WorkRecipe {
   recipe: string;
   artifact: string;
+  completion?: WorkCompletion;
 }
 
 /** §27.10 */
@@ -333,6 +346,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   const work = requireRecord(rec.work, 'work');
   const workRecipe = confineDefRelative(tierRoot, defDir, requireString(work.recipe, 'work recipe'), 'work recipe');
   const workArtifact = requireString(work.artifact, 'work artifact');
+  let workCompletion: WorkCompletion | undefined;
+  if (work.completion !== undefined) {
+    const c = requireString(work.completion, 'work completion');
+    if (!isWorkCompletion(c)) fail(`unknown work completion: ${c}`);
+    workCompletion = c;
+  }
 
   const cons = requireRecord(rec.consolidator, 'consolidator');
   const consolidator = confineDefRelative(tierRoot, defDir, requireString(cons.recipe, 'consolidator recipe'), 'consolidator recipe');
@@ -349,7 +368,11 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   return {
     version: LOOP_DEF_V2_VERSION,
     name,
-    work: { recipe: workRecipe, artifact: workArtifact },
+    work: {
+      recipe: workRecipe,
+      artifact: workArtifact,
+      ...(workCompletion !== undefined ? { completion: workCompletion } : {}),
+    },
     reviewers: toReviewers(rec.reviewers, tierRoot, defDir),
     consolidator,
     boundaries: toBoundaries(rec.boundaries),
