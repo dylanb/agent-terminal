@@ -56,17 +56,27 @@ export function parsePhaseResult(text: string): ParsedPhaseResult {
   const outcomeScanEnd = headingIdx === -1 ? lines.length : headingIdx;
   let outcome: PhaseOutcome | null = null;
   let build: BuildOutcome | null = null;
+  // FIRST-match-wins per field (the pre-S4 `outcome` scan `break`s on the first labeled line, valid or not):
+  // `*Seen` records that the field's line was ENCOUNTERED, so an invalid first value stays terminal (→ null) and
+  // a later valid line never overrides it. A `null` value is not "unscanned" — conflating them would weaken the
+  // gate's malformed-result reject (§28.5.3). The two fields are scanned independently (either order).
+  let outcomeSeen = false;
+  let buildSeen = false;
   for (let i = 0; i < outcomeScanEnd; i++) {
-    if (outcome === null) {
+    if (!outcomeSeen) {
       const v = fieldValue(lines[i], PHASE_RESULT_GRAMMAR.outcomeLabel);
       if (v !== null) {
         outcome = isPhaseOutcome(v) ? v : null; // exact, trimmed, never normalized — an unknown spelling is null
-        continue;
+        outcomeSeen = true;
+        continue; // a line is the outcome field OR the build field, never both
       }
     }
-    if (build === null) {
+    if (!buildSeen) {
       const b = fieldValue(lines[i], PHASE_RESULT_GRAMMAR.buildLabel);
-      if (b !== null) build = isBuildOutcome(b) ? b : null; // same exact/never-normalized rule as outcome
+      if (b !== null) {
+        build = isBuildOutcome(b) ? b : null; // same exact/never-normalized/first-match rule as outcome
+        buildSeen = true;
+      }
     }
   }
 
