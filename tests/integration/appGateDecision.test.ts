@@ -7,7 +7,7 @@ import {
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
-import type { AppGateCommitCtx, AppGateCommitOutcome } from '../../src/main/appGateCommit';
+import type { AppGateCommitCtx } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
 // bound def's declared side-effect out of band, then reaches the terminal accept and advances the flow; a
@@ -70,7 +70,7 @@ interface Recorder {
   polishClears: string[];
 }
 
-function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: AppGateCommitOutcome; pr?: number | null; ticket?: number | null }): {
+function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
@@ -90,7 +90,9 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     runCommitSideEffect: async (ctx) => {
       rec.commitSideEffects.push(ctx);
       if (over.commitThrows) throw new Error(over.commitThrows);
-      return over.commitOutcome ?? 'committed';
+      return over.commitOutcome === 'nothing-to-commit'
+        ? { outcome: 'nothing-to-commit' }
+        : { outcome: 'committed', sha: 'a'.repeat(40) };
     },
     persistAccept: (_r, state) => void rec.accepts.push(state),
     advanceFlow: (r) => void rec.advances.push(r),

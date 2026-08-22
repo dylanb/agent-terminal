@@ -198,8 +198,8 @@ export async function runAppGateDecision(
       try {
         // §28.3 — the phase-start snapshot is captured by the phase lifecycle (§28.5.1), not yet wired; the
         // executor passes an empty snapshot until then.
-        const outcome = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
-        if (outcome === 'committed') {
+        const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
+        if (result.outcome === 'committed') {
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
         } else {
           // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice

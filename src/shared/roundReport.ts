@@ -2,7 +2,7 @@
 // readers (this slice's completion validator, N4's consolidator). One definition in the shared layer so the
 // prompt composer (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
 
-import { stripLeadingBullet, fieldValue } from './markdownFields';
+import { fieldValue } from './markdownFields';
 
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
