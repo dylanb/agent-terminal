@@ -62,6 +62,10 @@ export interface AppGateDecisionDeps {
   /** §28.3 — surface a benign completed no-op (nothing-to-commit) to the operator as a notice, framed so
    *  it never reads as a failure. Same operator channel as emitError, distinct severity (`kind: 'notice'`). */
   emitNotice(reason: string): void;
+  /** §28.5.1 — record the phase-commit `sha` a `commit` side-effect returned, under the decision's `step`, as
+   *  the baseline the next phase's frozen check diffs from. A domain seam (never `writeAppLoopState`); BEST-
+   *  EFFORT — the composition root wraps the throwing store so a filesystem error never aborts the accept. */
+  recordBaseline(repoDir: string, step: string, sha: string): void;
   onViewChanged(): void;
 }
 
@@ -200,6 +204,10 @@ export async function runAppGateDecision(
         // executor passes an empty snapshot until then.
         const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
         if (result.outcome === 'committed') {
+          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under THIS
+          // decision's step, from the value the side-effect returned (never a re-derived rev-parse). Only on
+          // `committed`: a nothing-to-commit records no baseline (there is no new commit to diff from).
+          deps.recordBaseline(repoDir, step, result.sha);
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
         } else {
           // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
