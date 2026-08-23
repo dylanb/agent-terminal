@@ -10,6 +10,12 @@ import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 
 const SOURCE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
 
+// A dead engine token is a copy-paste leak of engine plumbing into human-facing content: an unfilled `{{…}}`
+// template placeholder from the loops-repo source, or a citation of the retired section. The needle is
+// CONSTRUCTED from the glyph so this file is not a self-match for the retired-section citation grep.
+const SECTION = String.fromCharCode(0xa7);
+const DEAD_TOKENS = ['{{', `${SECTION}26`] as const;
+
 // The four planning artifacts the plan-bundle recipe produces as delimited sections (§28.8 P8.1: one loop,
 // one work turn, all four files). One definition — authored as the recipe's headings and matched
 // heading-anchored — so pin and recipe cannot drift.
@@ -77,4 +83,32 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
     expect(read('impl-loop/impl-loop.yaml')).not.toBeNull();
     expect(read('does-not-exist/nope.md')).toBeNull();
   });
+});
+
+// §28.6 P6b — each new charter exists, carries its distinctive marker, composes the ported charter structure
+// (H1 + `Derived from persona:` line + a lane body), and carries no dead engine token.
+function assertCharterContract(row: CharterRow): void {
+  it('exists and carries its distinctive marker', () => {
+    const body = read(row.file);
+    expect(body, `charter absent: ${row.file}`).not.toBeNull();
+    expect(body).toContain(row.marker);
+  });
+  it('composes the ported charter structure', () => {
+    const body = read(row.file) ?? '';
+    const firstNonEmpty = body.split('\n').find((l) => l.trim().length > 0) ?? '';
+    expect(firstNonEmpty).toMatch(/^# Reviewer charter — /);
+    expect(body).toContain(`Derived from persona: ${row.persona}.`);
+    const afterPersona = body.split(`Derived from persona: ${row.persona}.`)[1] ?? '';
+    expect(afterPersona.trim().length, `${row.file}: empty lane body`).toBeGreaterThan(0);
+  });
+  it('contains no dead engine token', () => {
+    const body = read(row.file) ?? '';
+    for (const token of DEAD_TOKENS) expect(body, `${row.file}: dead token ${token}`).not.toContain(token);
+  });
+}
+
+describe('loops-v2 content-parity — the 3 planning-discipline charters (§28.6 P6b)', () => {
+  for (const row of NEW_CHARTERS.filter((c) => c.file.startsWith('plan-bundle-loop/charter/'))) {
+    describe(row.file, () => assertCharterContract(row));
+  }
 });
