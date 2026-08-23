@@ -127,16 +127,9 @@ export function examplePhaseResult(outcome: PhaseOutcome, opts?: { build?: Build
   ].join('\n');
 }
 
-/** §28.5.5 / §28 §7d — the ONE composer of the phase-result WRITER instruction block, shared by the RED/GREEN
- *  work-turn branches (composeAppWorkPrompt) and the refactor review round (composeReviewAndFixPrompt). It owns
- *  the run→classify→write→fenced-few-shot structure so the §28.5.5 writer contract (grammar tokens, ordering,
- *  fence handling) lives in one place and cannot drift from the parse predicate. Every grammar token is
- *  interpolated from PHASE_RESULT_GRAMMAR and every category from PHASE_OUTCOMES/BUILD_OUTCOMES — never
- *  re-spelled; the few-shot is the canonical `examplePhaseResult`. The phase-specific `closing` prose (the
- *  "valid X only when …" bar + its remediation, which is NOT derivable from the outcome/build) is threaded
- *  verbatim by each caller. Returns the block's lines WITHOUT a leading blank — the caller spaces it. With
- *  `build`, a GREEN turn also classifies the build and shows a build few-shot; without, the softer RED/refactor
- *  shape carries no `build:` line. */
+/** §28.5.5 / §28 §7d — the phase-result WRITER instruction, single-sourced here so it cannot drift from the
+ *  parse predicate that gates the file it instructs the agent to write (the writer↔predicate coupling no type
+ *  or test spans). */
 export function composePhaseResultInstruction(opts: {
   resultRel: string;
   completingOutcome: PhaseOutcome;

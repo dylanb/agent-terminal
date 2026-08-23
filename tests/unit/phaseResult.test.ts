@@ -192,10 +192,9 @@ describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
   });
 });
 
-// §28.5.5 / §28 §7d — the shared phase-result WRITER: the one composer of the run→classify→write→few-shot
-// instruction block, called by the RED/GREEN work-turn branches and the refactor review round. Every grammar
-// token comes from PHASE_RESULT_GRAMMAR and every category from PHASE_OUTCOMES/BUILD_OUTCOMES (never re-spelled),
-// the few-shot is the canonical examplePhaseResult, and the phase-specific `closing` prose is threaded verbatim.
+// §28.5.5 / §28 §7d — the shared phase-result WRITER block. These pin the OBSERVABLE contract: the composed
+// lines carry the result rel, the grammar tokens and vocabulary (from the shared descriptors), the canonical
+// few-shot, and the caller's `closing` bar prose verbatim; the outcome-only shape omits the build classification.
 describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)', () => {
   const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
   const CLOSE = ['This round is done only when the tests still pass.', 'Fix, then re-run and re-classify.'];
@@ -211,6 +210,12 @@ describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)',
     expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel);
     expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
     for (const outcome of PHASE_OUTCOMES) expect(outcomeOnly).toContain(outcome);
+  });
+
+  it('opens by instructing the agent to run the tests and classify the run (the shared opening line)', () => {
+    // Guards the shared opening line so a change to the writer's run→classify directive can't silently regress
+    // (the RED/GREEN branches route through this — normalizing their intros to one phrasing was deliberate).
+    expect(outcomeOnly).toContain('Run the test command for this change and classify');
   });
 
   it('embeds the ONE canonical example for the completing outcome (single-source with the gate predicate)', () => {
