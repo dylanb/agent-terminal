@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
+import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
+import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../../src/shared/phaseResult';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.3/§27.4/§27.5 — the pure, data-driven pieces of the §27 review-and-fix turn: the pre-review boundary
@@ -184,5 +187,61 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
     expect(p).toContain('# Round report');
     // The feedback appears BEFORE the done-signal contract, not after the example.
     expect(p.indexOf('address the taint flow')).toBeLessThan(p.indexOf('turn-done:review-plan'));
+  });
+});
+
+// §28.5.3 / S5 — the REFACTOR review round: the fixer additionally runs the targeted tests and writes a
+// phase-result file the round gate reads, so the round completes only when the tests still pass. The review
+// prompt gains an optional `resultRel`; when present it appends the shared phase-result WRITER block (softer
+// than GREEN — no build classification) after the report block, and verifies the RESULT on disk before the
+// done-file. Absent `resultRel`, the prompt is the pre-S5 review prompt (RED/GREEN loops' review rounds unchanged).
+describe('composeReviewAndFixPrompt — the refactor round phase-result instruction (§28.5.3)', () => {
+  const RESULT_REL = '.agent-terminal/loop/artifacts/refactor-result-1.md';
+  const refactorReq = () => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    resultRel: RESULT_REL,
+  });
+
+  it('still instructs the round report (the review round is not replaced — the result is ADDED)', () => {
+    const p = composeReviewAndFixPrompt(refactorReq());
+    for (const s of def().report.sections) expect(p).toContain(s);
+    for (const d of DISPOSITIONS) expect(p).toContain(d);
+    expect(p).toContain('.agent-terminal/loop/reports/1.md'); // the report is still written
+  });
+
+  it('appends the phase-result WRITER block naming the result file, the outcome vocabulary, and the passed few-shot', () => {
+    const p = composeReviewAndFixPrompt(refactorReq());
+    expect(p).toContain(RESULT_REL);
+    expect(p).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel);
+    expect(p).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    for (const outcome of PHASE_OUTCOMES) expect(p).toContain(outcome);
+    expect(p).toContain(examplePhaseResult(REFACTOR_COMPLETING_OUTCOME).trimEnd());
+  });
+
+  it('is SOFTER than GREEN — no build classification (§28.5.3: refactor gates on {passed}, not build)', () => {
+    const p = composeReviewAndFixPrompt(refactorReq());
+    expect(p).not.toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}:`);
+    for (const b of BUILD_OUTCOMES) expect(p).not.toContain(b);
+  });
+
+  it('verifies the RESULT file on disk before the done-signal (the new, more-likely-forgotten artifact)', () => {
+    const p = composeReviewAndFixPrompt(refactorReq());
+    expect(p).toContain(`re-read ${RESULT_REL}`); // the done-signal verify targets the result rel
+    expect(p).toContain('turn-done:review-plan');
+  });
+
+  it('adds NO phase-result block when resultRel is absent (RED/GREEN loops\' review rounds are unchanged)', () => {
+    const { resultRel: _drop, ...withoutResult } = refactorReq();
+    const p = composeReviewAndFixPrompt(withoutResult);
+    expect(p).not.toContain(RESULT_REL);
+    expect(p).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // no phase-result section
+    expect(p).not.toContain('Run the test command for this change and classify'); // no classify instruction
+    // the plain review round still verifies the REPORT on disk (unchanged)
+    expect(p).toContain('re-read .agent-terminal/loop/reports/1.md');
   });
 });
