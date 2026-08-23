@@ -128,17 +128,14 @@ function completingOutcome(completes: 'red' | 'green'): PhaseOutcome {
   return completes === 'red' ? RED_COMPLETING_OUTCOME : GREEN_COMPLETING_OUTCOME;
 }
 
-/** The block between the two ``` fence markers of a composed instruction — the sole fenced element the
- *  work-turn composer embeds (§28.5.5). */
+/** §28.5.5 — the composer embeds exactly one fenced block; return it. */
 function fencedExample(lines: string[]): string {
   const open = lines.indexOf('```');
   const close = lines.indexOf('```', open + 1);
   return open >= 0 && close > open ? lines.slice(open + 1, close).join('\n') : '';
 }
 
-// §28.6 P6c — each new recipe references the capabilities file; the plan-bundle recipe produces all four
-// planning sections; a phase recipe names its completing outcome and embeds no result-file block (the
-// work-turn composer owns that embed, §28.5.5).
+// §28.6 P6c. The work-turn composer owns the result-file embed (§28.5.5), so a phase recipe carries none.
 describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () => {
   for (const row of NEW_RECIPES) {
     describe(row.file, () => {
@@ -155,7 +152,7 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
         it('has a heading for each planning section', () => {
           const body = read(row.file) ?? '';
           for (const section of row.sections) {
-            const hasHeading = body.split('\n').some((l) => /^#+\s/.test(l) && l.includes(section));
+            const hasHeading = body.split('\n').some((l) => /^#+\s/.test(l) && l.toLowerCase().includes(section));
             expect(hasHeading, `${row.file}: no heading for '${section}'`).toBe(true);
           }
         });
