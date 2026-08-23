@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, type PhaseOutcome } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
@@ -177,6 +178,36 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
           ? composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: GREEN_COMPLETING_OUTCOME, build: { completingBuildOutcome: GREEN_COMPLETING_BUILD_OUTCOME }, closing: [] })
           : composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: RED_COMPLETING_OUTCOME, closing: [] });
       expect(phaseResultWellFormed(fencedExample(lines))).toBe(true);
+    });
+  }
+});
+
+// §28.10 (the S6/S7 boundary) — the manifest is closed over the new dirs, and each dir is inert: authored
+// content with no def, so nothing resolves until S7 wires the yamls.
+describe('loops-v2 content-parity — the new content is closed and inert', () => {
+  const newDirs = [...new Set([...NEW_CHARTERS, ...NEW_RECIPES].map((r) => r.file.split('/')[0]))];
+  const repoDir = resolve(__dirname, '..', '..');
+
+  const present = (sub: 'charter' | 'prompts'): string[] =>
+    newDirs
+      .flatMap((dir) => {
+        const d = join(SOURCE_TREE, dir, sub);
+        return existsSync(d) ? readdirSync(d).map((f) => `${dir}/${sub}/${f}`) : [];
+      })
+      .sort();
+
+  it('the charter files present under the new dirs are exactly the manifest charters', () => {
+    expect(present('charter')).toEqual(NEW_CHARTERS.map((c) => c.file).sort());
+  });
+
+  it('the recipe files present under the new dirs are exactly the manifest recipes', () => {
+    expect(present('prompts')).toEqual(NEW_RECIPES.map((r) => r.file).sort());
+  });
+
+  for (const dir of newDirs) {
+    it(`${dir} resolves to no loop def`, () => {
+      const r = resolveLoopDefV2(dir, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
+      expect(r.ok).toBe(false);
     });
   }
 });
