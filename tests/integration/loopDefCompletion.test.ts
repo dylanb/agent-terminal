@@ -6,6 +6,7 @@ import {
   resolveLoopDefV2,
   WORK_COMPLETIONS,
   isWorkCompletion,
+  requiresResultBinding,
   type LoopDefV2Result,
 } from '../../src/main/loopDefV2';
 
@@ -45,12 +46,21 @@ const addCompletion = (value: string) => (y: string): string =>
 
 describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
   it('UT-DEF-4: WORK_COMPLETIONS is the single-sourced closed set the type and guard both derive from', () => {
-    expect(WORK_COMPLETIONS).toEqual(['red', 'green']);
+    expect(WORK_COMPLETIONS).toEqual(['red', 'green', 'refactor']);
     expect(isWorkCompletion('red')).toBe(true);
-    expect(isWorkCompletion('green')).toBe(true); // S4 adds the GREEN completion mode
-    expect(isWorkCompletion('refactor')).toBe(false); // extends the set in S5, not here
+    expect(isWorkCompletion('green')).toBe(true);
+    expect(isWorkCompletion('refactor')).toBe(true); // S5 adds the refactor phase-completion mode
     expect(isWorkCompletion('RED')).toBe(false); // never normalized
     expect(isWorkCompletion('')).toBe(false);
+  });
+
+  // §28.5.5 F1 — the result-binding requirement is single-sourced as a fail-CLOSED exemption predicate: a NEW
+  // result-producing mode requires a binding by DEFAULT (guarded), and only `refactor` (a `commits` work turn
+  // that produces no result file) is exempt. An allow-list would be fail-open for a future mode.
+  it('UT-DEF-4b: requiresResultBinding guards red/green (true) and exempts refactor (false)', () => {
+    expect(requiresResultBinding('red')).toBe(true);
+    expect(requiresResultBinding('green')).toBe(true);
+    expect(requiresResultBinding('refactor')).toBe(false);
   });
 
   it('UT-DEF-1: parses work.completion: red onto the def', () => {
@@ -63,6 +73,12 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     const r = resolvePatched(addCompletion('green'));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.work.completion).toBe('green');
+  });
+
+  it('UT-DEF-1r: parses work.completion: refactor onto the def', () => {
+    const r = resolvePatched(addCompletion('refactor'));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.work.completion).toBe('refactor');
   });
 
   it('UT-DEF-2: leaves completion undefined when the field is absent (S1/S2 defs still valid)', () => {
@@ -104,5 +120,21 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: green\n'));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
+  });
+
+  // §28.5.3 / S5 — a refactor loop's work turn is a `commits` turn producing NO result file, so it is exempt
+  // from the binding requirement: completion: refactor with an unbound artifact PARSES (unlike red/green).
+  it('UT-DEF-5r: accepts completion: refactor when work.artifact names no output binding (exempt)', () => {
+    const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: refactor\n'));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.work.completion).toBe('refactor');
+  });
+
+  // A refactor def whose artifact DOES name a binding also parses (the binding is permitted-but-unused — the
+  // refactor work turn is pinned to `commits` in the engine regardless; closes the marker-file deadlock class).
+  it('UT-DEF-5r2: accepts completion: refactor when work.artifact names a real binding (permitted-but-unused)', () => {
+    const r = resolvePatched(addCompletion('refactor'));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.work.completion).toBe('refactor');
   });
 });

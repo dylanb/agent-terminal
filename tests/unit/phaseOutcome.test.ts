@@ -3,6 +3,7 @@ import {
   PHASE_OUTCOMES,
   isPhaseOutcome,
   GREEN_COMPLETING_OUTCOME,
+  REFACTOR_COMPLETING_OUTCOME,
   type PhaseOutcome,
 } from '../../src/shared/phaseOutcome';
 
@@ -49,5 +50,13 @@ describe('phaseOutcome vocabulary (§28.5.2 / §28.5.5)', () => {
   it('the GREEN-completing outcome is `passed` and is a member of the set', () => {
     expect(GREEN_COMPLETING_OUTCOME).toBe('passed');
     expect(isPhaseOutcome(GREEN_COMPLETING_OUTCOME)).toBe(true);
+  });
+
+  // §28.5.3 — the ONE test outcome that completes a REFACTOR ROUND is single-sourced here so the refactor
+  // round gate and the refactor prompt derive from one definition (the RED/GREEN twins beside it). It is
+  // `passed` (a refactor keeps the tests green) — the softer bar carries no build/exit clause.
+  it('the REFACTOR-completing outcome is `passed` and is a member of the set', () => {
+    expect(REFACTOR_COMPLETING_OUTCOME).toBe('passed');
+    expect(isPhaseOutcome(REFACTOR_COMPLETING_OUTCOME)).toBe(true);
   });
 });
