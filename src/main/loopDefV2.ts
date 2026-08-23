@@ -71,9 +71,9 @@ export interface GateOptionDef {
 
 /** The framework-neutral phase-completion mode a loop declares (§28.4/§28.5.5) — which machine completion
  *  predicate its phase gates on: `red`/`green` gate the WORK turn (S3/S4), `refactor` gates each REVIEW-AND-FIX
- *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", its work turn is a `commits` turn). A closed set
- *  recognized by exact string, single-sourced so the field type AND the parser's validation both derive from it
- *  (mirroring PHASE_OUTCOMES). */
+ *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", so it produces no work-turn result file). A
+ *  closed set recognized by exact string, single-sourced so the field type AND the parser's validation both
+ *  derive from it (mirroring PHASE_OUTCOMES). */
 export const WORK_COMPLETIONS = ['red', 'green', 'refactor'] as const;
 export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
 const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
@@ -84,7 +84,7 @@ export function isWorkCompletion(value: string): value is WorkCompletion {
 /** §28.5.5 F1 — the completion modes whose work turn produces NO result file and so are EXEMPT from the
  *  `work.artifact`-must-name-a-binding parse guard. An exemption set (not an allow-list) keeps the guard
  *  fail-CLOSED: a future result-producing mode requires a binding by default and must be named here to opt out.
- *  `refactor`'s work turn is a `commits` turn (the refactor gate is on the review round, not the work turn). */
+ *  `refactor`'s work turn produces no result file (the refactor gate is on the review round, not the work turn). */
 const COMPLETIONS_EXEMPT_FROM_RESULT_BINDING: ReadonlySet<WorkCompletion> = new Set<WorkCompletion>(['refactor']);
 export function requiresResultBinding(mode: WorkCompletion): boolean {
   return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);

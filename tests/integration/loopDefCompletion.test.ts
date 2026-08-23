@@ -122,18 +122,11 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
   });
 
-  // §28.5.3 / S5 — a refactor loop's work turn is a `commits` turn producing NO result file, so it is exempt
-  // from the binding requirement: completion: refactor with an unbound artifact PARSES (unlike red/green).
+  // §28.5.3 / S5 — a refactor loop produces no work-turn result file (the phase gate is on the review round),
+  // so it is exempt from the binding requirement: completion: refactor with an unbound artifact PARSES (unlike
+  // red/green). The bound-artifact case parses too, covered by UT-DEF-1r.
   it('UT-DEF-5r: accepts completion: refactor when work.artifact names no output binding (exempt)', () => {
     const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: refactor\n'));
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.def.work.completion).toBe('refactor');
-  });
-
-  // A refactor def whose artifact DOES name a binding also parses (the binding is permitted-but-unused — the
-  // refactor work turn is pinned to `commits` in the engine regardless; closes the marker-file deadlock class).
-  it('UT-DEF-5r2: accepts completion: refactor when work.artifact names a real binding (permitted-but-unused)', () => {
-    const r = resolvePatched(addCompletion('refactor'));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.work.completion).toBe('refactor');
   });
