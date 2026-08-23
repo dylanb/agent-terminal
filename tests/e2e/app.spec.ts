@@ -2679,7 +2679,7 @@ function seedFakeAgentV2(
   opts: {
     stepId: string;
     artifactRel: string;
-    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green';
+    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor';
     // §28.5.5 RED work mode (work: 'red'): the classified outcome the fake writes into the phase-result file
     // (the completion:red gate reads it back), and whether it authors a test-glob file this turn (the
     // "a test was added" async clause). Ignored unless work === 'red'.
@@ -2748,6 +2748,10 @@ function seedFakeAgentV2(
         ? greenAct
         : opts.work === 'red'
           ? redAct
+          : opts.work === 'refactor'
+            ? // §28.5.3/§28.6 — a refactor loop's work turn is a `commits` turn: it just signals done and the
+              // engine chains the review round (where the refactor result gate lives). No artifact.
+              `${bump}; ${done(turnKey)}`
           : opts.work === 'file-only'
           ? `${bump}; ${writeArtifact(true)}`
           : opts.work === 'no-marker'
@@ -5870,7 +5874,7 @@ test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a L
 // Clone the example config, set the plan-loop's work.completion, and swap its gh mark-ready gate for a commit
 // side-effect carrying `label` — the shared shape of the §28.5 RED (S3) and GREEN (S4) tracer configs; they
 // differ only in the completion value and the commit label.
-function seedCompletionGateConfig(prefix: string, completion: 'red' | 'green', label: string): string {
+function seedCompletionGateConfig(prefix: string, completion: 'red' | 'green' | 'refactor', label: string): string {
   const cfg = mkdtempSync(join(tmpdir(), prefix));
   cpSync(exampleConfigDir, cfg, { recursive: true });
   const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
@@ -6118,6 +6122,145 @@ test('§28.5.3 / AC3 — a GREEN turn whose tests do NOT pass never completes: i
   await expect(errorDialog).toContainText('Loop error');
 
   // AC3 — no clean gate was reached, so HEAD never advanced and no flag was recorded.
+  expect(gitCount(repo)).toBe(before);
+  expect(readChangedTests(repo)).toBeNull();
+
+  await errorDialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+// ─── §28.5.3/§28.6 — the refactor loop, end-to-end (the S5 tracer bullet) ──────────────────────────────
+// The plan-loop set to `work.completion: refactor` whose approve gate commits. The work turn is a `commits`
+// turn; each review-and-fix ROUND writes a round-keyed phase-result the gate reads ({report ∧ passed}, softer
+// than GREEN). The baseline (a committed tests/frozen.test.ts, its SHA recorded) stands in for a completed RED;
+// the frozen check (baseline↔working-tree) flags a touched test as a NON-blocking caution.
+const seedRefactorGateConfig = (prefix: string): string => seedCompletionGateConfig(prefix, 'refactor', 'refactor: s5-tracer');
+const seedRefactorFlowRepo = (prefix: string): string => {
+  const dir = seedCommitFlowRepo(prefix, {
+    withChange: false,
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+    seedTestFile: 'tests/frozen.test.ts',
+  });
+  recordBaselineCommit(dir, 'plan', gitIn(dir, 'rev-parse', 'HEAD'));
+  return dir;
+};
+
+test('§28.5.3 / AC1 — a clean refactor round (report + passing result, no test changed) completes, drives to the gate, and commits', { tag: '@ownapp' }, async () => {
+  const repo = seedRefactorFlowRepo('agent-term-e2e-refac-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-home-'));
+  const cfg = seedRefactorGateConfig('agent-term-e2e-refac-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', touchTest: false, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // the refactor round's result classified `passed` → the round completed and the loop drove to the clean gate.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  // no test changed → an EMPTY flag, so the panel shows NO changed-test notice:
+  await expect(loopPanel().locator('[data-changed-tests]')).toHaveCount(0);
+  expect(readChangedTests(repo)).toEqual({ step: 'plan', paths: [] });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // approve fired the commit side-effect: HEAD+1 with the `refactor:` label, the refactored source rode in.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  expect(gitIn(repo, 'log', '-1', '--format=%s')).toBe('refactor: s5-tracer');
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('feature.ts');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5.3 / AC3 — a refactor round that touches a test file STILL completes, and the changed-test flag is recorded + surfaced (detect-and-escalate)', { tag: '@ownapp' }, async () => {
+  const repo = seedRefactorFlowRepo('agent-term-e2e-refac-flag-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-flag-home-'));
+  const cfg = seedRefactorGateConfig('agent-term-e2e-refac-flag-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-flag-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', touchTest: true, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // the touched test did NOT block — the refactor round completed and drove to the clean gate (§28.8.3).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  // the changed-test flag was recorded (naming the touched test) AND surfaced in the phase-neutral panel notice:
+  expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
+  const notice = loopPanel().locator('[data-changed-tests]');
+  await expect(notice).toBeVisible({ timeout: 10_000 });
+  await expect(notice).toContainText('tests/frozen.test.ts');
+  await expect(notice).not.toContainText('during GREEN'); // phase-neutral (this is a refactor round)
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // approve committed the change (HEAD+1, the touched test rode in) — the flag is a caution, not a block.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('tests/frozen.test.ts');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never completes: it retries then routes out as a loop error, HEAD unchanged', { tag: '@ownapp' }, async () => {
+  const repo = seedRefactorFlowRepo('agent-term-e2e-refac-sad-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refac-sad-home-'));
+  const cfg = seedRefactorGateConfig('agent-term-e2e-refac-sad-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-refac-sad-bin-', { realCommitOps: true });
+  // the round writes a report but the fake classifies the result as failed-assertion — the gate requires `passed`.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'refactor', resultOutcome: 'failed-assertion', touchTest: false, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // a non-passing result never satisfies the refactor round's gate → the round retries once then routes out.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('Loop error');
+
+  // AC2 — no clean gate was reached, so HEAD never advanced and no flag was recorded.
   expect(gitCount(repo)).toBe(before);
   expect(readChangedTests(repo)).toBeNull();
 
