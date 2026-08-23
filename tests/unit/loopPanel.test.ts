@@ -884,10 +884,10 @@ describe('docked loop panel — the sweep split (§B.9)', () => {
   });
 });
 
-// §28.5.3/§28.8.3 — the changed-tests flag: when the machine detected a test-glob file changed during a GREEN
-// turn, the panel surfaces a NON-blocking notice naming the files (for the regression-guard persona + human at
-// the gate). Modeled on the polish-standdown notice — a role="status" live-region paragraph, present only when
-// the view carries `changedTests`.
+// §28.5.3/§28.8.3 — the changed-tests flag: when the machine detected a test-glob file changed since the RED
+// baseline (a GREEN turn OR a refactor round), the panel surfaces a NON-blocking notice naming the files (for the
+// regression-guard persona + human at the gate). Modeled on the polish-standdown notice — a role="status"
+// live-region paragraph, present only when the view carries `changedTests`.
 describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
   it('surfaces a notice naming the changed test files when the view carries the flag', () => {
     createLoopPanel(host).render(loop({ changedTests: ['tests/a.test.ts', 'tests/b.test.ts'] }), 'plan');
