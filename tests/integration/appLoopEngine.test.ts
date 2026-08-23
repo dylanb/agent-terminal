@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 import { makeFakeCompletionPredicates, deferredWorkingTree, deferredChangedTestPaths } from '../helpers/fakeCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
@@ -2570,5 +2570,232 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
     engine.onDoneSignal(); // work completes (commits) → enterReview → reviewTurnFor resolves the result location → null
     expect(emitError).toHaveBeenCalled(); // surfaced as a routable §27 loop error
     expect(readAppLoopState(repo)?.status).toBe('error');
+  });
+});
+
+// §28.5.3/§28.8.3/S5 — the REFACTOR round completion GATE + the NON-blocking frozen probe. A refactor round is
+// done ⟺ {round report well-formed} ∧ {result shape-valid ∧ outcome == passed} — the SYNC softer clause, no
+// build, no exit-direction, no PrecomputedGate. The frozen check is a best-effort SIDE probe that records the
+// non-blocking changed-test flag; a probe that cannot run (no baseline / capfail) records NO flag and is
+// AUDITED, and the round STILL completes on the sync clause (the opposite of GREEN, which blocks).
+describe('§28.5.3 — the refactor round completion gate + non-blocking frozen probe', () => {
+  const OID = 'a'.repeat(40);
+  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const refFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
+    makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
+  const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+  const passed = (): string => examplePhaseResult(REFACTOR_COMPLETING_OUTCOME); // `outcome: passed`, no build
+  const writeRefactorResult = (content: string, round = 1): void => {
+    const p = refactorResultFile(repo, round)!;
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, content);
+  };
+  const writeMalformedReport = (round = 1): void => {
+    const p = roundReportFile(repo, round)!;
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, '# incomplete — a persona is missing\n'); // present but NOT roundReportWellFormed
+  };
+  /** enter a refactor loop → work (commits) completes → the review-and-fix round-1 prompt injects. */
+  const driveToRefactorReview = (engine: ReturnType<typeof createAppLoopEngine>): void => {
+    defResult = resolved(refactorDef());
+    enterAndInjectWork(engine);
+    engine.onDoneSignal(); // commits work turn completes → chains review round 1
+    engine.onInjectable();
+    engine.onInjectable();
+  };
+  /** The round completed iff it chained the consolidator (its turnKey is now the active one). */
+  const completed = (engine: ReturnType<typeof createAppLoopEngine>): boolean => engine.activeTurnKey() === CONSOLIDATE_KEY;
+
+  it('IT-REFAC-1: report + passing result + no changed test completes the round and records an EMPTY-paths flag', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(completed(engine)).toBe(true); // chained the consolidator — the round is done
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] }); // checked, none changed (REAL reader)
+  });
+
+  it('IT-REFAC-2: a changed test is FLAGGED (naming it) and the round STILL completes (§28.8.3 non-blocking)', async () => {
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    expect(completed(engine)).toBe(true); // still completes — detect-and-escalate, not a block
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts');
+  });
+
+  it('IT-REFAC-3a: a failed-assertion result does NOT complete the round → retry-then-error, no flag', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(completed(engine)).toBe(false);
+    expect(readChangedTests(repo)).toBeNull(); // never completed → no flag
+  });
+
+  it('IT-REFAC-3c: an absent/malformed result does NOT complete the round → retry-then-error', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult('outcome: passed\n'); // no captured-output section → not shape-valid
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(completed(engine)).toBe(false);
+  });
+
+  it('IT-REFAC-3d: a malformed REPORT with a passing result does NOT complete (both clauses required)', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeMalformedReport(1);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(completed(engine)).toBe(false);
+  });
+
+  it('IT-REFAC-nobaseline: an absent baseline does NOT block the round (non-blocking probe) — completes, no flag, audited', async () => {
+    const engine = makeEngine(undefined, refFake());
+    // no seedBaseline() — the probe cannot run, but the round still completes on the sync clause (softer than GREEN)
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled(); // NOT blocked (the opposite of IT-GREEN-baseline-a)
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(repo)).toBeNull(); // no flag — the probe could not run
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1); // audited, never silent
+  });
+
+  it('IT-REFAC-capfail: a capabilities-load failure does NOT block the round — completes, no flag, audited', async () => {
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled(); // NOT blocked (the opposite of IT-GREEN-capfail)
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(repo)).toBeNull();
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1);
+  });
+
+  it('IT-REFAC-recordfail: a throwing recordChangedTests NEVER aborts the advance (best-effort wrap)', async () => {
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    recordChangedTestsImpl = () => { throw new Error('disk full'); };
+    engine.onDoneSignal();
+    await flushGate();
+    expect(completed(engine)).toBe(true); // the round still advances (the flag write is best-effort)
+    expect(emitError).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalled();
+  });
+
+  it('IT-REFAC-8: a stall during the probe errors the round; the late probe records NO flag against the errored turn', async () => {
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal(); // starts the probe, awaiting the deferred changedTestPaths
+    engine.onStall(); // the runner errors the review round while the probe is pending
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the probe resolves late, with a changed test...
+    await flushGate();
+    expect(completed(engine)).toBe(false); // ...the late runner.onDoneSignal() no-ops (state != in-flight)
+    expect(readChangedTests(repo)).toBeNull(); // the stashed flag is NEVER recorded against the errored turn
+  });
+
+  it('IT-REFAC-2b-a: human-ACCEPT keeps a malformed report when the result passes, and records the flag', async () => {
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeMalformedReport(1); // present but malformed — the override relaxes report well-formedness
+    writeRefactorResult(passed());
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // finalized (report well-formedness relaxed)
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // flag recorded on the accept route too
+  });
+
+  it('IT-REFAC-2b-b: human-ACCEPT REFUSES a non-passing result (passed is machine ground truth, not overridable)', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []); // well-formed report
+    writeRefactorResult(examplePhaseResult('failed-assertion')); // not passing
+    engine.onStall();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — AC2 route-invariant
+  });
+
+  it('IT-REFAC-2b-c: human-ACCEPT REFUSES an absent result (the override never relaxes presence)', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []); // report present
+    // no writeRefactorResult → the result file is absent
+    engine.onStall();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — no result to accept
+  });
+
+  it('IT-REFAC-2b-d: human-ACCEPT REFUSES an absent report (existing presence guard)', async () => {
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    // no report written
+    writeRefactorResult(passed());
+    engine.onStall();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — no report to accept
+  });
+
+  it('IT-REFAC-multiround: a persisting change is re-reported each round; the flag survives review→consolidate to the gate', async () => {
+    // The probe is cumulative baseline↔working-tree, so a round-1 change is re-reported; replace-semantics
+    // preserves the flag. Drive round 1 → consolidator clean → gate; the flag is still present at the gate.
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }) }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal(); // round 1 completes (flag recorded) → consolidator
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    completeConsolidate(engine, 1, 'verdict: clean\n');
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // reached the gate
+    expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
   });
 });
