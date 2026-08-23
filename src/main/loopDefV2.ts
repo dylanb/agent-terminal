@@ -69,14 +69,25 @@ export interface GateOptionDef {
   sideEffects: GateSideEffect[];
 }
 
-/** The framework-neutral completion mode a work turn declares (§28.4/§28.5.5) — which machine completion
- *  predicate gates it. A closed set recognized by exact string, single-sourced so the field type AND the
- *  parser's validation both derive from it (mirroring PHASE_OUTCOMES). */
-export const WORK_COMPLETIONS = ['red', 'green'] as const;
+/** The framework-neutral phase-completion mode a loop declares (§28.4/§28.5.5) — which machine completion
+ *  predicate its phase gates on: `red`/`green` gate the WORK turn (S3/S4), `refactor` gates each REVIEW-AND-FIX
+ *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", its work turn is a `commits` turn). A closed set
+ *  recognized by exact string, single-sourced so the field type AND the parser's validation both derive from it
+ *  (mirroring PHASE_OUTCOMES). */
+export const WORK_COMPLETIONS = ['red', 'green', 'refactor'] as const;
 export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
 const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
 export function isWorkCompletion(value: string): value is WorkCompletion {
   return WORK_COMPLETION_SET.has(value);
+}
+
+/** §28.5.5 F1 — the completion modes whose work turn produces NO result file and so are EXEMPT from the
+ *  `work.artifact`-must-name-a-binding parse guard. An exemption set (not an allow-list) keeps the guard
+ *  fail-CLOSED: a future result-producing mode requires a binding by default and must be named here to opt out.
+ *  `refactor`'s work turn is a `commits` turn (the refactor gate is on the review round, not the work turn). */
+const COMPLETIONS_EXEMPT_FROM_RESULT_BINDING: ReadonlySet<WorkCompletion> = new Set<WorkCompletion>(['refactor']);
+export function requiresResultBinding(mode: WorkCompletion): boolean {
+  return !COMPLETIONS_EXEMPT_FROM_RESULT_BINDING.has(mode);
 }
 
 /** The work recipe (§27.3): the prompt recipe reference (confined), the id of the artifact it produces, and —
@@ -365,11 +376,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
 
   const outputs = toArtifactBindings(rec.outputs, repoDir, 'output');
-  // §28.5.5 — a declared completion mode validates a result FILE, so `work.artifact` MUST name a real output
-  // binding (unlike a `commits`-producing turn, whose artifact legitimately resolves to none). Fail closed at
-  // parse time: a `completion` def whose artifact does not resolve would otherwise reach the completion gate
-  // with no result-file path to shape-validate — a false-pass on the done-signal alone (F1).
-  if (workCompletion !== undefined && !outputs.some((o) => o.id === workArtifact)) {
+  // §28.5.5 — a result-producing completion mode validates a result FILE, so `work.artifact` MUST name a real
+  // output binding (unlike a `commits`-producing turn, whose artifact legitimately resolves to none). Fail
+  // closed at parse time: such a def whose artifact does not resolve would otherwise reach the completion gate
+  // with no result-file path to shape-validate — a false-pass on the done-signal alone (F1). `refactor` is
+  // exempt (its work turn is a `commits` turn — the gate is on the review round), via requiresResultBinding.
+  if (workCompletion !== undefined && requiresResultBinding(workCompletion) && !outputs.some((o) => o.id === workArtifact)) {
     fail(`work.completion: ${workCompletion} requires work.artifact "${workArtifact}" to name an output binding`);
   }
 
