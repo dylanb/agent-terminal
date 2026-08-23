@@ -898,6 +898,16 @@ describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
     expect(notice?.textContent).toContain('tests/b.test.ts');
   });
 
+  it('phrases the notice phase-neutrally (§28.5.3 — the same flag is raised by GREEN and by a refactor round)', () => {
+    // The flag is raised by the GREEN work turn AND by a refactor review round (§28.5.3); the notice text must
+    // not hard-code one phase, or a refactor-round flag would read wrong. It still names the persona + the files.
+    createLoopPanel(host).render(loop({ changedTests: ['tests/a.test.ts'] }), 'plan');
+    const notice = host.querySelector('[data-changed-tests]');
+    expect(notice?.textContent).not.toContain('during GREEN');
+    expect(notice?.textContent).toContain('regression-guard'); // still routes to the persona
+    expect(notice?.textContent).toContain('tests/a.test.ts'); // still names the files
+  });
+
   it('omits the changed-tests notice when the view carries no flag', () => {
     createLoopPanel(host).render(loop({}), 'plan');
     expect(host.querySelector('[data-changed-tests]')).toBeNull();
