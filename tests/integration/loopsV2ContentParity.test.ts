@@ -108,3 +108,15 @@ describe('loops-v2 content-parity — the 3 planning-discipline charters (§28.6
     describe(row.file, () => assertCharterContract(row));
   }
 });
+
+describe('loops-v2 content-parity — the 2 phase-discipline charters (§28.6 P6b)', () => {
+  for (const row of NEW_CHARTERS.filter((c) => c.persona.startsWith('impl-review-'))) {
+    describe(row.file, () => assertCharterContract(row));
+  }
+
+  // §28.5.3 — regression-guard is the persona that reads the machine's changed-test flag and advises the
+  // human; the charter must name that flag so S7 wires the right reviewer to it.
+  it('regression-guard names the changed-test flag it reads', () => {
+    expect(read('green-loop/charter/regression-guard.md') ?? '').toContain('changed-test flag');
+  });
+});
