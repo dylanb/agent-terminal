@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { PHASE_OUTCOMES } from '../../src/shared/phaseOutcome';
+import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import {
   PHASE_RESULT_GRAMMAR,
   parsePhaseResult,
   phaseResultWellFormed,
   examplePhaseResult,
+  composePhaseResultInstruction,
 } from '../../src/shared/phaseResult';
 
 // §28.5.5 — the result-file grammar: one writer (the RED recipe/prompt), one predicate (the engine), one
@@ -187,5 +189,56 @@ describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
     expect(phaseResultWellFormed(green)).toBe(true);
     expect(parsePhaseResult(green)).toMatchObject({ outcome: 'passed', build: 'built' });
     expect(green.indexOf('build: built')).toBeLessThan(green.indexOf(PHASE_RESULT_GRAMMAR.capturedOutputHeading));
+  });
+});
+
+// §28.5.5 / §28 §7d — the shared phase-result WRITER: the one composer of the run→classify→write→few-shot
+// instruction block, called by the RED/GREEN work-turn branches and the refactor review round. Every grammar
+// token comes from PHASE_RESULT_GRAMMAR and every category from PHASE_OUTCOMES/BUILD_OUTCOMES (never re-spelled),
+// the few-shot is the canonical examplePhaseResult, and the phase-specific `closing` prose is threaded verbatim.
+describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)', () => {
+  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
+  const CLOSE = ['This round is done only when the tests still pass.', 'Fix, then re-run and re-classify.'];
+
+  const outcomeOnly = composePhaseResultInstruction({
+    resultRel: RESULT_REL,
+    completingOutcome: REFACTOR_COMPLETING_OUTCOME,
+    closing: CLOSE,
+  }).join('\n');
+
+  it('names the result file and interpolates the grammar tokens + full outcome vocabulary from the descriptors', () => {
+    expect(outcomeOnly).toContain(RESULT_REL);
+    expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel);
+    expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    for (const outcome of PHASE_OUTCOMES) expect(outcomeOnly).toContain(outcome);
+  });
+
+  it('embeds the ONE canonical example for the completing outcome (single-source with the gate predicate)', () => {
+    const example = examplePhaseResult(REFACTOR_COMPLETING_OUTCOME);
+    expect(phaseResultWellFormed(example)).toBe(true);
+    expect(outcomeOnly).toContain(example.trimEnd());
+  });
+
+  it('threads the phase-specific closing prose verbatim (each caller supplies its own bar)', () => {
+    for (const line of CLOSE) expect(outcomeOnly).toContain(line);
+  });
+
+  it('omits the build classification when no build is asked (softer than GREEN — no build: line)', () => {
+    expect(outcomeOnly).not.toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}:`);
+    for (const b of BUILD_OUTCOMES) expect(outcomeOnly).not.toContain(b);
+    // the few-shot for an outcome-only block carries no build line either
+    expect(outcomeOnly).not.toContain('build: built');
+  });
+
+  it('includes the build classification + a build few-shot when a completing build outcome is given (GREEN)', () => {
+    const withBuild = composePhaseResultInstruction({
+      resultRel: RESULT_REL,
+      completingOutcome: 'passed',
+      build: { completingBuildOutcome: 'built' },
+      closing: ['This turn is a valid GREEN only when the build succeeds.'],
+    }).join('\n');
+    expect(withBuild).toContain(PHASE_RESULT_GRAMMAR.buildLabel);
+    for (const b of BUILD_OUTCOMES) expect(withBuild).toContain(b);
+    expect(withBuild).toContain(examplePhaseResult('passed', { build: 'built' }).trimEnd());
   });
 });
