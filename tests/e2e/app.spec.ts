@@ -2752,11 +2752,11 @@ function seedFakeAgentV2(
             ? // §28.5.3/§28.6 — a refactor loop's work turn is a `commits` turn: it just signals done and the
               // engine chains the review round (where the refactor result gate lives). No artifact.
               `${bump}; ${done(turnKey)}`
-          : opts.work === 'file-only'
-          ? `${bump}; ${writeArtifact(true)}`
-          : opts.work === 'no-marker'
-            ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
-            : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
+            : opts.work === 'file-only'
+              ? `${bump}; ${writeArtifact(true)}`
+              : opts.work === 'no-marker'
+                ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
+                : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
   const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
