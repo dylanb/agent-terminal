@@ -2713,7 +2713,9 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     await flushGate();
     expect(completed(engine)).toBe(true); // the round still advances (the flag write is best-effort)
     expect(emitError).not.toHaveBeenCalled();
-    expect(audit).toHaveBeenCalled();
+    // the record failure is AUDITED (never silently swallowed) — asserted on the specific message so the check
+    // fails if the best-effort catch stops auditing, and so the audit is the refactor record-failure path.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('changed-tests flag record failed'), 1);
   });
 
   it('IT-REFAC-8: a stall during the probe errors the round; the late probe records NO flag against the errored turn', async () => {
@@ -2730,6 +2732,38 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     await flushGate();
     expect(completed(engine)).toBe(false); // ...the late runner.onDoneSignal() no-ops (state != in-flight)
     expect(readChangedTests(repo)).toBeNull(); // the stashed flag is NEVER recorded against the errored turn
+  });
+
+  it('IT-REFAC-dedup: a duplicate done-signal while the probe is pending does not burn a second retry attempt', async () => {
+    // The host watcher is not debounced; a double-fire must not consume both MAX_ATTEMPTS. The round is NOT
+    // passing (won't complete); two rapid signals → ONE probe (asyncGatePendingFor) → ONE retry (not error).
+    const engine = makeEngine(undefined, refFake());
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(examplePhaseResult('failed-assertion')); // not passing → the round will not complete
+    engine.onDoneSignal(); // spawns the probe for `a`
+    engine.onDoneSignal(); // duplicate while the probe is pending → suppressed by asyncGatePendingFor
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled(); // only ONE attempt consumed → retried, not errored
+  });
+
+  it('IT-REFAC-8b: a stale probe resolving after `active` moved to a fresh turn records no flag against it (identity guard)', async () => {
+    // A review-round retry re-runs the SAME turn object (unlike a work-turn retry), so the `active !== a` branch
+    // is reached instead by a concurrent re-entry after the round errors — the defense-in-depth case.
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal(); // starts the probe for the review round `a`
+    engine.onStall(); // errors the round → the runner is idle, so a fresh turn can enter
+    defResult = resolved(refactorDef());
+    engine.enter(repo, 'plan-loop', STEP, 're-entry'); // `active` is now a DIFFERENT turn than the pending probe's `a`
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the STALE probe for `a` resolves against the fresh turn...
+    await flushGate();
+    expect(readChangedTests(repo)).toBeNull(); // ...the identity guard skips the stash; no flag recorded
   });
 
   it('IT-REFAC-2b-a: human-ACCEPT keeps a malformed report when the result passes, and records the flag', async () => {
@@ -2782,6 +2816,10 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(readAppLoopState(repo)?.status).toBe('error'); // refused — no report to accept
   });
 
+  // AC1's "records a commit" clause: the commit is the generic S2 gate-commit side-effect (appGateDecision's
+  // runCommitSideEffect, wired in index.ts), which fires on the human's gate DECISION — a layer these engine ITs
+  // do not drive. It is pinned end-to-end for the refactor path by E2E-REFAC-1 (approve → HEAD+1 with the
+  // `refactor:` label). These ITs pin the "completes" clause (chaining the consolidator, then reaching the gate).
   it('IT-REFAC-multiround: a persisting change is re-reported each round; the flag survives review→consolidate to the gate', async () => {
     // The probe is cumulative baseline↔working-tree, so a round-1 change is re-reported; replace-semantics
     // preserves the flag. Drive round 1 → consolidator clean → gate; the flag is still present at the gate.

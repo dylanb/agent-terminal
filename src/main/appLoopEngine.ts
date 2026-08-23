@@ -401,9 +401,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // pass. This flag suppresses a duplicate signal WHILE a gate is pending; a genuine retry's real done-signal
   // (after the flag clears) still spawns a fresh gate. One slot suffices — only one work turn is active at a time.
   let asyncGatePendingFor: ActiveAppTurn | null = null;
-  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths resolved by greenAsyncGate and awaiting their record
-  // (distinct from `asyncGatePendingFor`, which tracks an in-flight gate). Identity-carrying (`turn`) so a stale
-  // gate that resolves after a retry rebuilt `active` cannot record its paths against the fresh turn.
+  // §28.5.3/§28.8.3 — the changed-test paths AWAITING their record (a distinct sense from `asyncGatePendingFor`,
+  // which tracks an in-flight gate): resolved by greenAsyncGate on a GREEN work turn or refactorFrozenProbe on a
+  // refactor review round, drained by that turn's onComplete. Identity-carrying (`turn`) so a stale gate/probe
+  // resolving after a retry rebuilt `active` cannot record its paths against the fresh turn.
   let changedTestsToRecord: { turn: ActiveAppTurn; paths: string[] } | null = null;
   let runner: TurnRunner;
   // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
@@ -549,9 +550,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const content = deps.readArtifact(active.reportPath);
       if (content === null || !roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) })) return false;
       if (active.completion.kind === 'refactor-report') {
-        // §28.5.3 — a REFACTOR round ADDITIONALLY gates on {result shape-valid ∧ outcome == passed} — the
-        // softer clause (no `build`, no exit-direction). The frozen check is a NON-blocking side probe, never
-        // part of this gate (§28.8.3). `resultOutcome` returns a value only for a shape-valid result file.
+        // §28.5.3 — a REFACTOR round ADDITIONALLY gates on {result shape-valid ∧ outcome == passed}, softer than
+        // GREEN (no build, no exit). The frozen check is a non-blocking side probe, NOT part of this gate (§28.8.3).
         const result = deps.readArtifact(active.completion.resultPath);
         if (result === null) return false;
         return deps.completionPredicates.resultOutcome(result) === REFACTOR_COMPLETING_OUTCOME;
@@ -633,19 +633,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.1 — the frozen check's shared core: which test-glob files changed since the RED baseline. ONE
-   *  definition of the baseline read + step-match + capfail mapping, so the GREEN gate (which BLOCKS on
-   *  `blocked`) and the refactor probe (which AUDITS + null on `blocked`, never blocks) cannot drift — and S7's
-   *  phase-stable step reduction has ONE edit site. A missing OR step-mismatched baseline is `no-baseline` (the
-   *  phase-stable reduction is the deferred §12 piece; S4/S5 steps are stable, so `===` is correct now). */
+  /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe, so S7's
+   *  phase-stable step reduction (the deferred §12 piece; S4/S5 steps are stable so `===` holds now) has ONE
+   *  edit site here. A missing OR step-mismatched baseline is `no-baseline`. */
   const changedTestPathsSinceBaseline = async (
     a: ActiveAppTurn,
-  ): Promise<{ paths: string[] } | { blocked: 'no-baseline' } | { blocked: { cause: 'absent' | 'malformed' } }> => {
+  ): Promise<{ kind: 'ok'; paths: string[] } | { kind: 'no-baseline' } | { kind: 'capfail'; cause: 'absent' | 'malformed' }> => {
     const baseline = deps.readBaseline(a.repoDir);
-    if (baseline === null || baseline.step !== a.stepId) return { blocked: 'no-baseline' };
+    if (baseline === null || baseline.step !== a.stepId) return { kind: 'no-baseline' };
     const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
-    if (!changed.ok) return { blocked: { cause: changed.cause } };
-    return { paths: changed.paths };
+    if (!changed.ok) return { kind: 'capfail', cause: changed.cause };
+    return { kind: 'ok', paths: changed.paths };
   };
 
   /** §28.5.3 / §28 Option C — the GREEN turn's ASYNC machine ground truth. Returns the PrecomputedGate (baseline
@@ -660,11 +658,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §28.5.1/D-baseline — a missing OR step-mismatched baseline means "tests unchanged" cannot be proven, so
       // the gate BLOCKS (fail toward firing), never silently reading as "nothing changed".
       const changed = await changedTestPathsSinceBaseline(a);
-      if (!('paths' in changed)) {
+      if (changed.kind !== 'ok') {
         const reason =
-          changed.blocked === 'no-baseline'
+          changed.kind === 'no-baseline'
             ? 'GREEN cannot run the frozen check — no RED baseline is recorded for this step'
-            : `GREEN cannot run the frozen check — ${baselineCapabilitiesCauseReason(changed.blocked.cause)}`;
+            : `GREEN cannot run the frozen check — ${baselineCapabilitiesCauseReason(changed.cause)}`;
         return { gate: { ok: false, reason }, changedTests: null };
       }
       const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
@@ -682,19 +680,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.3/§28.8.3 — the REFACTOR round's frozen check as a NON-blocking side probe: the changed test-glob
-   *  paths, or `null` when the check could not run. Unlike the GREEN gate it NEVER blocks the round (the
-   *  refactor gate is the sync clause alone); an inability records no flag and is AUDITED (never silently
-   *  swallowed), naming the cause so an S7 debugger sees why a flag is absent once phase-qualified steps land.
-   *  Never rejects — a throw audits and yields null. */
+  /** §28.5.3/§28.8.3 — the REFACTOR round's frozen check as a NON-blocking side probe (unlike the GREEN gate it
+   *  never blocks the round; an inability records no flag and is AUDITED, never silently swallowed — CLAUDE.md). */
   const refactorFrozenProbe = async (a: ActiveAppTurn): Promise<string[] | null> => {
     try {
       const changed = await changedTestPathsSinceBaseline(a);
-      if ('paths' in changed) return changed.paths;
+      if (changed.kind === 'ok') return changed.paths;
       const why =
-        changed.blocked === 'no-baseline'
+        changed.kind === 'no-baseline'
           ? 'no RED baseline is recorded for this step (baseline recorded under a different step)'
-          : capabilitiesCauseReason(changed.blocked.cause);
+          : capabilitiesCauseReason(changed.cause);
       deps.audit(a.repoDir, `§28 refactor round frozen probe could not run — ${why}`, 1);
       return null;
     } catch (e) {
@@ -716,11 +711,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.3 — the changed-test flag stash idiom, shared by the GREEN work turn and the refactor review round.
-   *  `stashChangedTests` records the resolved paths for the drain (identity-carrying on `turn` so a stale gate
-   *  that resolves after a retry rebuilt `active` cannot record against the fresh turn); `drainChangedTestsStash`
-   *  records the flag (only when the stash still belongs to the completing turn) and clears it unconditionally
-   *  so it never leaks to a later turn. One definition so the stale-guard contract cannot drift between routes. */
+  /** §28.5.3 — the changed-test flag stash idiom, ONE definition shared by the GREEN work turn and the refactor
+   *  review round so the stale-guard contract cannot drift between routes: the drain records only when the stash
+   *  still belongs to the completing `turn`, and clears it unconditionally so it never leaks to a later turn. */
   const stashChangedTests = (turn: ActiveAppTurn, changedTests: string[] | null): void => {
     if (changedTests !== null) changedTestsToRecord = { turn, paths: changedTests };
   };
@@ -1111,11 +1104,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
         });
       } else if (a?.phase === 'review' && a.completion.kind === 'refactor-report') {
-        // §28.5.3/§28.8.3 — the REFACTOR round's completion is the SYNC clause (report ∧ result-passed), so the
-        // runner is re-entered with NO PrecomputedGate. The frozen check is the NON-blocking side probe: compute
-        // it (async), stash its paths for onComplete to record, then re-enter the sync runner. Same dedup +
-        // identity + runner-state guards as the GREEN gate; the stash sits inside the `active === a` guard so a
-        // stale probe cannot clobber a fresh turn's flag (IT-REFAC-8).
+        // §28.5.3/§28.8.3 — the REFACTOR round completes on the SYNC clause, so the runner re-enters with NO
+        // gate; the non-blocking probe only stashes its paths inside the `active === a` guard, so a stale probe
+        // cannot record against a fresh turn (IT-REFAC-8/-8b). Same dedup guard as the GREEN gate (IT-REFAC-dedup).
         if (asyncGatePendingFor === a) return;
         asyncGatePendingFor = a;
         void refactorFrozenProbe(a).then((changedTests) => {
