@@ -2767,8 +2767,23 @@ function seedFakeAgentV2(
     'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
     `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; ` +
     'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
+  // §28.5.3 — a REFACTOR loop's review ROUND additionally writes the round-keyed phase-result the gate reads
+  // ({report ∧ passed}, softer than GREEN — no build line) and makes a behavior-preserving change so the approve
+  // commit has content: a non-test file (clean) or the committed test (touchTest → the frozen-check flag).
+  const refactorResultB64 = b64(examplePhaseResult(opts.resultOutcome ?? 'passed'));
+  const writeRefactorResult =
+    'r=$(rnd); mkdir -p .agent-terminal/loop/refactor-results; ' +
+    `printf %s '${refactorResultB64}' | base64 -d > .agent-terminal/loop/refactor-results/$r.md`;
+  const writeRefactorChange =
+    opts.touchTest === true
+      ? `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' >> tests/frozen.test.ts`
+      : `printf '%s\\n' 'export const y = 2;' > feature.ts`;
   const reviewAct =
-    reviewKind === 'none' ? `${reviewBump}` : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
+    reviewKind === 'none'
+      ? `${reviewBump}`
+      : opts.work === 'refactor'
+        ? `${reviewBump}; ${writeReportRoundAware}; ${writeRefactorChange}; ${writeRefactorResult}; ${done(reviewKey)}`
+        : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
   // The consolidator writes its verdict output (round-keyed) then signals; the round is read from run-state
   // so a multi-round run emits the scripted verdict for each round (§27.6).
   const verdicts = opts.verdicts ?? ['verdict: clean\n'];
