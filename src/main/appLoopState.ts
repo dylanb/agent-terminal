@@ -17,6 +17,7 @@ const RUN_STATE_FILE = 'run-state.yaml';
 /** The round reports live under a dedicated subtree of the loop area, keyed by round number (§27.5/§27.10),
  *  disjoint from the run-state file and from every other round's report. */
 const REPORTS_SUBDIR = 'reports';
+const REFACTOR_RESULTS_SUBDIR = 'refactor-results';
 /** The consolidator's per-round verdict outputs live under their own subtree (§27.6), disjoint from the
  *  round reports and the run-state file. */
 const CONSOLIDATE_SUBDIR = 'consolidate';
@@ -243,6 +244,21 @@ export function consolidatorOutputRel(round: number): string {
  *  (§27.6), or null when the loop area cannot be reduced to a symlink-free real path (CWE-22/59). */
 export function consolidatorOutputFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR);
+  if (jail === null) return null;
+  return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+}
+
+/** §28.5.3 — the repo-relative refactor-result path the fixer is instructed to write, the WRITE-target half of
+ *  the resolver whose READ-source half is `refactorResultFile`, so the two cannot drift (writer↔reader-location).
+ *  Round-keyed and disjoint from the round reports and the consolidator output. */
+export function refactorResultRel(round: number): string {
+  return [...APP_LOOP_DIR_SEGMENTS, REFACTOR_RESULTS_SUBDIR, roundLeaf(round)].join('/');
+}
+
+/** §28.5.3 — the confined absolute refactor-result path the engine READS back to gate the refactor round, or
+ *  null when the loop area cannot be reduced to a symlink-free real path (CWE-22/59). */
+export function refactorResultFile(repoDir: string, round: number): string | null {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REFACTOR_RESULTS_SUBDIR);
   if (jail === null) return null;
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }

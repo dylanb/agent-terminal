@@ -131,6 +131,10 @@ export interface AppLoopEngineDeps {
    *  back to gate the turn and the repo-relative path the consolidator writes, from ONE resolver; null when
    *  the loop area is unresolvable. */
   resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
+  /** §28.5.3 — resolve round N's refactor-result location — the confined absolute path the round gate reads
+   *  back and the repo-relative path the fixer writes, from ONE resolver; null when the loop area is
+   *  unresolvable (a routable error, never a fabricated pass). Consulted only for a refactor loop's review round. */
+  resolveRefactorResultLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
   /** §28.5.3 — the machine completion predicates the RED/GREEN gate consults (a domain-concept seam). */
   completionPredicates: LoopCompletionPredicates;
   /** §28.5.3/§28.8.3 — record the GREEN turn's changed-test flag (the test-glob files the frozen check found
@@ -230,7 +234,10 @@ type ActiveAppTurn =
       sections: string[];
       reportPath: string;
       reportRel: string;
-      completion: { kind: 'report' } | { kind: 'unresolved' };
+      /** §28.5.3 — a plain review round gates on the report alone (`report`); a REFACTOR loop's round ALSO
+       *  gates on a round-keyed phase-result file (`refactor-report`, carrying its confined path + repo-rel);
+       *  an `unresolved` round (resume/entry lost the def or a location) reads nothing (Accept refuses). */
+      completion: { kind: 'report' } | { kind: 'refactor-report'; resultPath: string; resultRel: string } | { kind: 'unresolved' };
       /** The roster the consolidator chose for this round (§27.6/AC8); absent on round 1 (the full catalog). */
       chosenRoster?: string[];
       /** §27.9/AC4 — the operator's request-changes feedback carried into this round, threaded into the
@@ -366,9 +373,14 @@ function activeTurnFor(
           artifact
           ? { kind: def.work.completion, resultPath: artifact.path, resultRel: artifact.rel }
           : { kind: 'unresolved' }
-        : artifact
-          ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
-          : { kind: 'commits' },
+        : def.work.completion === 'refactor'
+          ? // §28.5.3/§28.6 — a refactor loop's work turn is a `commits` turn (the phase gate is on each review
+            // ROUND, not the work turn), REGARDLESS of whether work.artifact resolves to a binding — so a
+            // refactor def that names one can never become a marker-`file` turn that would never complete.
+            { kind: 'commits' }
+          : artifact
+            ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
+            : { kind: 'commits' },
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
   };
@@ -691,6 +703,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
+          // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
+          // phase-result instruction; a plain review round has no `refactor-report` completion and none.
+          ...(active.completion.kind === 'refactor-report' ? { resultRel: active.completion.resultRel } : {}),
         });
       }
       const body = deps.readRecipe(active.recipePath);
@@ -786,6 +801,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (!r.ok) return null;
     const loc = deps.resolveReportLocation(ctx.repoDir, round);
     if (!loc) return null;
+    // §28.5.3 — a REFACTOR loop's round ALSO writes a round-keyed phase-result file the gate reads; resolve its
+    // location from the ONE resolver. An unresolvable location is a routable error (return null), never a
+    // fabricated pass — exactly as an unresolvable report location above.
+    let completion: Extract<ActiveAppTurn, { phase: 'review' }>['completion'];
+    if (r.def.work.completion === 'refactor') {
+      const res = deps.resolveRefactorResultLocation(ctx.repoDir, round);
+      if (!res) return null;
+      completion = { kind: 'refactor-report', resultPath: res.abs, resultRel: res.rel };
+    } else {
+      completion = { kind: 'report' };
+    }
     const full = reviewRoster(r.def);
     const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
     return {
@@ -800,7 +826,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       sections: r.def.report.sections,
       reportPath: loc.abs,
       reportRel: loc.rel,
-      completion: { kind: 'report' },
+      completion,
       ...(chosenRoster ? { chosenRoster } : {}),
       ...(feedback !== undefined ? { feedback } : {}),
     };
