@@ -3,10 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 
-// §28.6 (P6b/P6c) — the content-parity pins for the five new reviewer charters and the new work recipes S6
-// authors under example/loops-v2/. Reads the SOURCE tree (the bytes exampleAssetsBuild ships); the manifest
-// below is the closed content-identity source. The charters/recipes here are authored content only — S7 wires
-// the loop defs that consume them, so this file never resolves a def (the §28.10 S6 / S7 boundary).
+// §28.6 (P6b/P6c) — content-parity pins for the five new charters + work recipes S6 authors under
+// example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
+// resolves a def (the §28.10 S6 / S7 boundary).
 
 const SOURCE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
 
@@ -56,8 +55,6 @@ function read(rel: string): string | null {
   }
 }
 
-// The manifest's own invariants — the infrastructure the slice pins consume. Green from the first commit; a
-// typo'd or colliding row fails here before any content assertion runs.
 describe('loops-v2 content-parity — manifest is internally consistent', () => {
   it('every charter file, persona, and marker is distinct and well-shaped', () => {
     const files = NEW_CHARTERS.map((c) => c.file);
@@ -85,8 +82,7 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
   });
 });
 
-// §28.6 P6b — each new charter exists, carries its distinctive marker, composes the ported charter structure
-// (H1 + `Derived from persona:` line + a lane body), and carries no dead engine token.
+// §28.6 P6b
 function assertCharterContract(row: CharterRow): void {
   it('exists and carries its distinctive marker', () => {
     const body = read(row.file);
