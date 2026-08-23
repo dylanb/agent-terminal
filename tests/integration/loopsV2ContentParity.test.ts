@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, type PhaseOutcome } from '../../src/shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
+import { composePhaseResultInstruction, phaseResultWellFormed, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
 
 // §28.6 (P6b/P6c) — content-parity pins for the five new charters + work recipes S6 authors under
 // example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
@@ -118,4 +122,64 @@ describe('loops-v2 content-parity — the 2 phase-discipline charters (§28.6 P6
   it('regression-guard names the changed-test flag it reads', () => {
     expect(read('green-loop/charter/regression-guard.md') ?? '').toContain('changed-test flag');
   });
+});
+
+function completingOutcome(completes: 'red' | 'green'): PhaseOutcome {
+  return completes === 'red' ? RED_COMPLETING_OUTCOME : GREEN_COMPLETING_OUTCOME;
+}
+
+/** The block between the two ``` fence markers of a composed instruction — the sole fenced element the
+ *  work-turn composer embeds (§28.5.5). */
+function fencedExample(lines: string[]): string {
+  const open = lines.indexOf('```');
+  const close = lines.indexOf('```', open + 1);
+  return open >= 0 && close > open ? lines.slice(open + 1, close).join('\n') : '';
+}
+
+// §28.6 P6c — each new recipe references the capabilities file; the plan-bundle recipe produces all four
+// planning sections; a phase recipe names its completing outcome and embeds no result-file block (the
+// work-turn composer owns that embed, §28.5.5).
+describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () => {
+  for (const row of NEW_RECIPES) {
+    describe(row.file, () => {
+      it('exists and references the capabilities file', () => {
+        const body = read(row.file);
+        expect(body, `recipe absent: ${row.file}`).not.toBeNull();
+        expect(body).toContain(LOOP_CAPABILITIES_FILENAME);
+      });
+      it('contains no dead engine token', () => {
+        const body = read(row.file) ?? '';
+        for (const token of DEAD_TOKENS) expect(body, `${row.file}: dead token ${token}`).not.toContain(token);
+      });
+      if (row.kind === 'plan-bundle') {
+        it('has a heading for each planning section', () => {
+          const body = read(row.file) ?? '';
+          for (const section of row.sections) {
+            const hasHeading = body.split('\n').some((l) => /^#+\s/.test(l) && l.includes(section));
+            expect(hasHeading, `${row.file}: no heading for '${section}'`).toBe(true);
+          }
+        });
+      }
+      if (row.kind === 'phase') {
+        it('names its completing outcome in a delimited backticked context', () => {
+          const body = read(row.file) ?? '';
+          expect(body).toContain(`\`${completingOutcome(row.completes)}\``);
+          if (row.completes === 'green') expect(body).toContain(`\`${GREEN_COMPLETING_BUILD_OUTCOME}\``);
+        });
+        it('embeds no result-file block', () => {
+          expect(read(row.file) ?? '').not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+        });
+      }
+    });
+  }
+
+  for (const completes of ['red', 'green'] as const) {
+    it(`the ${completes} completing outcome composes a well-formed example`, () => {
+      const lines =
+        completes === 'green'
+          ? composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: GREEN_COMPLETING_OUTCOME, build: { completingBuildOutcome: GREEN_COMPLETING_BUILD_OUTCOME }, closing: [] })
+          : composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: RED_COMPLETING_OUTCOME, closing: [] });
+      expect(phaseResultWellFormed(fencedExample(lines))).toBe(true);
+    });
+  }
 });
