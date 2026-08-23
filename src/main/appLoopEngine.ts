@@ -131,9 +131,10 @@ export interface AppLoopEngineDeps {
    *  back to gate the turn and the repo-relative path the consolidator writes, from ONE resolver; null when
    *  the loop area is unresolvable. */
   resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
-  /** §28.5.3 — resolve round N's refactor-result location — the confined absolute path the round gate reads
-   *  back and the repo-relative path the fixer writes, from ONE resolver; null when the loop area is
-   *  unresolvable (a routable error, never a fabricated pass). Consulted only for a refactor loop's review round. */
+  /** §28.5.3 — resolve round N's refactor-result location: the confined absolute path (the R5 round gate reads
+   *  it back) and the repo-relative path (threaded into the review prompt for the fixer to write), from ONE
+   *  resolver; null when the loop area is unresolvable (a routable error, never a fabricated pass). Consulted
+   *  only for a refactor loop's review round. */
   resolveRefactorResultLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
   /** §28.5.3 — the machine completion predicates the RED/GREEN gate consults (a domain-concept seam). */
   completionPredicates: LoopCompletionPredicates;
@@ -234,9 +235,10 @@ type ActiveAppTurn =
       sections: string[];
       reportPath: string;
       reportRel: string;
-      /** §28.5.3 — a plain review round gates on the report alone (`report`); a REFACTOR loop's round ALSO
-       *  gates on a round-keyed phase-result file (`refactor-report`, carrying its confined path + repo-rel);
-       *  an `unresolved` round (resume/entry lost the def or a location) reads nothing (Accept refuses). */
+      /** §28.5.3 — a plain review round carries only its report (`report`); a REFACTOR loop's round also
+       *  carries a round-keyed phase-result location (`refactor-report`: confined path + repo-rel) — the compose
+       *  threads the rel, the R5 gate reads the path; an `unresolved` round (resume/entry lost the def or a
+       *  location) reads nothing (Accept refuses). */
       completion: { kind: 'report' } | { kind: 'refactor-report'; resultPath: string; resultRel: string } | { kind: 'unresolved' };
       /** The roster the consolidator chose for this round (§27.6/AC8); absent on round 1 (the full catalog). */
       chosenRoster?: string[];
@@ -801,9 +803,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (!r.ok) return null;
     const loc = deps.resolveReportLocation(ctx.repoDir, round);
     if (!loc) return null;
-    // §28.5.3 — a REFACTOR loop's round ALSO writes a round-keyed phase-result file the gate reads; resolve its
-    // location from the ONE resolver. An unresolvable location is a routable error (return null), never a
-    // fabricated pass — exactly as an unresolvable report location above.
+    // §28.5.3 — a REFACTOR loop's round writes a round-keyed phase-result file; resolve its location from the
+    // ONE resolver — the compose threads the rel, the R5 gate reads the path. An unresolvable location is a
+    // routable error (return null), never a fabricated pass — exactly as an unresolvable report location above.
     let completion: Extract<ActiveAppTurn, { phase: 'review' }>['completion'];
     if (r.def.work.completion === 'refactor') {
       const res = deps.resolveRefactorResultLocation(ctx.repoDir, round);
