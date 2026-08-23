@@ -7,9 +7,9 @@
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
-import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../shared/phaseResult';
-import { PHASE_OUTCOMES, RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
-import { BUILD_OUTCOMES, GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
+import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -103,47 +103,38 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       req.completion.marker,
     );
   } else if (req.completion?.kind === 'red') {
-    // §28.5.5 §7d — the RED phase-result instruction. Every grammar token and every outcome category is
-    // interpolated from the shared descriptors (PHASE_RESULT_GRAMMAR / PHASE_OUTCOMES), never re-spelled here, so
-    // this WRITER and the gate PREDICATE derive from one source. The few-shot is the ONE canonical example
-    // (examplePhaseResult, fence-free by contract) — fenced here without an inner fence closing the block early.
+    // §28.5.5 §7d — the RED phase-result instruction, composed by the shared writer (composePhaseResultInstruction:
+    // grammar tokens + outcome vocabulary from the descriptors, the canonical few-shot embedded fence-free). Only
+    // the phase-specific bar prose (NOT derivable from the outcome) is spelled here and threaded as `closing`.
     const g = PHASE_RESULT_GRAMMAR;
     parts.push(
       '',
-      'Run the test command for this change, then classify that run as EXACTLY one of these outcomes:',
-      `  ${PHASE_OUTCOMES.join(', ')}`,
-      `Write the result to ${req.completion.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` line`,
-      `first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
-      '',
-      '```',
-      examplePhaseResult(RED_COMPLETING_OUTCOME).trimEnd(),
-      '```',
-      '',
-      `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: ${RED_COMPLETING_OUTCOME}\`).`,
-      'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
-      'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+      ...composePhaseResultInstruction({
+        resultRel: req.completion.resultRel,
+        completingOutcome: RED_COMPLETING_OUTCOME,
+        closing: [
+          `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: ${RED_COMPLETING_OUTCOME}\`).`,
+          'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
+          'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+        ],
+      }),
     );
   } else if (req.completion?.kind === 'green') {
-    // §28.5.3 §7d — the GREEN phase-result instruction. Same WRITER contract as the RED branch: every grammar
-    // token and BOTH vocabularies (test + build) are interpolated from the shared descriptors, and the few-shot
-    // is the ONE canonical example (fence-free by contract). GREEN carries a second classification, `build:`.
+    // §28.5.3 §7d — the GREEN phase-result instruction: the same shared writer, additionally classifying the
+    // build (`build:`) via `build`. The phase-specific bar prose is threaded as `closing`.
     const g = PHASE_RESULT_GRAMMAR;
     parts.push(
       '',
-      'Run the test command for this change and classify that run as EXACTLY one of these outcomes:',
-      `  ${PHASE_OUTCOMES.join(', ')}`,
-      'Then run the build command and classify it as EXACTLY one of these:',
-      `  ${BUILD_OUTCOMES.join(', ')}`,
-      `Write the result to ${req.completion.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` and`,
-      `\`${g.buildLabel}:\` lines first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
-      '',
-      '```',
-      examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME }).trimEnd(),
-      '```',
-      '',
-      `This turn is a valid GREEN only when the tests pass (\`${g.outcomeLabel}: ${GREEN_COMPLETING_OUTCOME}\`) AND the build succeeds (\`${g.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}\`).`,
-      'A failing or errored test, a broken build (`build-failed`), or any non-passing outcome does NOT complete it —',
-      'fix the implementation so the tests pass and the build succeeds, then re-run and re-classify.',
+      ...composePhaseResultInstruction({
+        resultRel: req.completion.resultRel,
+        completingOutcome: GREEN_COMPLETING_OUTCOME,
+        build: { completingBuildOutcome: GREEN_COMPLETING_BUILD_OUTCOME },
+        closing: [
+          `This turn is a valid GREEN only when the tests pass (\`${g.outcomeLabel}: ${GREEN_COMPLETING_OUTCOME}\`) AND the build succeeds (\`${g.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}\`).`,
+          'A failing or errored test, a broken build (`build-failed`), or any non-passing outcome does NOT complete it —',
+          'fix the implementation so the tests pass and the build succeeds, then re-run and re-classify.',
+        ],
+      }),
     );
   }
   const verifyRel =
