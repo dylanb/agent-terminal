@@ -9,6 +9,8 @@ import { boundaryCommand } from './appWorkTurn';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
+import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
  *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
@@ -58,6 +60,10 @@ export interface ReviewAndFixPromptReq {
    *  reviewers' findings (never to the consolidator or the work turn). Absent on a consolidator-driven
    *  another-round; a blank/whitespace-only value is treated as none, so no empty block is ever emitted. */
   feedback?: string;
+  /** §28.5.3 — a REFACTOR loop's round-keyed phase-result path: present ⟺ this is a refactor round, which
+   *  additionally runs the targeted tests and writes the result the round gate reads (softer than GREEN —
+   *  {passed}, no build). Absent for RED/GREEN loops' review rounds (no phase-result block emitted). */
+  resultRel?: string;
 }
 
 /** Compose the §27 review-and-fix prompt (§27.3/§27.4/§27.5): spawn the roster as parallel subagents each
@@ -105,8 +111,28 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
     `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,
     '  verbatim, no other value.',
+  );
+  // §28.5.3 — a refactor round ALSO runs the targeted tests and writes a phase-result file the round gate reads
+  // (softer than GREEN: {passed}, no build). The shared writer keeps this instruction single-sourced with the
+  // parse predicate; the round then verifies the RESULT on disk before the done-file (the new artifact the
+  // fixer is least habituated to). Absent `resultRel` (RED/GREEN loops' review rounds), no block is emitted.
+  if (req.resultRel !== undefined) {
+    lines.push(
+      '',
+      ...composePhaseResultInstruction({
+        resultRel: req.resultRel,
+        completingOutcome: REFACTOR_COMPLETING_OUTCOME,
+        closing: [
+          `This round is done only when the tests still pass (\`${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${REFACTOR_COMPLETING_OUTCOME}\`).`,
+          'A failing or errored test does NOT complete it — fix so the tests pass, then re-run and re-classify.',
+          '(A legitimate fixture change is recorded and flagged for regression-guard and the human, not blocked.)',
+        ],
+      }),
+    );
+  }
+  lines.push(
     '',
-    doneSignalInstruction(req.turnKey, req.reportRel, req.doneRelPath),
+    doneSignalInstruction(req.turnKey, req.resultRel ?? req.reportRel, req.doneRelPath),
     '',
     'A well-formed example:',
     '',
