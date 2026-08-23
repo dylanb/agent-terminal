@@ -112,10 +112,10 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,
     '  verbatim, no other value.',
   );
-  // §28.5.3 — a refactor round ALSO runs the targeted tests and writes a phase-result file the round gate reads
-  // (softer than GREEN: {passed}, no build). The shared writer keeps this instruction single-sourced with the
-  // parse predicate; the round then verifies the RESULT on disk before the done-file (the new artifact the
-  // fixer is least habituated to). Absent `resultRel` (RED/GREEN loops' review rounds), no block is emitted.
+  // §28.5.3 — a refactor round writes a phase-result file the round gate reads (softer than GREEN: {passed},
+  // no build), via the shared writer so this instruction stays single-sourced with the parse predicate. The
+  // done-signal verifies the RESULT, not the report — it is the artifact the fixer is least habituated to (the
+  // report stays gated by completionSatisfied).
   if (req.resultRel !== undefined) {
     lines.push(
       '',
