@@ -26,6 +26,8 @@ import {
   readChangedTests,
   roundReportFile,
   roundReportRel,
+  refactorResultFile,
+  refactorResultRel,
   writeAppLoopState,
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
@@ -88,6 +90,10 @@ let polishStep: string | null;
  *  swapped for a directory → EISDIR that rmSync's `force` does not swallow). Null (no throw) by default. */
 let clearPolishError: string | null;
 
+/** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null (the loop area is
+ *  unresolvable), driving IT-REFAC-unresolvable-result. False (the real resolver) by default. */
+let refactorResultLocationNull: boolean;
+
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
 function fileDef(): LoopDefV2 {
@@ -119,6 +125,20 @@ function commitDef(): LoopDefV2 {
   return { ...fileDef(), work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'commits' }, outputs: [] };
 }
 
+/** §28.5.3/S5 — a REFACTOR loop def: `work.completion: refactor`, its work turn a `commits` turn (no result
+ *  binding). The phase gate is on each review-and-fix ROUND (the round writes a phase-result file), so the
+ *  work turn advances to review round 1 on the done-signal alone. */
+function refactorDef(): LoopDefV2 {
+  return { ...fileDef(), work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'commits', completion: 'refactor' }, outputs: [] };
+}
+
+/** A refactor def whose work.artifact DOES resolve to a marker-file binding — used to prove the engine pins the
+ *  refactor work turn to `commits` REGARDLESS of the binding (the activeTurnFor arm), rather than treating it as
+ *  a marker-`file` turn that would never complete on the done-signal alone (the ARCH-1 deadlock). */
+function refactorDefBound(): LoopDefV2 {
+  return { ...fileDef(), work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'plan', completion: 'refactor' } };
+}
+
 let defResult: LoopDefV2Result;
 /** A resolved §27 def result rooted at the test repo's own temp dir — the honest "resolved-from tier" for
  *  every def these tests hand the engine through `resolveDef`. */
@@ -135,6 +155,7 @@ function makeEngine(
   injected = [];
   polishStep = null;
   clearPolishError = null;
+  refactorResultLocationNull = false;
   recordChangedTestsImpl = (repoDir, step, paths) => recordChangedTests(repoDir, step, paths); // the REAL writer
   readArtifact = vi.fn((p: string) => {
     try {
@@ -171,6 +192,14 @@ function makeEngine(
     resolveConsolidatorLocation: (repoDir, round) => {
       const abs = consolidatorOutputFile(repoDir, round);
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
+    },
+    // §28.5.3/S5 — the refactor round's phase-result location (round-keyed), from the REAL resolver so a refactor
+    // review round writes and the gate reads back a real result artifact. `refactorResultLocationNull` forces the
+    // unresolvable-location path (IT-REFAC-unresolvable-result).
+    resolveRefactorResultLocation: (repoDir, round) => {
+      if (refactorResultLocationNull) return null;
+      const abs = refactorResultFile(repoDir, round);
+      return abs ? { abs, rel: refactorResultRel(round) } : null;
     },
     completionPredicates: predicatesOverride ?? completionPredicatesSentinel,
     // §28.5.3 — the GREEN engine ports: record the changed-tests flag (real writer, swappable) and read the RED
@@ -2494,5 +2523,52 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     completeConsolidate(engine, 1, 'verdict: clean\n');
     expect(readAppLoopState(repo)?.status).toBe('complete'); // reached the gate
     expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
+  });
+});
+
+// §28.5.3/§28.6/S5 — the REFACTOR loop's engine shape: a `work.completion: refactor` loop's work turn is a
+// `commits` turn (the phase gate is on the review ROUND, §28.6 "it is review-and-fix"), so it advances to
+// review round 1 on the done-signal alone; the review round is then instructed to write a round-keyed
+// phase-result file (the gate that R5 wires). These pin the turn SHAPE, observed through the injected prompts
+// and the engine's advance — never a private-field peek.
+describe('§28.5.3 — the refactor loop review-turn shape', () => {
+  it('IT-REFAC-workturn: a refactor loop\'s work turn is a commits turn — advances to review on the done-signal alone (activeTurnFor pin)', () => {
+    // A BOUND work.artifact would map to a marker-`file` turn WITHOUT the refactor→commits arm; the marker is
+    // never written here, so before the arm the turn cannot complete and never reaches review (RED).
+    defResult = resolved(refactorDefBound());
+    const engine = makeEngine();
+    enterAndInjectWork(engine); // enter + the work prompt injects
+    engine.onDoneSignal(); // commits work turn completes on the done-signal alone → chains review round 1
+    engine.onInjectable(); // the pre-review boundary drains
+    engine.onInjectable(); // the review-and-fix prompt injects
+    expect(engine.activeTurnKey()).toBe(REVIEW_KEY); // advanced to the review round, not stuck in the work turn
+    expect(injected[injected.length - 1]).toContain('turn-done:review-plan'); // the review prompt injected
+  });
+
+  it('IT-REFAC-turn: the refactor loop\'s review round is instructed to write the round-keyed result file', () => {
+    defResult = resolved(refactorDef());
+    const engine = makeEngine();
+    driveToReviewInjected(engine); // work (commits) → review round 1 prompt injects
+    // The injected review prompt names the round-keyed refactor-result rel (from resolveRefactorResultLocation).
+    expect(injected[injected.length - 1]).toContain(refactorResultRel(1));
+    expect(injected[injected.length - 1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+  });
+
+  it('IT-REFAC-turn: a NON-refactor loop\'s review round names no result file (regression — existing loops unchanged)', () => {
+    defResult = resolved(fileDef());
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).not.toContain(refactorResultRel(1));
+    expect(injected[injected.length - 1]).not.toContain('.agent-terminal/loop/refactor-results/');
+  });
+
+  it('IT-REFAC-unresolvable-result: an unresolvable refactor-result location stops the round in a routable error (no fabricated pass)', () => {
+    defResult = resolved(refactorDef());
+    const engine = makeEngine();
+    refactorResultLocationNull = true; // the loop area is unresolvable
+    enterAndInjectWork(engine);
+    engine.onDoneSignal(); // work completes (commits) → enterReview → reviewTurnFor resolves the result location → null
+    expect(emitError).toHaveBeenCalled(); // surfaced as a routable §27 loop error
+    expect(readAppLoopState(repo)?.status).toBe('error');
   });
 });

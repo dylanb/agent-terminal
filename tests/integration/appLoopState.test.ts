@@ -12,6 +12,8 @@ import {
   isPolishActiveForStep,
   consolidatorOutputFile,
   consolidatorOutputRel,
+  refactorResultFile,
+  refactorResultRel,
   parseAppLoopState,
   readAppLoopState,
   readArmedInterrupt,
@@ -530,6 +532,33 @@ describe('§27 consolidator-output location resolver', () => {
     try {
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
       expect(consolidatorOutputFile(repo, 1)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+// §28.5.3/S5 — a REFACTOR round's phase-result file has a write-target (the fixer, via refactorResultRel) and a
+// read-source (the round gate, via refactorResultFile) from ONE resolver, round-keyed and disjoint from the
+// round reports and the consolidator output (writer↔reader-location). Confined to the untrusted repo tree.
+describe('§28 refactor-result location resolver', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/refactor-results/<N>.md, write-target === read-source', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
+    expect(refactorResultRel(1)).toBe('.agent-terminal/loop/refactor-results/1.md');
+    expect(refactorResultFile(repo, 1)).toBe(join(realpathSync(repo), refactorResultRel(1)));
+    expect(refactorResultFile(repo, 2)).toBe(join(realpathSync(repo), refactorResultRel(2)));
+  });
+
+  it('keeps the refactor result disjoint from the round report AND the consolidator output of the same round', () => {
+    expect(refactorResultFile(repo, 1)).not.toBe(roundReportFile(repo, 1));
+    expect(refactorResultFile(repo, 1)).not.toBe(consolidatorOutputFile(repo, 1));
+  });
+
+  it('refuses a refactor-result location behind a symlinked loop container (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-refac-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(refactorResultFile(repo, 1)).toBeNull();
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
