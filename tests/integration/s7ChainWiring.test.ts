@@ -190,14 +190,18 @@ describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
     expect(approve?.sideEffects.map((se) => se.kind).slice().sort()).toEqual([...row.gate].sort());
   });
 
-  it('declares the manifest chained input', () => {
-    expect(mustResolve(name).inputs.some((i) => i.id === row.input.id), `${name} input ${row.input.id}`).toBe(true);
+  it('declares the manifest chained input (id + path)', () => {
+    const binding = mustResolve(name).inputs.find((i) => i.id === row.input.id);
+    expect(binding, `${name} input ${row.input.id}`).toBeDefined();
+    expect(binding?.rel.split('/').pop()).toBe(row.input.path);
   });
 
-  it('binds the result output the manifest declares', () => {
+  it('binds the result output the manifest declares (id + path)', () => {
     const out = row.output;
     if (!out) return;
-    expect(mustResolve(name).outputs.some((o) => o.id === out.id), `${name} output ${out.id}`).toBe(true);
+    const binding = mustResolve(name).outputs.find((o) => o.id === out.id);
+    expect(binding, `${name} output ${out.id}`).toBeDefined();
+    expect(binding?.rel.split('/').pop()).toBe(out.path);
   });
 
   // §28.5.5 / CLAUDE.md shared-semantics — a reused charter/consolidate recipe is a byte-copy of its
@@ -259,9 +263,7 @@ describe('s7 wiring — closure', () => {
 
 describe('s7 refactor recipe (§28.6 P6c)', () => {
   it('references the capabilities file and embeds no result-file block', () => {
-    const rel = 'refactor-loop/prompts/work.md';
-    expect(existsSync(join(SOURCE_TREE, rel)), rel).toBe(true);
-    const body = readFileSync(join(SOURCE_TREE, rel), 'utf8');
+    const body = readFileSync(mustResolve('refactor-loop').work.recipe, 'utf8');
     expect(body).toContain(LOOP_CAPABILITIES_FILENAME);
     expect(body).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
   });
