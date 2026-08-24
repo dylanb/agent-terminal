@@ -505,6 +505,11 @@ export interface FlowLoopView {
    *  persona + the human gate. Absent when none changed (a clean GREEN records an empty flag, which does not
    *  show) or when the record is for another step. Additive and §27-only. */
   changedTests?: string[];
+  /** §28.7 — the epic decomposition the work agent authored into the gate's `plan` artifact, surfaced when an
+   *  epic-capable loop (its approve gate declares a `promote` side-effect) is AT the gate and the plan is
+   *  classified an epic (src/shared/epicPlan.ts). The panel shows the operator the split promotion will create
+   *  BEFORE they approve (§27.10). Absent for a non-epic plan or a loop with no promote gate. Additive and §27-only. */
+  epic?: { subTickets: { index: number; title: string }[] };
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,

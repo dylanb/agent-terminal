@@ -7,9 +7,11 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
+import { readFileSync } from 'node:fs';
 import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
-import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import { isEpicPlan, parseEpicPlan } from '../shared/epicPlan';
+import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2 } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState, isPolishActiveForStep, readChangedTests } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
@@ -22,6 +24,30 @@ export const APP_LOOP_STATUS_ERROR = 'error';
  *  `AppLoopRunState` status values (appLoopState.ts) — one vocabulary the writer and this reader share. */
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
+
+// §28.7 — the epic split the panel previews at the gate: for an epic-capable loop (its approve gate declares a
+// `promote` side-effect), read that side-effect's `plan` artifact and, when the work agent classified it an
+// epic, return the ordered sub-ticket {index,title}s. The same epicPlan grammar the promotion executor reads,
+// so the previewed split and the created chain cannot drift. Returns undefined for a non-epic plan, a loop with
+// no promote gate, or an unreadable artifact (the gate still renders — the classification is additive).
+function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
+  const approve = def.gate.find((g) => g.option === 'approve');
+  const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
+  const artifactId = promote && typeof promote.args.artifact === 'string' ? promote.args.artifact : null;
+  if (artifactId === null) return undefined;
+  const binding = [...def.inputs, ...def.outputs].find((b) => b.id === artifactId);
+  if (binding === undefined) return undefined;
+  let text: string;
+  try {
+    text = readFileSync(binding.path, 'utf8');
+  } catch {
+    return undefined;
+  }
+  if (!isEpicPlan(text)) return undefined;
+  const parsed = parseEpicPlan(text);
+  if (parsed === null || parsed.subTickets.length === 0) return undefined;
+  return { subTickets: parsed.subTickets.map((t) => ({ index: t.index, title: t.title })) };
+}
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
   // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
@@ -74,6 +100,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // pull, like the polish flag.
     const changedRec = readChangedTests(ctx.repoDir);
     const changedTests = changedRec && changedRec.step === run.step && changedRec.paths.length > 0 ? changedRec.paths : null;
+    // §28.7 — surface the epic split ONLY at the gate (a reached verdict), where the operator judges it before
+    // approving; r.ok is implied by atGate (gateOptions come from the resolved def).
+    const epic = atGate && r.ok ? epicPreviewAtGate(r.def) : undefined;
     return {
       status: run.status,
       pr: null,
@@ -96,6 +125,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
+      ...(epic ? { epic } : {}),
     };
   }
   if (!r.ok) {
