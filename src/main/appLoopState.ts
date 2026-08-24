@@ -589,3 +589,61 @@ export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
   if (!Array.isArray(doc.paths)) return null;
   return { step: doc.step, paths: sanitizeChangedTestPaths(doc.paths) };
 }
+
+// §28.7 AC3 — the resumable promotion record, in its OWN file (a wholesale run-state rewrite cannot clobber it —
+// the baseline/changed-tests precedent). No wall-clock, so an idempotent re-run's "unchanged" assertion is
+// deterministic. Field-local validation with a DELIBERATE fail-safe: a present-but-malformed store reads
+// 'corrupt' (BLOCK — never fall through to re-creating duplicate public issues, CWE-20/770), while an absent
+// store, or one recording a DIFFERENT epic, reads null (a fresh promotion for this epic).
+const PROMOTION_FILE = 'promotion.yaml';
+
+export interface EpicPromotionState {
+  epic: number;
+  created: { index: number; issue: number }[];
+  trackingAppended: boolean;
+  prClosed: boolean;
+}
+
+export function writeEpicPromotion(repoDir: string, state: EpicPromotionState): void {
+  const file = loopAreaFile(repoDir, PROMOTION_FILE);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = {
+    schema_version: APP_LOOP_STATE_SCHEMA,
+    epic: state.epic,
+    created: state.created.map((c) => ({ index: c.index, issue: c.issue })),
+    tracking_appended: state.trackingAppended,
+    pr_closed: state.prClosed,
+  };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §28 promotion record: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionState | 'corrupt' | null {
+  const file = loopAreaFile(repoDir, PROMOTION_FILE);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null; // absent → a fresh promotion
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return 'corrupt'; // present but unparseable → block, never re-create
+  }
+  if (!isRecord(doc)) return 'corrupt';
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return 'corrupt';
+  if (!Number.isInteger(doc.epic)) return 'corrupt';
+  if (!Array.isArray(doc.created)) return 'corrupt';
+  const created: { index: number; issue: number }[] = [];
+  for (const c of doc.created) {
+    if (!isRecord(c) || !Number.isInteger(c.index) || !Number.isInteger(c.issue) || (c.issue as number) < 0) return 'corrupt';
+    created.push({ index: c.index as number, issue: c.issue as number });
+  }
+  // A valid record for a DIFFERENT epic is stale (this epic has no record) → fresh, not a block.
+  if (doc.epic !== epic) return null;
+  return { epic: doc.epic as number, created, trackingAppended: doc.tracking_appended === true, prClosed: doc.pr_closed === true };
+}

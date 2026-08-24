@@ -8,6 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { isEpicPlan, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
 import type { LoopDefV2 } from './loopDefV2';
+import type { EpicPromotionState } from './appLoopState';
 
 // The plan is free-form agent prose read synchronously; cap it so a runaway artifact cannot block (CWE-400).
 const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
@@ -72,25 +73,53 @@ export interface AppEpicPromotionGitHub {
   closePr(pr: number): Promise<void>;
 }
 
-/** Create the sub-ticket chain + tracking issue (§28.7 AC2). Ordered so the approved plan is never lost: every
- *  sub-ticket (each carrying its plan slice verbatim) is created BEFORE the epic PR is closed. Each sub-ticket
- *  carries the epic link and the REAL preceding issue number (resolved as creation proceeds), labelled
- *  uniformly (subticket + ready) — slice 1 is a sibling like the rest (operator decision), none assigned. */
-export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: EpicPromotionRequest): Promise<void> {
-  const created: { issue: number; title: string }[] = [];
+/** The resumable promotion record (§28.7 AC3) — the real store is appLoopState's promotion.yaml; injected so the
+ *  executor runs under an in-memory fake. `read` returns 'corrupt' for a present-but-malformed record (BLOCK). */
+export interface EpicPromotionStore {
+  read(epic: number): EpicPromotionState | 'corrupt' | null;
+  write(state: EpicPromotionState): void;
+}
+
+/** Create the sub-ticket chain + tracking issue (§28.7 AC2), RESUMABLY and IDEMPOTENTLY (AC3). Ordered so the
+ *  approved plan is never lost: every sub-ticket (each carrying its plan slice verbatim) is created BEFORE the
+ *  epic PR is closed. Each sub-ticket carries the epic link and the REAL preceding issue number, labelled
+ *  uniformly (subticket + ready) — slice 1 is a sibling like the rest, none assigned. The store is consulted so
+ *  a re-run creates only what is missing (a corrupt record blocks rather than duplicating public issues). */
+export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: EpicPromotionRequest, store: EpicPromotionStore): Promise<void> {
+  const existing = store.read(request.epic);
+  if (existing === 'corrupt') {
+    throw new Error('a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion.yaml and re-approve');
+  }
+  const state: EpicPromotionState = existing ?? { epic: request.epic, created: [], trackingAppended: false, prClosed: false };
+  const issueByIndex = new Map(state.created.map((c) => [c.index, c.issue]));
   let preceding: number | null = null;
   for (const st of request.subTickets) {
+    const already = issueByIndex.get(st.index);
+    if (already !== undefined) {
+      preceding = already; // recorded on a prior run — skip, never re-create
+      continue;
+    }
     const precedingRef = preceding === null ? 'none' : `#${preceding}`;
     const body = `${st.body}\n\n---\n${EPIC_LINK_TOKEN} #${request.epic}\n${PRECEDING_SUBTICKET_TOKEN} ${precedingRef}\n`;
     const issue = await gh.createIssue(st.title, body);
     await gh.addLabel(issue, EPIC_SUBTICKET_LABEL);
     await gh.addLabel(issue, EPIC_READY_LABEL);
-    created.push({ issue, title: st.title });
+    state.created.push({ index: st.index, issue });
+    store.write(state); // persist after each create so a mid-chain failure resumes, never duplicates
+    issueByIndex.set(st.index, issue);
     preceding = issue;
   }
-  const checklist = `\n\n## Sub-tickets\n${created.map((c) => `- [ ] #${c.issue} — ${c.title}`).join('\n')}\n`;
-  await gh.appendIssueBody(request.epic, checklist);
-  if (request.pr !== null) await gh.closePr(request.pr);
+  const checklist = `\n\n## Sub-tickets\n${request.subTickets.map((st) => `- [ ] #${issueByIndex.get(st.index)} — ${st.title}`).join('\n')}\n`;
+  if (!state.trackingAppended) {
+    await gh.appendIssueBody(request.epic, checklist);
+    state.trackingAppended = true;
+    store.write(state);
+  }
+  if (request.pr !== null && !state.prClosed) {
+    await gh.closePr(request.pr);
+    state.prClosed = true;
+    store.write(state);
+  }
 }
 
 export interface EpicPromotionCoordinatorDeps {

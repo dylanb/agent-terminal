@@ -105,7 +105,7 @@ import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -802,8 +802,13 @@ async function createWindow(): Promise<void> {
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
     emitPreview: ({ repoDir, step, epic, pr, subTickets }) =>
       send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
-    // §28.7 AC2 — create the sub-ticket chain + tracking issue on GitHub through the real gh adapter.
-    runPromotion: (repoDir, request) => runEpicPromotion(createRealAppEpicPromotionGitHub(repoDir), request),
+    // §28.7 AC2/AC3 — create the sub-ticket chain + tracking issue through the real gh adapter, resumably: the
+    // promotion.yaml store makes a re-run create only what is missing (a corrupt record blocks).
+    runPromotion: (repoDir, request) =>
+      runEpicPromotion(createRealAppEpicPromotionGitHub(repoDir), request, {
+        read: (epic) => readEpicPromotion(repoDir, epic),
+        write: (state) => writeEpicPromotion(repoDir, state),
+      }),
     persistAccept: (repoDir, loop, step, turnKey) => writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' }),
     terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
