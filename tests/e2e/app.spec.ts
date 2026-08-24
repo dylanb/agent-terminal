@@ -5958,7 +5958,7 @@ test('§28.5 — a RED loop completes on a newly-authored failing test + a faile
   // §28.5.1 — approve recorded the baseline: the EXACT sha the side-effect made, under the decision's step.
   const baseline = readBaselineCommit(repo);
   expect(baseline?.sha).toBe(head);
-  expect(baseline?.step).toBe('plan');
+  expect(baseline?.branch).toBe(gitIn(repo, 'rev-parse', '--abbrev-ref', 'HEAD'));
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -6023,7 +6023,7 @@ const seedGreenFlowRepo = (prefix: string): string => {
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
     seedTestFile: 'tests/frozen.test.ts',
   });
-  recordBaselineCommit(dir, 'plan', gitIn(dir, 'rev-parse', 'HEAD'));
+  recordBaselineCommit(dir, gitIn(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), gitIn(dir, 'rev-parse', 'HEAD'));
   return dir;
 };
 
@@ -6164,7 +6164,7 @@ const seedRefactorFlowRepo = (prefix: string): string => {
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
     seedTestFile: 'tests/frozen.test.ts',
   });
-  recordBaselineCommit(dir, 'plan', gitIn(dir, 'rev-parse', 'HEAD'));
+  recordBaselineCommit(dir, gitIn(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), gitIn(dir, 'rev-parse', 'HEAD'));
   return dir;
 };
 

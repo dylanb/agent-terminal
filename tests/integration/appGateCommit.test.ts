@@ -51,6 +51,8 @@ describe('createRealAppGateCommit — real git (§28.3/§28.5.1 L1)', () => {
     if (result.outcome === 'committed') {
       expect(result.sha).toBe(headSha(repo));
       expect(isGitObjectId(result.sha)).toBe(true);
+      // §28.5.1 — the baseline key: the branch the commit landed on, read in-adapter.
+      expect(result.branch).toBe(git(repo, 'rev-parse', '--abbrev-ref', 'HEAD'));
     }
     expect(headCount(repo)).toBe(before + 1);
     expect(headSubject(repo)).toBe('RED: slice-x');
@@ -279,6 +281,7 @@ describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
       calls,
       ops: {
         headCommit: async () => headBefore,
+        currentBranch: async () => 'main',
         commitWorkingTree: async (label, dirtyAtPhaseStart) => {
           calls.push({ label, dirtyAtPhaseStart });
           return step;
@@ -287,11 +290,11 @@ describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
     };
   };
 
-  it('T7: passes the label AND the phase-start snapshot to the seam and returns { committed, sha } when the parent matches the pre-commit head', async () => {
+  it('T7: passes the label AND the phase-start snapshot to the seam and returns { committed, sha, branch } when the parent matches the pre-commit head', async () => {
     const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a') }, OID('a'));
     const result = await createAppGateCommit(ops)({ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] });
     expect(calls).toEqual([{ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] }]);
-    expect(result).toEqual({ outcome: 'committed', sha: OID('c') });
+    expect(result).toEqual({ outcome: 'committed', sha: OID('c'), branch: 'main' });
   });
 
   it('T8: throws on an empty/whitespace label before touching the seam', async () => {

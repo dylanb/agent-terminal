@@ -47,6 +47,10 @@ import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 // route-out, and resume that never re-drives a stopped or completed turn.
 
 const STEP = 'plan';
+// §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
+// step, so a baseline the RED step recorded is found by the GREEN step (different step, same branch). This
+// fake branch differs from STEP so a lingering step-match would fail these branch-keyed tests.
+const TEST_BRANCH = 'main';
 const TURN_KEY = 'work-plan';
 const REVIEW_KEY = 'review-plan';
 const CONSOLIDATE_KEY = 'consolidate-plan';
@@ -206,6 +210,7 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
+    currentBranch: () => TEST_BRANCH,
   };
   return createAppLoopEngine(deps);
 }
@@ -2255,7 +2260,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
 describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen flag)', () => {
   const reviewChained = (): boolean => injected.some((s) => s.includes(ROSTER[0]));
   const OID = 'a'.repeat(40);
-  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(repo, branch, sha);
   const greenFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const greenDef = (withBinding = true): LoopDefV2 => ({
@@ -2399,9 +2404,9 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(readChangedTests(repo)).toBeNull();
   });
 
-  it('IT-GREEN-baseline-b: a baseline recorded under a DIFFERENT step blocks GREEN (step-match)', async () => {
+  it('IT-GREEN-baseline-b: a baseline recorded on a DIFFERENT branch blocks GREEN (branch-match)', async () => {
     const engine = makeEngine(undefined, greenFake());
-    seedBaseline('some-other-step', OID); // recorded, but not this turn's step
+    seedBaseline('a-different-branch', OID); // recorded, but not this run's branch
     enterGreen(engine);
     writeGreen();
     engine.onDoneSignal();
@@ -2410,6 +2415,21 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     await flushGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline'));
     expect(reviewChained()).toBe(false);
+  });
+
+  // §28.5.1 — the RED step and the GREEN step are DISTINCT flow steps sharing one branch; the branch-keyed
+  // baseline the RED step recorded is found by the GREEN step (a step-keyed baseline could not cross this).
+  it('IT-GREEN-baseline-c: a baseline on the current branch is found by GREEN even though a different phase step recorded it', async () => {
+    const engine = makeEngine(undefined, greenFake());
+    seedBaseline(TEST_BRANCH, OID); // the RED step's commit, keyed by the shared branch
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(reviewChained()).toBe(true); // the cross-step baseline completed the GREEN turn
   });
 
   it('IT-GREEN-capfail: an absent loop-capabilities surfaces a DISTINCT reason naming the BASELINE COMMIT, not the RED gate\'s working-tree wording', async () => {
@@ -2581,7 +2601,7 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
 // GREEN, whose frozen check's baseline guard blocks).
 describe('§28.5.3 — the refactor round completion gate + non-blocking frozen probe', () => {
   const OID = 'a'.repeat(40);
-  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(repo, branch, sha);
   const refFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
