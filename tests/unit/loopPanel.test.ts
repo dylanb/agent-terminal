@@ -921,3 +921,33 @@ describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
     expect(host.querySelector('[data-changed-tests]')).toBeNull();
   });
 });
+
+// §28.7 — the epic preview: at the gate, when the plan is classified an epic, the panel names every sub-ticket
+// promotion will create, so the operator judges the split before approving (§27.10). Modeled on the catalog
+// list — a section with one navigable node per sub-ticket (WCAG 1.3.1 — never a bare count).
+describe('docked loop panel — the epic preview (§28.7)', () => {
+  const EPIC = { subTickets: [{ index: 1, title: 'Wire the widget' }, { index: 2, title: 'Remove the widget' }] };
+
+  it('names every sub-ticket when the view carries an epic split', () => {
+    createLoopPanel(host).render(loop({ epic: EPIC }), 'plan');
+    const section = host.querySelector('[data-epic-preview]');
+    expect(section).not.toBeNull();
+    const items = [...host.querySelectorAll<HTMLElement>('[data-epic-subticket]')].map((el) => el.textContent ?? '');
+    expect(items).toHaveLength(2);
+    expect(items.some((t) => t.includes('Wire the widget'))).toBe(true);
+    expect(items.some((t) => t.includes('Remove the widget'))).toBe(true);
+  });
+
+  it('omits the epic preview when the view carries no epic split', () => {
+    createLoopPanel(host).render(loop({}), 'plan');
+    expect(host.querySelector('[data-epic-preview]')).toBeNull();
+  });
+
+  it('drops the epic preview on a re-render once the split clears (structural transition)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ epic: EPIC }), 'plan');
+    expect(host.querySelector('[data-epic-preview]')).not.toBeNull();
+    panel.render(loop({}), 'plan');
+    expect(host.querySelector('[data-epic-preview]')).toBeNull();
+  });
+});

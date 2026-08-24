@@ -15,6 +15,7 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests } from '../../src/main/appLoopState';
@@ -6423,6 +6424,87 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   // §28.10 AC1 — end-to-end chaining: the integration gate published plan-bundle's '# plan' artifact as the PR body.
   await expect.poll(() => readIf(`${logFile}.pr-body`)).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// ---- §28.7 S8 — the epic overlay: an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate ----
+// A focused fake-agent driving groom → plan-bundle, whose plan-bundle work arm writes an EPIC-classified plan
+// (exampleEpicPlan — the one authored grammar). Reused by the S8 slices; each drives to the plan-bundle gate.
+function seedEpicChainAgent(binDir: string, subTickets = 2): void {
+  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
+  const art = '.agent-terminal/loop/artifacts';
+  const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
+  const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  const epicPlan = `${exampleEpicPlan(subTickets)}\n${completionMarker('plan-bundle')}\n`;
+
+  const workArm: Record<string, string> = {
+    groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
+    'plan-bundle': `mkdir -p ${art}; ${decode(b64(epicPlan), `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
+  };
+  const arm = (step: string): string => {
+    const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}; ${done(`review-${step}`)}`;
+    const con = `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
+    return `    *turn-done:consolidate-${step}*) ${con} ;;\n    *turn-done:review-${step}*) ${rev} ;;\n    *turn-done:work-${step}*) ${workArm[step]} ;;`;
+  };
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${['groom', 'plan-bundle'].map(arm).join('\n')}\n` +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
+function seedEpicChainRepo(prefix: string): string {
+  const { dir } = seedFlowRepoBase(prefix, {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+  });
+  return dir;
+}
+
+// Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
+// gate for the caller to inspect/act on.
+async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter groom
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // groom at gate
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click(); // approve groom → enter plan-bundle
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // plan-bundle at gate
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+}
+
+test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicA-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicA-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicA-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 3);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+
+  // The plan the agent wrote is classified an epic → the panel names every sub-ticket promotion will create.
+  await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
+  await expect(loopPanel().locator('[data-epic-subticket]')).toHaveCount(3);
+  await expect(loopPanel()).toContainText('Slice 1 of the feature');
+  await expect(loopPanel()).toContainText('Slice 3 of the feature');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
