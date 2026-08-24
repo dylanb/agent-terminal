@@ -2253,9 +2253,9 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  // 5 flow steps (preparation, groom, plan, implement, finalize) render as 7 stations — the Not-started
-  // and Completed caps bracket the steps.
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(7, {
+  // 9 flow steps (preparation, groom, plan-bundle, infra, red, green, refactor, integration-slice,
+  // finalize) render as 11 stations — the Not-started and Completed caps bracket the steps.
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(11, {
     timeout: 10_000,
   });
   await expect(flowStepName()).toHaveText('preparation');
@@ -2307,8 +2307,12 @@ test('the shipped-flow migration is confirm-first and a decline preserves the ex
   expect(installedFlow).not.toBe(customFlow);
   expect(installedFlow).toContain('loop_namespace: app');
   expect(installedFlow).toContain('loop: groom-loop');
-  expect(installedFlow).toContain('loop: plan-loop');
-  expect(installedFlow).toContain('loop: impl-loop');
+  expect(installedFlow).toContain('loop: plan-bundle-loop');
+  expect(installedFlow).toContain('loop: infra-loop');
+  expect(installedFlow).toContain('loop: red-loop');
+  expect(installedFlow).toContain('loop: green-loop');
+  expect(installedFlow).toContain('loop: refactor-loop');
+  expect(installedFlow).toContain('loop: integration-slice-loop');
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
 
   await app.close();

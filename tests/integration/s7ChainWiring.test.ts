@@ -306,7 +306,7 @@ describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
     }
   });
 
-  // §28.8.1 — the planning phase presents ONE human gate for the whole bundle (C-AC2).
+  // §28.8.1 (C-AC2)
   it('presents a single planning gate between groom and infra', () => {
     const ids = flow.steps.map((s) => s.id);
     const between = flow.steps.slice(ids.indexOf('groom') + 1, ids.indexOf('infra'));

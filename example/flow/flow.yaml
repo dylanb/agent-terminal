@@ -22,6 +22,8 @@ steps:
     loop: infra-loop
     loop_namespace: app
     todo_template: impl-loop-review
+  # One impl-slice per run (red→green→refactor once): §28.2's slice-loop×N needs a repeatable-step
+  # primitive §28.1 bars, so it is deferred — the chain is a static single slice, not an oversight.
   - id: red
     kind: loop
     loop: red-loop
