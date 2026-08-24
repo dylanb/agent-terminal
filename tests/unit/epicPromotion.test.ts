@@ -156,7 +156,8 @@ describe('resolve — complete the held promotion (§28.7)', () => {
 // §28.7 slice C — the promotion executor: create each sub-ticket in order (the plan slice VERBATIM + the epic
 // link + the REAL preceding issue number), uniform labels, then append the epic's tracking checklist, then
 // close the epic planning PR. The gh port is injected so the sequence is asserted with no real gh.
-import { runEpicPromotion, type AppEpicPromotionGitHub } from '../../src/main/epicPromotion';
+import { runEpicPromotion, type AppEpicPromotionGitHub, type EpicPromotionStore } from '../../src/main/epicPromotion';
+import type { EpicPromotionState } from '../../src/main/appLoopState';
 
 function fakeGh() {
   const events: string[] = [];
@@ -174,6 +175,20 @@ function fakeGh() {
   return { gh, events };
 }
 
+// An in-memory promotion store: seed with a resumable record, or 'corrupt' to exercise the block. `saved` holds
+// the last written state so a test can assert what was persisted.
+function memStore(initial: EpicPromotionState | 'corrupt' | null = null): { store: EpicPromotionStore; saved: () => EpicPromotionState | null } {
+  const corrupt = initial === 'corrupt';
+  let held: EpicPromotionState | null = corrupt ? null : initial;
+  return {
+    store: {
+      read: (epic) => (corrupt ? 'corrupt' : held && held.epic === epic ? held : null),
+      write: (state) => void (held = state),
+    },
+    saved: () => held,
+  };
+}
+
 const REQUEST = {
   epic: 176,
   pr: 4242,
@@ -186,7 +201,7 @@ const REQUEST = {
 describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', () => {
   it('creates each sub-ticket carrying its plan slice verbatim, the epic link, and the REAL preceding number', async () => {
     const { gh, events } = fakeGh();
-    await runEpicPromotion(gh, REQUEST);
+    await runEpicPromotion(gh, REQUEST, memStore().store);
     const create1 = events.find((e) => e.startsWith('create#501'))!;
     const create2 = events.find((e) => e.startsWith('create#502'))!;
     expect(create1).toContain('PLAN-ONE build it end to end.'); // plan slice preserved verbatim
@@ -199,7 +214,7 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
 
   it('labels every sub-ticket uniformly agent-loop/subticket + agent-loop/ready (the port has no assign verb)', async () => {
     const { gh, events } = fakeGh();
-    await runEpicPromotion(gh, REQUEST);
+    await runEpicPromotion(gh, REQUEST, memStore().store);
     for (const issue of [501, 502]) {
       expect(events).toContain(`label #${issue} agent-loop/subticket`);
       expect(events).toContain(`label #${issue} agent-loop/ready`);
@@ -208,7 +223,7 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
 
   it('appends a tracking checklist naming every created sub-ticket to the epic, then closes the planning PR', async () => {
     const { gh, events } = fakeGh();
-    await runEpicPromotion(gh, REQUEST);
+    await runEpicPromotion(gh, REQUEST, memStore().store);
     const append = events.find((e) => e.startsWith('append #176'))!;
     expect(append).toContain('- [ ] #501 — Slice one');
     expect(append).toContain('- [ ] #502 — Slice two');
@@ -217,7 +232,7 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
 
   it('orders create → epic-append → close (the plan is never lost)', async () => {
     const { gh, events } = fakeGh();
-    await runEpicPromotion(gh, REQUEST);
+    await runEpicPromotion(gh, REQUEST, memStore().store);
     const lastCreate = Math.max(...events.map((e, i) => (e.startsWith('create#') ? i : -1)));
     const append = events.findIndex((e) => e.startsWith('append #176'));
     const close = events.findIndex((e) => e.startsWith('closePr'));
@@ -228,7 +243,41 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
 
   it('does not close a PR when the epic has no planning PR', async () => {
     const { gh, events } = fakeGh();
-    await runEpicPromotion(gh, { ...REQUEST, pr: null });
+    await runEpicPromotion(gh, { ...REQUEST, pr: null }, memStore().store);
     expect(events.some((e) => e.startsWith('closePr'))).toBe(false);
+  });
+
+  it('records each created sub-ticket + the append/close flags in the store (resumable)', async () => {
+    const { gh } = fakeGh();
+    const m = memStore();
+    await runEpicPromotion(gh, REQUEST, m.store);
+    expect(m.saved()).toEqual({ epic: 176, created: [{ index: 1, issue: 501 }, { index: 2, issue: 502 }], trackingAppended: true, prClosed: true });
+  });
+});
+
+describe('runEpicPromotion — resumable idempotency (§28.7 AC3)', () => {
+  it('creates NOTHING when the store already records the whole chain (a clean re-run)', async () => {
+    const { gh, events } = fakeGh();
+    const done = memStore({ epic: 176, created: [{ index: 1, issue: 501 }, { index: 2, issue: 502 }], trackingAppended: true, prClosed: true });
+    await runEpicPromotion(gh, REQUEST, done.store);
+    expect(events).toEqual([]); // no create, no label, no append, no close — every step already recorded
+  });
+
+  it('creates ONLY the missing sub-tickets after a partial run (resume), preserving the real stacking number', async () => {
+    const { gh, events } = fakeGh();
+    // sub-ticket 1 landed (#501) but the run died before #2, the append, and the close.
+    const partial = memStore({ epic: 176, created: [{ index: 1, issue: 501 }], trackingAppended: false, prClosed: false });
+    await runEpicPromotion(gh, REQUEST, partial.store);
+    expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(1); // only #2 is created
+    const create2 = events.find((e) => e.startsWith('create#'))!;
+    expect(create2).toContain('Preceding sub-ticket: #501'); // stacks on the ALREADY-recorded #501
+    expect(events.find((e) => e.startsWith('append #176'))).toContain('- [ ] #501 — Slice one'); // checklist names both
+    expect(events).toContain('closePr #4242');
+  });
+
+  it('BLOCKS on a corrupt store — throws, creates nothing (never duplicates public issues, SEC-1)', async () => {
+    const { gh, events } = fakeGh();
+    await expect(runEpicPromotion(gh, REQUEST, memStore('corrupt').store)).rejects.toThrow(/unreadable/);
+    expect(events).toEqual([]);
   });
 });

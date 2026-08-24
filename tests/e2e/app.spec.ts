@@ -6618,3 +6618,37 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
 });
+
+test('§28.7 S8 — a corrupt promotion record BLOCKS confirm, creating nothing (AC3 fail-safe)', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicD-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicD-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicD-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
+  // SOLE guard against duplicate public issues, so it must BLOCK creation, never fall through (SEC-1/AC3).
+  writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion.yaml'), 'this: is: not: valid: yaml: [\n');
+
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const confirmDialog = page.getByRole('alertdialog').filter({ hasText: 'Create' });
+  await expect(confirmDialog).toBeVisible({ timeout: 15_000 });
+  await confirmDialog.locator('.pill.danger.confirm').click();
+
+  // The promotion was blocked: nothing created, the error surfaced, the gate is NOT accepted (still actionable).
+  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle'); // not stood down — the promotion refused
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
