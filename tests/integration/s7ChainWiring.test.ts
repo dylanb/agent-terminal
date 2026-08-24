@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { load } from 'js-yaml';
+import { resolveExampleLoopsV2Dir, resolveExampleFlowDir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
@@ -150,7 +151,7 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
   });
 });
 
-const WIRED = ['plan-bundle-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop'];
+const WIRED = ['plan-bundle-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
 
 const REPO_DIR = resolve(__dirname, '..', '..');
 const resolveDef = (name: string) => resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir: REPO_DIR });
@@ -266,5 +267,63 @@ describe('s7 refactor recipe (§28.6 P6c)', () => {
     const body = readFileSync(mustResolve('refactor-loop').work.recipe, 'utf8');
     expect(body).toContain(LOOP_CAPABILITIES_FILENAME);
     expect(body).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+  });
+});
+
+const EXPECTED_FLOW: Array<[string, string, string | null]> = [
+  ['preparation', 'manual', null],
+  ['groom', 'loop', 'groom-loop'],
+  ['plan-bundle', 'loop', 'plan-bundle-loop'],
+  ['infra', 'loop', 'infra-loop'],
+  ['red', 'loop', 'red-loop'],
+  ['green', 'loop', 'green-loop'],
+  ['refactor', 'loop', 'refactor-loop'],
+  ['integration-slice', 'loop', 'integration-slice-loop'],
+  ['finalize', 'manual', null],
+];
+
+interface ShippedFlow {
+  name: string;
+  steps: Array<{ id: string; kind: string; loop?: string }>;
+}
+
+describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
+  const flowDir = resolveExampleFlowDir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+  const flow = load(readFileSync(join(flowDir, 'flow.yaml'), 'utf8')) as ShippedFlow;
+
+  it('keeps the name feature-dev', () => {
+    expect(flow.name).toBe('feature-dev');
+  });
+
+  it('chains groom → plan-bundle → infra → red → green → refactor → integration-slice in order', () => {
+    expect(flow.steps.map((s) => [s.id, s.kind, s.loop ?? null])).toEqual(EXPECTED_FLOW);
+  });
+
+  it('resolves every loop step to a parseable def', () => {
+    for (const s of flow.steps) {
+      if (s.kind !== 'loop' || !s.loop) continue;
+      expect(resolveDef(s.loop).ok, s.loop).toBe(true);
+    }
+  });
+
+  // §28.8.1 — the planning phase presents ONE human gate for the whole bundle (C-AC2).
+  it('presents a single planning gate between groom and infra', () => {
+    const ids = flow.steps.map((s) => s.id);
+    const between = flow.steps.slice(ids.indexOf('groom') + 1, ids.indexOf('infra'));
+    expect(between.filter((s) => s.kind === 'loop').map((s) => s.loop)).toEqual(['plan-bundle-loop']);
+    expect(mustResolve('plan-bundle-loop').gate.filter((g) => g.option === 'approve').length).toBe(1);
+  });
+});
+
+describe('s7 integration-slice-loop (§28.2)', () => {
+  it('references the capabilities file in its recipe', () => {
+    expect(readFileSync(mustResolve('integration-slice-loop').work.recipe, 'utf8')).toContain(LOOP_CAPABILITIES_FILENAME);
+  });
+
+  it('publishes the PR body at its approve gate (C6b)', () => {
+    const approve = mustResolve('integration-slice-loop').gate.find((g) => g.option === 'approve');
+    const gh = approve?.sideEffects.find((se) => se.kind === 'gh');
+    expect(gh?.args.action).toBe('publish-pr-body');
+    expect(gh?.args.artifact).toBe('plan');
   });
 });
