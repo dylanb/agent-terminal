@@ -191,9 +191,8 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
   }
 });
 
-// §28.10 (the S6/S7 boundary) — S7 wires these dirs by adding <dir>/<dir>.yaml and reused-charter/recipe
-// copies on top of the S6 content. The S6-authored files stay present as a SUBSET, and a dir resolves iff
-// its yaml exists — self-adjusting so this holds at every point across S7's slices.
+// §28.10 (the S6/S7 boundary) — asserted iff-wired (not a fixed set) so it holds at every intermediate
+// S7 slice.
 describe('loops-v2 content-parity — S6 content stays present, a dir resolves once wired', () => {
   const newDirs = [...new Set([...NEW_CHARTERS, ...NEW_RECIPES].map((r) => r.file.split('/')[0]))];
   const repoDir = resolve(__dirname, '..', '..');

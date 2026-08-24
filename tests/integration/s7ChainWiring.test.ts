@@ -28,9 +28,12 @@ interface LoopRow {
   gate: ('commit' | 'gh')[];
   pickup: boolean;
   consolidateSource: string;
+  input: { id: string; path: string };
   output: { id: string; path: string } | null;
   personas: PersonaRow[];
 }
+
+const PLAN_INPUT = { id: 'plan', path: 'plan.md' } as const;
 
 const IMPL_LANES = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'] as const;
 const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'] as const;
@@ -43,7 +46,7 @@ const authored = (persona: string, lane: string): PersonaRow => ({ persona, char
 export const CHAIN: readonly LoopRow[] = [
   {
     name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh'], pickup: true,
-    consolidateSource: 'plan-loop', output: null,
+    consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
     personas: [
       ...PLAN_LANES.map(plan),
       authored('review-plan-test-architect', 'test-architect'),
@@ -53,7 +56,7 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'infra-loop', kind: 'impl', completion: null, gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', output: null,
+    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
     personas: [
       ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
       fromPlanBundle('review-plan-determinism', 'determinism'),
@@ -61,22 +64,22 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'red-loop', kind: 'phase', completion: 'red', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', output: { id: 'red-result', path: 'red-result.md' },
+    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.md' },
     personas: [...['tests', 'intent'].map(impl), authored('impl-review-red-authenticity', 'red-authenticity')],
   },
   {
     name: 'green-loop', kind: 'phase', completion: 'green', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', output: { id: 'green-result', path: 'green-result.md' },
+    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.md' },
     personas: [...IMPL_LANES.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
   },
   {
     name: 'refactor-loop', kind: 'phase', completion: 'refactor', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', output: null,
+    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
     personas: [...IMPL_LANES.map(impl)],
   },
   {
     name: 'integration-slice-loop', kind: 'impl', completion: null, gate: ['commit', 'gh'], pickup: false,
-    consolidateSource: 'impl-loop', output: null,
+    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
     personas: [...IMPL_LANES.map(impl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
   },
 ];
@@ -133,6 +136,13 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
     }
   });
 
+  it('names a chained input for every loop', () => {
+    for (const loop of CHAIN) {
+      expect(loop.input.id.length, `${loop.name}: input id`).toBeGreaterThan(0);
+      expect(loop.input.path.length, `${loop.name}: input path`).toBeGreaterThan(0);
+    }
+  });
+
   it('gives exactly one loop the pickup that creates the shared branch', () => {
     expect(CHAIN.filter((l) => l.pickup).length).toBe(1);
   });
@@ -176,6 +186,10 @@ describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
     expect(def.work.completion ?? null).toBe(row.completion);
     const approve = def.gate.find((g) => g.option === 'approve');
     expect(approve?.sideEffects.map((se) => se.kind).slice().sort()).toEqual([...row.gate].sort());
+  });
+
+  it('declares the manifest chained input', () => {
+    expect(mustResolve(name).inputs.some((i) => i.id === row.input.id), `${name} input ${row.input.id}`).toBe(true);
   });
 
   it('binds the result output the manifest declares', () => {
@@ -228,6 +242,15 @@ describe.each(WIRED.filter((n) => rowFor(n).gate.includes('commit')))('s7 commit
       expect(fx.git(repo, ['log', '-1', '--format=%s'])).toBe(label);
     } finally {
       fx.cleanup();
+    }
+  });
+});
+
+describe('s7 wiring — closure', () => {
+  it('registers every wired loop (its yaml exists) in WIRED', () => {
+    for (const loop of CHAIN) {
+      if (!existsSync(join(SOURCE_TREE, loop.name, `${loop.name}.yaml`))) continue;
+      expect(WIRED, `${loop.name} yaml exists but is not in WIRED`).toContain(loop.name);
     }
   });
 });
