@@ -81,15 +81,21 @@ describe('createRealAppEpicPromotionGitHub — gh adapter', () => {
 
   it('appendIssueBody preserves the existing body as a prefix', async () => {
     process.env.FAKE_BODY = 'ORIGINAL BODY';
-    await adapter().appendIssueBody(176, '\n\n## Sub-tickets\n- [ ] #501 — A');
+    await adapter().appendIssueBody(176, '\n\nMARKER\n## Sub-tickets\n- [ ] #501 — A', 'MARKER');
     const written = readIf(`${log}.edit`);
     expect(written.startsWith('ORIGINAL BODY')).toBe(true);
     expect(written).toContain('- [ ] #501 — A');
   });
 
+  it('appendIssueBody is idempotent — skips when the body already carries the marker (never double-appends)', async () => {
+    process.env.FAKE_BODY = 'ORIGINAL BODY\n\nMARKER\n## Sub-tickets\n- [ ] #501 — A';
+    await adapter().appendIssueBody(176, '\n\nMARKER\n## Sub-tickets\n- [ ] #501 — A', 'MARKER');
+    expect(readIf(`${log}.edit`)).toBe(''); // the marker is present → no second edit issued
+  });
+
   it('appendIssueBody refuses an empty read — never clobbers the human intent, issues no edit (§27.10)', async () => {
     process.env.FAKE_BODY = '';
-    await expect(adapter().appendIssueBody(176, 'the checklist')).rejects.toThrow(/empty epic issue body/);
+    await expect(adapter().appendIssueBody(176, 'the checklist', 'MARKER')).rejects.toThrow(/empty epic issue body/);
     expect(readIf(`${log}.edit`)).toBe(''); // no `issue edit --body-file` was ever issued
   });
 

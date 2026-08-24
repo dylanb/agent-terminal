@@ -59,17 +59,22 @@ export const EPIC_READY_LABEL = 'agent-loop/ready';
 export const EPIC_LINK_TOKEN = 'Epic:';
 export const PRECEDING_SUBTICKET_TOKEN = 'Preceding sub-ticket:';
 
+// A distinctive marker in the appended tracking checklist so the append is idempotent: if a resume re-reaches
+// the append (the flag persist failed after the append landed), the marker's presence skips a second append.
+export const EPIC_TRACKING_MARKER = '<!-- agent-terminal:epic-tracking -->';
+
 /** The GitHub port the promotion executor drives — domain verbs, argv/stdin under the hood (the real adapter is
  *  appEpicPromotionGithub.ts), so the executor runs under a fake with no `gh`. */
 export interface AppEpicPromotionGitHub {
   /** Create a sub-ticket, returning its issue number. */
   createIssue(title: string, body: string): Promise<number>;
-  /** Add a label to an issue. */
+  /** Add a label to an issue. Idempotent (a label already present is a no-op), so it is safe to re-apply on
+   *  resume. */
   addLabel(issue: number, label: string): Promise<void>;
-  /** Append `textToAppend` to an issue's body, preserving the existing body; §27.10 — refuses an empty read so
-   *  a failed/empty read can never clobber the human's intent contract. */
-  appendIssueBody(issue: number, textToAppend: string): Promise<void>;
-  /** Close a PR. */
+  /** Append `textToAppend` to an issue's body, preserving the existing body; §27.10 refuses an empty read (never
+   *  clobbers the human's intent contract). Idempotent: if the body already contains `marker`, it skips. */
+  appendIssueBody(issue: number, textToAppend: string, marker: string): Promise<void>;
+  /** Close a PR. Idempotent (closing a closed PR is a no-op). */
   closePr(pr: number): Promise<void>;
 }
 
@@ -88,30 +93,42 @@ export interface EpicPromotionStore {
 export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: EpicPromotionRequest, store: EpicPromotionStore): Promise<void> {
   const existing = store.read(request.epic);
   if (existing === 'corrupt') {
-    throw new Error('a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion.yaml and re-approve');
+    throw new Error(`a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion-${request.epic}.yaml and re-approve`);
   }
   const state: EpicPromotionState = existing ?? { epic: request.epic, created: [], trackingAppended: false, prClosed: false };
+  // Reconcile a resumed record against the CURRENT plan: every recorded sub-ticket must still be in the request
+  // with the same index AND title, else the plan diverged since the partial run (or the record was planted) and
+  // resuming would orphan real slices / mis-stack. Block rather than act on a stale split. (Fabricated issue
+  // NUMBERS with valid titles cannot be caught without re-querying GitHub — a documented non-goal; the loop area
+  // is shared with the agent, the pre-existing trust boundary.)
+  for (const rec of state.created) {
+    const cur = request.subTickets.find((st) => st.index === rec.index);
+    if (cur === undefined || cur.title !== rec.title) {
+      throw new Error(`the plan changed since a partial promotion — clear .agent-terminal/loop/promotion-${request.epic}.yaml and re-approve`);
+    }
+  }
   const issueByIndex = new Map(state.created.map((c) => [c.index, c.issue]));
   let preceding: number | null = null;
   for (const st of request.subTickets) {
-    const already = issueByIndex.get(st.index);
-    if (already !== undefined) {
-      preceding = already; // recorded on a prior run — skip, never re-create
-      continue;
+    let issue = issueByIndex.get(st.index);
+    if (issue === undefined) {
+      const precedingRef = preceding === null ? 'none' : `#${preceding}`;
+      const body = `${st.body}\n\n---\n${EPIC_LINK_TOKEN} #${request.epic}\n${PRECEDING_SUBTICKET_TOKEN} ${precedingRef}\n`;
+      issue = await gh.createIssue(st.title, body);
+      // Record the created issue BEFORE labelling, so a label failure cannot lose it and force a re-create.
+      state.created.push({ index: st.index, issue, title: st.title });
+      store.write(state);
+      issueByIndex.set(st.index, issue);
     }
-    const precedingRef = preceding === null ? 'none' : `#${preceding}`;
-    const body = `${st.body}\n\n---\n${EPIC_LINK_TOKEN} #${request.epic}\n${PRECEDING_SUBTICKET_TOKEN} ${precedingRef}\n`;
-    const issue = await gh.createIssue(st.title, body);
+    // Labels are idempotent, so (re)apply them for every sub-ticket — a resume completes labelling a record
+    // whose labels did not land, without re-creating the issue.
     await gh.addLabel(issue, EPIC_SUBTICKET_LABEL);
     await gh.addLabel(issue, EPIC_READY_LABEL);
-    state.created.push({ index: st.index, issue });
-    store.write(state); // persist after each create so a mid-chain failure resumes, never duplicates
-    issueByIndex.set(st.index, issue);
     preceding = issue;
   }
-  const checklist = `\n\n## Sub-tickets\n${request.subTickets.map((st) => `- [ ] #${issueByIndex.get(st.index)} — ${st.title}`).join('\n')}\n`;
+  const checklist = `\n\n${EPIC_TRACKING_MARKER}\n## Sub-tickets\n${request.subTickets.map((st) => `- [ ] #${issueByIndex.get(st.index)} — ${st.title}`).join('\n')}\n`;
   if (!state.trackingAppended) {
-    await gh.appendIssueBody(request.epic, checklist);
+    await gh.appendIssueBody(request.epic, checklist, EPIC_TRACKING_MARKER); // idempotent via the marker
     state.trackingAppended = true;
     store.write(state);
   }
@@ -128,7 +145,7 @@ export interface EpicPromotionCoordinatorDeps {
   readSubTickets(def: LoopDefV2): EpicSubTicket[] | null;
   /** Raise the confirm-first preview naming every sub-ticket (→ flow:onEpicPromotionPreview). */
   emitPreview(msg: { repoDir: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }): void;
-  /** Create the sub-ticket chain + tracking issue (S8 slice C). A no-op stub until then. */
+  /** Create the sub-ticket chain + tracking issue (§28.7 AC2/AC3) — resumably, over the promotion store. */
   runPromotion(repoDir: string, request: EpicPromotionRequest): Promise<void>;
   /** Persist the terminal gate accept (writeAppLoopState `accepted`). Kept SEPARATE from `terminateFlow` so a
    *  persist failure is surfaced distinctly and leaves the gate re-decidable, never mislabeled as a promotion

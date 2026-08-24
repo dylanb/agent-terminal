@@ -175,6 +175,26 @@ function fakeGh() {
   return { gh, events };
 }
 
+// A gh fake that rejects createIssue on the Nth call (1-based), to prove partial-failure records what landed.
+function failingGh(failCreateOn: number) {
+  const events: string[] = [];
+  let next = 500;
+  let creates = 0;
+  const gh: AppEpicPromotionGitHub = {
+    createIssue: async (title, body) => {
+      creates += 1;
+      if (creates === failCreateOn) throw new Error('gh create failed');
+      next += 1;
+      events.push(`create#${next} title=${title} body=${JSON.stringify(body)}`);
+      return next;
+    },
+    addLabel: async (issue, label) => void events.push(`label #${issue} ${label}`),
+    appendIssueBody: async (issue) => void events.push(`append #${issue}`),
+    closePr: async (pr) => void events.push(`closePr #${pr}`),
+  };
+  return { gh, events };
+}
+
 // An in-memory promotion store: seed with a resumable record, or 'corrupt' to exercise the block. `saved` holds
 // the last written state so a test can assert what was persisted.
 function memStore(initial: EpicPromotionState | 'corrupt' | null = null): { store: EpicPromotionStore; saved: () => EpicPromotionState | null } {
@@ -247,32 +267,72 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
     expect(events.some((e) => e.startsWith('closePr'))).toBe(false);
   });
 
-  it('records each created sub-ticket + the append/close flags in the store (resumable)', async () => {
+  it('records each created sub-ticket (with its title) + the flags in the store (resumable)', async () => {
     const { gh } = fakeGh();
     const m = memStore();
     await runEpicPromotion(gh, REQUEST, m.store);
-    expect(m.saved()).toEqual({ epic: 176, created: [{ index: 1, issue: 501 }, { index: 2, issue: 502 }], trackingAppended: true, prClosed: true });
+    expect(m.saved()).toEqual({
+      epic: 176,
+      created: [{ index: 1, issue: 501, title: 'Slice one' }, { index: 2, issue: 502, title: 'Slice two' }],
+      trackingAppended: true,
+      prClosed: true,
+    });
   });
 });
+
+const REC1 = { index: 1, issue: 501, title: 'Slice one' };
+const REC2 = { index: 2, issue: 502, title: 'Slice two' };
 
 describe('runEpicPromotion — resumable idempotency (§28.7 AC3)', () => {
   it('creates NOTHING when the store already records the whole chain (a clean re-run)', async () => {
     const { gh, events } = fakeGh();
-    const done = memStore({ epic: 176, created: [{ index: 1, issue: 501 }, { index: 2, issue: 502 }], trackingAppended: true, prClosed: true });
+    const done = memStore({ epic: 176, created: [REC1, REC2], trackingAppended: true, prClosed: true });
     await runEpicPromotion(gh, REQUEST, done.store);
-    expect(events).toEqual([]); // no create, no label, no append, no close — every step already recorded
+    expect(events.filter((e) => e.startsWith('create#'))).toEqual([]); // no sub-ticket re-created
+    expect(events.some((e) => e.startsWith('append'))).toBe(false); // no re-append
+    expect(events.some((e) => e.startsWith('closePr'))).toBe(false); // no re-close
   });
 
   it('creates ONLY the missing sub-tickets after a partial run (resume), preserving the real stacking number', async () => {
     const { gh, events } = fakeGh();
-    // sub-ticket 1 landed (#501) but the run died before #2, the append, and the close.
-    const partial = memStore({ epic: 176, created: [{ index: 1, issue: 501 }], trackingAppended: false, prClosed: false });
+    const partial = memStore({ epic: 176, created: [REC1], trackingAppended: false, prClosed: false });
     await runEpicPromotion(gh, REQUEST, partial.store);
     expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(1); // only #2 is created
-    const create2 = events.find((e) => e.startsWith('create#'))!;
-    expect(create2).toContain('Preceding sub-ticket: #501'); // stacks on the ALREADY-recorded #501
+    expect(events.find((e) => e.startsWith('create#'))).toContain('Preceding sub-ticket: #501'); // stacks on recorded #501
     expect(events.find((e) => e.startsWith('append #176'))).toContain('- [ ] #501 — Slice one'); // checklist names both
     expect(events).toContain('closePr #4242');
+  });
+
+  it('resumes after the append but before the close — closes the PR without re-appending (independent flags)', async () => {
+    const { gh, events } = fakeGh();
+    const afterAppend = memStore({ epic: 176, created: [REC1, REC2], trackingAppended: true, prClosed: false });
+    await runEpicPromotion(gh, REQUEST, afterAppend.store);
+    expect(events.some((e) => e.startsWith('append'))).toBe(false); // the append is NOT repeated
+    expect(events).toContain('closePr #4242'); // but the close still happens
+  });
+
+  it('records a created sub-ticket BEFORE labelling it — a label failure never loses the issue (RELI-D1)', async () => {
+    const labelFails: AppEpicPromotionGitHub = { ...fakeGh().gh, createIssue: async () => 501, addLabel: async () => { throw new Error('label failed'); } };
+    const m = memStore();
+    await expect(runEpicPromotion(labelFails, REQUEST, m.store)).rejects.toThrow(/label failed/);
+    // the created issue is already persisted, so a re-run skips its create rather than duplicating it
+    expect(m.saved()?.created).toEqual([{ index: 1, issue: 501, title: 'Slice one' }]);
+  });
+
+  it('records the FIRST issue even when the SECOND create fails (persist-after-each, not end-of-run)', async () => {
+    const { gh, events } = failingGh(2); // createIssue rejects on the 2nd call
+    const m = memStore();
+    await expect(runEpicPromotion(gh, REQUEST, m.store)).rejects.toThrow(/gh create failed/);
+    expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(1); // #1 landed
+    expect(m.saved()?.created).toEqual([{ index: 1, issue: 501, title: 'Slice one' }]); // and was recorded before the crash
+  });
+
+  it('BLOCKS a resumed record whose split diverged from the current plan (RELI-D3/SEC-D2)', async () => {
+    const { gh, events } = fakeGh();
+    // the plan was edited: slice 1's title changed since the partial run recorded #501.
+    const stale = memStore({ epic: 176, created: [{ index: 1, issue: 501, title: 'An OLD title' }], trackingAppended: false, prClosed: false });
+    await expect(runEpicPromotion(gh, REQUEST, stale.store)).rejects.toThrow(/plan changed/);
+    expect(events).toEqual([]); // nothing created — never act on a stale split
   });
 
   it('BLOCKS on a corrupt store — throws, creates nothing (never duplicates public issues, SEC-1)', async () => {

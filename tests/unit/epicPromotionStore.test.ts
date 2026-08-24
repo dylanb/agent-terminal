@@ -14,8 +14,8 @@ import {
 // re-run's "unchanged" assertion is deterministic, and failing toward NOT re-creating duplicate public issues.
 
 let repo: string;
-const promotionFile = (): string => join(repo, '.agent-terminal', 'loop', 'promotion.yaml');
-const STATE: EpicPromotionState = { epic: 176, created: [{ index: 1, issue: 501 }, { index: 2, issue: 502 }], trackingAppended: true, prClosed: false };
+const promotionFile = (): string => join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml');
+const STATE: EpicPromotionState = { epic: 176, created: [{ index: 1, issue: 501, title: 'Slice one' }, { index: 2, issue: 502, title: 'Slice two' }], trackingAppended: true, prClosed: false };
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'epic-promotion-store-'));
@@ -34,9 +34,10 @@ describe('promotion.yaml store (§28.7 AC3)', () => {
     expect(readEpicPromotion(repo, 176)).toEqual(STATE);
   });
 
-  it('reads null for a DIFFERENT epic than the one recorded (a stale record, fresh promotion)', () => {
-    writeEpicPromotion(repo, STATE);
-    expect(readEpicPromotion(repo, 999)).toBeNull();
+  it('a DIFFERENT epic reads from its OWN file — one epic cannot clobber another epic\'s resume record', () => {
+    writeEpicPromotion(repo, STATE); // epic 176
+    expect(readEpicPromotion(repo, 999)).toBeNull(); // epic 999 has no file of its own
+    expect(readEpicPromotion(repo, 176)).toEqual(STATE); // 176's record is untouched
   });
 
   it('reads "corrupt" for a present-but-unparseable store — blocking, never fall-through to re-create (SEC-1)', () => {
@@ -45,17 +46,27 @@ describe('promotion.yaml store (§28.7 AC3)', () => {
     expect(readEpicPromotion(repo, 176)).toBe('corrupt');
   });
 
-  it('reads "corrupt" for a malformed record (created not an array of {index,issue})', () => {
+  it('reads "corrupt" for every malformed field (the fail-safe guards each — CWE-20/770)', () => {
     mkdirSync(join(repo, '.agent-terminal', 'loop'), { recursive: true });
-    writeFileSync(promotionFile(), 'schema_version: 1\nepic: 176\ncreated: "nope"\n');
-    expect(readEpicPromotion(repo, 176)).toBe('corrupt');
+    const cases = [
+      'schema_version: 1\nepic: 176\ncreated: "nope"\n', // created not an array
+      'schema_version: 999\nepic: 176\ncreated: []\n', // wrong schema_version
+      'schema_version: 1\nepic: 0\ncreated: []\n', // non-positive epic
+      'schema_version: 1\nepic: 176\ncreated:\n  - index: 1\n    issue: 0\n    title: x\n', // non-positive issue (#0 does not exist)
+      'schema_version: 1\nepic: 176\ncreated:\n  - index: 1\n    issue: 501\n', // sub-ticket missing its title
+    ];
+    for (const yaml of cases) {
+      writeFileSync(promotionFile(), yaml);
+      expect(readEpicPromotion(repo, 176), yaml).toBe('corrupt');
+    }
   });
 
-  it('carries NO wall-clock field (a re-write is byte-stable, so the AC3 unchanged assertion is deterministic)', () => {
+  it('carries NO wall-clock field, and a SECOND write of equal state is byte-identical (AC3 determinism)', () => {
     writeEpicPromotion(repo, STATE);
-    const raw = readFileSync(promotionFile(), 'utf8');
-    expect(raw).not.toContain('updated_at');
-    expect(readFileSync(promotionFile(), 'utf8')).toBe(raw); // stable across reads
+    const first = readFileSync(promotionFile(), 'utf8');
+    expect(first).not.toContain('updated_at');
+    writeEpicPromotion(repo, STATE); // re-write the same state
+    expect(readFileSync(promotionFile(), 'utf8')).toBe(first); // byte-stable across re-writes
   });
 
   it('is created on a FRESH tree (first-run writer deletes the loop dir first)', () => {

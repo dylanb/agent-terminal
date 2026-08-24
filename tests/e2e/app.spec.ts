@@ -6552,15 +6552,13 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
   expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // not advanced/terminated on decline
 
-  // Approve again and CONFIRM this time → the epic flow stands down (terminated) and the gate is accepted;
-  // still nothing is created (runPromotion is a slice-C stub, so the creation lands there).
+  // Approve again and CONFIRM this time → the promotion runs, the gate is accepted, and the epic flow stands down.
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await dialog.locator('.pill.danger.confirm').click();
-  await expect(dialog).toBeHidden({ timeout: 10_000 });
+  await expect.poll(() => readGhLog(logFile), { timeout: 30_000 }).toContain('issue create'); // the chain is created now
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
-  expect(readGhLog(logFile)).not.toContain('issue create');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -6634,7 +6632,7 @@ test('§28.7 S8 — a corrupt promotion record BLOCKS confirm, creating nothing 
   await driveToEpicPlanBundleGate(repo);
   // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
   // SOLE guard against duplicate public issues, so it must BLOCK creation, never fall through (SEC-1/AC3).
-  writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion.yaml'), 'this: is: not: valid: yaml: [\n');
+  writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
 
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const confirmDialog = page.getByRole('alertdialog').filter({ hasText: 'Create' });

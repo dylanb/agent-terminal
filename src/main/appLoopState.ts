@@ -590,27 +590,32 @@ export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
   return { step: doc.step, paths: sanitizeChangedTestPaths(doc.paths) };
 }
 
-// §28.7 AC3 — the resumable promotion record, in its OWN file (a wholesale run-state rewrite cannot clobber it —
-// the baseline/changed-tests precedent). No wall-clock, so an idempotent re-run's "unchanged" assertion is
-// deterministic. Field-local validation with a DELIBERATE fail-safe: a present-but-malformed store reads
-// 'corrupt' (BLOCK — never fall through to re-creating duplicate public issues, CWE-20/770), while an absent
-// store, or one recording a DIFFERENT epic, reads null (a fresh promotion for this epic).
-const PROMOTION_FILE = 'promotion.yaml';
+// §28.7 AC3 — the resumable promotion record, PER EPIC in its own file promotion-<epic>.yaml (a wholesale
+// run-state rewrite cannot clobber it, and two epics sharing a loop area cannot clobber each other's resume
+// record). No wall-clock, so an idempotent re-run's "unchanged" assertion is deterministic. This is untrusted
+// persisted state and the SOLE guard against re-creating duplicate PUBLIC issues (CLAUDE.md line 76 /
+// CWE-20/770), so it fails TOWARD the block: a present-but-malformed record — OR an unresolvable loop area (a
+// planted symlink) — reads 'corrupt' (BLOCK), and only a benign absent file reads null (a fresh promotion).
+function promotionFileName(epic: number): string {
+  return `promotion-${epic}.yaml`;
+}
 
 export interface EpicPromotionState {
+  /** Each created sub-ticket carries its `title` so the executor can reconcile a resumed record against the
+   *  current plan and refuse a divergence (a stale/planted record could otherwise orphan or mis-stack issues). */
   epic: number;
-  created: { index: number; issue: number }[];
+  created: { index: number; issue: number; title: string }[];
   trackingAppended: boolean;
   prClosed: boolean;
 }
 
 export function writeEpicPromotion(repoDir: string, state: EpicPromotionState): void {
-  const file = loopAreaFile(repoDir, PROMOTION_FILE);
+  const file = loopAreaFile(repoDir, promotionFileName(state.epic));
   if (file === null) throw new Error('§27 loop area is unresolvable');
   const doc = {
     schema_version: APP_LOOP_STATE_SCHEMA,
     epic: state.epic,
-    created: state.created.map((c) => ({ index: c.index, issue: c.issue })),
+    created: state.created.map((c) => ({ index: c.index, issue: c.issue, title: c.title })),
     tracking_appended: state.trackingAppended,
     pr_closed: state.prClosed,
   };
@@ -620,8 +625,8 @@ export function writeEpicPromotion(repoDir: string, state: EpicPromotionState): 
 }
 
 export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionState | 'corrupt' | null {
-  const file = loopAreaFile(repoDir, PROMOTION_FILE);
-  if (file === null) return null;
+  const file = loopAreaFile(repoDir, promotionFileName(epic));
+  if (file === null) return 'corrupt'; // an unresolvable loop area fails toward the block, never a fresh re-create
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
@@ -632,18 +637,16 @@ export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionS
   try {
     doc = yaml.load(text);
   } catch {
-    return 'corrupt'; // present but unparseable → block, never re-create
+    return 'corrupt';
   }
   if (!isRecord(doc)) return 'corrupt';
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return 'corrupt';
-  if (!Number.isInteger(doc.epic)) return 'corrupt';
+  if (!isPositiveInt(doc.epic) || doc.epic !== epic) return 'corrupt';
   if (!Array.isArray(doc.created)) return 'corrupt';
-  const created: { index: number; issue: number }[] = [];
+  const created: { index: number; issue: number; title: string }[] = [];
   for (const c of doc.created) {
-    if (!isRecord(c) || !Number.isInteger(c.index) || !Number.isInteger(c.issue) || (c.issue as number) < 0) return 'corrupt';
-    created.push({ index: c.index as number, issue: c.issue as number });
+    if (!isRecord(c) || !isPositiveInt(c.index) || !isPositiveInt(c.issue) || typeof c.title !== 'string' || c.title.length === 0) return 'corrupt';
+    created.push({ index: c.index, issue: c.issue, title: c.title });
   }
-  // A valid record for a DIFFERENT epic is stale (this epic has no record) → fresh, not a block.
-  if (doc.epic !== epic) return null;
-  return { epic: doc.epic as number, created, trackingAppended: doc.tracking_appended === true, prClosed: doc.pr_closed === true };
+  return { epic: doc.epic, created, trackingAppended: doc.tracking_appended === true, prClosed: doc.pr_closed === true };
 }
