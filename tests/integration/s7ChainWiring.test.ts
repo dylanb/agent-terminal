@@ -5,6 +5,8 @@ import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
+import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
+import { PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
 import { createGitRepoFixture } from '../helpers/gitRepo';
 
 // §28.10 S7 (§28.2)
@@ -148,7 +150,7 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
   });
 });
 
-const WIRED = ['plan-bundle-loop', 'infra-loop'];
+const WIRED = ['plan-bundle-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop'];
 
 const REPO_DIR = resolve(__dirname, '..', '..');
 const resolveDef = (name: string) => resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir: REPO_DIR });
@@ -252,5 +254,15 @@ describe('s7 wiring — closure', () => {
       if (!existsSync(join(SOURCE_TREE, loop.name, `${loop.name}.yaml`))) continue;
       expect(WIRED, `${loop.name} yaml exists but is not in WIRED`).toContain(loop.name);
     }
+  });
+});
+
+describe('s7 refactor recipe (§28.6 P6c)', () => {
+  it('references the capabilities file and embeds no result-file block', () => {
+    const rel = 'refactor-loop/prompts/work.md';
+    expect(existsSync(join(SOURCE_TREE, rel)), rel).toBe(true);
+    const body = readFileSync(join(SOURCE_TREE, rel), 'utf8');
+    expect(body).toContain(LOOP_CAPABILITIES_FILENAME);
+    expect(body).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
   });
 });
