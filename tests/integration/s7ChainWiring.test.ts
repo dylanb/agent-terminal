@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
+import { catalogPersonas } from '../../src/main/reviewTurn';
+import { createRealAppGateCommit } from '../../src/main/appGateCommit';
+import { createGitRepoFixture } from '../helpers/gitRepo';
 
 // §28.10 S7 (§28.2)
 
@@ -131,5 +135,99 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
 
   it('gives exactly one loop the pickup that creates the shared branch', () => {
     expect(CHAIN.filter((l) => l.pickup).length).toBe(1);
+  });
+});
+
+const WIRED = ['plan-bundle-loop', 'infra-loop'];
+
+const REPO_DIR = resolve(__dirname, '..', '..');
+const resolveDef = (name: string) => resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir: REPO_DIR });
+
+function mustResolve(name: string): LoopDefV2 {
+  const r = resolveDef(name);
+  expect(r.ok, `${name} did not resolve`).toBe(true);
+  return (r as Extract<typeof r, { ok: true }>).def;
+}
+
+const rowFor = (name: string): LoopRow => {
+  const row = CHAIN.find((l) => l.name === name);
+  if (!row) throw new Error(`no manifest row: ${name}`);
+  return row;
+};
+
+const bytesUnder = (rel: string): string => readFileSync(join(SOURCE_TREE, rel), 'utf8');
+
+describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
+  const row = rowFor(name);
+
+  it('resolves to a def whose catalog is the manifest personas', () => {
+    expect(catalogPersonas(mustResolve(name)).slice().sort()).toEqual(row.personas.map((p) => p.persona).sort());
+  });
+
+  it('resolves every reviewer charter on disk', () => {
+    for (const rev of mustResolve(name).reviewers) {
+      expect(existsSync(rev.charter), `${name}/${rev.persona}: ${rev.charter}`).toBe(true);
+    }
+  });
+
+  it('declares the manifest pickup, completion, and approve-gate side-effect kinds', () => {
+    const def = mustResolve(name);
+    expect(def.pickup !== null, `${name} pickup`).toBe(row.pickup);
+    expect(def.work.completion ?? null).toBe(row.completion);
+    const approve = def.gate.find((g) => g.option === 'approve');
+    expect(approve?.sideEffects.map((se) => se.kind).slice().sort()).toEqual([...row.gate].sort());
+  });
+
+  it('binds the result output the manifest declares', () => {
+    const out = row.output;
+    if (!out) return;
+    expect(mustResolve(name).outputs.some((o) => o.id === out.id), `${name} output ${out.id}`).toBe(true);
+  });
+
+  // §28.5.5 / CLAUDE.md shared-semantics — a reused charter/consolidate recipe is a byte-copy of its
+  // canonical source; no type catches the drift.
+  it('byte-copies every reused charter + the consolidate recipe from source', () => {
+    for (const p of row.personas) {
+      if (!p.source) continue;
+      const copy = `${name}/${p.charter}`;
+      expect(existsSync(join(SOURCE_TREE, copy)), copy).toBe(true);
+      expect(bytesUnder(copy), copy).toBe(bytesUnder(p.source.charter));
+    }
+    const cons = `${name}/prompts/consolidate.md`;
+    expect(existsSync(join(SOURCE_TREE, cons)), cons).toBe(true);
+    expect(bytesUnder(cons)).toBe(bytesUnder(`${row.consolidateSource}/prompts/consolidate.md`));
+  });
+
+  it('gives every reused reviewer the tools of its source def', () => {
+    const def = mustResolve(name);
+    for (const p of row.personas) {
+      if (!p.source) continue;
+      const want = mustResolve(p.source.loop).reviewers.find((rv) => rv.persona === p.persona)?.tools;
+      const got = def.reviewers.find((rv) => rv.persona === p.persona)?.tools;
+      expect(got, `${name}/${p.persona} tools`).toEqual(want);
+    }
+  });
+});
+
+describe.each(WIRED.filter((n) => rowFor(n).gate.includes('commit')))('s7 commit-lands — %s', (name) => {
+  it('lands its approve commit label as a real commit', async () => {
+    const approve = mustResolve(name).gate.find((g) => g.option === 'approve');
+    const label = approve?.sideEffects.find((se) => se.kind === 'commit')?.args.label;
+    expect(typeof label, `${name} commit label`).toBe('string');
+    const fx = createGitRepoFixture();
+    try {
+      const repo = fx.makeGitRepo('s7commit');
+      fx.writeRepoFile(repo, '.gitignore', '.agent-terminal/\n');
+      fx.writeRepoFile(repo, 'seed.txt', 'seed\n');
+      fx.commitAll(repo, 'baseline');
+      fx.writeRepoFile(repo, 'src/new.ts', 'export const x = 1;\n');
+      const before = Number(fx.git(repo, ['rev-list', '--count', 'HEAD']));
+      const result = await createRealAppGateCommit(repo)({ label: label as string });
+      expect(result.outcome).toBe('committed');
+      expect(Number(fx.git(repo, ['rev-list', '--count', 'HEAD']))).toBe(before + 1);
+      expect(fx.git(repo, ['log', '-1', '--format=%s'])).toBe(label);
+    } finally {
+      fx.cleanup();
+    }
   });
 });
