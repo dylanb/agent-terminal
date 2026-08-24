@@ -1780,6 +1780,7 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.issue-body"; exit 0; fi\n' +
     // epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
@@ -5768,14 +5769,14 @@ const gitIn = (repo: string, ...args: string[]): string =>
   execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
 const gitCount = (repo: string): number => Number(gitIn(repo, 'rev-list', '--count', 'HEAD'));
 
-// A REAL git repo carrying the same flow/bootstrap `.agent-terminal` state the fake-git gate test uses, so
-// the drive (canned via the fake git+gh) reaches a clean gate while the commit side-effect's delegated ops
-// land in a genuine repo. `.gitignore` excludes the engine state dirs (so AC1's tree-clean survives
-// advanceFlow's post-commit write); `withChange` leaves one uncommitted file the commit will record;
-// `capabilities`, when given, is a §28.5.4 loop-capabilities.yaml committed INTO the baseline (the RED
-// working-tree check sources its test globs from it). Shared by the §28.3 commit and §28.5 RED tracers so the
-// flow/flow-state literals have one home.
-function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabilities?: string; seedTestFile?: string }): string {
+// The shared prologue for a REAL git-repo flow tracer: a baseline commit carrying the given
+// flow.yaml + flow-state.yaml (and optional §28.5.4 loop-capabilities.yaml) atop a pre-completed app
+// bootstrap, with `.gitignore` excluding the engine state dirs so a tree-clean assertion survives
+// advanceFlow's post-commit write. One home for the git-init/config/gitignore/seed/bootstrap boilerplate.
+function seedFlowRepoBase(
+  prefix: string,
+  opts: { flowYaml: string; flowState: string; capabilities?: string; seedTestFile?: string },
+): { dir: string; g: (...args: string[]) => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
@@ -5786,22 +5787,31 @@ function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabil
   writeFileSync(join(dir, 'seed.txt'), 'seed\n');
   if (opts.capabilities !== undefined) writeFileSync(join(dir, 'loop-capabilities.yaml'), opts.capabilities);
   // §28.5.3 — a test-glob file committed INTO the baseline (default: none), so the GREEN frozen check
-  // (baseline↔working-tree) sees a change when a later turn edits it. A no-op for the S2/S3 callers.
+  // (baseline↔working-tree) sees a change when a later turn edits it.
   if (opts.seedTestFile !== undefined) {
     mkdirSync(join(dir, dirname(opts.seedTestFile)), { recursive: true });
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
-  );
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow-state.yaml'),
-    'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
-  );
+  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
   g('commit', '-qm', 'baseline');
+  return { dir, g };
+}
+
+// A §28.3/§28.5 commit tracer repo: the v2-gate flow (single `plan` step) atop the shared prologue, so the
+// drive (canned via the fake git+gh) reaches a clean gate while the commit side-effect's delegated ops land
+// in a genuine repo. `withChange` leaves one uncommitted file the commit will record; `capabilities` commits
+// the §28.5.4 loop-capabilities.yaml the RED working-tree check sources its test globs from.
+function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabilities?: string; seedTestFile?: string }): string {
+  const { dir } = seedFlowRepoBase(prefix, {
+    flowYaml:
+      'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+    flowState: 'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    capabilities: opts.capabilities,
+    seedTestFile: opts.seedTestFile,
+  });
   if (opts.withChange) writeFileSync(join(dir, 'feature.ts'), 'export const x = 1;\n');
   return dir;
 }
@@ -6298,6 +6308,7 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
 // ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
 const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
 const CHAIN_ROSTERS: Record<string, string[]> = {
+  groom: ['review-plan-intent'],
   'plan-bundle': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
   infra: [...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
   red: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'],
@@ -6306,10 +6317,8 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
   'integration-slice': [...CHAIN_IMPL12, 'review-plan-tracer-slicer'],
 };
 
-// A multi-step fake-agent: one `while read` loop whose case matches every loop step's work/review/consolidate
-// turn-done token, so ONE agent process drives the whole chain. Each loop's review round writes a report
-// accounting for THAT loop's roster (§27.5); the phase loops classify their §28.5 result files; the refactor
-// review round writes its round-keyed result + a behavior-preserving change so its gate has something to commit.
+// A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
+// loop's roster (§27.5); the phase loops classify their §28.5 result files.
 function seedFullTddChainAgent(binDir: string): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
@@ -6318,6 +6327,7 @@ function seedFullTddChainAgent(binDir: string): void {
   const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
 
   const workArm: Record<string, string> = {
+    groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; printf '%s\\n' '# plan' '${completionMarker('plan-bundle')}' > ${art}/plan.md; ${done('work-plan-bundle')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), `${art}/red-result.md`)}; ${done('work-red')}`,
@@ -6327,6 +6337,7 @@ function seedFullTddChainAgent(binDir: string): void {
   };
   const reviewArm = (step: string): string => {
     const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}`;
+    // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
     return step === 'refactor'
       ? `${base}; mkdir -p .agent-terminal/loop/refactor-results; ${decode(b64(examplePhaseResult('passed')), '.agent-terminal/loop/refactor-results/$r.md')}; printf '%s\\n' 'export const rf = 4;' > refactor.ts; ${done('review-refactor')}`
       : `${base}; ${done(`review-${step}`)}`;
@@ -6334,7 +6345,7 @@ function seedFullTddChainAgent(binDir: string): void {
   const consolidateArm = (step: string): string =>
     `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
 
-  const steps = ['plan-bundle', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
+  const steps = ['groom', 'plan-bundle', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
   const cases = steps
     .flatMap((s) => [
       `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,
@@ -6356,27 +6367,18 @@ function seedFullTddChainAgent(binDir: string): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-// A real-git repo carrying the SHIPPED full-TDD flow.yaml, entered at the plan-bundle step (a groomed ticket,
-// §28.2 AC1); bootstrap pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
+// A real-git repo carrying the SHIPPED feature-dev flow.yaml, entered at its first loop `groom`; bootstrap
+// pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
 function seedFullTddChainRepo(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
-  g('init', '-q');
-  g('config', 'user.email', 't@t');
-  g('config', 'user.name', 'T');
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
-  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
-  writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n');
-  cpSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), join(dir, '.agent-terminal', 'flow.yaml'));
-  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: plan-bundle\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n');
-  seedCompletedAppBootstrap(dir);
-  g('add', '-A');
-  g('commit', '-qm', 'baseline');
+  const { dir } = seedFlowRepoBase(prefix, {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+  });
   return dir;
 }
 
-test('§28.10 S7 — the shipped full-TDD flow runs end-to-end from a groomed ticket: plan-bundle → infra → red → green → refactor → integration-slice, the five phase commits landing on one branch and the PR body published', { tag: '@ownapp' }, async () => {
+test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-fulltdd-bin-', { realCommitOps: true });
@@ -6392,10 +6394,12 @@ test('§28.10 S7 — the shipped full-TDD flow runs end-to-end from a groomed ti
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await typeCommand('fake-agent');
-  await flowControl().click(); // Start → enter plan-bundle
+  await flowControl().click(); // Start → enter groom
 
-  const approveStep = async (step: string): Promise<void> => {
+  const approveStep = async (step: string, consumes?: string): Promise<void> => {
     await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    // §28.10 AC1 — the loop consumed the prior loop's artifact: the engine recorded it as a chained input.
+    if (consumes) expect(readIf(appRunState(repo))).toMatch(new RegExp(`chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`));
     // Open the loop panel if it isn't already (loopReadout TOGGLES it — re-clicking an open panel closes it).
     if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
     const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
@@ -6404,19 +6408,20 @@ test('§28.10 S7 — the shipped full-TDD flow runs end-to-end from a groomed ti
     await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
   };
 
-  await approveStep('plan-bundle'); // planning bundle: gh mark-ready + carry plan.md into infra
-  await approveStep('infra'); // infra commits
-  await approveStep('red'); // RED commit + §28.5.1 baseline recorded on the branch
-  await approveStep('green'); // GREEN commit — the branch-keyed baseline is FOUND across the step (slice D)
-  await approveStep('refactor'); // refactor commit
-  await approveStep('integration-slice'); // integration commit + PR body published
+  await approveStep('groom'); // gate is gh update-issue-body (no commit); its groomed-ticket feeds plan-bundle
+  await approveStep('plan-bundle', 'groomed-ticket'); // gate is gh mark-ready; its plan feeds every downstream loop
+  await approveStep('infra', 'plan');
+  await approveStep('red', 'plan'); // §28.5.1 — the frozen baseline is recorded on the branch here
+  await approveStep('green', 'plan'); // slice D — the branch-keyed baseline is FOUND across the step
+  await approveStep('refactor', 'plan');
+  await approveStep('integration-slice', 'plan');
 
-  // AC1 — the four commit groups (infra / the three slice phases / integration) all landed, in order, on ONE branch.
+  // AC1 — the five phase commits (infra / the three slice phases / integration) landed, in order, on ONE branch.
   expect(gitCount(repo)).toBe(before + 5);
   expect(gitIn(repo, 'log', '--format=%s', '-6').split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'infra', 'baseline']);
-  // The planning gate marked the PR ready and the integration gate published its body; the flow reached finalize.
   await expect.poll(() => readGhLog(logFile)).toContain('pr ready');
-  await expect.poll(() => readGhLog(logFile)).toContain('pr edit');
+  // §28.10 AC1 — end-to-end chaining: the integration gate published plan-bundle's '# plan' artifact as the PR body.
+  await expect.poll(() => readIf(`${logFile}.pr-body`)).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
 
   await app.close();
