@@ -144,10 +144,14 @@ export interface AppLoopEngineDeps {
    *  the call so a write failure audits and never aborts the turn advance. A domain seam (composition root wires
    *  the disjoint `changed-tests.yaml` writer). */
   recordChangedTests(repoDir: string, step: string, paths: readonly string[]): void;
-  /** §28.5.1 — the RED baseline (SHA + the step it was recorded under) the frozen check diffs the working tree
-   *  against. Null when unset; the GREEN gate BLOCKS on an absent or step-mismatched baseline (D-baseline), while
-   *  the refactor probe only audits (non-blocking). A domain seam (composition root wires `readBaselineCommit`). */
-  readBaseline(repoDir: string): { step: string; sha: string } | null;
+  /** §28.5.1 — the RED baseline (SHA + the branch it was recorded on) the GREEN frozen check diffs the working
+   *  tree against. Null when unset; the GREEN gate blocks on an absent or branch-mismatched baseline (D-baseline).
+   *  A domain seam (composition root wires `readBaselineCommit`). */
+  readBaseline(repoDir: string): { branch: string; sha: string } | null;
+  /** §28.5.1 — the repo's current branch (the baseline's slice key), or null when detached/unresolvable. The
+   *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
+   *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
+  currentBranch(repoDir: string): string | null;
 }
 
 export interface AppLoopEngine {
@@ -580,7 +584,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
       }
       case 'green': {
-        // §28.5.3 — the SYNCHRONOUS GREEN clause. The ASYNC clauses (baseline present+step-matched, the
+        // §28.5.3 — the SYNCHRONOUS GREEN clause. The ASYNC clauses (baseline present+branch-matched, the
         // exit-direction, and the NON-blocking frozen detection) live in greenAsyncGate, ANDed on both
         // completion routes like the RED gate.
         const content = deps.readArtifact(active.completion.resultPath);
@@ -635,21 +639,24 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe, so S7's
-   *  phase-stable step reduction (the deferred §12 piece; S4/S5 steps are stable so `===` holds now) has ONE
-   *  edit site here. */
+  /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe, so the
+   *  branch-match rule has ONE edit site. */
   const changedTestPathsSinceBaseline = async (
     a: ActiveAppTurn,
   ): Promise<{ kind: 'ok'; paths: string[] } | { kind: 'no-baseline' } | { kind: 'capfail'; cause: 'absent' | 'malformed' }> => {
     const baseline = deps.readBaseline(a.repoDir);
-    if (baseline === null || baseline.step !== a.stepId) return { kind: 'no-baseline' };
+    // §28.5.1 — match the recorded baseline BRANCH to the current branch (the phase-stable slice key), not the
+    // flow step: RED and GREEN are distinct steps on one branch. A detached HEAD (null branch) cannot prove
+    // "same slice", so it blocks (fail toward firing).
+    const branch = deps.currentBranch(a.repoDir);
+    if (baseline === null || branch === null || baseline.branch !== branch) return { kind: 'no-baseline' };
     const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
     if (!changed.ok) return { kind: 'capfail', cause: changed.cause };
     return { kind: 'ok', paths: changed.paths };
   };
 
   /** §28.5.3 / §28 Option C — the GREEN turn's ASYNC machine ground truth. Returns the PrecomputedGate (baseline
-   *  present + step-matched, then the exit-direction) AND the frozen-check paths the NON-blocking flag records
+   *  present + branch-matched, then the exit-direction) AND the frozen-check paths the NON-blocking flag records
    *  (or `null` when the check could not run — in which case the gate blocks). The frozen RESULT never sets the
    *  gate false (§28.8.3 detect-and-escalate); only the baseline guard and exit-direction do. Never rejects — an
    *  unexpected throw is a fail-toward-firing gate. */
@@ -657,13 +664,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     a: ActiveAppTurn,
   ): Promise<{ gate: PrecomputedGate; changedTests: string[] | null }> => {
     try {
-      // §28.5.1/D-baseline — a missing OR step-mismatched baseline means "tests unchanged" cannot be proven, so
+      // §28.5.1/D-baseline — a missing OR branch-mismatched baseline means "tests unchanged" cannot be proven, so
       // the gate BLOCKS (fail toward firing), never silently reading as "nothing changed".
       const changed = await changedTestPathsSinceBaseline(a);
       if (changed.kind !== 'ok') {
         const reason =
           changed.kind === 'no-baseline'
-            ? 'GREEN cannot run the frozen check — no RED baseline is recorded for this step'
+            ? 'GREEN cannot run the frozen check — no RED baseline is recorded for this branch'
             : `GREEN cannot run the frozen check — ${baselineCapabilitiesCauseReason(changed.cause)}`;
         return { gate: { ok: false, reason }, changedTests: null };
       }
@@ -690,7 +697,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (changed.kind === 'ok') return changed.paths;
       const why =
         changed.kind === 'no-baseline'
-          ? 'no RED baseline is recorded for this step'
+          ? 'no RED baseline is recorded for this branch (recorded on a different branch, or detached HEAD)'
           : baselineCapabilitiesCauseReason(changed.cause);
       deps.audit(a.repoDir, `§28 refactor round frozen probe could not run — ${why}`, 1);
       return null;
@@ -1245,7 +1252,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           return;
         }
         // §28.5.3 / AC3 — a GREEN work turn's accept mirrors the RED accept: it requires BOTH the sync clause
-        // (result present + passed + built) AND the async gate (baseline present+step-matched, exit-direction).
+        // (result present + passed + built) AND the async gate (baseline present+branch-matched, exit-direction).
         // It ALSO records the non-blocking changed-test flag on this override route (the done-signal route records
         // it via onComplete; the accept route has no onComplete, so it records here — else an operator-accepted
         // GREEN turn with a changed test would complete with the flag never written).

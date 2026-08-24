@@ -243,7 +243,7 @@ describe.each(WIRED.filter((n) => rowFor(n).gate.includes('commit')))('s7 commit
       fx.commitAll(repo, 'baseline');
       fx.writeRepoFile(repo, 'src/new.ts', 'export const x = 1;\n');
       const before = Number(fx.git(repo, ['rev-list', '--count', 'HEAD']));
-      const result = await createRealAppGateCommit(repo)({ label: label as string });
+      const result = await createRealAppGateCommit(repo)({ label: label as string, dirtyAtPhaseStart: [] });
       expect(result.outcome).toBe('committed');
       expect(Number(fx.git(repo, ['rev-list', '--count', 'HEAD']))).toBe(before + 1);
       expect(fx.git(repo, ['log', '-1', '--format=%s'])).toBe(label);

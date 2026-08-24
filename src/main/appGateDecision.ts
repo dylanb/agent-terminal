@@ -62,15 +62,13 @@ export interface AppGateDecisionDeps {
   /** §28.3 — surface a benign completed no-op (nothing-to-commit) to the operator as a notice, framed so
    *  it never reads as a failure. Same operator channel as emitError, distinct severity (`kind: 'notice'`). */
   emitNotice(reason: string): void;
-  /** §28.5.1 — record the phase-commit `sha` a `commit` side-effect returned, under the decision's `step`, as
-   *  the baseline the next phase's frozen check diffs from. A domain seam (never `writeAppLoopState`). The raw
-   *  store is fail-loud (throws on an FS/loop-area error); the executor wraps THIS call best-effort itself (as it
-   *  does its `gh`/clear-polish side-effects), so the composition root wires the store directly.
-   *  §12 (cross-slice, phase-stable): `step` is recorded verbatim as the baseline key; when §28.4's RED/GREEN/
-   *  refactor phase-loops exist, the writer and the GREEN reader MUST reduce it to ONE shared PHASE-STABLE slice
-   *  identity before comparing — a raw phase-qualified step (`red-<slice>` written vs `green-<slice>` read) would
-   *  mismatch on every happy path and silently disable the frozen check. */
-  recordBaseline(repoDir: string, step: string, sha: string): void;
+  /** §28.5.1 — record the phase-commit `sha` a `commit` side-effect returned, under the `branch` it landed on, as
+   *  the baseline the next phase's frozen check diffs from. The BRANCH (not the flow step) is the key: §28.4's
+   *  RED/GREEN/refactor phase-loops are DISTINCT flow steps sharing one branch, so a step key would mismatch every
+   *  cross-phase read; the branch is their phase-stable slice identity (both sourced from the commit result, never
+   *  re-derived). A domain seam (never `writeAppLoopState`). The raw store is fail-loud (throws on an FS/loop-area
+   *  error); the executor wraps THIS call best-effort itself (as it does its `gh`/clear-polish side-effects). */
+  recordBaseline(repoDir: string, branch: string, sha: string): void;
   onViewChanged(): void;
 }
 
@@ -218,7 +216,7 @@ export async function runAppGateDecision(
           // downstream frozen check refuses on the missing baseline, so the state is recoverable (fail toward
           // firing). Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
           try {
-            deps.recordBaseline(repoDir, step, result.sha);
+            deps.recordBaseline(repoDir, result.branch, result.sha);
           } catch (e) {
             const reason = e instanceof Error ? e.message : String(e);
             deps.audit(repoDir, gateDecisionAuditCmd('baseline-record-failed', option, reason), 1);
