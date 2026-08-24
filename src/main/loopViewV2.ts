@@ -7,10 +7,9 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
-import { readFileSync, statSync } from 'node:fs';
 import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
-import { isEpicPlan, parseEpicPlan } from '../shared/epicPlan';
+import { readEpicSubTicketsAtGate } from './epicPromotion';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2 } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState, isPolishActiveForStep, readChangedTests } from './appLoopState';
@@ -25,29 +24,11 @@ export const APP_LOOP_STATUS_ERROR = 'error';
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
-// §28.7 — the epic split surfaced at the gate, read from the approve gate's `promote` artifact through the same
-// epicPlan grammar the promotion executor reads, so the previewed split and the created chain cannot drift.
-const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
+// §28.7 — the epic split surfaced at the gate: the same sub-tickets the promotion executor reads
+// (readEpicSubTicketsAtGate), reduced to the {index,title}s the panel previews so preview and chain can't drift.
 function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
-  const approve = def.gate.find((g) => g.option === 'approve');
-  const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
-  const artifactId = promote && typeof promote.args.artifact === 'string' ? promote.args.artifact : null;
-  if (artifactId === null) return undefined;
-  const binding = [...def.inputs, ...def.outputs].find((b) => b.id === artifactId);
-  if (binding === undefined) return undefined;
-  let text: string;
-  try {
-    // The plan is free-form agent prose read synchronously on the main process each gate pull; cap it so a
-    // runaway artifact cannot block the UI (CWE-400). A missing/unreadable artifact falls through the same way.
-    if (statSync(binding.path).size > EPIC_PLAN_MAX_BYTES) return undefined;
-    text = readFileSync(binding.path, 'utf8');
-  } catch {
-    return undefined;
-  }
-  if (!isEpicPlan(text)) return undefined;
-  const parsed = parseEpicPlan(text);
-  if (parsed === null || parsed.subTickets.length === 0) return undefined;
-  return { subTickets: parsed.subTickets.map((t) => ({ index: t.index, title: t.title })) };
+  const subs = readEpicSubTicketsAtGate(def);
+  return subs ? { subTickets: subs.map((t) => ({ index: t.index, title: t.title })) } : undefined;
 }
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {

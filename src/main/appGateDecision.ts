@@ -38,6 +38,11 @@ export interface AppGateDecisionDeps {
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
+  /** §28.7 — when the approve gate declares a `promote` side-effect and the plan is classified an epic, raise
+   *  the confirm-first preview and HOLD, returning true (the resolve path accepts + stands the flow down). The
+   *  gate is neither accepted nor advanced here. Returns false for a non-epic plan or a gate with no promote
+   *  side-effect — the normal accept below runs. */
+  maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): boolean;
   /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback
    *  (a domain port the composition root wires to the §27 engine). It is NOT approve: the flow does not
    *  advance and no gh side-effect runs — the loop returns to iterate on the step. Returns whether the round
@@ -152,6 +157,15 @@ export async function runAppGateDecision(
   }
   // impasse is never executed here.
   if (option !== 'approve') return false;
+
+  // §28.7 — an epic plan intercepts BEFORE the accept: the coordinator raises the confirm-first preview and
+  // holds; the gate is neither accepted nor advanced (the resolve path completes it). A non-epic plan — or a
+  // gate with no promote side-effect — is not intercepted and takes the normal accept below.
+  if (deps.maybeBeginEpicPromotion(repoDir, r.def, run.step, run.turnKey)) {
+    deps.audit(repoDir, gateDecisionAuditCmd('epic-promotion-preview', option), 0);
+    deps.onViewChanged();
+    return false;
+  }
 
   // D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
   // re-run the outward side-effect); a failed side-effect does not (§27.13 / AC3).

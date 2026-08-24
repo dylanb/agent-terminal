@@ -71,6 +71,8 @@ export type FlowStripDeps = Omit<
   | 'onLoopError'
   | 'onAppBootstrapConflict'
   | 'resolveAppBootstrapConflict'
+  | 'onEpicPromotionPreview'
+  | 'resolveEpicPromotion'
   | 'githubRef'
   | 'openExternal'
   | 'appRouteOut'

@@ -36,6 +36,7 @@ import {
   isValidFlowProvideInput,
   isValidFlowSetTitle,
   isValidFlowResolveAppBootstrapConflict,
+  isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
@@ -110,6 +111,7 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
+import { createEpicPromotionCoordinator, readEpicSubTicketsAtGate } from './epicPromotion';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
@@ -793,6 +795,23 @@ async function createWindow(): Promise<void> {
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
+  // §28.7 — the epic-promotion confirm-first coordinator: an approve on an epic plan intercepts here, raises
+  // the preview, and holds; resolve completes it (confirm promotes then accepts + terminates, decline drops).
+  const epicPromotionCoordinator = createEpicPromotionCoordinator({
+    readSubTickets: (def) => readEpicSubTicketsAtGate(def),
+    emitPreview: ({ repoDir, step, epic, pr, subTickets }) =>
+      send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
+    // §28.7 S8 slice C fills this in; until then confirm accepts + stands down without creating the chain.
+    runPromotion: async () => {},
+    accept: (repoDir, loop, step, turnKey) => {
+      writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' });
+      terminateFlowLifecycle(repoDir);
+    },
+    audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
+    emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    onViewChanged: () => pushFlowChanged(),
+  });
+
   // §27.9/§27.13 / N5 — composition root for the §27 gate decision. Returns the request-changes
   // delivered/dropped result so the two-way flow:appRequestChanges caller can hold the composer open on a
   // drop (approve goes through the one-way channel and ignores the result).
@@ -840,6 +859,12 @@ async function createWindow(): Promise<void> {
         // §27.9/AC6 — polish is app-owned loop state written to its own file (§27.9).
         enterPolish: (repoDir, step) => enterPolish(repoDir, step),
         clearPolish: (repoDir) => clearPolish(repoDir),
+        // §28.7 — an epic plan intercepts before accept; the coordinator sources the epic issue from the flow's
+        // ticket ref (never re-derived — §6) and the loop name from the resolved def.
+        maybeBeginEpicPromotion: (repoDir, def, step, turnKey) => {
+          const gateRefs = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
+          return epicPromotionCoordinator.maybeBegin(repoDir, def, def.name, step, turnKey, { epic: gateRefs.ticket, pr: gateRefs.pr });
+        },
       },
       note,
     );
@@ -951,6 +976,11 @@ async function createWindow(): Promise<void> {
             pullRequests: m.pullRequests,
           });
         }
+      },
+      // §28.7 — the step is named in the payload, so an answer cannot be applied to a gate the operator was
+      // never shown (§6); the coordinator's held-key matches repoKey+step.
+      [CH.flowResolveEpicPromotion]: (_e, m) => {
+        if (isValidFlowResolveEpicPromotion(m)) void epicPromotionCoordinator.resolve(m.repoKey, m.step, m.confirm);
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

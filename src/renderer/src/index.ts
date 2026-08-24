@@ -10,6 +10,7 @@ import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
 import { wireAppBootstrapConflict } from './wireAppBootstrapConflict';
+import { wireEpicPromotion } from './wireEpicPromotion';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog, type ErrorDialogOptions } from './errorDialog';
 import {
@@ -173,6 +174,11 @@ if (flowStripHost) {
       confirm: (opts) => flowModals!.showConfirmation(opts),
       resolve: (key, step, wipe, target) =>
         window.flow.resolveAppBootstrapConflict(key, step, wipe, target),
+    });
+    wireEpicPromotion({
+      onPreview: (cb) => window.flow.onEpicPromotionPreview(cb),
+      confirm: (opts) => flowModals!.showConfirmation(opts),
+      resolve: (key, step, confirm) => window.flow.resolveEpicPromotion(key, step, confirm),
     });
   }
   loopPanel = loopPanelHost

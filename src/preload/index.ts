@@ -15,6 +15,7 @@ import {
   type FlowBootstrapErrorMsg,
   type FlowLoopErrorMsg,
   type FlowAppBootstrapConflictMsg,
+  type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
   type GithubRef,
   type MonitorApi,
@@ -170,6 +171,14 @@ const flowApi: FlowApi = {
       wipe,
       ...target,
     }),
+  onEpicPromotionPreview: (cb) => {
+    const handler = (_e: unknown, msg: FlowEpicPromotionPreviewMsg): void =>
+      cb({ repoKey: msg.repoKey, step: msg.step, epic: msg.epic, pr: msg.pr, subTickets: msg.subTickets });
+    ipcRenderer.on(CH.flowOnEpicPromotionPreview, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnEpicPromotionPreview, handler);
+  },
+  resolveEpicPromotion: (repoKey, step, confirm) =>
+    ipcRenderer.send(CH.flowResolveEpicPromotion, { sessionId: SESSION_ID, repoKey, step, confirm }),
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,

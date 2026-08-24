@@ -27,6 +27,7 @@ import {
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
   type FlowResolveAppBootstrapConflictMsg,
+  type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
   type TodoTemplateListMsg,
@@ -263,6 +264,19 @@ export function isValidFlowResolveAppBootstrapConflict(
     m.step.length > 0 &&
     typeof m.wipe === 'boolean' &&
     isAppBootstrapConflictTarget(m)
+  );
+}
+
+/** flow:resolveEpicPromotion — the operator's confirm/decline of the §28.7 confirm-first preview. `repoKey`
+ *  gets the safe-path guard; `step` is the non-empty gate identity the coordinator's held-key matches (§6). */
+export function isValidFlowResolveEpicPromotion(m: unknown): m is FlowResolveEpicPromotionMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.confirm === 'boolean'
   );
 }
 
