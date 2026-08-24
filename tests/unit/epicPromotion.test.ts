@@ -152,3 +152,80 @@ describe('resolve — complete the held promotion (§28.7)', () => {
     expect(deps.emitError).not.toHaveBeenCalledWith('/repo', expect.stringContaining('epic promotion failed'));
   });
 });
+
+// §28.7 slice C — the promotion executor: create each sub-ticket in order (the plan slice VERBATIM + the epic
+// link + the REAL preceding issue number), uniform labels, then append the epic's tracking checklist, then
+// close the epic planning PR. The gh port is injected so the sequence is asserted with no real gh.
+import { runEpicPromotion, type AppEpicPromotionGitHub } from '../../src/main/epicPromotion';
+
+function fakeGh() {
+  const events: string[] = [];
+  let next = 500;
+  const gh: AppEpicPromotionGitHub = {
+    createIssue: async (title, body) => {
+      next += 1;
+      events.push(`create#${next} title=${title} body=${JSON.stringify(body)}`);
+      return next;
+    },
+    addLabel: async (issue, label) => void events.push(`label #${issue} ${label}`),
+    appendIssueBody: async (issue, text) => void events.push(`append #${issue} ${JSON.stringify(text)}`),
+    closePr: async (pr) => void events.push(`closePr #${pr}`),
+  };
+  return { gh, events };
+}
+
+const REQUEST = {
+  epic: 176,
+  pr: 4242,
+  subTickets: [
+    { index: 1, title: 'Slice one', body: 'Acceptance criteria: a\n\nPLAN-ONE build it end to end.' },
+    { index: 2, title: 'Slice two', body: 'Acceptance criteria: b\n\nPLAN-TWO tear it down.' },
+  ],
+};
+
+describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', () => {
+  it('creates each sub-ticket carrying its plan slice verbatim, the epic link, and the REAL preceding number', async () => {
+    const { gh, events } = fakeGh();
+    await runEpicPromotion(gh, REQUEST);
+    const create1 = events.find((e) => e.startsWith('create#501'))!;
+    const create2 = events.find((e) => e.startsWith('create#502'))!;
+    expect(create1).toContain('PLAN-ONE build it end to end.'); // plan slice preserved verbatim
+    expect(create1).toContain('Epic: #176');
+    expect(create1).toContain('Depends on: none'); // the first slice depends on nothing
+    expect(create2).toContain('PLAN-TWO tear it down.');
+    expect(create2).toContain('Depends on: #501'); // the REAL preceding issue number, not the authored ordinal
+  });
+
+  it('labels every sub-ticket uniformly agent-loop/subticket + agent-loop/ready (none assigned)', async () => {
+    const { gh, events } = fakeGh();
+    await runEpicPromotion(gh, REQUEST);
+    for (const issue of [501, 502]) {
+      expect(events).toContain(`label #${issue} agent-loop/subticket`);
+      expect(events).toContain(`label #${issue} agent-loop/ready`);
+    }
+    expect(events.some((e) => e.includes('assign'))).toBe(false); // uniform siblings — none in flight
+  });
+
+  it('appends a tracking checklist naming every created sub-ticket to the epic, then closes the planning PR', async () => {
+    const { gh, events } = fakeGh();
+    await runEpicPromotion(gh, REQUEST);
+    const append = events.find((e) => e.startsWith('append #176'))!;
+    expect(append).toContain('- [ ] #501 — Slice one');
+    expect(append).toContain('- [ ] #502 — Slice two');
+    expect(events).toContain('closePr #4242');
+  });
+
+  it('creates all sub-tickets BEFORE closing the epic PR (the plan is never lost)', async () => {
+    const { gh, events } = fakeGh();
+    await runEpicPromotion(gh, REQUEST);
+    const lastCreate = Math.max(...events.map((e, i) => (e.startsWith('create#') ? i : -1)));
+    const close = events.findIndex((e) => e.startsWith('closePr'));
+    expect(lastCreate).toBeLessThan(close);
+  });
+
+  it('does not close a PR when the epic has no planning PR', async () => {
+    const { gh, events } = fakeGh();
+    await runEpicPromotion(gh, { ...REQUEST, pr: null });
+    expect(events.some((e) => e.startsWith('closePr'))).toBe(false);
+  });
+});

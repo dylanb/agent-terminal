@@ -1776,17 +1776,25 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
+    // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
+    // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.issue-body"; exit 0; fi\n' +
-    // epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
-    // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
-    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
+    // §28.7 — the epic-body edit (the tracking append) captures its stdin per-issue so each written body is
+    // independently assertable ($3 is the issue number).
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.issue-body.$3"; exit 0; fi\n' +
+    // §28.7 — each `gh issue create` returns a fresh issue URL (a per-binDir counter seeded at 500) so the
+    // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
+    // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
+    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; exit 0; fi\n' +
+    // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
+    // sub-ticket's label set is independently assertable.
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; echo "$value" >> "$FAKE_GHGIT_LOG.issue-label.$3"; exit 0; fi\n' +
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale.
@@ -6553,6 +6561,57 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
   expect(readGhLog(logFile)).not.toContain('issue create');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain + tracking issue (AC2)', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicC-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicC-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicC-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await dialog.locator('.pill.danger.confirm').click();
+
+  // AC2 — the chain exists on GitHub: two sub-tickets created, then the epic tracking append, then the PR close.
+  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('502');
+
+  // Each sub-ticket carries its plan slice VERBATIM + the epic link + the REAL preceding number (plan preserved).
+  await expect.poll(() => readIf(`${logFile}.issue-body.501`)).toContain('Plan for slice 1: the thin vertical that delivers criterion 1 end to end.');
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Epic: #176');
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Depends on: none');
+  await expect.poll(() => readIf(`${logFile}.issue-body.502`)).toContain('Plan for slice 2: the thin vertical that delivers criterion 2 end to end.');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Depends on: #501'); // the REAL preceding issue number
+
+  // Uniform labels — every sub-ticket subticket + ready, none assigned.
+  for (const n of [501, 502]) {
+    expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/subticket');
+    expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/ready');
+  }
+  expect(readIf(`${logFile}.issue-assignee`)).not.toContain('501'); // no sub-ticket assigned (uniform siblings)
+
+  // The epic became a tracking issue: its original body preserved as a prefix, the checklist appended.
+  const epicBody = readIf(`${logFile}.issue-body.176`);
+  expect(epicBody).toContain('Original epic intent — do not overwrite.');
+  expect(epicBody).toContain('- [ ] #501 — Slice 1 of the feature');
+  expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
+
+  // The epic planning PR is closed; the epic flow stood down.
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
