@@ -191,19 +191,19 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
     const create2 = events.find((e) => e.startsWith('create#502'))!;
     expect(create1).toContain('PLAN-ONE build it end to end.'); // plan slice preserved verbatim
     expect(create1).toContain('Epic: #176');
-    expect(create1).toContain('Depends on: none'); // the first slice depends on nothing
+    expect(create1).toContain('Preceding sub-ticket: none'); // the first slice stacks on nothing
     expect(create2).toContain('PLAN-TWO tear it down.');
-    expect(create2).toContain('Depends on: #501'); // the REAL preceding issue number, not the authored ordinal
+    // the REAL preceding issue number, in a token DISTINCT from the plan's own authored `Depends on:` ordinal
+    expect(create2).toContain('Preceding sub-ticket: #501');
   });
 
-  it('labels every sub-ticket uniformly agent-loop/subticket + agent-loop/ready (none assigned)', async () => {
+  it('labels every sub-ticket uniformly agent-loop/subticket + agent-loop/ready (the port has no assign verb)', async () => {
     const { gh, events } = fakeGh();
     await runEpicPromotion(gh, REQUEST);
     for (const issue of [501, 502]) {
       expect(events).toContain(`label #${issue} agent-loop/subticket`);
       expect(events).toContain(`label #${issue} agent-loop/ready`);
     }
-    expect(events.some((e) => e.includes('assign'))).toBe(false); // uniform siblings — none in flight
   });
 
   it('appends a tracking checklist naming every created sub-ticket to the epic, then closes the planning PR', async () => {
@@ -215,12 +215,15 @@ describe('runEpicPromotion — create the chain + tracking issue (§28.7 AC2)', 
     expect(events).toContain('closePr #4242');
   });
 
-  it('creates all sub-tickets BEFORE closing the epic PR (the plan is never lost)', async () => {
+  it('orders create → epic-append → close (the plan is never lost)', async () => {
     const { gh, events } = fakeGh();
     await runEpicPromotion(gh, REQUEST);
     const lastCreate = Math.max(...events.map((e, i) => (e.startsWith('create#') ? i : -1)));
+    const append = events.findIndex((e) => e.startsWith('append #176'));
     const close = events.findIndex((e) => e.startsWith('closePr'));
-    expect(lastCreate).toBeLessThan(close);
+    expect(lastCreate).toBeGreaterThan(-1); // a create actually happened (not a vacuous -1 < close)
+    expect(append).toBeGreaterThan(lastCreate);
+    expect(close).toBeGreaterThan(append);
   });
 
   it('does not close a PR when the epic has no planning PR', async () => {

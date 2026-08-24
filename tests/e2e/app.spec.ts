@@ -6586,15 +6586,17 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await dialog.locator('.pill.danger.confirm').click();
 
-  // AC2 — the chain exists on GitHub: two sub-tickets created, then the epic tracking append, then the PR close.
+  // AC2 — the chain exists on GitHub. Wait for the PR close, the STRICTLY-LAST op (creation → labels → epic
+  // append → close, all awaited in order), so every per-issue sink below is guaranteed flushed before it is read.
   await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('502');
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 30_000 }).toBe(true);
 
   // Each sub-ticket carries its plan slice VERBATIM + the epic link + the REAL preceding number (plan preserved).
-  await expect.poll(() => readIf(`${logFile}.issue-body.501`)).toContain('Plan for slice 1: the thin vertical that delivers criterion 1 end to end.');
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Plan for slice 1: the thin vertical that delivers criterion 1 end to end.');
   expect(readIf(`${logFile}.issue-body.501`)).toContain('Epic: #176');
-  expect(readIf(`${logFile}.issue-body.501`)).toContain('Depends on: none');
-  await expect.poll(() => readIf(`${logFile}.issue-body.502`)).toContain('Plan for slice 2: the thin vertical that delivers criterion 2 end to end.');
-  expect(readIf(`${logFile}.issue-body.502`)).toContain('Depends on: #501'); // the REAL preceding issue number
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Preceding sub-ticket: none');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Plan for slice 2: the thin vertical that delivers criterion 2 end to end.');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Preceding sub-ticket: #501'); // the REAL preceding issue number
 
   // Uniform labels — every sub-ticket subticket + ready, none assigned.
   for (const n of [501, 502]) {
@@ -6609,9 +6611,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   expect(epicBody).toContain('- [ ] #501 — Slice 1 of the feature');
   expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
 
-  // The epic planning PR is closed; the epic flow stood down.
-  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 15_000 }).toBe(true);
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

@@ -47,22 +47,28 @@ export interface EpicPromotionRequest {
   subTickets: EpicSubTicket[];
 }
 
-// §27.10 — the labels every promoted sub-ticket carries: the marker pickup keys on, and the ready label that
-// makes the chain pickable without a second per-slice human gate (the recorded operator override).
+// §27.10 (line 194) / §28.7 (line 176) / CLAUDE.md (line 95) — the labels every promoted sub-ticket carries.
 export const EPIC_SUBTICKET_LABEL = 'agent-loop/subticket';
 export const EPIC_READY_LABEL = 'agent-loop/ready';
+
+// §27.10 — the machine footer appended to each posted sub-ticket body, delimited by `---` so a future pickup
+// reader parses only past it. Distinct from EPIC_GRAMMAR's `Depends on:` (which the verbatim plan slice already
+// carries with an authored ordinal), so the two never collide on divergent values. Single-sourced here for that
+// reader to import.
+export const EPIC_LINK_TOKEN = 'Epic:';
+export const PRECEDING_SUBTICKET_TOKEN = 'Preceding sub-ticket:';
 
 /** The GitHub port the promotion executor drives — domain verbs, argv/stdin under the hood (the real adapter is
  *  appEpicPromotionGithub.ts), so the executor runs under a fake with no `gh`. */
 export interface AppEpicPromotionGitHub {
-  /** Create a sub-ticket, returning its issue number (`gh issue create`, body on stdin). */
+  /** Create a sub-ticket, returning its issue number. */
   createIssue(title: string, body: string): Promise<number>;
-  /** Add a label to an issue (`gh issue edit --add-label`). */
+  /** Add a label to an issue. */
   addLabel(issue: number, label: string): Promise<void>;
-  /** Read the issue body and append `textToAppend` (read-modify-write; refuses to write over an empty read so a
-   *  failed/empty read can never clobber the human's intent contract — §27.10). */
+  /** Append `textToAppend` to an issue's body, preserving the existing body; §27.10 — refuses an empty read so
+   *  a failed/empty read can never clobber the human's intent contract. */
   appendIssueBody(issue: number, textToAppend: string): Promise<void>;
-  /** Close a PR (`gh pr close`). */
+  /** Close a PR. */
   closePr(pr: number): Promise<void>;
 }
 
@@ -74,8 +80,8 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
   const created: { issue: number; title: string }[] = [];
   let preceding: number | null = null;
   for (const st of request.subTickets) {
-    const dependsOn = preceding === null ? 'none' : `#${preceding}`;
-    const body = `${st.body}\n\n---\nEpic: #${request.epic}\nDepends on: ${dependsOn}\n`;
+    const precedingRef = preceding === null ? 'none' : `#${preceding}`;
+    const body = `${st.body}\n\n---\n${EPIC_LINK_TOKEN} #${request.epic}\n${PRECEDING_SUBTICKET_TOKEN} ${precedingRef}\n`;
     const issue = await gh.createIssue(st.title, body);
     await gh.addLabel(issue, EPIC_SUBTICKET_LABEL);
     await gh.addLabel(issue, EPIC_READY_LABEL);

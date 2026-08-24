@@ -32,8 +32,7 @@ export function createRealAppEpicPromotionGitHub(
       void (await gh(['issue', 'edit', String(issue), '--add-label', label], 'sub-ticket label update failed')),
     appendIssueBody: async (issue, textToAppend) => {
       const current = await gh(['issue', 'view', String(issue), '--json', 'body', '-q', '.body'], 'epic body read failed');
-      // §27.10 — never write a checklist over a lost/empty body (the human's intent contract). A failed read
-      // threw above; an empty read aborts here, leaving the append resumable.
+      // §27.10 — an empty read must never clobber the human's intent contract with a bare checklist.
       if (current.trim().length === 0) throw new Error('refused to append to an empty epic issue body');
       await gh(['issue', 'edit', String(issue), '--body-file', '-'], 'epic tracking update failed', `${current.replace(/\n+$/, '')}${textToAppend}`);
     },
