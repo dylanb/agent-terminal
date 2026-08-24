@@ -34,7 +34,56 @@ interface LoopRow {
   personas: PersonaRow[];
 }
 
-export const CHAIN: readonly LoopRow[] = [];
+const IMPL_12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'] as const;
+const PLAN_6 = ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'] as const;
+
+const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-loop', charter: `plan-loop/charter/${lane}.md` } });
+const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'impl-loop', charter: `impl-loop/charter/${lane}.md` } });
+/** A charter S6 authored in plan-bundle-loop's dir, copied into a later loop's dir (its canonical home). */
+const fromPlanBundle = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-bundle-loop', charter: `plan-bundle-loop/charter/${lane}.md` } });
+/** A charter S6 authored in this loop's own dir — no copy, no drift source. */
+const authored = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md` });
+
+export const CHAIN: readonly LoopRow[] = [
+  {
+    name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh'], pickup: true,
+    consolidateSource: 'plan-loop', output: null,
+    personas: [
+      ...PLAN_6.map(plan),
+      authored('review-plan-test-architect', 'test-architect'),
+      authored('review-plan-determinism', 'determinism'),
+      authored('review-plan-tracer-slicer', 'tracer-slicer'),
+    ],
+  },
+  {
+    name: 'infra-loop', kind: 'impl', completion: null, gate: ['commit'], pickup: false,
+    consolidateSource: 'impl-loop', output: null,
+    personas: [
+      ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
+      fromPlanBundle('review-plan-determinism', 'determinism'),
+    ],
+  },
+  {
+    name: 'red-loop', kind: 'phase', completion: 'red', gate: ['commit'], pickup: false,
+    consolidateSource: 'impl-loop', output: { id: 'red-result', path: 'red-result.md' },
+    personas: [...['tests', 'intent'].map(impl), authored('impl-review-red-authenticity', 'red-authenticity')],
+  },
+  {
+    name: 'green-loop', kind: 'phase', completion: 'green', gate: ['commit'], pickup: false,
+    consolidateSource: 'impl-loop', output: { id: 'green-result', path: 'green-result.md' },
+    personas: [...IMPL_12.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
+  },
+  {
+    name: 'refactor-loop', kind: 'phase', completion: 'refactor', gate: ['commit'], pickup: false,
+    consolidateSource: 'impl-loop', output: null,
+    personas: [...IMPL_12.map(impl)],
+  },
+  {
+    name: 'integration-slice-loop', kind: 'impl', completion: null, gate: ['commit', 'gh'], pickup: false,
+    consolidateSource: 'impl-loop', output: null,
+    personas: [...IMPL_12.map(impl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
+  },
+];
 
 function charterExists(rel: string): boolean {
   return existsSync(join(SOURCE_TREE, rel));
