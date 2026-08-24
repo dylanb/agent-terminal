@@ -65,4 +65,19 @@ describe('wireEpicPromotion (§28.7)', () => {
     expect(named).toContain('Add tracking checklist to epic #176');
     expect(named).not.toContain('planning PR');
   });
+
+  it('phrases the title + message plural for a multi-sub-ticket epic', () => {
+    const h = harness();
+    h.deliver(PREVIEW);
+    expect(h.opts().title).toBe('Create 2 sub-tickets?');
+    expect(h.opts().message).toContain('2 sub-tickets');
+    expect(h.opts().confirmLabel).toBe('Create sub-tickets');
+  });
+
+  it('phrases the title singular for a one-sub-ticket epic', () => {
+    const h = harness();
+    h.deliver({ ...PREVIEW, subTickets: [{ index: 1, title: 'Only slice' }] });
+    expect(h.opts().title).toBe('Create 1 sub-ticket?');
+    expect(h.opts().message).not.toContain('1 sub-tickets');
+  });
 });

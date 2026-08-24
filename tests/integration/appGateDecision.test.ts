@@ -558,6 +558,7 @@ describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
     expect(rec.advances).toHaveLength(0);
     expect(rec.sideEffects).toHaveLength(0); // mark-ready must not fire on an epic (it terminates, not readies)
     expect(rec.views).toBeGreaterThan(0); // the panel re-renders to show the held preview
+    expect(rec.audits.some((a) => a.cmd.includes('epic-promotion preview') && a.exit === 0)).toBe(true);
   });
 
   it('does not intercept a non-epic approve: the normal accept + advance runs', async () => {

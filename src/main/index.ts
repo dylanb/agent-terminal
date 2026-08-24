@@ -803,10 +803,8 @@ async function createWindow(): Promise<void> {
       send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
     // §28.7 S8 slice C fills this in; until then confirm accepts + stands down without creating the chain.
     runPromotion: async () => {},
-    accept: (repoDir, loop, step, turnKey) => {
-      writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' });
-      terminateFlowLifecycle(repoDir);
-    },
+    persistAccept: (repoDir, loop, step, turnKey) => writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' }),
+    terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),
