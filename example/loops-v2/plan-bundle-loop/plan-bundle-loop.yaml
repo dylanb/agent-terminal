@@ -46,6 +46,8 @@ gate:
     side_effects:
       - kind: gh
         action: mark-ready
+      - kind: promote
+        artifact: plan
   - option: request-changes
   - option: redo
   - option: polish
