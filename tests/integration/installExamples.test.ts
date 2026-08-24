@@ -21,6 +21,7 @@ import {
   type InstallDestination,
   type InstallExamplesInspection,
 } from '../../src/main/installExamples';
+import { load as parseYaml } from 'js-yaml';
 import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
 import {
   isTodoTemplateFile,
@@ -863,7 +864,8 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       expect(load.ok).toBe(true);
       if (!load.ok) return;
       expect(load.definition.name).toBe('feature-dev');
-      expect(load.definition.steps.map((s) => s.id)).toEqual(['preparation', 'groom', 'plan', 'implement', 'finalize']);
+      const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
+      expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
     } finally {
       rmSync(localWithoutFlow, { recursive: true, force: true });
     }

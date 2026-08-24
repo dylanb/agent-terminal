@@ -89,12 +89,13 @@ describe('after the install, every loop name the shipped flow binds resolves on 
 });
 
 describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)', () => {
-  it('installs exactly groom-loop → plan-loop → impl-loop on the app namespace', () => {
+  it('installs the full-TDD chain groom → plan-bundle → infra → red → green → refactor → integration-slice on the app namespace', () => {
     applyInstallExamples(dirs, []);
 
     const loaded = loadFlowDefinitionLocalFirst(repo, home);
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
+    const implStep = (id: string, loop: string) => ({ id, kind: 'loop', loop, loopNamespace: 'app', todoTemplate: 'impl-loop-review' });
     expect(loaded.definition.steps).toEqual([
       { id: 'preparation', kind: 'manual' },
       {
@@ -108,19 +109,17 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         ],
       },
       {
-        id: 'plan',
+        id: 'plan-bundle',
         kind: 'loop',
-        loop: 'plan-loop',
+        loop: 'plan-bundle-loop',
         loopNamespace: 'app',
         todoTemplate: 'plan-loop-review',
       },
-      {
-        id: 'implement',
-        kind: 'loop',
-        loop: 'impl-loop',
-        loopNamespace: 'app',
-        todoTemplate: 'impl-loop-review',
-      },
+      implStep('infra', 'infra-loop'),
+      implStep('red', 'red-loop'),
+      implStep('green', 'green-loop'),
+      implStep('refactor', 'refactor-loop'),
+      implStep('integration-slice', 'integration-slice-loop'),
       { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
     ]);
   });
