@@ -491,6 +491,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         const section = doc.createElement('div');
         section.className = 'epic-preview';
         section.dataset.epicPreview = '';
+        section.setAttribute('role', 'status'); // WCAG 4.1.3 — announce the split's appearance, like the sibling gate notices
         const segH = doc.createElement('div');
         segH.className = 'seg-h';
         const count = loop.epic.subTickets.length;

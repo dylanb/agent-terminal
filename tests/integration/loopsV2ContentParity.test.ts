@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { epicPlanWellFormed, isEpicPlan, parseEpicPlan } from '../../src/shared/epicPlan';
+import { epicPlanWellFormed, exampleEpicPlan, isEpicPlan, parseEpicPlan } from '../../src/shared/epicPlan';
 import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, type PhaseOutcome } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
@@ -241,6 +241,8 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect(isEpicPlan(example)).toBe(true);
     expect(epicPlanWellFormed(example)).toBe(true);
     expect(parseEpicPlan(example)?.subTickets).toHaveLength(2);
+    // pin the embedded few-shot to the single source, so a well-formed reword cannot silently drift (§93)
+    expect(example.trim()).toBe(exampleEpicPlan(2).trim());
   });
 
   it('the approve gate declares the promote side-effect naming the plan artifact', () => {

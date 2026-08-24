@@ -932,10 +932,26 @@ describe('docked loop panel — the epic preview (§28.7)', () => {
     createLoopPanel(host).render(loop({ epic: EPIC }), 'plan');
     const section = host.querySelector('[data-epic-preview]');
     expect(section).not.toBeNull();
+    expect(section?.getAttribute('role')).toBe('status'); // announced on appearance (WCAG 4.1.3)
+    expect(section?.textContent).toContain('Epic — 2 sub-tickets'); // plural header
     const items = [...host.querySelectorAll<HTMLElement>('[data-epic-subticket]')].map((el) => el.textContent ?? '');
     expect(items).toHaveLength(2);
     expect(items.some((t) => t.includes('Wire the widget'))).toBe(true);
     expect(items.some((t) => t.includes('Remove the widget'))).toBe(true);
+  });
+
+  it('phrases the header singular for a one-sub-ticket epic', () => {
+    createLoopPanel(host).render(loop({ epic: { subTickets: [{ index: 1, title: 'Only slice' }] } }), 'plan');
+    expect(host.querySelector('[data-epic-preview]')?.textContent).toContain('Epic — 1 sub-ticket');
+    expect(host.querySelector('[data-epic-preview]')?.textContent).not.toContain('1 sub-tickets');
+  });
+
+  it('strips display-unsafe bytes from a repo-sourced sub-ticket title (CWE-117)', () => {
+    createLoopPanel(host).render(loop({ epic: { subTickets: [{ index: 1, title: 'Wire\u0007the\u0007widget' }] } }), 'plan');
+    const item = host.querySelector('[data-epic-subticket]');
+    expect(item?.textContent).not.toContain('\u0007');
+    expect(item?.textContent).toContain('Wire');
+    expect(item?.textContent).toContain('widget');
   });
 
   it('omits the epic preview when the view carries no epic split', () => {
