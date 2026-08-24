@@ -51,7 +51,7 @@ gate:
   - option: polish
 pickup:
   initial_status: planning
-  branch_template: plan-bundle-loop/issue-{issue}
+  branch_template: plan-loop/issue-{issue}
   initial_labels:
     - action: remove
       target: issue
