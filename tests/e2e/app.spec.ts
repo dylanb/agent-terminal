@@ -6511,3 +6511,41 @@ test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
 });
+
+test('§28.7 S8 — approving an epic plan raises a confirm-first preview; declining creates nothing', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicB-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicB-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicB-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+
+  // Approve the epic plan → the confirm-first preview is raised (nothing has reached GitHub yet).
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog).toContainText('Create sub-ticket: Slice 1 of the feature');
+  await expect(dialog).toContainText('Create sub-ticket: Slice 2 of the feature');
+  await expect(dialog).toContainText('Add tracking checklist to epic #176');
+  await expect(dialog).toContainText('Close epic planning PR #4242'); // the bootstrap-created planning PR (the gate ref)
+  // AC1 — before anything reaches GitHub: no sub-ticket has been created at preview time.
+  expect(readGhLog(logFile)).not.toContain('issue create');
+
+  // Decline → the promotion is dropped, nothing is created, and the gate is still actionable.
+  await dialog.locator('.pill.cancel').click();
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+  expect(readGhLog(logFile)).not.toContain('issue create');
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
+  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // not advanced/terminated on decline
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
