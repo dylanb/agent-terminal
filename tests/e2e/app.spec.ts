@@ -1725,6 +1725,10 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     // their scripted answer; a blanket rev-parse delegation breaks the drive (the loop never starts).
     (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files|ls-tree|cat-file) exec ${realGit} "$@";; esac\n` : '') +
     (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
+    // §28.5.1 — the frozen baseline's branch key: `rev-parse --abbrev-ref HEAD` (commit adapter's capture +
+    // the engine's currentGitBranch) delegates to real git so both read the REAL branch; delegated by its EXACT
+    // form only, so every canned bootstrap/flow-detection rev-parse arm below keeps its scripted answer.
+    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ] && [ "$3" = "HEAD" ] && [ "$#" -eq 3 ]; then exec ${realGit} "$@"; fi\n` : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
@@ -6289,4 +6293,134 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
   rmSync(cfg, { recursive: true, force: true });
+});
+
+// ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
+const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
+const CHAIN_ROSTERS: Record<string, string[]> = {
+  'plan-bundle': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
+  infra: [...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
+  red: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'],
+  green: [...CHAIN_IMPL12, 'impl-review-regression-guard'],
+  refactor: CHAIN_IMPL12,
+  'integration-slice': [...CHAIN_IMPL12, 'review-plan-tracer-slicer'],
+};
+
+// A multi-step fake-agent: one `while read` loop whose case matches every loop step's work/review/consolidate
+// turn-done token, so ONE agent process drives the whole chain. Each loop's review round writes a report
+// accounting for THAT loop's roster (§27.5); the phase loops classify their §28.5 result files; the refactor
+// review round writes its round-keyed result + a behavior-preserving change so its gate has something to commit.
+function seedFullTddChainAgent(binDir: string): void {
+  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
+  const art = '.agent-terminal/loop/artifacts';
+  const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
+  const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+
+  const workArm: Record<string, string> = {
+    'plan-bundle': `mkdir -p ${art}; printf '%s\\n' '# plan' '${completionMarker('plan-bundle')}' > ${art}/plan.md; ${done('work-plan-bundle')}`,
+    infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
+    red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), `${art}/red-result.md`)}; ${done('work-red')}`,
+    green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), `${art}/green-result.md`)}; ${done('work-green')}`,
+    refactor: done('work-refactor'),
+    'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
+  };
+  const reviewArm = (step: string): string => {
+    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}`;
+    return step === 'refactor'
+      ? `${base}; mkdir -p .agent-terminal/loop/refactor-results; ${decode(b64(examplePhaseResult('passed')), '.agent-terminal/loop/refactor-results/$r.md')}; printf '%s\\n' 'export const rf = 4;' > refactor.ts; ${done('review-refactor')}`
+      : `${base}; ${done(`review-${step}`)}`;
+  };
+  const consolidateArm = (step: string): string =>
+    `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
+
+  const steps = ['plan-bundle', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
+  const cases = steps
+    .flatMap((s) => [
+      `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,
+      `    *turn-done:review-${s}*) ${reviewArm(s)} ;;`,
+      `    *turn-done:work-${s}*) ${workArm[s]} ;;`,
+    ])
+    .join('\n');
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
+    'while IFS= read -r line; do\n' +
+    '  [ -z "$line" ] && continue\n' +
+    '  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${cases}\n` +
+    '  esac\n' +
+    'done\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
+// A real-git repo carrying the SHIPPED full-TDD flow.yaml, entered at the plan-bundle step (a groomed ticket,
+// §28.2 AC1); bootstrap pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
+function seedFullTddChainRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
+  g('init', '-q');
+  g('config', 'user.email', 't@t');
+  g('config', 'user.name', 'T');
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
+  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n');
+  cpSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), join(dir, '.agent-terminal', 'flow.yaml'));
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: plan-bundle\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n');
+  seedCompletedAppBootstrap(dir);
+  g('add', '-A');
+  g('commit', '-qm', 'baseline');
+  return dir;
+}
+
+test('§28.10 S7 — the shipped full-TDD flow runs end-to-end from a groomed ticket: plan-bundle → infra → red → green → refactor → integration-slice, the five phase commits landing on one branch and the PR body published', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-fulltdd-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter plan-bundle
+
+  const approveStep = async (step: string): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    // Open the loop panel if it isn't already (loopReadout TOGGLES it — re-clicking an open panel closes it).
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  await approveStep('plan-bundle'); // planning bundle: gh mark-ready + carry plan.md into infra
+  await approveStep('infra'); // infra commits
+  await approveStep('red'); // RED commit + §28.5.1 baseline recorded on the branch
+  await approveStep('green'); // GREEN commit — the branch-keyed baseline is FOUND across the step (slice D)
+  await approveStep('refactor'); // refactor commit
+  await approveStep('integration-slice'); // integration commit + PR body published
+
+  // AC1 — the four commit groups (infra / the three slice phases / integration) all landed, in order, on ONE branch.
+  expect(gitCount(repo)).toBe(before + 5);
+  expect(gitIn(repo, 'log', '--format=%s', '-6').split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'infra', 'baseline']);
+  // The planning gate marked the PR ready and the integration gate published its body; the flow reached finalize.
+  await expect.poll(() => readGhLog(logFile)).toContain('pr ready');
+  await expect.poll(() => readGhLog(logFile)).toContain('pr edit');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
