@@ -88,6 +88,24 @@ describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as au
     expect(parsed?.subTickets[0].body).not.toContain('PLAN-SLICE-TWO');
     expect(parsed?.subTickets[1].body).toContain('PLAN-SLICE-TWO: tear the widget down.');
   });
+
+  it('preserves authored order and does not deduplicate indices (§27.10 "copied as authored")', () => {
+    // A malformed authoring — out of order and a repeated index — is copied as-is, not silently reordered or
+    // collapsed; the plan gate + the human judge the split, the parser does not correct it.
+    const plan = [
+      'Classification: epic',
+      '## Sub-tickets',
+      '### Sub-ticket 3 — Third',
+      'Acceptance criteria: c',
+      '### Sub-ticket 1 — First',
+      'Acceptance criteria: a',
+      '### Sub-ticket 1 — Duplicate one',
+      'Acceptance criteria: a2',
+      '',
+    ].join('\n');
+    expect(parseEpicPlan(plan)?.subTickets.map((t) => t.index)).toEqual([3, 1, 1]);
+    expect(parseEpicPlan(plan)?.subTickets.map((t) => t.title)).toEqual(['Third', 'First', 'Duplicate one']);
+  });
 });
 
 describe('epicPlanWellFormed — the minimal contract, never a rigid layout (§28.5.5)', () => {

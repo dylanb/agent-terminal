@@ -7,7 +7,7 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isEpicPlan, parseEpicPlan } from '../shared/epicPlan';
@@ -25,11 +25,9 @@ export const APP_LOOP_STATUS_ERROR = 'error';
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
-// §28.7 — the epic split the panel previews at the gate: for an epic-capable loop (its approve gate declares a
-// `promote` side-effect), read that side-effect's `plan` artifact and, when the work agent classified it an
-// epic, return the ordered sub-ticket {index,title}s. The same epicPlan grammar the promotion executor reads,
-// so the previewed split and the created chain cannot drift. Returns undefined for a non-epic plan, a loop with
-// no promote gate, or an unreadable artifact (the gate still renders — the classification is additive).
+// §28.7 — the epic split surfaced at the gate, read from the approve gate's `promote` artifact through the same
+// epicPlan grammar the promotion executor reads, so the previewed split and the created chain cannot drift.
+const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
 function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
   const approve = def.gate.find((g) => g.option === 'approve');
   const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
@@ -39,6 +37,9 @@ function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
   if (binding === undefined) return undefined;
   let text: string;
   try {
+    // The plan is free-form agent prose read synchronously on the main process each gate pull; cap it so a
+    // runaway artifact cannot block the UI (CWE-400). A missing/unreadable artifact falls through the same way.
+    if (statSync(binding.path).size > EPIC_PLAN_MAX_BYTES) return undefined;
     text = readFileSync(binding.path, 'utf8');
   } catch {
     return undefined;
@@ -100,8 +101,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // pull, like the polish flag.
     const changedRec = readChangedTests(ctx.repoDir);
     const changedTests = changedRec && changedRec.step === run.step && changedRec.paths.length > 0 ? changedRec.paths : null;
-    // §28.7 — surface the epic split ONLY at the gate (a reached verdict), where the operator judges it before
-    // approving; r.ok is implied by atGate (gateOptions come from the resolved def).
+    // §28.7 — the epic split rides only the terminal gate; r.ok narrows the def union.
     const epic = atGate && r.ok ? epicPreviewAtGate(r.def) : undefined;
     return {
       status: run.status,

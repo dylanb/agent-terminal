@@ -445,7 +445,26 @@ outputs:
     seedGate('plan-bundle-loop');
     const view = deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir });
     expect(view.epic?.subTickets.map((t) => t.index)).toEqual([1, 2, 3]);
-    expect(view.epic?.subTickets.every((t) => t.title.length > 0)).toBe(true);
+    // a concrete title, so a regression mapping the wrong field (e.g. body) into `title` is caught
+    expect(view.epic?.subTickets[0].title).toBe('Slice 1 of the feature');
+  });
+
+  it('still renders the gate (no epic) when the plan artifact is absent — a momentary miss must not throw', () => {
+    plantEpic('plan-bundle-loop', true);
+    seedGate('plan-bundle-loop'); // no writePlanArtifact — the artifact does not exist
+    const ctx = { tiers: tiers(), repoDir };
+    expect(() => deriveAppLoopView('plan-bundle-loop', ctx)).not.toThrow();
+    expect(deriveAppLoopView('plan-bundle-loop', ctx).epic).toBeUndefined();
+  });
+
+  it('caps the plan read (CWE-400): an oversized plan artifact yields no epic and does not block/throw', () => {
+    plantEpic('plan-bundle-loop', true);
+    // a well-formed epic plan padded past the 2 MiB read cap
+    writePlanArtifact(`${exampleEpicPlan(2)}\n${'x'.repeat(3 * 1024 * 1024)}\n`);
+    seedGate('plan-bundle-loop');
+    const ctx = { tiers: tiers(), repoDir };
+    expect(() => deriveAppLoopView('plan-bundle-loop', ctx)).not.toThrow();
+    expect(deriveAppLoopView('plan-bundle-loop', ctx).epic).toBeUndefined();
   });
 
   it('carries no epic split when the gate plan is a plain single-ticket plan', () => {
