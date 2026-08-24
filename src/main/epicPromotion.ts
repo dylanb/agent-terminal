@@ -40,11 +40,51 @@ export interface EpicPromotionRefs {
   pr: number | null;
 }
 
-/** What the promotion executor (S8 slice C) receives once the operator confirms. */
+/** What the promotion executor receives once the operator confirms. */
 export interface EpicPromotionRequest {
   epic: number;
   pr: number | null;
   subTickets: EpicSubTicket[];
+}
+
+// §27.10 — the labels every promoted sub-ticket carries: the marker pickup keys on, and the ready label that
+// makes the chain pickable without a second per-slice human gate (the recorded operator override).
+export const EPIC_SUBTICKET_LABEL = 'agent-loop/subticket';
+export const EPIC_READY_LABEL = 'agent-loop/ready';
+
+/** The GitHub port the promotion executor drives — domain verbs, argv/stdin under the hood (the real adapter is
+ *  appEpicPromotionGithub.ts), so the executor runs under a fake with no `gh`. */
+export interface AppEpicPromotionGitHub {
+  /** Create a sub-ticket, returning its issue number (`gh issue create`, body on stdin). */
+  createIssue(title: string, body: string): Promise<number>;
+  /** Add a label to an issue (`gh issue edit --add-label`). */
+  addLabel(issue: number, label: string): Promise<void>;
+  /** Read the issue body and append `textToAppend` (read-modify-write; refuses to write over an empty read so a
+   *  failed/empty read can never clobber the human's intent contract — §27.10). */
+  appendIssueBody(issue: number, textToAppend: string): Promise<void>;
+  /** Close a PR (`gh pr close`). */
+  closePr(pr: number): Promise<void>;
+}
+
+/** Create the sub-ticket chain + tracking issue (§28.7 AC2). Ordered so the approved plan is never lost: every
+ *  sub-ticket (each carrying its plan slice verbatim) is created BEFORE the epic PR is closed. Each sub-ticket
+ *  carries the epic link and the REAL preceding issue number (resolved as creation proceeds), labelled
+ *  uniformly (subticket + ready) — slice 1 is a sibling like the rest (operator decision), none assigned. */
+export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: EpicPromotionRequest): Promise<void> {
+  const created: { issue: number; title: string }[] = [];
+  let preceding: number | null = null;
+  for (const st of request.subTickets) {
+    const dependsOn = preceding === null ? 'none' : `#${preceding}`;
+    const body = `${st.body}\n\n---\nEpic: #${request.epic}\nDepends on: ${dependsOn}\n`;
+    const issue = await gh.createIssue(st.title, body);
+    await gh.addLabel(issue, EPIC_SUBTICKET_LABEL);
+    await gh.addLabel(issue, EPIC_READY_LABEL);
+    created.push({ issue, title: st.title });
+    preceding = issue;
+  }
+  const checklist = `\n\n## Sub-tickets\n${created.map((c) => `- [ ] #${c.issue} — ${c.title}`).join('\n')}\n`;
+  await gh.appendIssueBody(request.epic, checklist);
+  if (request.pr !== null) await gh.closePr(request.pr);
 }
 
 export interface EpicPromotionCoordinatorDeps {

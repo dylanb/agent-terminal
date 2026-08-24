@@ -111,7 +111,8 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
-import { createEpicPromotionCoordinator, readEpicSubTicketsAtGate } from './epicPromotion';
+import { createEpicPromotionCoordinator, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
+import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
@@ -801,8 +802,8 @@ async function createWindow(): Promise<void> {
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
     emitPreview: ({ repoDir, step, epic, pr, subTickets }) =>
       send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
-    // §28.7 S8 slice C fills this in; until then confirm accepts + stands down without creating the chain.
-    runPromotion: async () => {},
+    // §28.7 AC2 — create the sub-ticket chain + tracking issue on GitHub through the real gh adapter.
+    runPromotion: (repoDir, request) => runEpicPromotion(createRealAppEpicPromotionGitHub(repoDir), request),
     persistAccept: (repoDir, loop, step, turnKey) => writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' }),
     terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
