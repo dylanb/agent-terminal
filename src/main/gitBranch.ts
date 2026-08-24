@@ -1,6 +1,6 @@
 // §28.5.1 — the frozen-tests baseline's slice key: the git branch the phase loops (RED/GREEN/refactor) share.
 // A detached HEAD reports the literal `HEAD`; it maps to null so it can never match a recorded branch (a
-// detached state cannot prove "same slice"). Hardened like the commit side-effect's reads (no repo hook runs).
+// detached state cannot prove "same slice").
 
 import { execFileSync } from 'node:child_process';
 import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';

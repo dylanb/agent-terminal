@@ -150,6 +150,7 @@ const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot
 function makeEngine(
   persistOverride?: (repoDir: string, state: AppLoopRunState) => void,
   predicatesOverride?: LoopCompletionPredicates,
+  currentBranchOverride: string | null = TEST_BRANCH,
 ): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
@@ -210,7 +211,7 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
-    currentBranch: () => TEST_BRANCH,
+    currentBranch: () => currentBranchOverride,
   };
   return createAppLoopEngine(deps);
 }
@@ -2417,19 +2418,19 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(reviewChained()).toBe(false);
   });
 
-  // §28.5.1 — the RED step and the GREEN step are DISTINCT flow steps sharing one branch; the branch-keyed
-  // baseline the RED step recorded is found by the GREEN step (a step-keyed baseline could not cross this).
-  it('IT-GREEN-baseline-c: a baseline on the current branch is found by GREEN even though a different phase step recorded it', async () => {
-    const engine = makeEngine(undefined, greenFake());
-    seedBaseline(TEST_BRANCH, OID); // the RED step's commit, keyed by the shared branch
+  // §28.5.1 — a detached HEAD (currentBranch → null) cannot prove "same slice", so GREEN blocks even with a
+  // baseline recorded (fail toward firing) — the null-branch guard the branch-key relies on.
+  it('IT-GREEN-baseline-c: a null current branch (detached HEAD) blocks GREEN even with a baseline recorded', async () => {
+    const engine = makeEngine(undefined, greenFake(), null);
+    seedBaseline(TEST_BRANCH, OID);
     enterGreen(engine);
     writeGreen();
     engine.onDoneSignal();
     await flushGate();
-    engine.onInjectable();
-    engine.onInjectable();
-    expect(emitError).not.toHaveBeenCalled();
-    expect(reviewChained()).toBe(true); // the cross-step baseline completed the GREEN turn
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline'));
+    expect(reviewChained()).toBe(false);
   });
 
   it('IT-GREEN-capfail: an absent loop-capabilities surfaces a DISTINCT reason naming the BASELINE COMMIT, not the RED gate\'s working-tree wording', async () => {

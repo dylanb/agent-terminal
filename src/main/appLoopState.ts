@@ -524,9 +524,8 @@ const CHANGED_TESTS_FILE = 'changed-tests.yaml';
 export const MAX_CHANGED_TEST_PATHS = 1000;
 export const MAX_CHANGED_TEST_PATH_LEN = 4096;
 
-/** The recorded changed-test flag: the decision `step` it was recorded under (the §12 baseline key) and the
- *  test-glob paths that changed. `paths` is `[]` on a clean GREEN (checked, none changed — distinct from an
- *  absent file, which reads null). */
+/** The recorded changed-test flag: the flow `step` it was recorded under and the test-glob paths that changed.
+ *  `paths` is `[]` on a clean GREEN (checked, none changed — distinct from an absent file, which reads null). */
 export interface ChangedTestsRecord {
   step: string;
   paths: string[];
@@ -562,9 +561,9 @@ export function recordChangedTests(repoDir: string, step: string, paths: readonl
 
 /** The recorded changed-tests flag, or null when unset. Whole-doc invalidity (not a record, wrong schema,
  *  blank step, or `paths` not an array) reads null; a valid doc's `paths` are per-entry sanitized (a planted
- *  garbage entry is dropped, never surfaced). The returned `step` is the baseline key — see readBaselineCommit's
- *  §12 note: the GREEN/regression-guard reader MUST reduce a phase-qualified step to one PHASE-STABLE slice
- *  identity before comparing it to the active turn's step (deferred to S7's phase-loops; S4 steps are stable). */
+ *  garbage entry is dropped, never surfaced). Unlike the branch-keyed baseline, this flag is written AND read
+ *  within ONE step (a GREEN/refactor turn records it; the view surfaces it for that same step), so it never
+ *  crosses a phase boundary and stays step-keyed. */
 export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
   const file = loopAreaFile(repoDir, CHANGED_TESTS_FILE);
   if (file === null) return null;

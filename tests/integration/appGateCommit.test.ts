@@ -281,7 +281,6 @@ describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
       calls,
       ops: {
         headCommit: async () => headBefore,
-        currentBranch: async () => 'main',
         commitWorkingTree: async (label, dirtyAtPhaseStart) => {
           calls.push({ label, dirtyAtPhaseStart });
           return step;
@@ -291,14 +290,14 @@ describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
   };
 
   it('T7: passes the label AND the phase-start snapshot to the seam and returns { committed, sha, branch } when the parent matches the pre-commit head', async () => {
-    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a') }, OID('a'));
+    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a'), branch: 'main' }, OID('a'));
     const result = await createAppGateCommit(ops)({ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] });
     expect(calls).toEqual([{ label: 'GREEN: slice-y', dirtyAtPhaseStart: ['wip.ts'] }]);
     expect(result).toEqual({ outcome: 'committed', sha: OID('c'), branch: 'main' });
   });
 
   it('T8: throws on an empty/whitespace label before touching the seam', async () => {
-    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a') });
+    const { ops, calls } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('a'), branch: 'main' });
     await expect(createAppGateCommit(ops)({ label: '   ', dirtyAtPhaseStart: [] })).rejects.toThrow();
     expect(calls).toEqual([]);
   });
@@ -314,13 +313,13 @@ describe('createAppGateCommit — ports-injected (§28.3/§28.5.1 L2)', () => {
   // raced into the window, the new commit's parent would NOT be the head we captured before committing → refuse
   // to record a poisoned baseline (fail toward firing — no result returned).
   it('T-TOCTOU: refuses when the new commit parent is not the pre-commit head (a raced commit)', async () => {
-    const { ops } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('b') }, OID('a'));
+    const { ops } = fakeOps({ outcome: 'committed', sha: OID('c'), parentSha: OID('b'), branch: 'main' }, OID('a'));
     await expect(createAppGateCommit(ops)({ label: 'RED: raced', dirtyAtPhaseStart: [] })).rejects.toThrow();
   });
 
   // IT-COMMIT-1c — a garbage SHA from git must never become a persisted baseline (CWE-20).
   it('T-garbage-sha: throws when the seam yields a non-object-id SHA', async () => {
-    const { ops } = fakeOps({ outcome: 'committed', sha: 'not-a-real-object-id', parentSha: OID('a') }, OID('a'));
+    const { ops } = fakeOps({ outcome: 'committed', sha: 'not-a-real-object-id', parentSha: OID('a'), branch: 'main' }, OID('a'));
     await expect(createAppGateCommit(ops)({ label: 'RED: garbage', dirtyAtPhaseStart: [] })).rejects.toThrow();
   });
 });

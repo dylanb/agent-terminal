@@ -208,8 +208,8 @@ export async function runAppGateDecision(
         if (result.outcome === 'committed') {
           // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
-          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under THIS decision's
-          // step, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
+          // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
+          // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
           // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
           // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
           // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded); the

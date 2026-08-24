@@ -725,8 +725,6 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
   // §28.4 phase-as-a-loop rewrites run-state.yaml wholesale between RED/GREEN/refactor, so the phase-commit
   // baseline (set on RED approve, read by the next phase's frozen check) lives in its OWN file — a wholesale
   // run-state write can neither clobber nor resurrect it (the polish/armed-interrupt own-file pattern).
-  // §28.5.1 — keyed by the git BRANCH the phase loops share (they omit pickup), so the RED step's baseline is
-  // found by the GREEN step (a step-keyed baseline could not cross the RED→GREEN flow-step boundary).
   const baselineFile = (): string => join(loopDir(), 'baseline-commit.yaml');
   const OID = 'a'.repeat(40);
 

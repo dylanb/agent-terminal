@@ -584,9 +584,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
       }
       case 'green': {
-        // §28.5.3 — the SYNCHRONOUS GREEN clause. The ASYNC clauses (baseline present+branch-matched, the
-        // exit-direction, and the NON-blocking frozen detection) live in greenAsyncGate, ANDed on both
-        // completion routes like the RED gate.
+        // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
+        // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
+        // result). The async clauses (baseline present+branch-matched, the exit-direction, and the NON-blocking
+        // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
         const content = deps.readArtifact(active.completion.resultPath);
         if (content === null) return false;
         return (
@@ -640,7 +641,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe, so the
-   *  branch-match rule has ONE edit site. */
+   *  branch-match (the phase-stable slice key crossing the RED→GREEN step boundary) has ONE edit site here. A
+   *  missing, branch-mismatched, or detached-HEAD (null branch) baseline is `no-baseline`. */
   const changedTestPathsSinceBaseline = async (
     a: ActiveAppTurn,
   ): Promise<{ kind: 'ok'; paths: string[] } | { kind: 'no-baseline' } | { kind: 'capfail'; cause: 'absent' | 'malformed' }> => {
@@ -664,8 +666,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     a: ActiveAppTurn,
   ): Promise<{ gate: PrecomputedGate; changedTests: string[] | null }> => {
     try {
-      // §28.5.1/D-baseline — a missing OR branch-mismatched baseline means "tests unchanged" cannot be proven, so
-      // the gate BLOCKS (fail toward firing), never silently reading as "nothing changed".
+      // §28.5.1/D-baseline — a missing, branch-mismatched, or detached-HEAD baseline means "tests unchanged"
+      // cannot be proven, so the gate BLOCKS (fail toward firing), never silently reading as "nothing changed".
       const changed = await changedTestPathsSinceBaseline(a);
       if (changed.kind !== 'ok') {
         const reason =
