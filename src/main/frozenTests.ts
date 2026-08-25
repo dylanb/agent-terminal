@@ -49,11 +49,13 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   const stdout = await run(
     'git',
     [
+      '--no-replace-objects', // ignore any repo-planted refs/replace/* so the recorded baseline is used verbatim (tamper-evidence)
       ...coreExecHardeningArgs(disabledHooks),
       'diff',
       '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
       '-z', // NUL-delimited, raw UTF-8: git otherwise C-quotes non-ASCII names and they never match a glob
       '--no-renames', // decompose renames to delete+add (config-independent) so a test moved out still shows
+      '--ignore-submodules=none', // a changed test tree tracked as a gitlink must show regardless of a repo-local diff.ignoreSubmodules
       '--end-of-options', // the two revisions cannot be read as options (CWE-88)
       baseline,
       head,
