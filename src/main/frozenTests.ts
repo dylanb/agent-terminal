@@ -15,6 +15,11 @@ import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
 import { loadLoopCapabilities } from './loopCapabilities';
 
+// The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
+// repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
+// capabilities-file-times-diff amplification (CWE-400).
+const MAX_MATCH_WORK = 100_000_000;
+
 export interface FrozenTestsQuery {
   /** The checked-out repo working tree; git runs here as cwd. */
   repoDir: string;
@@ -65,7 +70,18 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   );
 
   const changed = stdout.split('\0').filter((path) => path.length > 0);
-  const matched = changed.filter((path) => matchesAnyGlob(path, testGlobs));
+  // Aggregate work guard (CWE-400): a bloated capabilities file (many long globs) times many changed paths can
+  // amplify matching far past any single pair. Charge (Σ glob chars)·(path chars) per path and reject once the
+  // running total passes the budget — fail toward firing, never a silent hang in the main process. globMatch
+  // bounds each individual pair; this bounds their sum.
+  const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
+  let work = 0;
+  const matched: string[] = [];
+  for (const path of changed) {
+    work += globChars * path.length;
+    if (work > MAX_MATCH_WORK) throw new Error('frozen-tests: aggregate glob-match work budget exceeded');
+    if (matchesAnyGlob(path, testGlobs)) matched.push(path);
+  }
   return [...new Set(matched)].sort();
 }
 

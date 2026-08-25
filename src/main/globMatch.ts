@@ -16,21 +16,22 @@
 // the aggregate comparison count is capped before matching (CWE-400): a crafted deep path is rejected rather
 // than allowed to hang/OOM the main process.
 
-// The most pattern×path segment comparisons any one match may perform. Real globs/paths are a few segments
-// each (product < 10³); this cap (≈10⁶) only rejects a pathological crafted path, and bounds both the O(m)
-// rolling storage and the total work.
-const MAX_GLOB_MATCH_CELLS = 1_000_000;
+// The most character comparisons any one match may perform. The total segmentMatch work is bounded by
+// (Σ pattern-segment lengths)·(Σ path-segment lengths) ≈ |pattern|·|path| CHARACTERS — counting SEGMENTS would
+// miss a single huge segment (a 1 MiB path component vs a 1024-char wildcard is 1×1 segments but ~10⁹ chars).
+// Real globs/paths multiply to < 10⁵; this cap (10⁶) only rejects a crafted path, and bounds the work.
+const MAX_GLOB_MATCH_CHARS = 1_000_000;
 
 /** Whether `pattern` matches the whole repo-relative path `path`. Throws `RangeError` when the pattern×path
- *  segment product exceeds the work budget (an untrusted-input resource-exhaustion guard, CWE-400). */
+ *  character product exceeds the work budget (an untrusted-input resource-exhaustion guard, CWE-400). */
 export function globMatch(pattern: string, path: string): boolean {
+  if (pattern.length * path.length > MAX_GLOB_MATCH_CHARS) {
+    throw new RangeError(`glob match budget exceeded: ${pattern.length}×${path.length} character comparisons`);
+  }
   const p = pattern.split('/');
   const t = path.split('/');
   const n = p.length;
   const m = t.length;
-  if (n * m > MAX_GLOB_MATCH_CELLS) {
-    throw new RangeError(`glob match budget exceeded: ${n}×${m} segment comparisons`);
-  }
 
   // `next[j]` = the pattern suffix p[i+1..] matches the path suffix t[j..]; `cur[j]` = the same for p[i..].
   // Rolling one pattern row at a time keeps storage O(m). Base (pattern exhausted): only a fully consumed
