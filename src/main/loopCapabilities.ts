@@ -87,6 +87,9 @@ function requireTestGlobs(value: unknown): string[] {
 }
 
 function parse(text: string): LoopCapabilities {
+  // The size cap lives at the shared parse boundary so every reader — the working-tree loader and the
+  // baseline blob reader — classifies an over-cap file identically (CWE-400/770).
+  if (Buffer.byteLength(text, 'utf8') > MAX_CAPABILITIES_BYTES) fail('loop-capabilities.yaml is too large');
   let doc: unknown;
   try {
     doc = yaml.load(text);
@@ -153,7 +156,7 @@ export function loadLoopCapabilities(repoDir: string): LoopCapabilitiesLoad {
       if (n === 0 || total >= buf.length) break;
       total += n;
     }
-    if (total > MAX_CAPABILITIES_BYTES) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
+    // The read stops at MAX+1 bytes (memory bound); over-cap CLASSIFICATION is the shared parse boundary's job.
     text = buf.toString('utf8', 0, total);
   } catch (e) {
     return { ok: false, cause: 'malformed', reason: `cannot read loop-capabilities.yaml: ${errMsg(e)}` };

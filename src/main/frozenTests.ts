@@ -102,8 +102,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
   const harden = ['--no-replace-objects', '-c', 'protocol.allow=never', ...coreExecHardeningArgs(disabledHooks)];
   const env = { GIT_NO_LAZY_FETCH: '1' };
-  // A bad baseline is fail-toward-firing: let it REJECT here (rev-parse throws), never degrade to "absent" —
-  // only a config file genuinely missing from a resolvable baseline is "absent".
+  // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
   await run(
     'git',
     [...harden, 'rev-parse', '--verify', '--end-of-options', `${baseline}^{commit}`],
@@ -111,18 +110,27 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
     'frozen-tests: baseline commit does not resolve',
     env,
   );
-  let text: string;
-  try {
-    text = await run(
-      'git',
-      [...harden, 'cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
-      repoDir,
-      'frozen-tests baseline capabilities read failed',
-      env,
-    );
-  } catch {
+  // Determine ABSENCE by listing the tree: an empty listing means the config is genuinely not in a readable
+  // baseline (degrade). An ls-tree failure — the tree/blob unreadable, e.g. a partial clone with lazy fetch
+  // disabled — is NOT absence; it propagates and rejects (fail toward firing), as does a read of a path that
+  // ls-tree just proved is present.
+  const listed = await run(
+    'git',
+    [...harden, 'ls-tree', '--name-only', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
+    repoDir,
+    'frozen-tests: baseline tree read failed',
+    env,
+  );
+  if (listed.trim().length === 0) {
     return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the baseline commit' };
   }
+  const text = await run(
+    'git',
+    [...harden, 'cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
+    repoDir,
+    'frozen-tests: baseline capabilities read failed',
+    env,
+  );
   const parsed = parseLoopCapabilities(text);
   return parsed.ok ? parsed : { ok: false, cause: 'malformed', reason: parsed.reason };
 }
