@@ -67,6 +67,14 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     if (r.ok) expect(r.value.testGlobs).toEqual(['tests/**', '**/*_test.go', 'src/a?c/*.spec.ts']);
   });
 
+  it('rejects test_globs with an empty (leading/trailing/doubled slash) or .|.. segment — git paths are repo-relative and normalized, so they never match (fail-away)', () => {
+    expect(rejectReason('test_globs: ["/tests/**"]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
+    expect(rejectReason('test_globs: ["tests/"]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
+    expect(rejectReason('test_globs: ["tests//a.test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
+    expect(rejectReason('test_globs: ["tests/./a.test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
+    expect(rejectReason('test_globs: ["tests/../a.test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
+  });
+
   it('rejects a missing or blank test_command / build_command, naming the field', () => {
     expect(rejectReason('test_globs: [tests/**]\nbuild_command: b\n')).toContain('test_command');
     expect(rejectReason('test_globs: [tests/**]\ntest_command: "  "\nbuild_command: b\n')).toContain('test_command');
