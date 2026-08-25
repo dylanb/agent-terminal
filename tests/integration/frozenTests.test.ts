@@ -173,6 +173,15 @@ describe('changedTestPaths (§28.5.1)', () => {
     }
   });
 
+  it('rejects a non-object-id baseline through changedTestPathsFromCapabilities (fail toward firing, not a capabilities "malformed")', async () => {
+    // A bad baseline is corrupted loop state, not a capabilities-file problem: changedTestPaths throws for it,
+    // so the capabilities-sourced seam must too — never convert it into a degradable {cause:'malformed'}.
+    const { dir } = seeded();
+    await expect(
+      changedTestPathsFromCapabilities({ repoDir: dir, baseline: 'not-a-sha', head: 'HEAD' }),
+    ).rejects.toThrow();
+  });
+
   it('refuses a baseline loop-capabilities.yaml that is a symlink (not a regular file), like the working-tree loader', async () => {
     // A committed symlink is a blob whose bytes are its link target. If those bytes are valid flow-yaml, a
     // name-only existence check would read and accept them — but loadLoopCapabilities refuses the same symlink
