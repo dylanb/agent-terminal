@@ -139,6 +139,44 @@ describe('changedTestPaths (§28.5.1)', () => {
     expect(result).toEqual({ ok: true, paths: ['tests/a.test.ts'] }); // still detected via the baseline's tests/**
   });
 
+  it('applies the 512 KiB capabilities size cap to the baseline read too (same classification as the working tree)', async () => {
+    const dir = repos.makeGitRepo('caps-baseline-big');
+    repos.writeRepoFile(
+      dir,
+      'loop-capabilities.yaml',
+      `test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n# ${'x'.repeat(600 * 1024)}\n`,
+    );
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'edit');
+    const result = await changedTestPathsFromCapabilities({ repoDir: dir, baseline, head });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('malformed');
+      expect(result.reason).toContain('too large');
+    }
+  });
+
+  it('rejects (fail toward firing) when the baseline tree is unreadable, rather than reporting the config absent', async () => {
+    // A tree:0 partial clone has the baseline COMMIT but not its tree/blobs. The config is not "absent" — it
+    // is unreadable — so the tamper-evident check must reject (with lazy fetch disabled), never degrade.
+    const source = repos.makeGitRepo('caps-src');
+    repos.git(source, ['config', 'uploadpack.allowFilter', 'true']);
+    repos.writeRepoFile(source, 'loop-capabilities.yaml', 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(source, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(source, 'seed');
+    repos.writeRepoFile(source, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(source, 'edit');
+    const clone = mkdtempSync(join(tmpdir(), 'caps-clone-'));
+    try {
+      repos.git(source, ['clone', '--filter=tree:0', '--no-checkout', `file://${source}`, clone]);
+      await expect(changedTestPathsFromCapabilities({ repoDir: clone, baseline, head })).rejects.toThrow();
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
   it('never launches an agent-controlled promisor transport during the diff (partial-clone lazy-fetch RCE)', async () => {
     // A tree:0 partial clone lazy-fetches missing trees from its promisor remote. An agent-controlled
     // .git/config can point that remote's transport at a command (here a custom `uploadpack`), so a
