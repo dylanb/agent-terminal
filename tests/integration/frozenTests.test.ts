@@ -173,6 +173,27 @@ describe('changedTestPaths (§28.5.1)', () => {
     }
   });
 
+  it('classifies an over-subprocess-buffer baseline config as malformed "too large", not a read rejection', async () => {
+    // A baseline blob larger than execFile's default 1 MiB stdout buffer must still classify as "too large"
+    // (same as the working-tree loader), not reject as a subprocess read failure. The size is checked first.
+    const dir = repos.makeGitRepo('caps-baseline-huge');
+    repos.writeRepoFile(
+      dir,
+      'loop-capabilities.yaml',
+      `test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n# ${'x'.repeat(2 * 1024 * 1024)}\n`,
+    );
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'edit');
+    const result = await changedTestPathsFromCapabilities({ repoDir: dir, baseline, head });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cause).toBe('malformed');
+      expect(result.reason).toContain('too large');
+    }
+  });
+
   it('rejects (fail toward firing) when the baseline tree is unreadable, rather than reporting the config absent', async () => {
     // A tree:0 partial clone has the baseline COMMIT but not its tree/blobs. The config is not "absent" — it
     // is unreadable — so the tamper-evident check must reject (with lazy fetch disabled), never degrade.
