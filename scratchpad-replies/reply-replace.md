@@ -1,0 +1,1 @@
+Fixed in a5ee342. `changedTestPaths` now invokes git with the global `--no-replace-objects`, so a repo-planted `refs/replace/*` can no longer substitute head for the recorded baseline and mask a changed test. Regression test in `tests/integration/frozenTests.test.ts` — "is not fooled by a repo-planted refs/replace/* that substitutes head for the baseline". Resolving.

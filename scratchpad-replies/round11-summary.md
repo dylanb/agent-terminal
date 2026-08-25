@@ -1,0 +1,3 @@
+**Round 11 review — the one suppressed finding addressed in 4c8aa87:**
+
+**`frozenTests.test.ts:125` — option-injection test didn't reach git.** Correct: the existing case used an option-shaped *baseline*, which `isGitObjectId` rejects before git runs, so `--end-of-options` was never exercised (deleting it left the suite green). Added a case with an option-shaped **head** (`--output=<sentinel>`), which `isSafeRef` deliberately permits: it must be rejected as an unknown revision **and** must not write the file `--output` would. Verified a real pin — it fails when `--end-of-options` is removed from the diff.

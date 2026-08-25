@@ -9,8 +9,12 @@ import { run, runBuffer } from './appBootstrapCommand';
 import { decodeUtf8Strict } from './decodeUtf8Strict';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from '../shared/globMatch';
-import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES } from '../shared/loopCapabilities';
-import { type LoopCapabilitiesLoad } from './loopCapabilities';
+import {
+  parseLoopCapabilities,
+  LOOP_CAPABILITIES_FILENAME,
+  MAX_CAPABILITIES_BYTES,
+  type LoopCapabilities,
+} from '../shared/loopCapabilities';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
@@ -106,10 +110,16 @@ export type ChangedTestPathsResult =
   | { ok: true; paths: string[] }
   | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
 
+/** The baseline-sourced capabilities: a git blob read, so it never has the working-tree loader's `confinement`
+ *  cause. Absent (no config in the baseline) degrades; malformed is human-owned; a bad baseline rejects. */
+type BaselineCapabilitiesResult =
+  | { ok: true; value: LoopCapabilities }
+  | { ok: false; cause: 'absent' | 'malformed'; reason: string };
+
 /** The test_globs as they stood in the RED baseline's COMMITTED loop-capabilities.yaml — a fixed git object
  *  the checked agent cannot narrow after the baseline is recorded, unlike the working tree it controls. Read
  *  as a raw blob (cat-file, no textconv), with the same no-replace / no-lazy-fetch hardening as the diff. */
-async function baselineCapabilities(repoDir: string, baseline: string): Promise<LoopCapabilitiesLoad> {
+async function baselineCapabilities(repoDir: string, baseline: string): Promise<BaselineCapabilitiesResult> {
   // A bad baseline is corrupted loop state (fail toward firing), NOT a degradable capabilities "malformed" —
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');

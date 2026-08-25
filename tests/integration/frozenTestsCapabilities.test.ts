@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { changedTestPathsFromCapabilities } from '../../src/main/frozenTests';
-import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
+import { LOOP_CAPABILITIES_FILENAME } from '../../src/shared/loopCapabilities';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 // Integration slice — the two S1 primitives composed over the real file that will drive them in S3/S4:

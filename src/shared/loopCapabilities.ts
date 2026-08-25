@@ -1,7 +1,7 @@
 // §28.5.4 — the framework-neutral per-repo `loop-capabilities.yaml` DESCRIPTOR: its shape, its serialized key
 // vocabulary, and the parse predicate that validates them. Lives in src/shared (issue #105) so a future
-// recipe/prompt writer and the main-process reader share ONE contract that cannot drift (writer↔reader). The
-// filesystem read is main-only (src/main/loopCapabilities.ts); nothing here touches node:fs.
+// recipe/prompt writer and the main-process reader share ONE contract that cannot drift (writer↔reader).
+// Nothing here touches node:fs; the main-process reader supplies the bytes.
 
 import yaml from 'js-yaml';
 import { unsupportedGlobReason } from './globMatch';
