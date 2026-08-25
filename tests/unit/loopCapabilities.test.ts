@@ -61,6 +61,12 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     );
   });
 
+  it('rejects a test_globs entry containing a NUL byte (git paths never contain NUL — fail-away)', () => {
+    expect(rejectReason('test_globs: ["tests/\\u0000.test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+  });
+
   it('rejects test_globs using extglob or leading-negation syntax globMatch treats literally (fail-away)', () => {
     expect(rejectReason('test_globs: ["tests/*.@(test|spec).ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
       'test_globs',
