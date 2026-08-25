@@ -25,7 +25,7 @@ describe('git repo fixture — hermetic against ambient GIT_* variables', () => 
       const dir = repos.makeGitRepo('hermetic');
       repos.writeRepoFile(dir, 'a.txt', 'a\n');
       const sha = repos.commitAll(dir, 'seed');
-      expect(sha).toMatch(/^[0-9a-f]{40}$/);
+      expect(sha).toMatch(/^([0-9a-f]{40}|[0-9a-f]{64})$/); // SHA-1 or SHA-256 (GIT_DEFAULT_HASH) object id
       expect(existsSync(join(dir, '.git'))).toBe(true); // the repo is the fixture's own, not the ambient GIT_DIR
     } finally {
       repos.cleanup();
