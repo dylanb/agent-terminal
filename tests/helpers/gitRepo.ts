@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { commandEnvironment } from '../../src/main/appCommand';
 
 const FIXED_DATE = '2020-01-01T00:00:00 +0000';
 
@@ -46,7 +47,10 @@ export function createGitRepoFixture(): GitRepoFixture {
     execFileSync('git', args, {
       cwd: dir,
       encoding: 'utf8',
-      env: { ...process.env, GIT_AUTHOR_DATE: FIXED_DATE, GIT_COMMITTER_DATE: FIXED_DATE },
+      // The same repo-selection/transport stripping production uses (appCommand.ts), so an ambient GIT_DIR /
+      // GIT_WORK_TREE / GIT_CONFIG_* cannot redirect the fixture. The GIT_CONFIG_GLOBAL/SYSTEM redirect this
+      // fixture sets on process.env is deliberately NOT stripped, so it still reaches git.
+      env: commandEnvironment({ GIT_AUTHOR_DATE: FIXED_DATE, GIT_COMMITTER_DATE: FIXED_DATE }),
     }).trim();
 
   return {

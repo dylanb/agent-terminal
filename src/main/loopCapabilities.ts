@@ -12,7 +12,7 @@ export const LOOP_CAPABILITIES_FILENAME = 'loop-capabilities.yaml';
 
 // Defense-in-depth bounds on untrusted input (CWE-400/770): a size cap on the file, and caps on the glob
 // list the matcher would iterate. Generous — a real capabilities file is tiny.
-const MAX_CAPABILITIES_BYTES = 512 * 1024;
+export const MAX_CAPABILITIES_BYTES = 512 * 1024;
 const MAX_TEST_GLOBS = 256;
 const MAX_GLOB_LENGTH = 1024;
 

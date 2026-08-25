@@ -10,7 +10,7 @@ import { isGitObjectId } from '../shared/appBootstrap';
 import { run } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
-import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, type LoopCapabilitiesLoad } from './loopCapabilities';
+import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES, type LoopCapabilitiesLoad } from './loopCapabilities';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
@@ -123,6 +123,19 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   );
   if (listed.trim().length === 0) {
     return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the baseline commit' };
+  }
+  // Size FIRST (cat-file -s): an over-cap blob classifies as malformed "too large" identically to the
+  // working-tree loader (MAX_CAPABILITIES_BYTES shared), and never exceeds the subprocess stdout buffer below.
+  const sizeOut = await run(
+    'git',
+    [...harden, 'cat-file', '-s', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
+    repoDir,
+    'frozen-tests: baseline capabilities size read failed',
+    env,
+  );
+  const size = Number(sizeOut.trim());
+  if (!Number.isInteger(size) || size > MAX_CAPABILITIES_BYTES) {
+    return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
   }
   const text = await run(
     'git',
