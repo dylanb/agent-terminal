@@ -46,6 +46,27 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     expect(rejectReason('test_globs: ["  "]\ntest_command: t\nbuild_command: b\n')).toContain('test_globs');
   });
 
+  it('rejects test_globs using syntax globMatch does not honor (braces, char-classes, partial **) — fail LOUD, not fail-away', () => {
+    // globMatch supports only *, ?, and a WHOLE-segment **. A brace/char-class/partial-** glob is accepted-but-
+    // treated-literally, so it matches nothing and the §28.5.1 frozen check would read as "no test changed" — a
+    // fail-AWAY, the exact direction §28.5.1 swears off. Reject it at parse time so it surfaces as malformed.
+    expect(rejectReason('test_globs: ["tests/*.{test,spec}.ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+    expect(rejectReason('test_globs: ["tests/[ab].test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+    expect(rejectReason('test_globs: ["tests/**foo/x.ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+  });
+
+  it('accepts the supported grammar — *, ?, and whole-segment ** — unchanged', () => {
+    const r = parseLoopCapabilities('test_globs: ["tests/**", "**/*_test.go", "src/a?c/*.spec.ts"]\ntest_command: t\nbuild_command: b\n');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.testGlobs).toEqual(['tests/**', '**/*_test.go', 'src/a?c/*.spec.ts']);
+  });
+
   it('rejects a missing or blank test_command / build_command, naming the field', () => {
     expect(rejectReason('test_globs: [tests/**]\nbuild_command: b\n')).toContain('test_command');
     expect(rejectReason('test_globs: [tests/**]\ntest_command: "  "\nbuild_command: b\n')).toContain('test_command');

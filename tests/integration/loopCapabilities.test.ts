@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -53,6 +54,29 @@ describe('loadLoopCapabilities (§28.5.4) — confined read of an untrusted repo
     const r = loadLoopCapabilities(dir);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.cause).toBe('confinement');
+  });
+
+  it('reports cause "confinement" when the capabilities file is a symlink INSIDE the repo (read is no-follow, CWE-59/367)', () => {
+    // The prior stat-then-read followed a symlink whose realpath stayed in the jail, so an attacker who owns the
+    // untrusted working tree could plant a link (or swap it under the stat↔read window). The read must not follow
+    // a link at the capabilities path: the file has to be a real regular file, or it is refused.
+    const dir = repoDir('caps-inside-link');
+    const real = join(dir, 'real-caps.yaml');
+    writeFileSync(real, WELL_FORMED);
+    symlinkSync(real, join(dir, LOOP_CAPABILITIES_FILENAME));
+    const r = loadLoopCapabilities(dir);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.cause).toBe('confinement');
+  });
+
+  it('does not hang and reports "malformed" when the capabilities path is a FIFO (no-block open, §28.5.4)', () => {
+    // A named pipe at the path would block a plain open() forever (a main-process DoS). The read opens non-
+    // blocking and rejects a non-regular file — this test would TIME OUT rather than fail if that regressed.
+    const dir = repoDir('caps-fifo');
+    execFileSync('mkfifo', [join(dir, LOOP_CAPABILITIES_FILENAME)]);
+    const r = loadLoopCapabilities(dir);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.cause).toBe('malformed');
   });
 
   it('reports cause "malformed" when the capabilities path is a directory, not a regular file', () => {
