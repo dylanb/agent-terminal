@@ -2,41 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { coreExecHardeningArgs } from '../../src/main/gitHardening';
 import { bootstrapProtectedArgs } from '../../src/main/appBootstrapGit';
 
-describe('git local-exec hardening (single-sourced)', () => {
-  it('coreExecHardeningArgs neutralizes exactly the two local-code-execution levers', () => {
-    expect(coreExecHardeningArgs('/tmp/disabled-hooks')).toEqual([
-      '-c',
-      'core.hooksPath=/tmp/disabled-hooks',
-      '-c',
-      'core.fsmonitor=false',
-    ]);
-  });
-
-  it('bootstrapProtectedArgs composes the shared local-exec set with the network-op hardening, byte-for-byte', () => {
-    // Byte-equality pin: proves the extraction preserves appBootstrapGit's historical protectedArgs exactly.
-    expect(bootstrapProtectedArgs('/tmp/disabled-hooks')).toEqual([
-      '-c',
-      'core.hooksPath=/tmp/disabled-hooks',
-      '-c',
-      'core.fsmonitor=false',
-      '-c',
-      'core.sshCommand=ssh',
-      '-c',
-      'credential.interactive=false',
-      '-c',
-      'protocol.allow=never',
-      '-c',
-      'protocol.ext.allow=never',
-      '-c',
-      'protocol.file.allow=always',
-      '-c',
-      'protocol.https.allow=always',
-      '-c',
-      'protocol.ssh.allow=always',
-    ]);
-  });
-
-  it('the shared local-exec set is a prefix of the bootstrap set (composition, not a second copy)', () => {
+// The OBSERVABLE protection — a hostile repo-local git config never runs a command during a bootstrap
+// operation — is covered behaviorally in tests/integration/bootstrapPorts.test.ts (inherited core.hooksPath
+// hooks, a custom remote.*.uploadpack, and core.sshCommand each assert their marker file stays absent). This
+// unit keeps ONLY the shared-semantics guarantee a behavioral test cannot express: bootstrap composes the
+// single-sourced local-exec set rather than carrying a second copy that could silently drift (CLAUDE.md).
+describe('git local-exec hardening — single source, not a second copy', () => {
+  it('bootstrapProtectedArgs begins with the shared coreExecHardeningArgs (composition, not duplication)', () => {
     const core = coreExecHardeningArgs('/tmp/h');
     expect(bootstrapProtectedArgs('/tmp/h').slice(0, core.length)).toEqual(core);
   });
