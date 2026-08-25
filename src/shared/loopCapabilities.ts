@@ -49,6 +49,9 @@ function requireNonBlankString(value: unknown, what: string): string {
 // are literal there, so such a glob would match nothing and the frozen check would read as "no test changed" —
 // a fail-AWAY. Rejecting here makes a bad glob a loud `malformed`, never silent under-matching.
 function requireSupportedGlob(glob: string): void {
+  if (glob.includes('\0')) {
+    fail(`test_globs entry ${JSON.stringify(glob)} contains a NUL byte; a git path never does, so it could never match`);
+  }
   if (glob.startsWith('!')) {
     fail(`test_globs entry ${JSON.stringify(glob)} uses leading-negation syntax, which globMatch treats literally; only *, ?, and whole-segment ** are honored`);
   }
