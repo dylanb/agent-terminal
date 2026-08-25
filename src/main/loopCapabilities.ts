@@ -5,12 +5,11 @@
 // The load path confines the file inside the untrusted repo working tree (resolveJail, CWE-22/59) and
 // classifies a caught errno through errno.ts.
 
-import { statSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { openSync, fstatSync, readFileSync, closeSync, constants } from 'node:fs';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 import { isErrno, errMsg } from './errno';
-import { resolveJail, confinedRealPathResult } from './confinedPath';
+import { resolveJail } from './confinedPath';
 
 export const LOOP_CAPABILITIES_FILENAME = 'loop-capabilities.yaml';
 
@@ -55,6 +54,20 @@ function requireNonBlankString(value: unknown, what: string): string {
   return value;
 }
 
+// globMatch (§28.5.1) honors only `*`, `?`, and a WHOLE-segment `**`; braces, char-classes, and a partial `**`
+// are literal there, so such a glob would match nothing and the frozen check would read as "no test changed" —
+// a fail-AWAY. Rejecting here makes a bad glob a loud `malformed`, never silent under-matching.
+function requireSupportedGlob(glob: string): void {
+  if (/[{}[\]]/.test(glob)) {
+    fail(`test_globs entry ${JSON.stringify(glob)} uses unsupported glob syntax ({}, []); only *, ?, and whole-segment ** are honored`);
+  }
+  for (const segment of glob.split('/')) {
+    if (segment.includes('**') && segment !== '**') {
+      fail(`test_globs entry ${JSON.stringify(glob)} uses ** inside a segment; ** is honored only as a whole path segment`);
+    }
+  }
+}
+
 function requireTestGlobs(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     fail('test_globs must be a non-empty array of path globs');
@@ -63,6 +76,7 @@ function requireTestGlobs(value: unknown): string[] {
   return value.map((glob) => {
     if (typeof glob !== 'string' || glob.trim() === '') fail('test_globs must contain only non-empty strings');
     if (glob.length > MAX_GLOB_LENGTH) fail(`test_globs entries must be at most ${MAX_GLOB_LENGTH} characters`);
+    requireSupportedGlob(glob);
     return glob;
   });
 }
@@ -104,38 +118,34 @@ export function parseLoopCapabilities(text: string): LoopCapabilitiesParse {
 /** Read + parse the repo's loop-capabilities.yaml, confined inside the repo working tree. The failure arm's
  *  `cause` distinguishes absent (degrade), malformed (human-owned), and confinement (security refusal). */
 export function loadLoopCapabilities(repoDir: string): LoopCapabilitiesLoad {
-  const jail = resolveJail(repoDir);
-  if (jail === null) {
+  // resolveJail realpaths the repo dir and appends the filename WITHOUT resolving it, so a link planted at the
+  // capabilities path is not adopted as the target; the O_NOFOLLOW open then refuses to traverse it (CWE-59).
+  const target = resolveJail(repoDir, LOOP_CAPABILITIES_FILENAME);
+  if (target === null) {
     return { ok: false, cause: 'confinement', reason: 'repository directory does not resolve' };
   }
-  const confined = confinedRealPathResult(jail, join(jail, LOOP_CAPABILITIES_FILENAME));
-  if (!confined.ok) {
-    const reason =
-      confined.cause === 'escapes'
-        ? 'loop-capabilities.yaml escapes the repository'
-        : 'loop-capabilities.yaml cannot be resolved';
-    return { ok: false, cause: 'confinement', reason };
-  }
 
-  let size: number;
+  // One descriptor for the whole read (CWE-367): O_NOFOLLOW refuses a symlink at the final component, O_NONBLOCK
+  // refuses to block on a FIFO, and fstat+read on that same fd close the stat↔read window a swapped inode wins.
+  let fd: number;
   try {
-    const st = statSync(confined.path);
-    if (!st.isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
-    size = st.size;
+    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the repository' };
-    return { ok: false, cause: 'malformed', reason: `cannot stat loop-capabilities.yaml: ${errMsg(e)}` };
-  }
-  if (size > MAX_CAPABILITIES_BYTES) {
-    return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
+    if (isErrno(e, 'ELOOP')) return { ok: false, cause: 'confinement', reason: 'loop-capabilities.yaml is a symlink' };
+    return { ok: false, cause: 'malformed', reason: `cannot open loop-capabilities.yaml: ${errMsg(e)}` };
   }
 
   let text: string;
   try {
-    text = readFileSync(confined.path, 'utf8'); // the confined real path, never a re-derived one (TOCTOU)
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
+    if (st.size > MAX_CAPABILITIES_BYTES) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
+    text = readFileSync(fd, 'utf8'); // the same fd we fstat'd — never a re-resolved path (TOCTOU)
   } catch (e) {
-    if (isErrno(e, 'ENOENT')) return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the repository' };
     return { ok: false, cause: 'malformed', reason: `cannot read loop-capabilities.yaml: ${errMsg(e)}` };
+  } finally {
+    closeSync(fd);
   }
 
   const parsed = parseLoopCapabilities(text);
