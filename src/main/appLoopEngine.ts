@@ -127,10 +127,7 @@ export interface AppLoopEngineDeps {
    *  back to gate the turn and the repo-relative path the consolidator writes, from ONE resolver; null when
    *  the loop area is unresolvable. */
   resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
-  /** §28.5.3 — the machine completion predicates (phase-outcome recognition + frozen-tests detection) the
-   *  RED/GREEN completion gate consults. Injected now so the seam exists on the engine's surface; S3/S4 make
-   *  the gate call through it. A domain-concept seam ("the machine ground truth about a turn"), not the
-   *  git/yaml mechanisms behind it. */
+  /** §28.5.3 — the machine completion predicates the RED/GREEN gate consults (a domain-concept seam). */
   completionPredicates: LoopCompletionPredicates;
 }
 

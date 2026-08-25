@@ -1,7 +1,5 @@
-// §28.5.1 — the frozen-tests detection. Two invariants the code leans on but does not spell: the diff paths
-// are string-matched, never opened or walked, so no path confinement applies here; and every arm fails TOWARD
-// the check firing (CWE-20/770) — a bad baseline, an empty glob list, or an unresolvable head reject rather
-// than read as "nothing changed".
+// §28.5.1 — the frozen-tests detection. Cross-cutting: the diff paths are string-matched, never opened or
+// walked, so the repo-path confinement rule does NOT apply to this module.
 
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';

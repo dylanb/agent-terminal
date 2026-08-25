@@ -1,10 +1,6 @@
-// Deterministic real-git fixtures for the frozen-tests detection tests (§28.5.1). No mock git (CLAUDE.md):
-// the detection is exercised against real temporary repositories. Hermetic by construction —
-//   • GIT_CONFIG_GLOBAL/SYSTEM are redirected to an empty file so a developer's ~/.gitconfig cannot change
-//     a diff's result. `commandEnvironment()` (src/main/appCommand.ts) does NOT strip these two, so the
-//     redirection reaches the production `run` path the detection uses, not just this helper's own commits.
-//   • commit author/committer dates are pinned, so nothing depends on the wall clock.
-// Each fixture owns its temp dirs and restores the env on cleanup; construct one per test.
+// Deterministic real-git fixtures (§28.5.1); no mock git (CLAUDE.md). Cross-module coupling: this relies on
+// commandEnvironment() (src/main/appCommand.ts) NOT stripping GIT_CONFIG_GLOBAL/SYSTEM, so the fixture's
+// empty-config redirect still reaches git — if that changes, the fixtures would leak the developer's ~/.gitconfig.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';

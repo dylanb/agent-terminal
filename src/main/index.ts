@@ -324,8 +324,7 @@ async function createWindow(): Promise<void> {
   let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
-    // §28.5.3 — the machine completion predicates the RED/GREEN gate (S3/S4) will consult. Wired onto the
-    // engine's surface now; the gate call through it lands with those slices.
+    // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The

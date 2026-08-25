@@ -1,16 +1,6 @@
-// A pure, dependency-free glob matcher for repo-relative POSIX paths. Pure and node-free, so it could move
-// to src/shared/ if a renderer consumer ever appears; today only the main-process frozen-tests detection
-// (§28.5.1) uses it, so it lives here (placement follows consumption, like confinedPath.ts).
-//
-// Supported subset, matched against a `/`-separated path: `*` matches any run (incl. empty) of non-`/`
-// characters within one segment; `?` matches exactly one non-`/` character; `**` — only as a WHOLE segment —
-// matches zero or more segments. Every other character, including `[`, `]`, and a leading `/`, is literal.
-// The subset is deliberate: test_globs are the small, well-known shapes (`tests/**/*.test.ts`, `**/*_test.go`),
-// and a narrow, total grammar is what keeps the matcher regex-free.
-//
-// The grammar is narrow and total on purpose: staying regex-free denies an adversarial pattern from an
-// untrusted loop-capabilities.yaml any catastrophic backtracking (CWE-1333), and the work is capped before
-// matching so a crafted deep path from untrusted `git diff` output cannot hang/OOM the main process (CWE-400).
+// §28.5.1 — a regex-free glob matcher for repo-relative POSIX paths. Its supported grammar (`*`, `?`,
+// whole-segment `**`) is the contract src/main/loopCapabilities.ts's requireSupportedGlob enforces — the two
+// must change together. Regex-free + work-capped because both the pattern and the path are untrusted (CWE-1333/400).
 
 // The most character comparisons any one match may perform. The total segmentMatch work is bounded by
 // (Σ pattern-segment lengths)·(Σ path-segment lengths) ≈ |pattern|·|path| CHARACTERS — counting SEGMENTS would
