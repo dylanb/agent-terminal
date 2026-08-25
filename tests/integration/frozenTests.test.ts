@@ -121,6 +121,18 @@ describe('changedTestPaths (§28.5.1)', () => {
     ).rejects.toThrow();
   });
 
+  it('rejects rather than hangs when the aggregate glob×path matching work exceeds the budget (untrusted-input DoS)', async () => {
+    // A maliciously bloated capabilities file (many long globs) times the changed paths can amplify matching
+    // work far past any single pair. These globs fail-fast against the path, so the guard must be the AGGREGATE
+    // length budget (globChars × Σ path bytes), not the per-match char cost. One long changed path suffices.
+    const { dir, baseline } = seeded();
+    const longSeg = (n: number): string => Array(n).fill('a').join('/');
+    repos.writeRepoFile(dir, `tests/${longSeg(300)}.test.ts`, 'x\n'); // a ~600-byte changed path
+    const head = repos.commitAll(dir, 'long path');
+    const bloatedGlobs = Array(200).fill('z'.repeat(1000)); // 200k glob chars, none matching
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: bloatedGlobs })).rejects.toThrow(/budget/i);
+  });
+
   it('is not fooled by a repo-planted refs/replace/* that substitutes head for the baseline (tamper-evidence)', async () => {
     // `git replace <baseline> <head>` makes git serve head wherever baseline is asked for, so a naive
     // `git diff <baseline> <head>` becomes head..head and reports nothing — the check must ignore replace refs.

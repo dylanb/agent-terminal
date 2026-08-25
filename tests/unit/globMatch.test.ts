@@ -61,9 +61,11 @@ describe('globMatch — supported subset: * ? ** over repo-relative posix paths'
     expect(globMatch(pattern, path)).toBe(false);
   });
 
-  it('rejects a match whose pattern×path segment product exceeds the work budget (untrusted-input DoS guard)', () => {
-    // An untrusted repo path with a huge segment count would otherwise drive an O(pattern×path) scan
-    // synchronously in the main process (CWE-400/1333). 1001×1001 ≈ 1.0M cells exceeds the 1M budget.
+  it('rejects a match whose pattern×path CHARACTER product exceeds the work budget (untrusted-input DoS guard)', () => {
+    // The budget counts characters, not segments: segmentMatch does O(pattern-chars × segment-chars) work, so
+    // a single ~100k-char path segment against a 1024-char wildcard (a 1×1 SEGMENT product) would still drive
+    // ~1e8 char comparisons synchronously in the main process (CWE-400/1333). Reject before matching.
+    expect(() => globMatch('*'.repeat(1024), 'a'.repeat(100_000))).toThrow(/budget/i);
     const deep = (segs: number): string => Array(segs).fill('a').join('/');
     expect(() => globMatch(deep(1001), deep(1001))).toThrow(/budget/i);
     // A realistic pattern/path stays well under budget and still matches normally.
