@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { PHASE_OUTCOMES, isPhaseOutcome, type PhaseOutcome } from '../../src/shared/phaseOutcome';
 
 describe('phaseOutcome vocabulary (§28.5.2 / §28.5.5)', () => {
-  it('is exactly the four framework-neutral categories, in order', () => {
-    expect(PHASE_OUTCOMES).toEqual(['passed', 'failed-assertion', 'errored', 'no-tests-selected']);
+  it('is exactly the four framework-neutral categories (a closed set; §28.5.5 assigns no order)', () => {
+    // Compare as a set — §28.5.5 is a closed vocabulary with no order semantics, so a behavior-preserving
+    // reorder must not fail this test; only a changed/added/removed member should.
+    expect([...PHASE_OUTCOMES].sort()).toEqual(['errored', 'failed-assertion', 'no-tests-selected', 'passed']);
+    expect(PHASE_OUTCOMES).toHaveLength(4);
   });
 
   it('recognizes every member of the set', () => {
