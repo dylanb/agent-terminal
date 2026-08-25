@@ -30,7 +30,7 @@ describe('phaseOutcome vocabulary (§28.5.2 / §28.5.5)', () => {
   });
 
   it('narrows to the PhaseOutcome type at the boundary', () => {
-    const raw = 'passed';
+    const raw: string = 'passed'; // string, not the literal 'passed', so the compile-gate below actually tests narrowing
     if (isPhaseOutcome(raw)) {
       const narrowed: PhaseOutcome = raw; // compile-gate: the guard narrows string → PhaseOutcome
       expect(narrowed).toBe('passed');

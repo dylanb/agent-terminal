@@ -62,8 +62,8 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
       '--no-renames', // decompose renames to delete+add (config-independent) so a test moved out still shows
       '--ignore-submodules=none', // a changed test tree tracked as a gitlink must show regardless of a repo-local diff.ignoreSubmodules
       '--end-of-options', // the two revisions cannot be read as options (CWE-88)
-      baseline,
-      head,
+      `${baseline}^{commit}`, // peel to a commit: git accepts a bare tree/blob object id as a diff operand, so a
+      `${head}^{commit}`, //     non-commit operand would diff instead of failing toward the check firing
     ],
     repoDir,
     'frozen-tests diff failed',
@@ -117,13 +117,20 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // ls-tree just proved is present.
   const listed = await run(
     'git',
-    [...harden, 'ls-tree', '--name-only', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
+    [...harden, 'ls-tree', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
     repoDir,
     'frozen-tests: baseline tree read failed',
     env,
   );
   if (listed.trim().length === 0) {
     return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the baseline commit' };
+  }
+  // ls-tree line is "<mode> <type> <object>\t<path>". Require a regular-file blob (100644/100755); a symlink
+  // (120000), directory (040000 tree), or gitlink (160000 commit) is refused as malformed — consistent with
+  // the working-tree loader's O_NOFOLLOW / isFile check, rather than reading link-target bytes or a git error.
+  const mode = listed.trim().split(' ', 1)[0];
+  if (mode !== '100644' && mode !== '100755') {
+    return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
   }
   // Size FIRST (cat-file -s): an over-cap blob classifies as malformed "too large" identically to the
   // working-tree loader (MAX_CAPABILITIES_BYTES shared), and never exceeds the subprocess stdout buffer below.
