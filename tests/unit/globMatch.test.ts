@@ -34,6 +34,14 @@ describe('globMatch — supported subset: * ? ** over repo-relative posix paths'
     expect(globMatch('a?b', 'a/b')).toBe(false); // ? does not cross a segment boundary
   });
 
+  it('? and * count whole characters, including non-BMP code points (surrogate pairs)', () => {
+    // A non-BMP char (😀 = one code point, two UTF-16 units): ? is "one character", so it must match it, and *
+    // must consume it as one — else a configured test path with such a name is silently missed by the frozen check.
+    expect(globMatch('tests/?.ts', 'tests/😀.ts')).toBe(true);
+    expect(globMatch('tests/*.ts', 'tests/😀😀.ts')).toBe(true);
+    expect(globMatch('tests/?.ts', 'tests/😀x.ts')).toBe(false); // ? is ONE character, not two
+  });
+
   it('a segment-count mismatch without ** never matches', () => {
     expect(globMatch('*.ts', 'a/b.ts')).toBe(false);
     expect(globMatch('a/b/c', 'a/b')).toBe(false);
