@@ -97,9 +97,9 @@ export type ChangedTestPathsResult =
  *  the checked agent cannot narrow after the baseline is recorded, unlike the working tree it controls. Read
  *  as a raw blob (cat-file, no textconv), with the same no-replace / no-lazy-fetch hardening as the diff. */
 async function baselineCapabilities(repoDir: string, baseline: string): Promise<LoopCapabilitiesLoad> {
-  if (!isGitObjectId(baseline)) {
-    return { ok: false, cause: 'malformed', reason: 'frozen-tests: baseline is not a git object id' };
-  }
+  // A bad baseline is corrupted loop state (fail toward firing), NOT a degradable capabilities "malformed" —
+  // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
+  if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
   const harden = ['--no-replace-objects', '-c', 'protocol.allow=never', ...coreExecHardeningArgs(disabledHooks)];
   const env = { GIT_NO_LAZY_FETCH: '1' };
