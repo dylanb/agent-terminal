@@ -7,9 +7,16 @@ export class CommandFailure extends Error {
   }
 }
 
-export function run(file: string, args: string[], cwd: string, failure: string): Promise<string> {
+export function run(
+  file: string,
+  args: string[],
+  cwd: string,
+  failure: string,
+  env?: Record<string, string>,
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: commandEnvironment() }, (err, stdout) => {
+    const environment = env ? { ...commandEnvironment(), ...env } : commandEnvironment();
+    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: environment }, (err, stdout) => {
       if (err) {
         const commandError = err as NodeJS.ErrnoException & {
           killed?: boolean;

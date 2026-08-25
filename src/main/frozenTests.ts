@@ -55,6 +55,8 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     'git',
     [
       '--no-replace-objects', // ignore any repo-planted refs/replace/* so the recorded baseline is used verbatim (tamper-evidence)
+      '-c',
+      'protocol.allow=never', // on a partial clone a diff can lazy-fetch missing objects; deny every transport so an agent-configured promisor cannot run a command (backstop for GIT_NO_LAZY_FETCH below)
       ...coreExecHardeningArgs(disabledHooks),
       'diff',
       '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
@@ -67,6 +69,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     ],
     repoDir,
     'frozen-tests diff failed',
+    { GIT_NO_LAZY_FETCH: '1' }, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
 
   const changed = stdout.split('\0').filter((path) => path.length > 0);
