@@ -10,7 +10,7 @@ import { isGitObjectId } from '../shared/appBootstrap';
 import { run } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
-import { loadLoopCapabilities } from './loopCapabilities';
+import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, type LoopCapabilitiesLoad } from './loopCapabilities';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
@@ -92,12 +92,47 @@ export type ChangedTestPathsResult =
   | { ok: true; paths: string[] }
   | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
 
+/** The test_globs as they stood in the RED baseline's COMMITTED loop-capabilities.yaml — a fixed git object
+ *  the checked agent cannot narrow after the baseline is recorded, unlike the working tree it controls. Read
+ *  as a raw blob (cat-file, no textconv), with the same no-replace / no-lazy-fetch hardening as the diff. */
+async function baselineCapabilities(repoDir: string, baseline: string): Promise<LoopCapabilitiesLoad> {
+  if (!isGitObjectId(baseline)) {
+    return { ok: false, cause: 'malformed', reason: 'frozen-tests: baseline is not a git object id' };
+  }
+  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
+  const harden = ['--no-replace-objects', '-c', 'protocol.allow=never', ...coreExecHardeningArgs(disabledHooks)];
+  const env = { GIT_NO_LAZY_FETCH: '1' };
+  // A bad baseline is fail-toward-firing: let it REJECT here (rev-parse throws), never degrade to "absent" —
+  // only a config file genuinely missing from a resolvable baseline is "absent".
+  await run(
+    'git',
+    [...harden, 'rev-parse', '--verify', '--end-of-options', `${baseline}^{commit}`],
+    repoDir,
+    'frozen-tests: baseline commit does not resolve',
+    env,
+  );
+  let text: string;
+  try {
+    text = await run(
+      'git',
+      [...harden, 'cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
+      repoDir,
+      'frozen-tests baseline capabilities read failed',
+      env,
+    );
+  } catch {
+    return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the baseline commit' };
+  }
+  const parsed = parseLoopCapabilities(text);
+  return parsed.ok ? parsed : { ok: false, cause: 'malformed', reason: parsed.reason };
+}
+
 export async function changedTestPathsFromCapabilities(query: {
   repoDir: string;
   baseline: string;
   head: string;
 }): Promise<ChangedTestPathsResult> {
-  const capabilities = loadLoopCapabilities(query.repoDir);
+  const capabilities = await baselineCapabilities(query.repoDir, query.baseline);
   if (!capabilities.ok) return capabilities;
   const paths = await changedTestPaths({ ...query, testGlobs: capabilities.value.testGlobs });
   return { ok: true, paths };
