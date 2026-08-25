@@ -103,12 +103,12 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   return [...new Set(matched)].sort();
 }
 
-/** The changed test paths, sourcing the globs from the repo's own loop-capabilities.yaml. Its failure arm is
- *  the capabilities-load failure (absent/malformed/confinement) so a consumer can degrade or refuse; a git or
- *  baseline failure still rejects (fail toward firing). This is the seam S3/S4 gate a turn on. */
+/** The changed test paths, sourcing the globs from the RED baseline's loop-capabilities.yaml (a git blob, so
+ *  no path is walked and there is no `confinement` cause). Its failure arm is absent (no config → degrade) or
+ *  malformed (human-owned); a git or baseline failure rejects (fail toward firing). The seam S3/S4 gate on. */
 export type ChangedTestPathsResult =
   | { ok: true; paths: string[] }
-  | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
+  | { ok: false; cause: 'absent' | 'malformed'; reason: string };
 
 /** The baseline-sourced capabilities: a git blob read, so it never has the working-tree loader's `confinement`
  *  cause. Absent (no config in the baseline) degrades; malformed is human-owned; a bad baseline rejects. */
