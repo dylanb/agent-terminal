@@ -5,7 +5,7 @@
 // The load path confines the file inside the untrusted repo working tree (resolveJail, CWE-22/59) and
 // classifies a caught errno through errno.ts.
 
-import { openSync, fstatSync, readFileSync, closeSync, constants } from 'node:fs';
+import { openSync, fstatSync, readSync, closeSync, constants } from 'node:fs';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 import { isErrno, errMsg } from './errno';
@@ -62,6 +62,11 @@ function requireSupportedGlob(glob: string): void {
     fail(`test_globs entry ${JSON.stringify(glob)} uses unsupported glob syntax ({}, []); only *, ?, and whole-segment ** are honored`);
   }
   for (const segment of glob.split('/')) {
+    // git diff paths are repo-relative and normalized: an empty segment (leading/trailing/doubled `/`) or a
+    // `.`/`..` segment can never appear, so such a glob matches nothing and the frozen check fails AWAY.
+    if (segment === '' || segment === '.' || segment === '..') {
+      fail(`test_globs entry ${JSON.stringify(glob)} has an empty or '.'/'..' path segment; git paths are repo-relative and normalized, so it can never match`);
+    }
     if (segment.includes('**') && segment !== '**') {
       fail(`test_globs entry ${JSON.stringify(glob)} uses ** inside a segment; ** is honored only as a whole path segment`);
     }
@@ -138,10 +143,18 @@ export function loadLoopCapabilities(repoDir: string): LoopCapabilitiesLoad {
 
   let text: string;
   try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
-    if (st.size > MAX_CAPABILITIES_BYTES) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
-    text = readFileSync(fd, 'utf8'); // the same fd we fstat'd — never a re-resolved path (TOCTOU)
+    if (!fstatSync(fd).isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
+    // Read at most MAX+1 bytes FROM THIS fd (never readFileSync's read-to-EOF): a file appended-to after the
+    // fstat cannot cause an unbounded read past the cap (CWE-400/770). MAX+1 bytes present ⇒ over the limit.
+    const buf = Buffer.alloc(MAX_CAPABILITIES_BYTES + 1);
+    let total = 0;
+    for (;;) {
+      const n = readSync(fd, buf, total, buf.length - total, total);
+      if (n === 0 || total >= buf.length) break;
+      total += n;
+    }
+    if (total > MAX_CAPABILITIES_BYTES) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
+    text = buf.toString('utf8', 0, total);
   } catch (e) {
     return { ok: false, cause: 'malformed', reason: `cannot read loop-capabilities.yaml: ${errMsg(e)}` };
   } finally {
