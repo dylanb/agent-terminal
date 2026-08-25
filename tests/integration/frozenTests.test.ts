@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changedTestPaths, changedTestPathsFromCapabilities } from '../../src/main/frozenTests';
+import { changedTestPaths, changedTestPathsFromCapabilities, strictDecodeNulPaths } from '../../src/main/frozenTests';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 // §28.5.1 — the pure-git frozen-tests detection, exercised against REAL temporary repositories (no mock git).
@@ -23,6 +23,16 @@ describe('changedTestPaths (§28.5.1)', () => {
     const baseline = repos.commitAll(dir, 'seed');
     return { dir, baseline };
   }
+
+  it('strictDecodeNulPaths returns exact UTF-8 paths and rejects non-UTF-8 git output (fail toward firing)', () => {
+    // git -z emits pathname BYTES, not guaranteed UTF-8; a lossy decode would normalize a changed test path
+    // into a different one. Valid UTF-8 decodes exactly; invalid bytes reject rather than being replaced.
+    expect(strictDecodeNulPaths(Buffer.from('tests/café.test.ts\0src/a.ts\0', 'utf8'))).toEqual([
+      'tests/café.test.ts',
+      'src/a.ts',
+    ]);
+    expect(() => strictDecodeNulPaths(Buffer.from([0x74, 0x65, 0x73, 0x74, 0xff, 0xfe, 0x00]))).toThrow(/non-UTF-8/);
+  });
 
   it('returns a test-glob file that changed between baseline and head', async () => {
     const { dir, baseline } = seeded();

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isGitObjectId } from '../shared/appBootstrap';
-import { run } from './appBootstrapCommand';
+import { run, runBuffer } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
 import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES } from '../shared/loopCapabilities';
@@ -25,6 +25,20 @@ export interface FrozenTestsQuery {
   head: string;
   /** The repository's test path globs (from loop-capabilities.yaml, §28.5.4). */
   testGlobs: readonly string[];
+}
+
+/** Decode git's `-z` NUL-separated pathname BYTES into exact paths, or throw. Git pathnames are byte strings
+ *  not guaranteed to be UTF-8 (POSIX), so a fatal decoder rejects non-UTF-8 output (fail toward firing) rather
+ *  than let a lossy decode normalize a changed test path into a different one. The trailing empty entry from
+ *  the final NUL is dropped. Exported for direct testing: a non-UTF-8 filename cannot be created on macOS. */
+export function strictDecodeNulPaths(stdout: Buffer): string[] {
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
+  } catch {
+    throw new Error('frozen-tests: git emitted non-UTF-8 path bytes');
+  }
+  return text.split('\0').filter((path) => path.length > 0);
 }
 
 /** A ref that is safe to hand git as a revision: non-empty and free of control characters that would corrupt
@@ -47,7 +61,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
 
   // A fresh, unpredictable, never-created hooks dir: with core.hooksPath pointed here no hook can run.
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-  const stdout = await run(
+  const stdout = await runBuffer(
     'git',
     [
       '--no-replace-objects', // ignore any repo-planted refs/replace/* so the recorded baseline is used verbatim (tamper-evidence)
@@ -56,7 +70,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
       ...coreExecHardeningArgs(disabledHooks),
       'diff',
       '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
-      '-z', // NUL-delimited, raw UTF-8: git otherwise C-quotes non-ASCII names and they never match a glob
+      '-z', // NUL-delimited raw pathname BYTES (git does not C-quote), decoded strictly below
       '--no-renames', // decompose renames to delete+add (config-independent) so a test moved out still shows
       '--ignore-submodules=none', // a changed test tree tracked as a gitlink must show regardless of a repo-local diff.ignoreSubmodules
       '--end-of-options', // the two revisions cannot be read as options (CWE-88)
@@ -68,7 +82,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     { GIT_NO_LAZY_FETCH: '1' }, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
 
-  const changed = stdout.split('\0').filter((path) => path.length > 0);
+  const changed = strictDecodeNulPaths(stdout);
   // Aggregate work guard (CWE-400): a bloated capabilities file (many long globs) times many changed paths can
   // amplify matching far past any single pair. Charge (Σ glob chars)·(path chars) per path and reject once the
   // running total passes the budget — fail toward firing, never a silent hang in the main process. globMatch
