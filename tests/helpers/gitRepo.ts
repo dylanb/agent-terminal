@@ -22,6 +22,10 @@ export interface GitRepoFixture {
   removeRepoFile(dir: string, relPath: string): void;
   /** Stage everything and commit; returns the new commit's full object id. */
   commitAll(dir: string, message: string): string;
+  /** Run a raw git command in this fixture's hermetic env (redirected config, fixed dates); returns trimmed
+   *  stdout. For adversarial setups the higher-level helpers don't model — a planted `refs/replace/*`, a
+   *  gitlink via `update-index --cacheinfo`, a hostile repo-local `diff.*` config. */
+  git(dir: string, args: string[]): string;
   /** Restore the git-config env and remove every temp dir this fixture created. */
   cleanup(): void;
 }
@@ -66,6 +70,9 @@ export function createGitRepoFixture(): GitRepoFixture {
       git(dir, ['add', '-A']);
       git(dir, ['commit', '-q', '-m', message]);
       return git(dir, ['rev-parse', 'HEAD']);
+    },
+    git(dir, args) {
+      return git(dir, args);
     },
     cleanup() {
       if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;

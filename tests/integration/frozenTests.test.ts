@@ -120,4 +120,36 @@ describe('changedTestPaths (§28.5.1)', () => {
       changedTestPaths({ repoDir: dir, baseline: '--upload-pack=evil', head: 'HEAD', testGlobs: TEST_GLOBS }),
     ).rejects.toThrow();
   });
+
+  it('is not fooled by a repo-planted refs/replace/* that substitutes head for the baseline (tamper-evidence)', async () => {
+    // `git replace <baseline> <head>` makes git serve head wherever baseline is asked for, so a naive
+    // `git diff <baseline> <head>` becomes head..head and reports nothing — the check must ignore replace refs.
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'edit test');
+    repos.git(dir, ['replace', baseline, head]);
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('detects a changed test tree tracked as a gitlink even under a repo-local diff.ignoreSubmodules', async () => {
+    // A test tree carried as a submodule (gitlink) whose pointer changes is a real change; a repo-local
+    // `diff.ignoreSubmodules=all` would hide it from a naive diff. The check must override that config.
+    const dir = repos.makeGitRepo('frozen-gitlink');
+    repos.writeRepoFile(dir, 'placeholder', 'x\n');
+    const c1 = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'placeholder', 'y\n');
+    const c2 = repos.commitAll(dir, 'second'); // a distinct real commit id for the gitlink to point at
+    repos.git(dir, ['update-index', '--add', '--cacheinfo', `160000,${c1},tests/sub`]);
+    repos.git(dir, ['commit', '-q', '-m', 'gitlink -> c1']);
+    const baseline = repos.git(dir, ['rev-parse', 'HEAD']);
+    repos.git(dir, ['update-index', '--cacheinfo', `160000,${c2},tests/sub`]);
+    repos.git(dir, ['commit', '-q', '-m', 'gitlink -> c2']);
+    const head = repos.git(dir, ['rev-parse', 'HEAD']);
+    repos.git(dir, ['config', 'diff.ignoreSubmodules', 'all']); // the hostile repo-local config
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toContain(
+      'tests/sub',
+    );
+  });
 });
