@@ -1,1 +1,0 @@
-Fixed in 85ec44d. The object-id assertion now accepts SHA-1 (40 hex) or SHA-256 (64 hex), so the fixture hermeticity pin is portable to a `GIT_DEFAULT_HASH=sha256` environment. The load-bearing assertion here is `existsSync(join(dir, '.git'))` (the repo is the fixture's own, not the ambient `GIT_DIR`); the id-shape check is just a "a commit happened" sanity check. Resolving.

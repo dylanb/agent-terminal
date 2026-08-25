@@ -106,6 +106,18 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     ).toContain('select_template');
   });
 
+  it('accepts a file of exactly 512 KiB and rejects one byte over (inclusive size boundary at the parse layer)', () => {
+    const CAP = 512 * 1024;
+    const base = 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n';
+    const filler = (n: number): string => `# ${'x'.repeat(n)}\n`; // adds n + 3 bytes
+    const atCap = `${base}${filler(CAP - Buffer.byteLength(base) - 3)}`;
+    expect(Buffer.byteLength(atCap)).toBe(CAP);
+    expect(parseLoopCapabilities(atCap).ok).toBe(true); // exactly at the cap parses — the boundary is inclusive
+    const overCap = `${base}${filler(CAP - Buffer.byteLength(base) - 3 + 1)}`;
+    expect(Buffer.byteLength(overCap)).toBe(CAP + 1);
+    expect(rejectReason(overCap)).toContain('too large');
+  });
+
   it('rejects malformed yaml with a surfaced reason', () => {
     expect(rejectReason('test_globs: [unterminated\n')).toContain('malformed yaml');
   });

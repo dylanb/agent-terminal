@@ -67,9 +67,8 @@ function requireTestGlobs(value: unknown): string[] {
 }
 
 function parse(text: string): LoopCapabilities {
-  // The size cap lives at this shared parse boundary so every reader — the working-tree loader and the
-  // baseline blob reader — classifies an over-cap file identically (CWE-400/770). TextEncoder (not Buffer) so
-  // the shared module stays renderer-safe.
+  // The size cap lives at this shared parse boundary so every byte-source reader classifies an over-cap file
+  // identically (CWE-400/770). TextEncoder (not Buffer) keeps the shared module renderer-safe.
   if (new TextEncoder().encode(text).length > MAX_CAPABILITIES_BYTES) fail('loop-capabilities.yaml is too large');
   let doc: unknown;
   try {
