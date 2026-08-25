@@ -4,6 +4,7 @@
 // filesystem read is main-only (src/main/loopCapabilities.ts); nothing here touches node:fs.
 
 import yaml from 'js-yaml';
+import { unsupportedGlobReason } from './globMatch';
 
 export const LOOP_CAPABILITIES_FILENAME = 'loop-capabilities.yaml';
 
@@ -45,29 +46,11 @@ function requireNonBlankString(value: unknown, what: string): string {
   return value;
 }
 
-// globMatch (§28.5.1) honors only `*`, `?`, and a WHOLE-segment `**`; braces, char-classes, and a partial `**`
-// are literal there, so such a glob would match nothing and the frozen check would read as "no test changed" —
-// a fail-AWAY. Rejecting here makes a bad glob a loud `malformed`, never silent under-matching.
+// The supported grammar is defined once in ./globMatch; rejecting a glob the matcher cannot honor makes it a
+// loud `malformed` rather than a silent fail-away, and cannot drift from what globMatch actually matches.
 function requireSupportedGlob(glob: string): void {
-  if (glob.includes('\0')) {
-    fail(`test_globs entry ${JSON.stringify(glob)} contains a NUL byte; a git path never does, so it could never match`);
-  }
-  if (glob.startsWith('!')) {
-    fail(`test_globs entry ${JSON.stringify(glob)} uses leading-negation syntax, which globMatch treats literally; only *, ?, and whole-segment ** are honored`);
-  }
-  if (/[{}()[\]|]/.test(glob)) {
-    fail(`test_globs entry ${JSON.stringify(glob)} uses unsupported glob syntax (braces, parens, brackets, or |); only *, ?, and whole-segment ** are honored`);
-  }
-  for (const segment of glob.split('/')) {
-    // git diff paths are repo-relative and normalized: an empty segment (leading/trailing/doubled `/`) or a
-    // `.`/`..` segment can never appear, so such a glob matches nothing and the frozen check fails AWAY.
-    if (segment === '' || segment === '.' || segment === '..') {
-      fail(`test_globs entry ${JSON.stringify(glob)} has an empty or '.'/'..' path segment; git paths are repo-relative and normalized, so it can never match`);
-    }
-    if (segment.includes('**') && segment !== '**') {
-      fail(`test_globs entry ${JSON.stringify(glob)} uses ** inside a segment; ** is honored only as a whole path segment`);
-    }
-  }
+  const reason = unsupportedGlobReason(glob);
+  if (reason !== null) fail(`test_globs entry ${JSON.stringify(glob)} ${reason}`);
 }
 
 function requireTestGlobs(value: unknown): string[] {

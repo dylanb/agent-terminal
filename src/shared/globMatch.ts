@@ -1,12 +1,38 @@
-// §28.5.1 — a regex-free glob matcher for repo-relative POSIX paths. Its supported grammar (`*`, `?`,
-// whole-segment `**`) is the contract src/main/loopCapabilities.ts's requireSupportedGlob enforces — the two
-// must change together. Regex-free + work-capped because both the pattern and the path are untrusted (CWE-1333/400).
+// §28.5.1 — a regex-free glob matcher for repo-relative POSIX paths, AND the single definition of its
+// supported grammar. Both consumers live off this one module (shared-semantics, #105): the frozen-tests
+// detector matches with globMatch, and the loop-capabilities parser rejects unsupported syntax with
+// unsupportedGlobReason — so what the matcher honors and what the validator rejects cannot drift apart.
+// Regex-free + work-capped because both the pattern and the path are untrusted (CWE-1333/400).
 
 // The most character comparisons any one match may perform. The total segmentMatch work is bounded by
 // (Σ pattern-segment lengths)·(Σ path-segment lengths) ≈ |pattern|·|path| CHARACTERS — counting SEGMENTS would
 // miss a single huge segment (a 1 MiB path component vs a 1024-char wildcard is 1×1 segments but ~10⁹ chars).
 // Real globs/paths multiply to < 10⁵; this cap (10⁶) only rejects a crafted path, and bounds the work.
 const MAX_GLOB_MATCH_CHARS = 1_000_000;
+
+/** Why `glob` uses syntax this matcher does NOT honor (so it would silently match nothing — a fail-away), or
+ *  null when it is within the supported grammar (`*`, `?`, whole-segment `**`). The one grammar definition the
+ *  loop-capabilities parser rejects against; keeping it here beside globMatch is what prevents the two drifting. */
+export function unsupportedGlobReason(glob: string): string | null {
+  if (glob.includes('\0')) return 'contains a NUL byte; a git path never does, so it could never match';
+  if (glob.startsWith('!')) {
+    return 'uses leading-negation syntax, which is literal here; only *, ?, and whole-segment ** are honored';
+  }
+  if (/[{}()[\]|]/.test(glob)) {
+    return 'uses unsupported glob syntax (braces, parens, brackets, or |); only *, ?, and whole-segment ** are honored';
+  }
+  for (const segment of glob.split('/')) {
+    // git diff paths are repo-relative and normalized, so an empty segment (leading/trailing/doubled `/`) or a
+    // `.`/`..` segment can never appear — such a glob matches nothing (fail-away).
+    if (segment === '' || segment === '.' || segment === '..') {
+      return "has an empty or '.'/'..' path segment; git paths are repo-relative and normalized, so it can never match";
+    }
+    if (segment.includes('**') && segment !== '**') {
+      return 'uses ** inside a segment; ** is honored only as a whole path segment';
+    }
+  }
+  return null;
+}
 
 /** Whether `pattern` matches the whole repo-relative path `path`. Throws `RangeError` when the pattern×path
  *  character product exceeds the work budget (an untrusted-input resource-exhaustion guard, CWE-400). */

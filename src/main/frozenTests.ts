@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { run, runBuffer } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
-import { matchesAnyGlob } from './globMatch';
+import { matchesAnyGlob } from '../shared/globMatch';
 import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES } from '../shared/loopCapabilities';
 import { type LoopCapabilitiesLoad } from './loopCapabilities';
 

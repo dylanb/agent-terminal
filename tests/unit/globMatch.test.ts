@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { globMatch, matchesAnyGlob } from '../../src/main/globMatch';
+import { globMatch, matchesAnyGlob } from '../../src/shared/globMatch';
 
 describe('globMatch — supported subset: * ? ** over repo-relative posix paths', () => {
   it('matches an exact literal path', () => {
