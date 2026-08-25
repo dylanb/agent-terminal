@@ -35,7 +35,7 @@ const NETWORK_OP_HARDENING_ARGS = [
 
 /** Every neutralizing `-c` arg prepended to each git invocation in the bootstrap wrapper: the shared
  *  local-exec hardening (single-sourced in gitHardening.ts) followed by the remote-op hardening. */
-export function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
+function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
   return [...coreExecHardeningArgs(disabledHooksPath), ...NETWORK_OP_HARDENING_ARGS];
 }
 import {

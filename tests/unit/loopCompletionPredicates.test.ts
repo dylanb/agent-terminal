@@ -29,5 +29,17 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.cause).toBe('absent');
     });
+
+    it('surfaces the matched changed path when the repo has a loop-capabilities.yaml (success wiring)', async () => {
+      const dir = repos.makeGitRepo('predicates-ok');
+      repos.writeRepoFile(dir, 'loop-capabilities.yaml', 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+      repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+      const baseline = repos.commitAll(dir, 'seed');
+      repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+      const head = repos.commitAll(dir, 'edit');
+
+      const result = await createLoopCompletionPredicates().changedTestPaths({ repoDir: dir, baseline, head });
+      expect(result).toEqual({ ok: true, paths: ['tests/a.test.ts'] });
+    });
   });
 });
