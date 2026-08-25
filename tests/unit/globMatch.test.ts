@@ -60,4 +60,13 @@ describe('globMatch — supported subset: * ? ** over repo-relative posix paths'
     const path = Array(40).fill('a').join('/') + '/b.ts';
     expect(globMatch(pattern, path)).toBe(false);
   });
+
+  it('rejects a match whose pattern×path segment product exceeds the work budget (untrusted-input DoS guard)', () => {
+    // An untrusted repo path with a huge segment count would otherwise drive an O(pattern×path) scan
+    // synchronously in the main process (CWE-400/1333). 1001×1001 ≈ 1.0M cells exceeds the 1M budget.
+    const deep = (segs: number): string => Array(segs).fill('a').join('/');
+    expect(() => globMatch(deep(1001), deep(1001))).toThrow(/budget/i);
+    // A realistic pattern/path stays well under budget and still matches normally.
+    expect(globMatch('tests/**', `tests/${deep(50)}/x.test.ts`)).toBe(true);
+  });
 });
