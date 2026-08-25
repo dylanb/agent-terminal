@@ -124,6 +124,21 @@ describe('changedTestPaths (§28.5.1)', () => {
     ).rejects.toThrow();
   });
 
+  it('neutralizes an option-shaped head via --end-of-options — isSafeRef permits a leading -, git must not honor it', async () => {
+    // isSafeRef deliberately allows a leading '-' (only control chars are barred), relying on --end-of-options
+    // to keep the revision from being read as an option. An --output= head must therefore be rejected as an
+    // unknown revision AND must NOT write the file the option would — this reaches git, unlike the baseline
+    // case above which isGitObjectId stops first. Deleting --end-of-options makes this fail.
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    repos.commitAll(dir, 'edit');
+    const sentinel = join(dir, 'pwned-output');
+    await expect(
+      changedTestPaths({ repoDir: dir, baseline, head: `--output=${sentinel}`, testGlobs: TEST_GLOBS }),
+    ).rejects.toThrow();
+    expect(existsSync(sentinel)).toBe(false); // --output was not honored as an option
+  });
+
   it('sources test_globs from the trusted baseline, so narrowing the working-tree config cannot hide a test edit', async () => {
     // The frozen check must be tamper-evident: the same agent being checked controls the working tree, so if
     // test_globs were read from there it could narrow tests/** to src/** in head and make an edited
