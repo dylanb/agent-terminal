@@ -1,10 +1,5 @@
-// §28.5.5 — the framework-neutral phase-outcome vocabulary: the *category* of a test run's result, named
-// so it does not know one runner from another (§28.5.2). A closed set, recognized by exact string equality
-// and NEVER normalized, single-sourced here the way `DISPOSITIONS` is in roundReport.ts (§27.5) so every
-// reader recognizes the same members and none can drift. The engine only recognizes membership — it never
-// runs the test command (§28.5.4); the agent classifies its own run's output into one of these and the
-// engine bounds the claim. Callers narrow an untrusted value to `string` before asking; the guard does no
-// coercion of its own.
+// §28.5.5 — the phase-outcome vocabulary. A closed set, matched by exact string equality and NEVER normalized,
+// single-sourced here the way `DISPOSITIONS` is (§27.5) so every reader shares one definition and cannot drift.
 export const PHASE_OUTCOMES = ['passed', 'failed-assertion', 'errored', 'no-tests-selected'] as const;
 export type PhaseOutcome = (typeof PHASE_OUTCOMES)[number];
 

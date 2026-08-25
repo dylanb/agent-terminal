@@ -8,13 +8,9 @@
 // The subset is deliberate: test_globs are the small, well-known shapes (`tests/**/*.test.ts`, `**/*_test.go`),
 // and a narrow, total grammar is what keeps the matcher regex-free.
 //
-// Regex-free by construction: matched with a bottom-up dynamic-programming recurrence over path segments, so
-// an adversarial pattern from an untrusted repo's loop-capabilities.yaml cannot trigger catastrophic
-// backtracking (CWE-1333). The recurrence is polynomial — O(|pattern segments| × |path segments|) segment
-// comparisons, each a bounded two-pointer wildcard match, with no recursion — and is rolled to a single row
-// so storage is O(|path segments|), not the full table. The path comes from untrusted `git diff` output, so
-// the aggregate comparison count is capped before matching (CWE-400): a crafted deep path is rejected rather
-// than allowed to hang/OOM the main process.
+// The grammar is narrow and total on purpose: staying regex-free denies an adversarial pattern from an
+// untrusted loop-capabilities.yaml any catastrophic backtracking (CWE-1333), and the work is capped before
+// matching so a crafted deep path from untrusted `git diff` output cannot hang/OOM the main process (CWE-400).
 
 // The most character comparisons any one match may perform. The total segmentMatch work is bounded by
 // (Σ pattern-segment lengths)·(Σ path-segment lengths) ≈ |pattern|·|path| CHARACTERS — counting SEGMENTS would

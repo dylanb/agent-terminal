@@ -1,8 +1,6 @@
-// §28.5.3 — the main-process home where the S1 machine-completion predicates plug into the §27.12 gate. S1
-// stands this seam up and wires it onto the loop engine's surface; S3/S4 make the RED/GREEN completion gate
-// call through it. Bundling the framework-neutral outcome recognizer (§28.5.2) with the capabilities-sourced
-// frozen-tests detection (§28.5.1) gives the engine ONE injection point named for the domain concept — "the
-// machine ground truth about a turn" — rather than the mechanisms behind it.
+// §28.5.3 — one injection point for "the machine ground truth about a turn": the framework-neutral outcome
+// recognizer (§28.5.2) and the capabilities-sourced frozen-tests detection (§28.5.1) behind a seam named for
+// that domain concept, not the mechanisms behind it (CLAUDE.md injection-seam rule).
 import { isPhaseOutcome, type PhaseOutcome } from '../shared/phaseOutcome';
 import { changedTestPathsFromCapabilities, type ChangedTestPathsResult } from './frozenTests';
 

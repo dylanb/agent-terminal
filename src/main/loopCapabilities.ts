@@ -1,9 +1,6 @@
-// §28.5.4 / P8.5 — the standalone per-repo `loop-capabilities.yaml`: the "how to run it" data every loop def
-// references. The engine NEVER executes test_command/build_command — they are inert strings the agent's
-// recipe reads as guidance; the engine only parses and validates the shape. Validation mirrors loopDefV2.ts:
-// a private error class + fail(), the shared isRecord guard, a closed key set, and a discriminated Result.
-// The load path confines the file inside the untrusted repo working tree (resolveJail, CWE-22/59) and
-// classifies a caught errno through errno.ts.
+// §28.5.4 — the per-repo `loop-capabilities.yaml`. The engine NEVER executes test_command/build_command: they
+// are inert guidance strings, only parsed and shape-validated. The file lives in the untrusted repo working
+// tree, so it is confined before reading (resolveJail, CWE-22/59) and read fail-closed.
 
 import { openSync, fstatSync, readSync, closeSync, constants } from 'node:fs';
 import yaml from 'js-yaml';

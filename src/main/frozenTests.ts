@@ -1,10 +1,7 @@
-// §28.5.1 — the frozen-tests detection: which test-glob files changed between a baseline commit and a head,
-// computed from git alone with NO knowledge of any test framework. Pure ground truth for the §28 completion
-// predicates (S3/S4): the engine never runs the test command (§28.5.4); it only asks git what changed.
-//
-// The paths are string-matched against `testGlobs`, never opened or walked, so no path confinement applies to
-// the diff output. It fails TOWARD the check firing (CWE-20/770): a bad baseline, an empty glob list, or a
-// non-object-id baseline all reject rather than reading as "nothing changed".
+// §28.5.1 — the frozen-tests detection. Two invariants the code leans on but does not spell: the diff paths
+// are string-matched, never opened or walked, so no path confinement applies here; and every arm fails TOWARD
+// the check firing (CWE-20/770) — a bad baseline, an empty glob list, or an unresolvable head reject rather
+// than read as "nothing changed".
 
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
