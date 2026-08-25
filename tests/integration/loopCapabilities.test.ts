@@ -86,4 +86,27 @@ describe('loadLoopCapabilities (§28.5.4) — confined read of an untrusted repo
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.cause).toBe('malformed');
   });
+
+  it('enforces the 512 KiB size cap: rejects just-over and accepts exactly-at-cap (§28.5.4 CWE-400/770)', () => {
+    const CAP = 512 * 1024; // MAX_CAPABILITIES_BYTES — the cap is part of the §28.5.4 contract, pinned here.
+    const over = repoDir('caps-too-big');
+    writeFileSync(join(over, LOOP_CAPABILITIES_FILENAME), `${WELL_FORMED}# ${'x'.repeat(CAP)}\n`);
+    const rOver = loadLoopCapabilities(over);
+    expect(rOver.ok).toBe(false);
+    if (!rOver.ok) {
+      expect(rOver.cause).toBe('malformed');
+      expect(rOver.reason).toContain('too large');
+    }
+
+    // Exactly at the cap → `size > CAP` is false → still read and parsed (the boundary is inclusive).
+    const at = repoDir('caps-at-cap');
+    const filler = `# ${'x'.repeat(CAP - Buffer.byteLength(WELL_FORMED) - 3)}\n`;
+    const atCap = `${WELL_FORMED}${filler}`;
+    expect(Buffer.byteLength(atCap)).toBe(CAP);
+    writeFileSync(join(at, LOOP_CAPABILITIES_FILENAME), atCap);
+    expect(loadLoopCapabilities(at)).toEqual({
+      ok: true,
+      value: { testGlobs: ['tests/**'], testCommand: 'pnpm test', buildCommand: 'pnpm run build' },
+    });
+  });
 });
