@@ -8,34 +8,47 @@
 // The subset is deliberate: test_globs are the small, well-known shapes (`tests/**/*.test.ts`, `**/*_test.go`),
 // and a narrow, total grammar is what keeps the matcher regex-free.
 //
-// Regex-free by construction: matched with a bottom-up dynamic-programming table over path segments, so an
-// adversarial pattern from an untrusted repo's loop-capabilities.yaml cannot trigger catastrophic
-// backtracking (CWE-1333). The matcher is polynomial — O(|pattern segments| × |path segments|) segment
-// comparisons, each a bounded two-pointer wildcard match — with no recursion.
+// Regex-free by construction: matched with a bottom-up dynamic-programming recurrence over path segments, so
+// an adversarial pattern from an untrusted repo's loop-capabilities.yaml cannot trigger catastrophic
+// backtracking (CWE-1333). The recurrence is polynomial — O(|pattern segments| × |path segments|) segment
+// comparisons, each a bounded two-pointer wildcard match, with no recursion — and is rolled to a single row
+// so storage is O(|path segments|), not the full table. The path comes from untrusted `git diff` output, so
+// the aggregate comparison count is capped before matching (CWE-400): a crafted deep path is rejected rather
+// than allowed to hang/OOM the main process.
 
-/** Whether `pattern` matches the whole repo-relative path `path`. */
+// The most pattern×path segment comparisons any one match may perform. Real globs/paths are a few segments
+// each (product < 10³); this cap (≈10⁶) only rejects a pathological crafted path, and bounds both the O(m)
+// rolling storage and the total work.
+const MAX_GLOB_MATCH_CELLS = 1_000_000;
+
+/** Whether `pattern` matches the whole repo-relative path `path`. Throws `RangeError` when the pattern×path
+ *  segment product exceeds the work budget (an untrusted-input resource-exhaustion guard, CWE-400). */
 export function globMatch(pattern: string, path: string): boolean {
   const p = pattern.split('/');
   const t = path.split('/');
   const n = p.length;
   const m = t.length;
-
-  // dp[i][j] = the pattern suffix p[i..] matches the path suffix t[j..].
-  const dp: boolean[][] = Array.from({ length: n + 1 }, () => new Array<boolean>(m + 1).fill(false));
-  dp[n][m] = true;
-  // Pattern exhausted but path remains → no match (dp[n][j<m] stays false). Path exhausted but pattern
-  // remains matches only if every remaining pattern segment is `**` (each may match zero segments).
-  for (let i = n - 1; i >= 0; i--) dp[i][m] = p[i] === '**' && dp[i + 1][m];
-
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] =
-        p[i] === '**'
-          ? dp[i + 1][j] /* ** matches zero segments here */ || dp[i][j + 1] /* … or consumes t[j] */
-          : segmentMatch(p[i], t[j]) && dp[i + 1][j + 1];
-    }
+  if (n * m > MAX_GLOB_MATCH_CELLS) {
+    throw new RangeError(`glob match budget exceeded: ${n}×${m} segment comparisons`);
   }
-  return dp[0][0];
+
+  // `next[j]` = the pattern suffix p[i+1..] matches the path suffix t[j..]; `cur[j]` = the same for p[i..].
+  // Rolling one pattern row at a time keeps storage O(m). Base (pattern exhausted): only a fully consumed
+  // path (j=m) matches; path exhausted with pattern left matches only if every remaining segment is `**`.
+  let next = new Array<boolean>(m + 1).fill(false);
+  next[m] = true;
+  for (let i = n - 1; i >= 0; i--) {
+    const cur = new Array<boolean>(m + 1).fill(false);
+    cur[m] = p[i] === '**' && next[m];
+    for (let j = m - 1; j >= 0; j--) {
+      cur[j] =
+        p[i] === '**'
+          ? next[j] /* ** matches zero segments here */ || cur[j + 1] /* … or consumes t[j] */
+          : segmentMatch(p[i], t[j]) && next[j + 1];
+    }
+    next = cur;
+  }
+  return next[0];
 }
 
 /** Whether `path` matches any of `patterns` (the empty list matches nothing). */
