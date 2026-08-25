@@ -58,8 +58,11 @@ export function matchesAnyGlob(path: string, patterns: readonly string[]): boole
 }
 
 /** Match one path segment against one pattern segment where `*` is any run of characters and `?` is one.
- *  Iterative two-pointer with a single backtrack mark — O(|pat| × |seg|) worst case, never exponential. */
-function segmentMatch(pat: string, seg: string): boolean {
+ *  Iterated over CODE POINTS (Array.from), so `?` matches one whole non-BMP character, not half a surrogate
+ *  pair. Two-pointer with a single backtrack mark — O(|pat| × |seg|) worst case, never exponential. */
+function segmentMatch(patStr: string, segStr: string): boolean {
+  const pat = Array.from(patStr);
+  const seg = Array.from(segStr);
   let pi = 0;
   let si = 0;
   let star = -1;
