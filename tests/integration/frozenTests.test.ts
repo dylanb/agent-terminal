@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { changedTestPaths, changedTestPathsFromCapabilities } from '../../src/main/frozenTests';
@@ -171,6 +171,31 @@ describe('changedTestPaths (§28.5.1)', () => {
       expect(result.cause).toBe('malformed');
       expect(result.reason).toContain('too large');
     }
+  });
+
+  it('refuses a baseline loop-capabilities.yaml that is a symlink (not a regular file), like the working-tree loader', async () => {
+    // A committed symlink is a blob whose bytes are its link target. If those bytes are valid flow-yaml, a
+    // name-only existence check would read and accept them — but loadLoopCapabilities refuses the same symlink
+    // (O_NOFOLLOW). The ls-tree mode must be checked so both readers classify it as malformed.
+    const dir = repos.makeGitRepo('caps-baseline-symlink');
+    symlinkSync('{test_globs: [tests/**], test_command: t, build_command: b}', join(dir, 'loop-capabilities.yaml'));
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'edit');
+    const result = await changedTestPathsFromCapabilities({ repoDir: dir, baseline, head });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBe('malformed');
+  });
+
+  it('rejects a non-commit (tree) baseline rather than diffing it — the operand is peeled to a commit', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    repos.commitAll(dir, 'edit');
+    const treeSha = repos.git(dir, ['rev-parse', `${baseline}^{tree}`]); // a valid object id, but a tree, not a commit
+    await expect(
+      changedTestPaths({ repoDir: dir, baseline: treeSha, head: 'HEAD', testGlobs: TEST_GLOBS }),
+    ).rejects.toThrow();
   });
 
   it('classifies an over-subprocess-buffer baseline config as malformed "too large", not a read rejection', async () => {
