@@ -79,6 +79,21 @@ describe('loadLoopCapabilities (§28.5.4) — confined read of an untrusted repo
     if (!r.ok) expect(r.cause).toBe('malformed');
   });
 
+  it('reports cause "malformed" for invalid UTF-8 bytes rather than normalizing them (U+FFFD would fail-away)', () => {
+    const dir = repoDir('caps-badutf8');
+    // valid yaml STRUCTURE but a test_globs value carrying an invalid UTF-8 byte: a lossy decode would make it a
+    // valid object with a U+FFFD-altered glob (silently matching nothing); a fatal decode rejects it.
+    const bytes = Buffer.concat([
+      Buffer.from('test_globs: ["tests/'),
+      Buffer.from([0xff]),
+      Buffer.from('.ts"]\ntest_command: t\nbuild_command: b\n'),
+    ]);
+    writeFileSync(join(dir, LOOP_CAPABILITIES_FILENAME), bytes);
+    const r = loadLoopCapabilities(dir);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.cause).toBe('malformed');
+  });
+
   it('reports cause "malformed" when the capabilities path is a directory, not a regular file', () => {
     const dir = repoDir('caps-dir');
     mkdirSync(join(dir, LOOP_CAPABILITIES_FILENAME));

@@ -164,6 +164,23 @@ describe('changedTestPaths (§28.5.1)', () => {
     expect(result).toEqual({ ok: true, paths: ['tests/a.test.ts'] }); // still detected via the baseline's tests/**
   });
 
+  it('reports malformed for a baseline capabilities blob with invalid UTF-8 (not a normalized value)', async () => {
+    const dir = repos.makeGitRepo('caps-baseline-badutf8');
+    const bytes = Buffer.concat([
+      Buffer.from('test_globs: ["tests/'),
+      Buffer.from([0xff]),
+      Buffer.from('.ts"]\ntest_command: t\nbuild_command: b\n'),
+    ]);
+    writeFileSync(join(dir, 'loop-capabilities.yaml'), bytes);
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'edit');
+    const result = await changedTestPathsFromCapabilities({ repoDir: dir, baseline, head });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBe('malformed');
+  });
+
   it('applies the 512 KiB capabilities size cap to the baseline read too (same classification as the working tree)', async () => {
     const dir = repos.makeGitRepo('caps-baseline-big');
     repos.writeRepoFile(
