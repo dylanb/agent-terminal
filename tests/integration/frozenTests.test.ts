@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changedTestPaths } from '../../src/main/frozenTests';
+import { changedTestPaths, changedTestPathsFromCapabilities } from '../../src/main/frozenTests';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 // §28.5.1 — the pure-git frozen-tests detection, exercised against REAL temporary repositories (no mock git).
@@ -122,6 +122,21 @@ describe('changedTestPaths (§28.5.1)', () => {
     await expect(
       changedTestPaths({ repoDir: dir, baseline: '--upload-pack=evil', head: 'HEAD', testGlobs: TEST_GLOBS }),
     ).rejects.toThrow();
+  });
+
+  it('sources test_globs from the trusted baseline, so narrowing the working-tree config cannot hide a test edit', async () => {
+    // The frozen check must be tamper-evident: the same agent being checked controls the working tree, so if
+    // test_globs were read from there it could narrow tests/** to src/** in head and make an edited
+    // tests/a.test.ts vanish from the result. The globs come from the RED baseline's committed config instead.
+    const dir = repos.makeGitRepo('caps-narrow');
+    repos.writeRepoFile(dir, 'loop-capabilities.yaml', 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'loop-capabilities.yaml', 'test_globs: [src/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(dir, 'narrow config + edit test');
+    const result = await changedTestPathsFromCapabilities({ repoDir: dir, baseline, head });
+    expect(result).toEqual({ ok: true, paths: ['tests/a.test.ts'] }); // still detected via the baseline's tests/**
   });
 
   it('never launches an agent-controlled promisor transport during the diff (partial-clone lazy-fetch RCE)', async () => {

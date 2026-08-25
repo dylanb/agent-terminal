@@ -61,6 +61,15 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     );
   });
 
+  it('rejects test_globs using extglob or leading-negation syntax globMatch treats literally (fail-away)', () => {
+    expect(rejectReason('test_globs: ["tests/*.@(test|spec).ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+    expect(rejectReason('test_globs: ["!tests/skip.test.ts"]\ntest_command: t\nbuild_command: b\n')).toContain(
+      'test_globs',
+    );
+  });
+
   it('accepts the supported grammar — *, ?, and whole-segment ** — unchanged', () => {
     const r = parseLoopCapabilities('test_globs: ["tests/**", "**/*_test.go", "src/a?c/*.spec.ts"]\ntest_command: t\nbuild_command: b\n');
     expect(r.ok).toBe(true);
