@@ -6,6 +6,7 @@
 import { openSync, fstatSync, readSync, closeSync, constants } from 'node:fs';
 import { isErrno, errMsg } from './errno';
 import { resolveJail } from './confinedPath';
+import { decodeUtf8Strict } from './decodeUtf8Strict';
 import {
   LOOP_CAPABILITIES_FILENAME,
   MAX_CAPABILITIES_BYTES,
@@ -62,7 +63,8 @@ export function loadLoopCapabilities(repoDir: string): LoopCapabilitiesLoad {
       total += n;
     }
     // The read stops at MAX+1 bytes (memory bound); over-cap CLASSIFICATION is the shared parse boundary's job.
-    text = buf.toString('utf8', 0, total);
+    // Fatal decode: invalid UTF-8 is malformed, never silently normalized to U+FFFD (which would fail-away).
+    text = decodeUtf8Strict(buf.subarray(0, total));
   } catch (e) {
     return { ok: false, cause: 'malformed', reason: `cannot read loop-capabilities.yaml: ${errMsg(e)}` };
   } finally {

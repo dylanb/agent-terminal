@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { run, runBuffer } from './appBootstrapCommand';
+import { decodeUtf8Strict } from './decodeUtf8Strict';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from '../shared/globMatch';
 import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES } from '../shared/loopCapabilities';
@@ -34,7 +35,7 @@ export interface FrozenTestsQuery {
 export function strictDecodeNulPaths(stdout: Buffer): string[] {
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
+    text = decodeUtf8Strict(stdout);
   } catch {
     throw new Error('frozen-tests: git emitted non-UTF-8 path bytes');
   }
@@ -157,13 +158,19 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   if (!Number.isInteger(size) || size > MAX_CAPABILITIES_BYTES) {
     return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
   }
-  const text = await run(
+  const blob = await runBuffer(
     'git',
     [...harden, 'cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
     repoDir,
     'frozen-tests: baseline capabilities read failed',
     env,
   );
+  let text: string;
+  try {
+    text = decodeUtf8Strict(blob); // invalid UTF-8 is malformed, never normalized to a fail-away value
+  } catch {
+    return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not valid UTF-8' };
+  }
   const parsed = parseLoopCapabilities(text);
   return parsed.ok ? parsed : { ok: false, cause: 'malformed', reason: parsed.reason };
 }
