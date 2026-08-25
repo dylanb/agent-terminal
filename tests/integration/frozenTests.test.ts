@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { changedTestPaths } from '../../src/main/frozenTests';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
@@ -119,6 +122,38 @@ describe('changedTestPaths (§28.5.1)', () => {
     await expect(
       changedTestPaths({ repoDir: dir, baseline: '--upload-pack=evil', head: 'HEAD', testGlobs: TEST_GLOBS }),
     ).rejects.toThrow();
+  });
+
+  it('never launches an agent-controlled promisor transport during the diff (partial-clone lazy-fetch RCE)', async () => {
+    // A tree:0 partial clone lazy-fetches missing trees from its promisor remote. An agent-controlled
+    // .git/config can point that remote's transport at a command (here a custom `uploadpack`), so a
+    // "read-only" diff would run it. The read must fail closed on the missing objects and never launch it.
+    const source = repos.makeGitRepo('promisor-source');
+    repos.git(source, ['config', 'uploadpack.allowFilter', 'true']);
+    repos.writeRepoFile(source, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(source, 'seed');
+    repos.writeRepoFile(source, 'tests/a.test.ts', 'a2\n');
+    const head = repos.commitAll(source, 'edit');
+
+    const clone = mkdtempSync(join(tmpdir(), 'promisor-clone-'));
+    try {
+      repos.git(source, ['clone', '--filter=tree:0', '--no-checkout', `file://${source}`, clone]);
+      const sentinel = join(clone, 'PWNED');
+      const up = join(clone, 'up.sh');
+      writeFileSync(up, `#!/bin/sh\ntouch ${JSON.stringify(sentinel)}\nexit 1\n`, { mode: 0o755 });
+      repos.git(clone, ['config', 'remote.origin.uploadpack', up]); // the malicious promisor transport command
+
+      let threw = false;
+      try {
+        await changedTestPaths({ repoDir: clone, baseline, head, testGlobs: TEST_GLOBS });
+      } catch {
+        threw = true;
+      }
+      expect(existsSync(sentinel)).toBe(false); // the promisor command was never launched
+      expect(threw).toBe(true); // and the read failed closed on the missing objects
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
   });
 
   it('rejects rather than hangs when the aggregate glob×path matching work exceeds the budget (untrusted-input DoS)', async () => {
