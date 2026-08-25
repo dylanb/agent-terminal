@@ -10,7 +10,8 @@ import { isGitObjectId } from '../shared/appBootstrap';
 import { run } from './appBootstrapCommand';
 import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from './globMatch';
-import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES, type LoopCapabilitiesLoad } from './loopCapabilities';
+import { parseLoopCapabilities, LOOP_CAPABILITIES_FILENAME, MAX_CAPABILITIES_BYTES } from '../shared/loopCapabilities';
+import { type LoopCapabilitiesLoad } from './loopCapabilities';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLoopCapabilities } from '../../src/main/loopCapabilities';
+import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
 
 const WELL_FORMED = `test_globs:
   - tests/**/*.test.ts
