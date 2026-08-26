@@ -21,7 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Full history, not the default shallow single-branch fetch: tests/unit/n8SweepGuards.test.ts AC8 reads
+      # the pre-sweep changelog at `git merge-base HEAD origin/main`, which needs origin/main and a common
+      # ancestor to exist (§D.4). Pinned by tests/unit/ciTestWorkflowFullHistory.test.ts.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
 
