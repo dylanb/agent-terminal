@@ -25,7 +25,7 @@ flowchart TD
   GROOM -->|"groomed ticket"| PLAN["plan-bundle-loop<br/>(extends plan-loop)"]
   PLAN -->|"planning bundle:<br/>test-plan + tech-plan<br/>+ infra-plan + slice-plan"| EPICQ{"classified<br/>an epic?"}
   EPICQ -->|"yes"| PROMO["epic promotion<br/>(reuses §27.10)<br/>fan out to sub-tickets"]
-  PROMO -->|"each sub-ticket<br/>re-enters here"| GROOM
+  PROMO -->|"each sub-ticket:<br/>reconstruct groomed ticket +<br/>epic plan (skip groom, §27.10),<br/>then plan its own seams"| PLAN
   EPICQ -->|"no"| INFRA["infra-loop<br/>(new, impl-shaped)<br/>build the test harness"]
   INFRA -->|"infra commits"| SLICE1["slice-loop 1"]
   SLICE1 -->|"slice commits"| SLICEN["slice-loop N"]
@@ -51,9 +51,10 @@ flowchart LR
 
 The "commit between each phase" requirement is made first-class as a new **side-effect `kind`** alongside the §27.13 `gh` side-effects (`publish-pr-body`, `mark-ready`): a local **`git commit`** carrying the phase label (`RED: <slice>`, `GREEN: <slice>`, `refactor: <slice>`).
 
-- Like every side-effect it is **best-effort and out-of-band** (§27.13) — it runs as an app operation, never as terminal injection, so a busy shell cannot block it.
+- It is **out-of-band** (§27.13) — an app operation, never terminal injection, so a busy shell cannot block it. Inter-phase commits are **best-effort**; the RED commit is the exception (below).
 - It **carries the identity of what it commits** (the phase and slice), and the receiver never re-derives that target from ambient state (the §6 IPC payload-identity rule).
-- It **never modifies the user's `.gitignore`** (CODE-STANDARDS). Firing it advances `HEAD` by **exactly one commit** and leaves the tree clean; a pre-existing `.gitignore` is byte-for-byte unchanged — the RED-first pin for P3.
+- It stages **only the phase's own paths** and **never** the user's `.gitignore` (CODE-STANDARDS). Firing it advances `HEAD` by **exactly one commit**; "clean" here means the working tree's **unstaged and untracked files are left in the same state they were in when the phase started** — the commit captures its own changes and never sweeps an operator's unrelated edits. A pre-existing `.gitignore` is byte-for-byte unchanged — the RED-first pin for P3.
+- **The RED commit is blocking, not best-effort:** it is the baseline GREEN diffs against (§28.5.1) and the commit that puts the failing tests into the tree, so RED→GREEN advances only once it lands. On a commit failure the app **retries with `--no-verify`** — a repo pre-commit hook that runs tests will reject a *failing*-test commit, which is exactly the RED commit — and only if that retry also fails does the transition **block** on the §27.12 retry-then-`error` path (human-owned, resumable).
 
 ### 28.4 Engine change #2 — phase-as-a-loop (P4)
 
@@ -69,13 +70,13 @@ This is the one genuinely hard piece. §27.12 already says a turn is done only w
 
 #### 28.5.1 Frozen-tests — fully portable, pure machine, zero framework knowledge
 
-The check "no test file changed during GREEN" is pure git:
+The check "no test file changed during GREEN" is pure git. It runs at GREEN-turn-done — **before** the GREEN commit — so it diffs the **working tree and untracked files** against the RED baseline, not commit-to-commit (`..HEAD` would be empty, since HEAD is still the RED commit and GREEN's edits are unstaged):
 
 ```
-git diff --name-only <RED-commit>..HEAD  ∩  test_globs  ==  ∅
+( git diff --name-only <RED-commit>  ∪  git ls-files --others --exclude-standard )  ∩  test_globs  ==  ∅
 ```
 
-Git is universal (the engine already requires it for pickup, branches, and PRs — §27.10). The only repo-specific input is **`test_globs`** — a list of path globs matched against the diff **with no knowledge of what a test is**. `<RED-commit>` is the SHA the RED loop's `commit` side-effect (P3) recorded in loop state. This half ships portably today; it is the same class of machine check as §27.5's "the report accounts for every persona" — **structural and tamper-evident, not semantic**.
+Git is universal (the engine already requires it for pickup, branches, and PRs — §27.10). The only repo-specific input is **`test_globs`** — a list of path globs matched against the changed set **with no knowledge of what a test is**. `<RED-commit>` is the SHA the RED loop's `commit` side-effect (P3) recorded in loop state; because it is this baseline, that commit is blocking rather than best-effort (§28.3). This half ships portably today; it is the same class of machine check as §27.5's "the report accounts for every persona" — **structural and tamper-evident, not semantic**.
 
 **Detect-and-escalate, not a hard gate (P5a, operator decision — §28.8).** A detected test-glob change since the RED commit is **recorded as a flag** on the turn's artifact and does **not** fail the turn. The flag feeds the review round — the `regression-guard` persona (§28.6) judges whether the change was a legitimate RED correction or a weakening — and the human gate, which decides. Detection is machine and tamper-evident; **disposition is persona + human.** A wrong RED test still has the `redo` lever (§27.9); freezing is deliberately not a hard block that could deadlock a slice.
 
@@ -95,7 +96,7 @@ The irreducible difficulty: **an exit code cannot distinguish an assertion failu
 |---|---|---|---|
 | `passed` | ran, all green | ✗ | ✓ |
 | `failed-assertion` | ran, an expectation was unmet | ✓ | ✗ |
-| `errored` | never ran: compile / import / collection error | ✗ | ✗ |
+| `errored` | no clean assertion verdict — never ran (compile / import / collection error) or crashed mid-run (runtime error, non-assert panic, fixture failure) | ✗ | ✗ |
 | `no-tests-selected` | the selector matched nothing | ✗ | ✗ |
 
 The vocabulary is portable **by construction** — it names the *category* of outcome, not the runner. Every framework maps onto it:
@@ -105,7 +106,7 @@ The vocabulary is portable **by construction** — it names the *category* of ou
 | vitest / jest | `AssertionError`, `expect` diff | `SyntaxError`, `Cannot find module` |
 | pytest | `assert` failure, `E   assert` | `ERROR ... collection`, `ImportError` |
 | go test | `--- FAIL` + assertion line | `build failed`, `undefined:` |
-| cargo test | `assertion failed`, `panicked` | `error[E…]`, `could not compile` |
+| cargo test | `assertion failed` (an `assert!` panic) | `error[E…]`, `could not compile`, a non-assertion panic |
 
 **(c) The agent writes the outcome into a result file whose *shape* the engine validates** — exactly like the round report. The agent classifies (marks its own homework, §27.5's N5a risk); the engine bounds it with the exit-code direction from (a); the **raw captured output is versioned next to the classification**; and the `red-authenticity` reviewer plus the human gate are the backstop for a misclassified assertion-vs-compile. This is the same three-part bound §27.5 already accepts — a structural machine check, a versioned auditable artifact, and the human gate.
 
@@ -116,6 +117,8 @@ Each new turn type gains an artifact-check clause, exactly as the round report a
 - **RED turn done** ⟺ `{diff added a test_glob file}` ∧ `{result file shape-valid}` ∧ `outcome == failed-assertion` ∧ `{exit ≠ 0 where recoverable}`.
 - **GREEN turn done** ⟺ `{result file shape-valid}` ∧ `outcome == passed` ∧ `{exit == 0 where recoverable}` ∧ `{build outcome == built}`. **Frozen-tests runs here as detection, not a block (P5a):** a test-glob file changed since the RED commit is recorded as a flag and does **not** fail the turn; the flag feeds `regression-guard` and the human gate.
 - **refactor round done** ⟺ `{result file shape-valid}` ∧ `outcome == passed` ∧ `{exit == 0 where recoverable}`. Refactor keeps the tests green, so it carries the same recoverable exit-code direction as GREEN. A refactor may legitimately restructure a *fixture*, so the same changed-test flag is raised for `regression-guard` and the human rather than blocking.
+
+**`built` is a separate axis from `phaseOutcome`:** it is not one of the four outcome values but the result of the configured `build_command` (§28.5.4) — `built` iff that command exits 0, recovered best-effort like the test exit code (§28.5.2a) and **vacuously satisfied where no `build_command` is configured**. It earns its place only for build steps the tests do not exercise — a production bundle or a typecheck; a compile error that breaks the tests already surfaces as `errored` in the test outcome.
 
 A malformed result takes the existing **retry-then-`error`** path of §27.12; a persisted `error` is human-owned and survives a relaunch.
 
@@ -128,7 +131,7 @@ Two things carry all repo-specific knowledge, and **neither is a program the eng
 
 #### 28.5.5 Shared-semantics placement (P5c)
 
-The outcome vocabulary is single-sourced in **`src/shared/phaseOutcome.ts`**, consumed by the prompt composer (tells the agent what to write), the completion predicate (validates the result file), and the tests — **exact-string, closed set, never normalized**, mirroring `DISPOSITIONS` and `GATE_DECISION_OPTIONS` (§27.5). The result-file grammar is single-sourced the way `roundReport.ts` is (§27 N3 changelog): **one writer** (the recipe), **one predicate**, **one canonical example** anchoring the prompt few-shot, the predicate happy-path test, and the fake-agent e2e. A recipe that instructs the agent to produce the result file is a *writer* in the shared-semantics contract (CODE-STANDARDS): its vocabulary derives from `phaseOutcome.ts`, and it embeds a canonical example asserted well-formed against the predicate.
+The outcome vocabulary is single-sourced in **`src/shared/phaseOutcome.ts`**, consumed by the prompt composer (tells the agent what to write), the completion predicate (validates the result file), and the tests — **exact-string, closed set, never normalized**, mirroring `DISPOSITIONS` and `GATE_DECISION_OPTIONS` (§27.5). The result-file grammar is single-sourced the way `roundReport.ts` is (§27 N3 changelog): **one writer** (the recipe), **one predicate**, **one canonical example** anchoring the prompt few-shot, the predicate happy-path test, and the fake-agent e2e. A recipe that instructs the agent to produce the result file is a *writer* in the shared-semantics contract (CODE-STANDARDS): its vocabulary derives from `phaseOutcome.ts`, and it embeds a canonical example asserted well-formed against the predicate. S0 fixes the **contract** — the vocabulary source, the shape-valid requirement, and the one-writer / one-predicate / one-example rule; the concrete result-file **grammar** (path, fields, version, raw-output bounds) is authored *with* its predicate in the slice that introduces it (S3/S4), exactly as `roundReport.ts`'s grammar lives beside its predicate rather than in §27's prose.
 
 #### 28.5.6 Honest boundary and limits (P5d)
 
@@ -170,7 +173,7 @@ The three epic steps are §27.10's existing epic promotion:
 2. **create tracer-bullet slices** = the plan-bundle-loop's slice breakdown, reviewed by `tracer-slicer`, at **ticket granularity** (each epic-slice becomes a sub-ticket).
 3. **create sub-tickets** = confirm-first promotion (§27.10): self-contained, stacked sub-tickets, each carrying its AC portion + the plan verbatim with the slice delimited, an epic link, and the preceding slice's issue number; `agent-loop/ready` + `agent-loop/subticket` applied (§27.10's recorded operator override — approving the epic plan is the human vetting act).
 
-Each sub-ticket then runs the full per-ticket chain (§28.2). **Settled (P7a, decision — §28.8):** the epic plan owns only the **coarse** decomposition into sub-tickets; each sub-ticket runs its own test / infra / slice planning, because the epic plan cannot yet know each slice's test seams.
+Each sub-ticket then runs the per-ticket chain (§28.2) — but, per §27.10, a picked-up sub-ticket **reconstructs the groomed ticket and the coarse epic plan from its body and skips groom and the epic plan**, rather than re-running them. What it *does* run is the plan-bundle-loop scoped to **its own** test / infra / slice seams — the detailed planning the coarse epic plan could not yet know — then infra, its impl-slices, and integration. This keeps §28 additive over §27.10: the coarse plan is reconstructed-and-skipped exactly as §27.10 specifies; the per-slice detailed planning is new §28 work, not a re-run of groom or the epic plan. **Settled (P7a, decision — §28.8):** the epic plan owns only the **coarse** decomposition into sub-tickets; each sub-ticket runs its own test / infra / slice planning, because the epic plan cannot yet know each slice's test seams.
 
 ### 28.8 Decisions settled (P8)
 
