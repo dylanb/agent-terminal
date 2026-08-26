@@ -1,6 +1,6 @@
 ## 28. The full-TDD development process — a chain of §27 loops
 
-> **Status:** requirements, drafted **v2.144** from the `plan.md` design. **This is the full-TDD development process expressed on the §27 engine — §27.1's proof-of-generality turned into payoff.** §27.1 built three loops (`groom` / `plan` / `impl`) as the *same loop shape* over different data so a plan/impl assumption could never be hardcoded into the orchestrator; this section spends that generality by chaining more links of the same shape. Decisions are **P1–P10**.
+> **Status:** requirements, drafted **v2.144** from the `plan.md` design. **This is the full-TDD development process expressed on the §27 engine — §27.1's proof-of-generality turned into payoff.** §27.1 built three loops (`groom` / `plan` / `impl`) as the *same loop shape* over different data so a plan/impl assumption could never be hardcoded into the orchestrator; this section spends that generality by chaining more links of the same shape. Decisions are **P1–P8**.
 >
 > **The process expressed here** — for the epic: create epic → tracer-bullet slices → sub-tickets; for each ticket: groom → plan-bundle → build the deterministic infrastructure → RED/GREEN slices → an integration slice → polish; for each slice, a commit between each phase: RED tests → GREEN implementation → review-and-refactor.
 >
@@ -115,7 +115,7 @@ Each new turn type gains an artifact-check clause, exactly as the round report a
 
 - **RED turn done** ⟺ `{diff added a test_glob file}` ∧ `{result file shape-valid}` ∧ `outcome == failed-assertion` ∧ `{exit ≠ 0 where recoverable}`.
 - **GREEN turn done** ⟺ `{result file shape-valid}` ∧ `outcome == passed` ∧ `{exit == 0 where recoverable}` ∧ `{build outcome == built}`. **Frozen-tests runs here as detection, not a block (P5a):** a test-glob file changed since the RED commit is recorded as a flag and does **not** fail the turn; the flag feeds `regression-guard` and the human gate.
-- **refactor round done** ⟺ `{result file shape-valid}` ∧ `outcome == passed`. A refactor may legitimately restructure a *fixture*, so the same changed-test flag is raised for `regression-guard` and the human rather than blocking.
+- **refactor round done** ⟺ `{result file shape-valid}` ∧ `outcome == passed` ∧ `{exit == 0 where recoverable}`. Refactor keeps the tests green, so it carries the same recoverable exit-code direction as GREEN. A refactor may legitimately restructure a *fixture*, so the same changed-test flag is raised for `regression-guard` and the human rather than blocking.
 
 A malformed result takes the existing **retry-then-`error`** path of §27.12; a persisted `error` is human-owned and survives a relaunch.
 
@@ -187,7 +187,7 @@ Issue #102 (the deferred per-persona verdict / pr-description / handoff work) is
 
 ### 28.10 Build — tracer-bullet slices (S0–S8)
 
-Per the CLAUDE.md tracer-bullet rule, each slice spans main → `src/shared/ipc.ts` → preload → renderer, is fired from an **existing** loop-panel / gate control, and is proven by a Playwright `_electron` e2e on a real PTY, with the §27.15 fake-agent seam extended to script the new outputs. One theme per PR; RED-first throughout. The fake-agent must gain: writing the **result file** (outcome classification), driving **git state** (add a test file for RED; touch/don't-touch a test file for the frozen check), and reporting a scripted **exit code** the log-sweep recovers.
+Per the CLAUDE.md tracer-bullet rule, each **UI-bearing** slice spans main → `src/shared/ipc.ts` → preload → renderer, is fired from an **existing** loop-panel / gate control, and is proven by a Playwright `_electron` e2e on a real PTY, with the §27.15 fake-agent seam extended to script the new outputs. A **foundational or content-only** slice — S0 (spec, no code), S1 (the pure-git / vocabulary foundation with no UI surface), S6 (charter/recipe content) — is proven at its own observable boundary instead: unit/integration over real git fixtures, or the content-parity test, RED-first, never forced through a renderer path it does not touch (the CLAUDE.md rule that the tracer-bullet shape is for UI-bearing work). One theme per PR; RED-first throughout. The fake-agent must gain: writing the **result file** (outcome classification), driving **git state** (add a test file for RED; touch/don't-touch a test file for the frozen check), and reporting a scripted **exit code** the log-sweep recovers.
 
 - **S0 — Spec §28 (this section). No code.** The contract the downstream slices cite; the spec wins on any conflict. (Operator decision — §28.8.6.)
 - **S1 — `phaseOutcome` vocabulary + portable frozen-tests detection.** `src/shared/phaseOutcome.ts` (the closed set) and the pure-git frozen-tests check in main (§28.5.1). RED-first over git fixtures; no UI. Foundation for everything below.
