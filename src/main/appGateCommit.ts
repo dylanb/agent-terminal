@@ -9,10 +9,10 @@ import { APP_STATE_DIRS } from './appStateDirs';
  *  descriptor carries — never re-derived from run-state or the branch. */
 export interface AppGateCommitCtx {
   label: string;
-  /** §28.3 — the repo-relative paths already dirty (modified or untracked) at phase start: the operator's
-   *  WIP the commit must NOT sweep, so it captures only the phase's own changes. Injected because only the
-   *  phase lifecycle knows phase start; S3 captures it alongside the RED baseline SHA (§28.5.1). Empty means
-   *  nothing was dirty at phase start, so every changed path is phase-produced. */
+  /** §28.3 — the repo-relative paths already dirty at phase start: operator WIP the commit leaves untouched.
+   *  A path listed here is unstaged wholesale, so the phase's own later change to an already-dirty file is
+   *  not committed either — the operator's edits win. A domain input the phase lifecycle supplies (§28.5.1);
+   *  empty leaves every changed path phase-produced. */
   dirtyAtPhaseStart: readonly string[];
 }
 
@@ -69,16 +69,17 @@ export function createRealAppGateCommit(
       const harden = commitHardeningArgs(freshDisabledHooksDir());
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
       await run('git', [...harden, 'add', '-A'], repoDir, 'commit side-effect: git add failed');
-      // Unstage what a phase commit must never sweep so it captures ONLY the phase's own changes (§28.3): the
-      // operator WIP already dirty at phase start, and the app's OWN state dirs — APP_STATE_DIRS, the SAME set
-      // the clean-tree gate uses (never a parallel copy) — so loop/flow state never lands in a phase commit
-      // (CWE-200) and never makes nothing-to-commit unreachable (CWE-754), independent of the operated repo's
-      // `.gitignore`. An empty snapshot resets only the app dirs (the pre-S3 behaviour). `git reset` of a
-      // non-staged path is a clean no-op; `--` + separate argv keep an operator path that begins `-` or holds
-      // a metachar from being read as an option or a shell string (CWE-88/CWE-78).
+      // Unstage what a phase commit must never sweep (§28.3): operator WIP already dirty at phase start, and
+      // the app's OWN state dirs — APP_STATE_DIRS, the SAME set the clean-tree gate uses (never a parallel
+      // copy) — so loop/flow state never lands in a phase commit (CWE-200) and never makes nothing-to-commit
+      // unreachable (CWE-754), independent of the operated repo's `.gitignore`. The snapshot paths are
+      // untrusted (a git-status listing of the operated repo), so all three ways a filename could be read as
+      // something other than a literal path are closed: `--literal-pathspecs` a leading-`:` magic pathspec,
+      // `--` a leading-`-` option, separate argv (execFile, no shell) a metachar — CWE-88/CWE-78. `git reset`
+      // of a non-staged path is a clean no-op.
       await run(
         'git',
-        [...harden, 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
+        [...harden, '--literal-pathspecs', 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
         repoDir,
         'commit side-effect: git reset failed',
       );

@@ -215,6 +215,38 @@ describe('createRealAppGateCommit — real git (§28.3 L1)', () => {
     expect(headCount(repo)).toBe(before); // no empty commit
     expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('operator wip\n'); // WIP preserved
   });
+
+  // The phase-start snapshot will be sourced (in S3) from a git-status listing of the UNTRUSTED operated
+  // repo, so a snapshot entry can be any repo-controlled filename. It must reach `git reset` as a literal
+  // path — never a git magic pathspec (Tw4) and never an option (Tw5) — or a hostile filename could steer
+  // the unstage set (sweep operator WIP into the commit, or leave APP_STATE_DIRS staged).
+  it('Tw4: a magic-pathspec-shaped snapshot entry is matched literally and cannot steer the unstage set (CWE-88)', async () => {
+    fx.writeRepoFile(repo, 'src/keep.ts', 'export const k = 1;\n'); // the phase's own change — MUST be committed
+    // Interpreted, `:(glob)src/**` would unstage the phase's own src/keep.ts and drop it from the commit;
+    // as a literal path it matches a (non-existent) file of that name and changes nothing.
+    const outcome = await createRealAppGateCommit(repo)({ label: 'GREEN: literal', dirtyAtPhaseStart: [':(glob)src/**'] });
+    expect(outcome).toBe('committed');
+    expect(headFiles(repo)).toContain('src/keep.ts'); // the magic pathspec did NOT steer the reset
+  });
+
+  it('Tw5: an option-shaped snapshot entry is a pathspec, never an option — no destructive `git reset --hard` (CWE-88)', async () => {
+    fx.writeRepoFile(repo, 'src/keep.ts', 'export const k = 1;\n'); // staged phase change a `reset --hard` would destroy
+    const outcome = await createRealAppGateCommit(repo)({ label: 'GREEN: dashdash', dirtyAtPhaseStart: ['--hard'] });
+    expect(outcome).toBe('committed');
+    expect(headFiles(repo)).toContain('src/keep.ts'); // `--hard` was an inert pathspec, not a worktree-wiping option
+    expect(readFileSync(join(repo, 'src/keep.ts'), 'utf8')).toBe('export const k = 1;\n'); // worktree intact
+  });
+
+  it('Tw6: a file BOTH dirty at phase start AND changed by the phase is excluded WHOLESALE (the phase edit is not committed)', async () => {
+    fx.writeRepoFile(repo, 'seed.txt', 'operator wip\n'); // operator WIP present when the phase starts
+    fx.writeRepoFile(repo, 'seed.txt', 'operator wip\nphase edit\n'); // the phase then edits the SAME file
+    fx.writeRepoFile(repo, 'src/other.ts', 'export const o = 1;\n'); // a separate phase change, so there IS a commit
+    await createRealAppGateCommit(repo)({ label: 'GREEN: entangled', dirtyAtPhaseStart: ['seed.txt'] });
+    const files = headFiles(repo);
+    expect(files).toContain('src/other.ts'); // the non-entangled phase change is committed
+    expect(files).not.toContain('seed.txt'); // the entangled file is left to the worktree — phase edit NOT committed
+    expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('operator wip\nphase edit\n'); // both edits remain on disk
+  });
 });
 
 describe('createAppGateCommit — ports-injected (§28.3 L2)', () => {
