@@ -3686,16 +3686,16 @@ test('a §27 def with no pickup enters work without invoking bootstrap ports (ST
   await flowControl().click();
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
-  const noPickupLogStart = readGhLog(logFile).length;
   await inputModal().locator('.confirm').click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('turn_key: work-plan');
-  const calls = readGhLog(logFile).slice(noPickupLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh repo view');
-  expect(calls).not.toContain('gh issue view 176 --json title,url');
-  expect(calls).not.toContain('gh issue edit');
-  expect(calls).not.toContain('gh pr create');
+  // AC3 constrains the bootstrap's outward-facing MUTATIONS (§27.10), not the read-only git/gh the viewer (§20)
+  // and ticket popout (§24.2.3 T7) run on step entry — so a `git status` command-sniff false-matches the viewer's
+  // working-tree read. Assert the mutation sidecars stay absent; the with-`pickup` sibling proves each is written
+  // when bootstrap runs.
+  for (const mutation of ['local-branch', 'remote-branch', 'pr-created', 'issue-assignee', 'issue-label', 'pr-label']) {
+    expect(existsSync(`${logFile}.${mutation}`), `bootstrap mutation .${mutation} fired for a no-pickup def`).toBe(false);
+  }
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
 
   await app.close();

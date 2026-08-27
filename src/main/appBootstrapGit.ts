@@ -12,6 +12,32 @@ import {
   type OriginDirection,
 } from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
+import { coreExecHardeningArgs } from './gitHardening';
+
+// The remote-op-facing hardening: repository/protocol/credential neutralizers the fetch/push/ref paths need
+// on top of the shared local-exec set. A local read (frozen-tests §28.5.1) deliberately does not use these.
+const NETWORK_OP_HARDENING_ARGS = [
+  '-c',
+  'core.sshCommand=ssh',
+  '-c',
+  'credential.interactive=false',
+  '-c',
+  'protocol.allow=never',
+  '-c',
+  'protocol.ext.allow=never',
+  '-c',
+  'protocol.file.allow=always',
+  '-c',
+  'protocol.https.allow=always',
+  '-c',
+  'protocol.ssh.allow=always',
+];
+
+/** Every neutralizing `-c` arg prepended to each git invocation in the bootstrap wrapper: the shared
+ *  local-exec hardening (single-sourced in gitHardening.ts) followed by the remote-op hardening. */
+function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
+  return [...coreExecHardeningArgs(disabledHooksPath), ...NETWORK_OP_HARDENING_ARGS];
+}
 import {
   createGitHubRepositorySource,
   type GitHubRepositorySource,
@@ -85,26 +111,7 @@ export function createRealAppBootstrapGit(
     tmpdir(),
     `agent-terminal-disabled-hooks-${randomUUID()}`,
   );
-  const protectedArgs = [
-    '-c',
-    `core.hooksPath=${disabledHooksPath}`,
-    '-c',
-    'core.fsmonitor=false',
-    '-c',
-    'core.sshCommand=ssh',
-    '-c',
-    'credential.interactive=false',
-    '-c',
-    'protocol.allow=never',
-    '-c',
-    'protocol.ext.allow=never',
-    '-c',
-    'protocol.file.allow=always',
-    '-c',
-    'protocol.https.allow=always',
-    '-c',
-    'protocol.ssh.allow=always',
-  ];
+  const protectedArgs = bootstrapProtectedArgs(disabledHooksPath);
   const git = (args: string[], failure: string): Promise<string> =>
     run('git', [...protectedArgs, ...args], repoDir, failure);
   remote = createAppGitRemote(repoDir, protectedArgs);

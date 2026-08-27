@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
+import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
@@ -47,6 +48,14 @@ let artifactPath: string;
 let hosted: HostedAgentState;
 let injected: string[];
 let deps: AppLoopEngineDeps;
+// §28.5.3 — a DISTINGUISHABLE injected toolkit: its classifyOutcome recognizes a marker the real recognizer
+// rejects, so a test asserts the engine surfaces THIS instance's BEHAVIOR — not object identity, which a
+// behavior-preserving wrapper would break (CLAUDE.md: tests observe behavior, never internal wiring).
+const INJECTED_MARKER = 'injected-toolkit-marker';
+const completionPredicatesSentinel: LoopCompletionPredicates = {
+  classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
+  changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
+};
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;
 let terminateFlow: Mock<(repoDir: string) => void>;
@@ -142,9 +151,19 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
       const abs = consolidatorOutputFile(repoDir, round);
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
     },
+    completionPredicates: completionPredicatesSentinel,
   };
   return createAppLoopEngine(deps);
 }
+
+describe('§28.5.3 — the engine surfaces the injected machine completion predicates', () => {
+  it('surfaces the injected toolkit — its classifyOutcome behavior is observable through the engine', () => {
+    // A fresh real toolkit returns null for this marker; the engine yielding the injected verdict proves it
+    // exposes the INJECTED instance — observed through behavior, so a behavior-preserving wrapper still passes.
+    expect(createLoopCompletionPredicates().classifyOutcome(INJECTED_MARKER)).toBeNull();
+    expect(makeEngine().completionPredicates.classifyOutcome(INJECTED_MARKER)).toBe('passed');
+  });
+});
 
 /** Write a well-formed round-N report; `failed` names personas recorded as failed-to-run (§27.5/AC7). */
 function writeRoundReport(round: number, failed: string[] = []): void {

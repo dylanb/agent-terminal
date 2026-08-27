@@ -282,6 +282,28 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(existsSync(receiveMarker)).toBe(false);
   });
 
+  it('neutralizes an inherited command-capable core.fsmonitor on an index-refreshing operation', async () => {
+    // core.fsmonitor is the OTHER command lever the shared hardening covers: git runs it to refresh the index
+    // (e.g. during `git status`). An inherited value is not caught by the local-config allow-list, so the
+    // `-c core.fsmonitor=false` override is what stops it — dropping that arg makes this marker appear.
+    const inheritedConfig = join(root, 'fsmonitor.gitconfig');
+    const fsmonitorMarker = join(root, 'inherited-fsmonitor-ran');
+    const fsmonitor = join(root, 'fsmonitor-hook');
+    writeFileSync(fsmonitor, `#!/bin/sh\ntouch '${fsmonitorMarker}'\n`, { mode: 0o755 });
+    runGit(root, ['config', '--file', inheritedConfig, 'core.fsmonitor', fsmonitor]);
+
+    const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = inheritedConfig;
+    try {
+      await createRealAppBootstrapGit(repo).isCleanTree(); // `git status --porcelain` refreshes the index
+    } finally {
+      if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+    }
+
+    expect(existsSync(fsmonitorMarker)).toBe(false);
+  });
+
   it('rejects a staged app-state file before creating the empty start commit', async () => {
     const report = join(repo, '.agent-terminal', 'loop', 'reports', '1.md');
     mkdirSync(join(repo, '.agent-terminal', 'loop', 'reports'), { recursive: true });
