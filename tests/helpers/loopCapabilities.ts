@@ -7,7 +7,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import yaml from 'js-yaml';
-import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
+import { LOOP_CAPABILITIES_FILENAME } from '../../src/shared/loopCapabilities';
 
 export interface LoopCapabilitiesFixture {
   testGlobs?: string[];

@@ -7,7 +7,7 @@ import {
   createLoopCompletionPredicates,
   type LoopCompletionPredicates,
 } from '../../src/main/loopCompletionPredicates';
-import type { TestPathsResult } from '../../src/main/frozenTests';
+import type { WorkingTreeTestPathsResult } from '../../src/main/frozenTests';
 
 export function makeFakeCompletionPredicates(
   overrides: Partial<LoopCompletionPredicates> = {},
@@ -25,10 +25,10 @@ export function makeFakeCompletionPredicates(
  *  can fire a concurrent event while the engine awaits the RED git gate. */
 export function deferredWorkingTree(): {
   workingTreeTestPaths: LoopCompletionPredicates['workingTreeTestPaths'];
-  resolve: (r: TestPathsResult) => void;
+  resolve: (r: WorkingTreeTestPathsResult) => void;
 } {
-  let resolve!: (r: TestPathsResult) => void;
-  const pending = new Promise<TestPathsResult>((res) => {
+  let resolve!: (r: WorkingTreeTestPathsResult) => void;
+  const pending = new Promise<WorkingTreeTestPathsResult>((res) => {
     resolve = res;
   });
   return { workingTreeTestPaths: () => pending, resolve };

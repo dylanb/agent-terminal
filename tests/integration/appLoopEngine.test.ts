@@ -58,7 +58,10 @@ let deps: AppLoopEngineDeps;
 const INJECTED_MARKER = 'injected-toolkit-marker';
 const completionPredicatesSentinel: LoopCompletionPredicates = {
   classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
+  resultOutcome: () => null,
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
+  workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
+  recoverExitCode: async () => null,
 };
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;

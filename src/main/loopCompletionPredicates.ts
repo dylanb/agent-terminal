@@ -6,7 +6,8 @@ import { phaseResultWellFormed, parsePhaseResult } from '../shared/phaseResult';
 import {
   changedTestPathsFromCapabilities,
   workingTreeTestPathsFromCapabilities,
-  type TestPathsResult,
+  type ChangedTestPathsResult,
+  type WorkingTreeTestPathsResult,
 } from './frozenTests';
 
 export interface LoopCompletionPredicates {
@@ -17,12 +18,13 @@ export interface LoopCompletionPredicates {
    *  closed set AND the raw captured output present — AC3); null when malformed/absent. The RED/GREEN completion
    *  gate compares this against the phase's required outcome (`failed-assertion` / `passed`). */
   resultOutcome(content: string): PhaseOutcome | null;
-  /** The test-glob files that changed between the RED baseline and head, per the repo's capabilities (§28.5.1). */
-  changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<TestPathsResult>;
+  /** The test-glob files that changed between the RED baseline and head, per the BASELINE's committed
+   *  capabilities (§28.5.1) — a git-blob read, so its failure arm is absent/malformed only (no `confinement`). */
+  changedTestPaths(query: { repoDir: string; baseline: string; head: string }): Promise<ChangedTestPathsResult>;
   /** §28.5.2a — the test-glob files this turn ADDED LINES to in the working tree (vs HEAD), per the repo's
-   *  capabilities: the RED "a failing test was authored" ground truth. Its failure arm (absent/malformed
-   *  capabilities) lets the RED gate surface a distinct reason. */
-  workingTreeTestPaths(query: { repoDir: string }): Promise<TestPathsResult>;
+   *  WORKING-TREE capabilities: the RED "a failing test was authored" ground truth. Its failure arm
+   *  (absent/malformed/confinement — the working-tree loader can refuse) lets the RED gate surface a distinct reason. */
+  workingTreeTestPaths(query: { repoDir: string }): Promise<WorkingTreeTestPathsResult>;
   /** §28.5.2a — the test command's real exit code for a turn, recovered best-effort from the session/tool log
    *  (§27.11), or null when unrecoverable. Where recoverable, the RED gate enforces the direction (exit 0 ⇒ not
    *  a RED failure). No live source ships today (N7/#92) — the default returns null, so the clause is dormant
