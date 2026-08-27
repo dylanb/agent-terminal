@@ -1706,10 +1706,11 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     : '';
   const fakeGit =
     '#!/usr/bin/env bash\n' +
-    // The bootstrap port runs remote operations in a throwaway bare git dir, so the shim sees
-    // `--git-dir <tmp>` ahead of the neutralizing -c pairs.
-    'if [ "$1" = "--git-dir" ]; then shift 2; fi\n' +
-    'while [ "$1" = "-c" ]; do shift 2; done\n' +
+    // Skip ALL leading git GLOBAL options so `$1` is the subcommand real git would dispatch: the bootstrap
+    // port's throwaway `--git-dir <tmp>`, the neutralizing `-c <k=v>` pairs, and `--no-replace-objects` (the §28
+    // reads' tamper-evidence flag — workingTreeTestPaths/changedTestPaths/baselineCapabilities send it ahead of
+    // the -c pairs). A case-loop handles them in any order, so a new global flag on a delegated read is skipped.
+    'while :; do case "$1" in --git-dir) shift 2;; -c) shift 2;; --no-replace-objects) shift;; *) break;; esac; done\n' +
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
     // §28.5.1 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the baseline

@@ -34,15 +34,16 @@ const MAX_MATCH_WORK = 100_000_000;
 
 // The object-source hardening every §28 git READ shares (CWE-345/829): ignore repo-planted refs/replace/* so a
 // tamper cannot substitute the compared objects, and deny every transport so a partial-clone lazy-fetch cannot
-// run an agent-configured promisor command (with the GIT_NO_LAZY_FETCH env backstop). ONE definition both the
-// commit↔commit and the working-tree detections use, so the posture cannot be present in one and absent in its
-// twin — a hardening the working-tree read reaches on every RED completion attempt, retries included.
+// run an agent-configured promisor command (with the GIT_NO_LAZY_FETCH env backstop). ONE definition every §28
+// git read in this module uses — the two path detections and the baseline-capabilities read — so the posture
+// cannot be present in one and absent in another. The working-tree read reaches it on every RED completion
+// attempt, retries included.
 const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
 const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
 
-/** Match `paths` against `testGlobs`, charging (Σ glob chars)·(path length) per path against MAX_MATCH_WORK and
- *  rejecting once the running total passes the budget (CWE-400) — the aggregate-work guard BOTH detections share,
- *  so the bound cannot be present in one and absent in its twin. Returns the matched paths, order preserved. */
+/** Match `paths` against `testGlobs`, bounding aggregate glob-match work against MAX_MATCH_WORK (CWE-400) — the
+ *  guard BOTH detections share, so the bound cannot be present in one and absent in its twin. globMatch bounds
+ *  each individual pair; this bounds their sum. Returns the matched paths, order preserved. */
 function matchTestGlobsWithinBudget(paths: readonly string[], testGlobs: readonly string[]): string[] {
   const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
   let work = 0;
@@ -143,8 +144,8 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-  const harden = ['--no-replace-objects', '-c', 'protocol.allow=never', ...coreExecHardeningArgs(disabledHooks)];
-  const env = { GIT_NO_LAZY_FETCH: '1' };
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
+  const env = NO_LAZY_FETCH_ENV;
   // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
   await run(
     'git',
