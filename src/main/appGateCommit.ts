@@ -9,6 +9,11 @@ import { APP_STATE_DIRS } from './appStateDirs';
  *  descriptor carries — never re-derived from run-state or the branch. */
 export interface AppGateCommitCtx {
   label: string;
+  /** §28.3 — the repo-relative paths already dirty (modified or untracked) at phase start: the operator's
+   *  WIP the commit must NOT sweep, so it captures only the phase's own changes. Injected because only the
+   *  phase lifecycle knows phase start; S3 captures it alongside the RED baseline SHA (§28.5.1). Empty means
+   *  nothing was dirty at phase start, so every changed path is phase-produced. */
+  dirtyAtPhaseStart: readonly string[];
 }
 
 export type AppGateCommitOutcome = 'committed' | 'nothing-to-commit';
@@ -21,7 +26,7 @@ export type RunAppGateCommitSideEffect = (
 
 /** The injected domain seam — a domain concept, not git mechanics (CODE-STANDARDS seam rule). */
 export interface AppGateCommitOperations {
-  commitWorkingTree(label: string): Promise<AppGateCommitOutcome>;
+  commitWorkingTree(label: string, dirtyAtPhaseStart: readonly string[]): Promise<AppGateCommitOutcome>;
 }
 
 export function createAppGateCommit(
@@ -31,7 +36,7 @@ export function createAppGateCommit(
     if (ctx.label.trim().length === 0) {
       throw new Error('refused to commit without a phase label');
     }
-    return git.commitWorkingTree(ctx.label);
+    return git.commitWorkingTree(ctx.label, ctx.dirtyAtPhaseStart);
   };
 }
 
@@ -60,17 +65,23 @@ export function createRealAppGateCommit(
   repoDir: string,
 ): RunAppGateCommitSideEffect {
   const git: AppGateCommitOperations = {
-    commitWorkingTree: async (label) => {
+    commitWorkingTree: async (label, dirtyAtPhaseStart) => {
       const harden = commitHardeningArgs(freshDisabledHooksDir());
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
       await run('git', [...harden, 'add', '-A'], repoDir, 'commit side-effect: git add failed');
-      // Unstage the app's OWN state dirs — APP_STATE_DIRS, the SAME set the clean-tree gate uses (never a
-      // parallel copy) — so they never land in a phase commit (CWE-200) and never make nothing-to-commit
-      // unreachable (CWE-754), independent of the operated repo's `.gitignore`. (A `:(exclude)` pathspec on
-      // `git add` instead trips git's ignored-path advice with exit 1 when the dir is also gitignored — the
-      // common case — so unstage-after-add is the form that works either way. `git reset` of a non-staged
-      // path is a clean no-op.)
-      await run('git', [...harden, 'reset', '-q', '--', ...APP_STATE_DIRS], repoDir, 'commit side-effect: git reset failed');
+      // Unstage what a phase commit must never sweep so it captures ONLY the phase's own changes (§28.3): the
+      // operator WIP already dirty at phase start, and the app's OWN state dirs — APP_STATE_DIRS, the SAME set
+      // the clean-tree gate uses (never a parallel copy) — so loop/flow state never lands in a phase commit
+      // (CWE-200) and never makes nothing-to-commit unreachable (CWE-754), independent of the operated repo's
+      // `.gitignore`. An empty snapshot resets only the app dirs (the pre-S3 behaviour). `git reset` of a
+      // non-staged path is a clean no-op; `--` + separate argv keep an operator path that begins `-` or holds
+      // a metachar from being read as an option or a shell string (CWE-88/CWE-78).
+      await run(
+        'git',
+        [...harden, 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
+        repoDir,
+        'commit side-effect: git reset failed',
+      );
       if (!(await hasStagedChanges(repoDir, harden))) return 'nothing-to-commit';
       await run('git', [...harden, 'commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
       return 'committed';

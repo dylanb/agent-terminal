@@ -166,7 +166,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: slice-x') });
     await approve(deps);
     // STD-identity — the label is sourced from se.args, not run-state/branch
-    expect(rec.commitSideEffects).toEqual([{ label: 'RED: slice-x' }]);
+    expect(rec.commitSideEffects).toEqual([{ label: 'RED: slice-x', dirtyAtPhaseStart: [] }]);
     // the audit trail names WHICH commit, at exit 0 (a success, not a failure)
     expect(rec.audits.some((a) => a.cmd.includes('side-effect') && a.cmd.includes('RED: slice-x') && a.exit === 0)).toBe(true);
     expect(rec.accepts).toHaveLength(1);
@@ -204,7 +204,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
   it('sources the label verbatim from se.args, passing empty when the descriptor declares none (T12, STD-identity)', async () => {
     const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT(undefined) });
     await approve(deps);
-    expect(rec.commitSideEffects).toEqual([{ label: '' }]); // the executor never invents a label from ambient state
+    expect(rec.commitSideEffects).toEqual([{ label: '', dirtyAtPhaseStart: [] }]); // the executor never invents a label from ambient state
     expect(rec.advances).toEqual(['/repo']);
   });
 });

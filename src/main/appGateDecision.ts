@@ -196,7 +196,10 @@ export async function runAppGateDecision(
       // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
       const label = typeof se.args.label === 'string' ? se.args.label : '';
       try {
-        const outcome = await deps.runCommitSideEffect({ label });
+        // §28.3 — the phase-start snapshot that keeps the commit from sweeping operator WIP is captured by the
+        // phase lifecycle (S3, §28.5.1). Until then the executor passes an empty snapshot, so every changed
+        // path is phase-produced (the pre-S3 staging).
+        const outcome = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
         if (outcome === 'committed') {
           deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
         } else {
