@@ -125,6 +125,30 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     ]);
   });
 
+  it('is not fooled by a repo-planted refs/replace/* substituting HEAD (tamper-evidence, --no-replace-objects)', async () => {
+    // `git diff HEAD` re-hashes and looks up the HEAD tree, so a planted `git replace HEAD <older>` makes a
+    // naive diff compare the working tree against the OLDER commit — a committed (not this-turn-added) test file
+    // then shows as "added", forging a RED completion. The read must ignore replace refs (same posture as the
+    // commit↔commit changedTestPaths tamper-evidence test), so an ALREADY-committed test stays out of the result.
+    const dir = repos.makeGitRepo('worktree-replace');
+    repos.writeRepoFile(dir, 'src/a.ts', 's\n');
+    const older = repos.commitAll(dir, 'seed'); // no test file
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 't\n');
+    repos.commitAll(dir, 'commit the test'); // the test is COMMITTED, not added this turn; working tree clean
+    repos.git(dir, ['replace', 'HEAD', older]); // a naive `git diff HEAD` would diff against `older` (no test)
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('rejects rather than hangs when the aggregate glob×path matching work exceeds the budget (untrusted-input DoS)', async () => {
+    // Same CWE-400 amplification the commit↔commit path bounds: many long globs × a long path. The working-tree
+    // path runs on EVERY RED completion attempt (incl. retries), so the aggregate budget must apply here too.
+    const dir = committed();
+    const longSeg = (n: number): string => Array(n).fill('a').join('/');
+    repos.writeRepoFile(dir, `tests/${longSeg(300)}.test.ts`, 'x\n'); // a ~600-byte untracked path added this turn
+    const bloatedGlobs = Array(200).fill('z'.repeat(1000)); // 200k glob chars, none matching
+    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: bloatedGlobs })).rejects.toThrow(/budget/i);
+  });
+
   // IT-WORKTREE-CAP — the capabilities-sourced wrapper
   describe('workingTreeTestPathsFromCapabilities', () => {
     it('sources globs from loop-capabilities.yaml and returns matched working-tree paths', async () => {

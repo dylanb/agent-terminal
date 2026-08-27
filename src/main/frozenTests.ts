@@ -32,6 +32,29 @@ import { isUnderAppStateDir } from './appStateDirs';
 // capabilities-file-times-diff amplification (CWE-400).
 const MAX_MATCH_WORK = 100_000_000;
 
+// The object-source hardening every §28 git READ shares (CWE-345/829): ignore repo-planted refs/replace/* so a
+// tamper cannot substitute the compared objects, and deny every transport so a partial-clone lazy-fetch cannot
+// run an agent-configured promisor command (with the GIT_NO_LAZY_FETCH env backstop). ONE definition both the
+// commit↔commit and the working-tree detections use, so the posture cannot be present in one and absent in its
+// twin — a hardening the working-tree read reaches on every RED completion attempt, retries included.
+const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
+const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
+
+/** Match `paths` against `testGlobs`, charging (Σ glob chars)·(path length) per path against MAX_MATCH_WORK and
+ *  rejecting once the running total passes the budget (CWE-400) — the aggregate-work guard BOTH detections share,
+ *  so the bound cannot be present in one and absent in its twin. Returns the matched paths, order preserved. */
+function matchTestGlobsWithinBudget(paths: readonly string[], testGlobs: readonly string[]): string[] {
+  const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
+  let work = 0;
+  const matched: string[] = [];
+  for (const path of paths) {
+    work += globChars * path.length;
+    if (work > MAX_MATCH_WORK) throw new Error('test-path detection: aggregate glob-match work budget exceeded');
+    if (matchesAnyGlob(path, testGlobs)) matched.push(path);
+  }
+  return matched;
+}
+
 export interface FrozenTestsQuery {
   /** The checked-out repo working tree; git runs here as cwd. */
   repoDir: string;
@@ -80,9 +103,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   const stdout = await runBuffer(
     'git',
     [
-      '--no-replace-objects', // ignore any repo-planted refs/replace/* so the recorded baseline is used verbatim (tamper-evidence)
-      '-c',
-      'protocol.allow=never', // on a partial clone a diff can lazy-fetch missing objects; deny every transport so an agent-configured promisor cannot run a command (backstop for GIT_NO_LAZY_FETCH below)
+      ...OBJECT_SOURCE_HARDENING, // ignore repo-planted refs/replace/* (tamper-evidence) + deny every transport
       ...coreExecHardeningArgs(disabledHooks),
       'diff',
       '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
@@ -95,23 +116,10 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     ],
     repoDir,
     'frozen-tests diff failed',
-    { GIT_NO_LAZY_FETCH: '1' }, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
+    NO_LAZY_FETCH_ENV, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
 
-  const changed = strictDecodeNulPaths(stdout);
-  // Aggregate work guard (CWE-400): a bloated capabilities file (many long globs) times many changed paths can
-  // amplify matching far past any single pair. Charge (Σ glob chars)·(path chars) per path and reject once the
-  // running total passes the budget — fail toward firing, never a silent hang in the main process. globMatch
-  // bounds each individual pair; this bounds their sum.
-  const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
-  let work = 0;
-  const matched: string[] = [];
-  for (const path of changed) {
-    work += globChars * path.length;
-    if (work > MAX_MATCH_WORK) throw new Error('frozen-tests: aggregate glob-match work budget exceeded');
-    if (matchesAnyGlob(path, testGlobs)) matched.push(path);
-  }
-  return [...new Set(matched)].sort();
+  return [...new Set(matchTestGlobsWithinBudget(strictDecodeNulPaths(stdout), testGlobs))].sort();
 }
 
 /** The changed test paths, sourcing the globs from the RED baseline's loop-capabilities.yaml (a git blob, so
@@ -242,18 +250,23 @@ export async function workingTreeTestPaths(query: {
   if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
 
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-  const harden = coreExecHardeningArgs(disabledHooks);
+  // The SAME object-source hardening the commit↔commit read carries (OBJECT_SOURCE_HARDENING + NO_LAZY_FETCH_ENV):
+  // `git diff HEAD` re-hashes and looks up the HEAD tree, so a repo-planted replace-ref or promisor would steer
+  // or run under a naive read exactly as on the sibling path.
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
   const trackedOut = await runBuffer(
     'git',
-    [...harden, 'diff', '--numstat', '-z', '--no-renames', '--end-of-options', 'HEAD'],
+    [...harden, 'diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
     repoDir,
     'working-tree tests: git diff failed',
+    NO_LAZY_FETCH_ENV,
   );
   const untrackedOut = await runBuffer(
     'git',
     [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
     repoDir,
     'working-tree tests: git ls-files failed',
+    NO_LAZY_FETCH_ENV,
   );
 
   // `--numstat -z` records are `<added>\t<deleted>\t<path>` per NUL-terminated entry (no renames → no split
@@ -280,8 +293,10 @@ export async function workingTreeTestPaths(query: {
     .filter((path): path is string => path !== null);
   const untracked = strictDecodeNulPaths(untrackedOut);
 
-  const matched = [...tracked, ...untracked].filter(
-    (path) => matchesAnyGlob(path, testGlobs) && !isUnderAppStateDir(path),
+  // The SAME aggregate-work budget the commit↔commit read applies (CWE-400) — matchTestGlobsWithinBudget — so the
+  // bound cannot be present on one detection and absent on its twin; then drop the app's own state dirs.
+  const matched = matchTestGlobsWithinBudget([...tracked, ...untracked], testGlobs).filter(
+    (path) => !isUnderAppStateDir(path),
   );
   return [...new Set(matched)].sort();
 }

@@ -1,19 +1,26 @@
-// §28.5.4 — the main-process READER for the per-repo `loop-capabilities.yaml`: it supplies the bytes to the
-// shared parse predicate (src/shared/loopCapabilities.ts, the ONE descriptor+parse contract, issue #105) and
-// confines the file inside the untrusted repo working tree (resolveJail, CWE-22/59), classifying a caught
-// errno through errno.ts. The engine NEVER executes test_command/build_command — they are inert guidance the
-// agent's recipe reads; this reader only parses and validates shape.
+// §28.5.4 — the main-process READER for `loop-capabilities.yaml`. The engine NEVER executes
+// test_command/build_command: they are inert guidance strings, only parsed and shape-validated. The file lives
+// in the untrusted repo working tree, so it is confined before reading (resolveJail, CWE-22/59) and read
+// fail-closed. The descriptor/shape/parse predicate is single-sourced in src/shared/loopCapabilities.ts (#105).
 
-import { statSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { openSync, fstatSync, readSync, closeSync, constants } from 'node:fs';
 import { isErrno, errMsg } from './errno';
-import { resolveJail, confinedRealPathResult } from './confinedPath';
+import { resolveJail } from './confinedPath';
+import { decodeUtf8Strict } from './decodeUtf8Strict';
 import {
-  parseLoopCapabilities,
   LOOP_CAPABILITIES_FILENAME,
   MAX_CAPABILITIES_BYTES,
+  parseLoopCapabilities,
   type LoopCapabilities,
 } from '../shared/loopCapabilities';
+
+// Re-export the shared descriptor so main-process callers have one import site; the DEFINITION lives in shared.
+export {
+  LOOP_CAPABILITIES_FILENAME,
+  MAX_CAPABILITIES_BYTES,
+  parseLoopCapabilities,
+} from '../shared/loopCapabilities';
+export type { LoopCapabilities, LoopCapabilitiesParse } from '../shared/loopCapabilities';
 
 /** The load failure arm carries a discriminated `cause` (mirroring confinedPath's `PathRefusal`) so a
  *  consumer (S3/S4) branches on the kind — absent → degrade coherently (§28.5.6); malformed → human-owned
@@ -25,38 +32,43 @@ export type LoopCapabilitiesLoad =
 /** Read + parse the repo's loop-capabilities.yaml, confined inside the repo working tree. The failure arm's
  *  `cause` distinguishes absent (degrade), malformed (human-owned), and confinement (security refusal). */
 export function loadLoopCapabilities(repoDir: string): LoopCapabilitiesLoad {
-  const jail = resolveJail(repoDir);
-  if (jail === null) {
+  // resolveJail realpaths the repo dir and appends the filename WITHOUT resolving it, so a link planted at the
+  // capabilities path is not adopted as the target; the O_NOFOLLOW open then refuses to traverse it (CWE-59).
+  const target = resolveJail(repoDir, LOOP_CAPABILITIES_FILENAME);
+  if (target === null) {
     return { ok: false, cause: 'confinement', reason: 'repository directory does not resolve' };
   }
-  const confined = confinedRealPathResult(jail, join(jail, LOOP_CAPABILITIES_FILENAME));
-  if (!confined.ok) {
-    const reason =
-      confined.cause === 'escapes'
-        ? 'loop-capabilities.yaml escapes the repository'
-        : 'loop-capabilities.yaml cannot be resolved';
-    return { ok: false, cause: 'confinement', reason };
-  }
 
-  let size: number;
+  // One descriptor for the whole read (CWE-367): O_NOFOLLOW refuses a symlink at the final component, O_NONBLOCK
+  // refuses to block on a FIFO, and fstat+read on that same fd close the stat↔read window a swapped inode wins.
+  let fd: number;
   try {
-    const st = statSync(confined.path);
-    if (!st.isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
-    size = st.size;
+    fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the repository' };
-    return { ok: false, cause: 'malformed', reason: `cannot stat loop-capabilities.yaml: ${errMsg(e)}` };
-  }
-  if (size > MAX_CAPABILITIES_BYTES) {
-    return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is too large' };
+    if (isErrno(e, 'ELOOP')) return { ok: false, cause: 'confinement', reason: 'loop-capabilities.yaml is a symlink' };
+    return { ok: false, cause: 'malformed', reason: `cannot open loop-capabilities.yaml: ${errMsg(e)}` };
   }
 
   let text: string;
   try {
-    text = readFileSync(confined.path, 'utf8'); // the confined real path, never a re-derived one (TOCTOU)
+    if (!fstatSync(fd).isFile()) return { ok: false, cause: 'malformed', reason: 'loop-capabilities.yaml is not a regular file' };
+    // Read at most MAX+1 bytes FROM THIS fd (never readFileSync's read-to-EOF): a file appended-to after the
+    // fstat cannot cause an unbounded read past the cap (CWE-400/770). MAX+1 bytes present ⇒ over the limit.
+    const buf = Buffer.alloc(MAX_CAPABILITIES_BYTES + 1);
+    let total = 0;
+    for (;;) {
+      const n = readSync(fd, buf, total, buf.length - total, total);
+      if (n === 0 || total >= buf.length) break;
+      total += n;
+    }
+    // The read stops at MAX+1 bytes (memory bound); over-cap CLASSIFICATION is the shared parse boundary's job.
+    // Fatal decode: invalid UTF-8 is malformed, never silently normalized to U+FFFD (which would fail-away).
+    text = decodeUtf8Strict(buf.subarray(0, total));
   } catch (e) {
-    if (isErrno(e, 'ENOENT')) return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the repository' };
     return { ok: false, cause: 'malformed', reason: `cannot read loop-capabilities.yaml: ${errMsg(e)}` };
+  } finally {
+    closeSync(fd);
   }
 
   const parsed = parseLoopCapabilities(text);

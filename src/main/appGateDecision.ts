@@ -205,8 +205,7 @@ export async function runAppGateDecision(
       // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
       const label = typeof se.args.label === 'string' ? se.args.label : '';
       try {
-        // §28.3 — the phase-start snapshot is captured by the phase lifecycle (§28.5.1), not yet wired; the
-        // executor passes an empty snapshot until then.
+        // TODO(dylanb): capture the §28.5.1 phase-start snapshot from the phase lifecycle; empty until wired.
         const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
         if (result.outcome === 'committed') {
           // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.

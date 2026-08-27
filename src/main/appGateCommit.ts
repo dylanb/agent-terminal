@@ -12,10 +12,9 @@ import { isGitObjectId } from '../shared/appBootstrap';
  *  descriptor carries — never re-derived from run-state or the branch. */
 export interface AppGateCommitCtx {
   label: string;
-  /** §28.3 — the repo-relative paths already dirty at phase start: operator WIP the commit leaves untouched.
-   *  A path listed here is unstaged wholesale, so the phase's own later change to an already-dirty file is
-   *  not committed either — the operator's edits win. A domain input the phase lifecycle supplies (§28.5.1);
-   *  empty leaves every changed path phase-produced. */
+  /** §28.3 — repo-relative paths already dirty at phase start (the operator's WIP): the commit leaves them
+   *  untouched, wholesale — a phase edit to an already-dirty file loses to the operator's copy by design. A
+   *  domain input the phase lifecycle supplies (§28.5.1); empty leaves every changed path phase-produced. */
   dirtyAtPhaseStart: readonly string[];
 }
 
