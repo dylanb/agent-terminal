@@ -8,6 +8,8 @@ import {
 } from '../../src/main/appWorkTurn';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
+import { PHASE_RESULT_GRAMMAR, examplePhaseResult, phaseResultWellFormed } from '../../src/shared/phaseResult';
+import { PHASE_OUTCOMES } from '../../src/shared/phaseOutcome';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop
@@ -170,7 +172,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-implement',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
       inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
@@ -186,7 +188,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
       recipeBody: '# work turn\nGroom the ticket.',
       turnKey: 'work-groom',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
       inputs: [],
     });
     expect(prompt.toLowerCase()).not.toContain('declared input');
@@ -213,7 +215,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-plan',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body survives
     expect(prompt).toContain('.agent-terminal/loop/artifacts/plan.md'); // the artifact to produce
@@ -241,7 +243,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-plan',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
       instruction: INSTRUCTION,
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads (ticket + plan inputs)
@@ -254,8 +256,69 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-plan',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
     });
     expect(prompt.toLowerCase()).not.toContain('redo');
+  });
+});
+
+// §28.5.5/§28 §7d — the RED work turn: the agent runs the tests, classifies the run into the phase-outcome
+// vocabulary, and writes the phase-result file the RED gate reads. The prompt is the WRITER half of the shared-
+// semantics contract (CODE-STANDARDS "a composed prompt that instructs an agent to produce a serialized
+// artifact"): every grammar token it names is interpolated from PHASE_RESULT_GRAMMAR / PHASE_OUTCOMES (one
+// descriptor the predicate also derives from), and it embeds the canonical example asserted well-formed against
+// that same predicate — so the instruction and the gate cannot drift.
+describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mode)', () => {
+  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
+  const redPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
+    composeAppWorkPrompt({
+      recipeBody: '# work turn\nAuthor a failing test for the adder.',
+      turnKey: 'work-red-slice1',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { kind: 'red', resultRel: RESULT_REL },
+      ...over,
+    });
+
+  it('names the phase-result file the agent must write and the §27 done-file that verifies it', () => {
+    const prompt = redPrompt();
+    expect(prompt).toContain('Author a failing test for the adder.'); // the recipe body still leads
+    expect(prompt).toContain(RESULT_REL); // the file to write
+    expect(prompt).toContain('turn-done:work-red-slice1'); // the turn id the fake-agent matches
+    // the done-signal verifies the RESULT FILE on disk first (re-read clause), like a file-producing turn.
+    expect(prompt.toLowerCase()).toContain('re-read');
+  });
+
+  it('interpolates the grammar tokens and the FULL outcome vocabulary from the shared descriptors (no re-spell)', () => {
+    const prompt = redPrompt();
+    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel); // `outcome`
+    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // `## captured output`
+    for (const outcome of PHASE_OUTCOMES) {
+      expect(prompt).toContain(outcome); // every category the agent may classify into
+    }
+  });
+
+  it('embeds the ONE canonical example, and that example is well-formed against the gate predicate (single-source)', () => {
+    // The contract: the few-shot the prompt shows is validated by the SAME predicate the gate runs, so a change
+    // to the grammar that broke the example would fail here before it could mislead the agent.
+    const example = examplePhaseResult('failed-assertion');
+    expect(phaseResultWellFormed(example)).toBe(true);
+    expect(redPrompt()).toContain(example);
+  });
+
+  it('states the RED completion bar (a newly-added test that fails by assertion), distinguishing it from errored', () => {
+    const prompt = redPrompt().toLowerCase();
+    // The bar PROSE itself (not merely the vocabulary line, which lists every outcome) — deleting the
+    // "valid RED only when …" sentence must fail this, so assert a phrase unique to the bar.
+    expect(prompt).toContain('valid red only when');
+    expect(prompt).toContain('fails by assertion'); // the assertion requirement, distinct from errored
+    expect(prompt).toContain('errored'); // named in the bar as the NOT-valid-RED sibling (a compile/module error)
+  });
+
+  it('is a distinct shape from a file-with-marker turn: no completion MARKER instruction', () => {
+    // The RED turn completes on the classified result file, never a marker line appended to an artifact. Assert
+    // the prose the file-with-marker branch would emit if it leaked (not a step-specific marker that could never
+    // appear regardless), so a mis-dispatch of a red turn into the file branch fails this.
+    expect(redPrompt().toLowerCase()).not.toContain('marker line');
+    expect(redPrompt()).not.toContain('work-turn-complete');
   });
 });

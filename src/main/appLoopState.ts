@@ -6,6 +6,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { isErrno } from './errno';
+import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
@@ -92,12 +93,19 @@ export function validInstruction(instruction: unknown): string | undefined {
   return nonEmptyText(instruction);
 }
 
-/** The confined absolute run-state file path inside the §27 loop area, or null when the loop area cannot be
- *  reduced to a symlink-free real path under the repo (a planted link at `.agent-terminal`, CWE-22/59). */
-export function appLoopStateFile(repoDir: string): string | null {
+/** The confined absolute path of a file directly inside the §27 loop area (<repo>/.agent-terminal/loop/), or
+ *  null when the loop area cannot be reduced to a symlink-free real path under the repo (a planted link at
+ *  `.agent-terminal`, CWE-22/59). The ONE confinement-leaf resolver the per-file resolvers here share (run-state,
+ *  the disjoint step-flags, the baseline), so the jail derivation lives once. */
+function loopAreaFile(repoDir: string, leaf: string): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, RUN_STATE_FILE));
+  return confinedRealPath(jail, path.join(jail, leaf));
+}
+
+/** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
+export function appLoopStateFile(repoDir: string): string | null {
+  return loopAreaFile(repoDir, RUN_STATE_FILE);
 }
 
 export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): string {
@@ -373,11 +381,7 @@ interface StepFlag {
 }
 
 function stepFlag(filename: string, what: string): StepFlag {
-  const fileOf = (repoDir: string): string | null => {
-    const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
-    if (jail === null) return null;
-    return confinedRealPath(jail, path.join(jail, filename));
-  };
+  const fileOf = (repoDir: string): string | null => loopAreaFile(repoDir, filename);
   return {
     set(repoDir, step) {
       if (step.length === 0) return;
@@ -442,4 +446,57 @@ export function clearPolish(repoDir: string): void {
  *  `inPolish` (loopViewV2) — so the two cannot drift on which gate is standing down (CLAUDE.md shared-semantics). */
 export function isPolishActiveForStep(repoDir: string, step: string): boolean {
   return polishStandDown.read(repoDir)?.step === step;
+}
+
+// §28.4/§28.5.1 — the phase-commit baseline (the SHA a commit side-effect captured on approve) in its OWN file,
+// `baseline-commit.yaml`, disjoint from run-state.yaml. Phase-as-a-loop (§28.4) rewrites run-state wholesale
+// between RED/GREEN/refactor, so a baseline stored in run-state would be clobbered before the next phase's
+// frozen check reads it; a disjoint file is structurally unclobberable (the polish/armed-interrupt pattern).
+// Confined via resolveJail (the loop area sits in the untrusted repo tree, CWE-22/59); field-local validation
+// (CWE-20): a non-object-id sha or blank step is never persisted/read as a baseline.
+const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
+
+/** Record `sha` (the phase commit) under `step` — read by the next phase's frozen check (§28.5.1). A blank step
+ *  or a non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop area is
+ *  unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the caller
+ *  (§28 approve side-effect) MUST wrap it best-effort so a filesystem error never aborts the accept. */
+export function recordBaselineCommit(repoDir: string, step: string, sha: string): void {
+  if (step.length === 0 || !isGitObjectId(sha)) return;
+  const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step, sha }))) {
+    throw new Error(`cannot write §27 baseline commit: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
+ *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. This is
+ *  one repo-keyed single-current baseline, overwritten each phase; the returned `step` is the baseline key the
+ *  writer recorded, so the reader (the GREEN frozen check) MUST match it and refuse a mismatch (a stale baseline
+ *  from an abandoned/interleaved chain — there is no clear() yet), never key on presence alone.
+ *  §12 (phase-stable): when §28.4's RED/GREEN/refactor phase-loops name steps phase-qualified, the writer and
+ *  this reader MUST reduce the step to ONE shared PHASE-STABLE slice identity before comparing — matching the raw
+ *  `red-<slice>` (written) against `green-<slice>` (read) would mismatch on every happy path and disable the
+ *  check. Drive that comparison in a cross-slice test with the real phase-loop step values (not a `plan` fixture,
+ *  which never exercises the key semantics) before the reader ships. */
+export function readBaselineCommit(repoDir: string): { step: string; sha: string } | null {
+  const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc)) return null;
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+  if (typeof doc.sha !== 'string' || !isGitObjectId(doc.sha)) return null;
+  return { step: doc.step, sha: doc.sha };
 }

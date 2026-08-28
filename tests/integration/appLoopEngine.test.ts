@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
+import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { RED_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { makeFakeCompletionPredicates, deferredWorkingTree } from '../helpers/fakeCompletionPredicates';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
@@ -45,6 +48,7 @@ const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
 
 let repo: string;
 let artifactPath: string;
+let resultPath: string;
 let hosted: HostedAgentState;
 let injected: string[];
 let deps: AppLoopEngineDeps;
@@ -54,7 +58,10 @@ let deps: AppLoopEngineDeps;
 const INJECTED_MARKER = 'injected-toolkit-marker';
 const completionPredicatesSentinel: LoopCompletionPredicates = {
   classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
+  resultOutcome: () => null,
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
+  workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
+  recoverExitCode: async () => null,
 };
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;
@@ -106,7 +113,10 @@ let defResult: LoopDefV2Result;
 /** A resolved §27 def result rooted at the test repo's own temp dir — the honest "resolved-from tier" for
  *  every def these tests hand the engine through `resolveDef`. */
 const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: repo });
-function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) => void): ReturnType<typeof createAppLoopEngine> {
+function makeEngine(
+  persistOverride?: (repoDir: string, state: AppLoopRunState) => void,
+  predicatesOverride?: LoopCompletionPredicates,
+): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
   terminateFlow = vi.fn();
@@ -151,10 +161,27 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
       const abs = consolidatorOutputFile(repoDir, round);
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
     },
-    completionPredicates: completionPredicatesSentinel,
+    completionPredicates: predicatesOverride ?? completionPredicatesSentinel,
   };
   return createAppLoopEngine(deps);
 }
+
+// §28.5.3 — a RED work-turn def: completion `red`, its work artifact resolving to a result-file binding under
+// the §27 area. `red-result-orphan` variants drop the binding to exercise the resume-case F1 unresolved guard.
+function redDef(withBinding = true): LoopDefV2 {
+  return {
+    ...fileDef(),
+    work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'red-result', completion: 'red' },
+    outputs: withBinding ? [binding('red-result', resultPath)] : [],
+  };
+}
+function writeResult(content: string): void {
+  mkdirSync(join(repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+  writeFileSync(resultPath, content);
+}
+/** Flush the engine's async RED gate (redAsyncGate resolves on the fake predicate promises, then re-enters the
+ *  runner). One macrotask drains the pending microtask chain. */
+const flushRedGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 describe('§28.5.3 — the engine surfaces the injected machine completion predicates', () => {
   it('surfaces the injected toolkit — its classifyOutcome behavior is observable through the engine', () => {
@@ -233,6 +260,7 @@ beforeEach(() => {
   mkdirSync(join(repo, 'recipe'), { recursive: true });
   writeFileSync(join(repo, 'recipe', 'work.md'), '# work turn\nProduce the plan.\n');
   artifactPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md');
+  resultPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'red-result.md');
   hosted = 'idle';
   defResult = resolved(fileDef());
 });
@@ -1958,5 +1986,221 @@ describe('§27 engine — an accept whose `complete` write fails re-surfaces the
     engine.routeOut(repo, STEP, CONSOLIDATE_KEY, 'accept');
     expect(engine.liveErrorFor(repo)).not.toBeNull();
     expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('accept'), expect.anything());
+  });
+});
+
+describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => {
+  // A RED completion chains the review-and-fix turn, whose prompt names the roster; a failure surfaces emitError.
+  const reviewChained = (): boolean => injected.some((s) => s.includes(ROSTER[0]));
+  const redFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
+    makeFakeCompletionPredicates({
+      workingTreeTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }),
+      ...overrides,
+    });
+  const enterRed = (engine: ReturnType<typeof createAppLoopEngine>, def: LoopDefV2 = redDef()): void => {
+    defResult = resolved(def);
+    enterAndInjectWork(engine);
+  };
+
+  it('IT-ENGINE-writer: entering a RED-completion def injects a work prompt instructing the phase-result write (§28.5.5 §7d writer wiring)', () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    // The compose-site red branch threads the result binding into the injected work prompt; reverting it to
+    // `null` composes a plain work prompt with NO result instruction (and the done-signal loses its verify
+    // clause) — a real agent would never be told to write the file. This pins that wiring at the injected
+    // boundary, mirroring the file case's injected[1] assertions (recipe + marker + done-signal).
+    expect(injected[1]).toContain('red-result.md'); // the resultRel the engine threaded — the file to write
+    expect(injected[1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // the grammar the agent must emit
+    expect(injected[1]).toContain(RED_COMPLETING_OUTCOME); // the RED bar named in the instruction
+  });
+
+  it('IT-ENGINE-1: a failed-assertion result + a test file added completes the RED turn', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(reviewChained()).toBe(true); // completion chained the review turn
+  });
+
+  it('IT-ENGINE-2: a passing test result drives retry-then-error (the sync outcome clause)', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult(examplePhaseResult('passed'));
+    engine.onDoneSignal();
+    await flushRedGate(); // attempt 1 -> retry
+    engine.onDoneSignal();
+    await flushRedGate(); // attempt 2 -> error
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-ENGINE-3: an errored result (compile/import — the marquee "not valid RED") drives retry-then-error', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult(examplePhaseResult('errored'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-ENGINE-3b: a no-tests-selected result drives retry-then-error', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult(examplePhaseResult('no-tests-selected'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalled();
+  });
+
+  it('IT-ENGINE-4: a failed-assertion result but NO test file added drives retry-then-error with a naming reason', async () => {
+    const engine = makeEngine(undefined, redFake({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('no test file was added'));
+  });
+
+  it('IT-ENGINE-4b: absent loop-capabilities surfaces a DISTINCT reason, not the generic missing-artifact text', async () => {
+    const engine = makeEngine(
+      undefined,
+      redFake({ workingTreeTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }),
+    );
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+  });
+
+  it('IT-ENGINE-5: a malformed result file drives retry-then-error', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine);
+    writeResult('outcome: failed-assertion\n'); // no captured-output section -> not well-formed (AC3)
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-ENGINE-6: exit-direction — exit 0 rejects a failed-assertion claim; exit 5 allows it', async () => {
+    // exit 0 -> may not claim RED
+    const rejects = makeEngine(undefined, redFake({ recoverExitCode: async () => 0 }));
+    enterRed(rejects);
+    writeResult(examplePhaseResult('failed-assertion'));
+    rejects.onDoneSignal();
+    await flushRedGate();
+    rejects.onDoneSignal();
+    await flushRedGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('exited 0'));
+
+    // exit 5 (non-zero) -> RED allowed
+    const allows = makeEngine(undefined, redFake({ recoverExitCode: async () => 5 }));
+    enterRed(allows);
+    writeResult(examplePhaseResult('failed-assertion'));
+    allows.onDoneSignal();
+    await flushRedGate();
+    allows.onInjectable();
+    allows.onInjectable();
+    expect(reviewChained()).toBe(true);
+  });
+
+  it('IT-ENGINE-7: a completion:red def whose artifact binding does NOT resolve is unresolved, never a free pass', async () => {
+    const engine = makeEngine(undefined, redFake());
+    enterRed(engine, redDef(false)); // no output binding for work.artifact (the resume-case F1)
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // unresolved -> completionSatisfied false -> retry (SYNC path; not a RED gate)
+    engine.onDoneSignal(); // -> error
+    expect(emitError).toHaveBeenCalled();
+    expect(reviewChained()).toBe(false); // never fabricated a pass on the done-signal alone
+  });
+
+  it('IT-ENGINE-8: a stall during the async RED gate errors the turn; the late gate cannot resurrect it', async () => {
+    const { workingTreeTestPaths, resolve } = deferredWorkingTree();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ workingTreeTestPaths }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // starts the async gate, awaiting the deferred workingTreeTestPaths
+    engine.onStall(); // the runner errors while the gate is still pending
+    expect(emitError).toHaveBeenCalled();
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late...
+    await flushRedGate();
+    expect(reviewChained()).toBe(false); // ...but the late runner.onDoneSignal(gate) no-ops (state != in-flight)
+  });
+
+  it('IT-ENGINE-8b: a stale gate resolving after a retry rebuilt the turn cannot auto-complete it (identity guard)', async () => {
+    const { workingTreeTestPaths, resolve } = deferredWorkingTree();
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ workingTreeTestPaths }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // starts the async gate for turn `a`
+    engine.onStall(); // errors the turn
+    engine.routeOut(repo, STEP, 'work-plan', 'retry'); // rebuilds `active` as a NEW in-flight turn (≠ a)
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the STALE gate for `a` resolves...
+    await flushRedGate();
+    expect(reviewChained()).toBe(false); // ...but active !== a → the identity guard skips; the retry never auto-completed
+    expect(readAppLoopState(repo)?.status).toBe('working'); // the retry turn is running, not fabricated-complete
+  });
+
+  it('IT-ENGINE-dedup: a duplicate done-signal while the gate is pending does not burn a second retry attempt', async () => {
+    // The host watcher is not debounced (turnDoneFile) — the async gate must not let a double-fire consume both
+    // MAX_ATTEMPTS. gate fails (no test file); two rapid signals -> ONE gate -> ONE fail -> retry (not error).
+    const engine = makeEngine(undefined, redFake({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onDoneSignal(); // spawns the gate for `a`
+    engine.onDoneSignal(); // duplicate while the gate is pending -> suppressed by redGatePendingFor
+    await flushRedGate();
+    expect(emitError).not.toHaveBeenCalled(); // only ONE attempt consumed -> retried, not errored
+  });
+
+  it('IT-ENGINE-9a: human-accept ALSO requires the async gate — no test file added → accept REFUSES (AC2 on the human path)', async () => {
+    const engine = makeEngine(undefined, redFake({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onStall(); // error the turn (a stall, independent of the gate)
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, 'work-plan', 'accept');
+    await flushRedGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // accept refused — §28.5.6 keeps "a test was added" machine-authoritative
+    expect(reviewChained()).toBe(false);
+  });
+
+  it('IT-ENGINE-9b: human-accept finalizes when BOTH the sync clause and the async gate hold', async () => {
+    const engine = makeEngine(undefined, redFake()); // workingTreeTestPaths -> paths: ['tests/a.test.ts']
+    enterRed(engine);
+    writeResult(examplePhaseResult('failed-assertion'));
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, 'work-plan', 'accept');
+    await flushRedGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // both clauses held → finalized
+  });
+
+  it('IT-ENGINE-10: a non-RED (file) turn is unaffected — it completes SYNCHRONOUSLY on the done-signal', () => {
+    const engine = makeEngine(); // the real sentinel predicates; a plain file def
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal(); // NO flush needed — non-RED completion is synchronous
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(reviewChained()).toBe(true);
   });
 });

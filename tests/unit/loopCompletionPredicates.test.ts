@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createLoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
+import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
@@ -9,6 +10,17 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
     expect(predicates.classifyOutcome('failed-assertion')).toBe('failed-assertion');
     expect(predicates.classifyOutcome('nope')).toBeNull();
     expect(predicates.classifyOutcome('Passed')).toBeNull(); // never normalized
+  });
+
+  it('resultOutcome returns the outcome of a well-formed result file and null for a malformed one', () => {
+    const predicates = createLoopCompletionPredicates();
+    // a well-formed result (outcome ∈ set AND raw captured output present) yields its outcome:
+    expect(predicates.resultOutcome(examplePhaseResult('failed-assertion'))).toBe('failed-assertion');
+    expect(predicates.resultOutcome(examplePhaseResult('passed'))).toBe('passed');
+    // an outcome with NO captured-output section is not well-formed (AC3) → null, even though the outcome parses:
+    expect(predicates.resultOutcome('outcome: failed-assertion\n')).toBeNull();
+    // an unknown outcome spelling → null:
+    expect(predicates.resultOutcome('outcome: flaky\n\n## captured output\n\nx\n')).toBeNull();
   });
 
   describe('changedTestPaths delegates to the capabilities-sourced detection', () => {
@@ -41,5 +53,21 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
       const result = await createLoopCompletionPredicates().changedTestPaths({ repoDir: dir, baseline, head });
       expect(result).toEqual({ ok: true, paths: ['tests/a.test.ts'] });
     });
+
+    it('workingTreeTestPaths delegates to the working-tree detection (absent cause for no loop-capabilities.yaml)', async () => {
+      const dir = repos.makeGitRepo('predicates-wt');
+      repos.writeRepoFile(dir, 'src/a.ts', 'a\n');
+      repos.commitAll(dir, 'seed');
+      repos.writeRepoFile(dir, 'tests/a.test.ts', 't\n'); // an added test, but no capabilities to source globs from
+      const result = await createLoopCompletionPredicates().workingTreeTestPaths({ repoDir: dir });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.cause).toBe('absent');
+    });
+  });
+
+  it('recoverExitCode returns null in the shipped default (no source wired — the N7/#92 dormant hook)', async () => {
+    await expect(
+      createLoopCompletionPredicates().recoverExitCode({ repoDir: '/nonexistent', turnKey: 'work-red' }),
+    ).resolves.toBeNull();
   });
 });

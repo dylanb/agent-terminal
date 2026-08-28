@@ -7,7 +7,7 @@ import {
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
-import type { AppGateCommitCtx, AppGateCommitOutcome } from '../../src/main/appGateCommit';
+import type { AppGateCommitCtx } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
 // bound def's declared side-effect out of band, then reaches the terminal accept and advances the flow; a
@@ -68,13 +68,14 @@ interface Recorder {
   redos: Array<{ step: string; turnKey: string; instruction: string }>;
   polishEnters: Array<{ repoDir: string; step: string }>;
   polishClears: string[];
+  recordBaselines: Array<{ repoDir: string; step: string; sha: string }>;
 }
 
-function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: AppGateCommitOutcome; pr?: number | null; ticket?: number | null }): {
+function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -90,8 +91,11 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     runCommitSideEffect: async (ctx) => {
       rec.commitSideEffects.push(ctx);
       if (over.commitThrows) throw new Error(over.commitThrows);
-      return over.commitOutcome ?? 'committed';
+      return over.commitOutcome === 'nothing-to-commit'
+        ? { outcome: 'nothing-to-commit' }
+        : { outcome: 'committed', sha: 'a'.repeat(40) };
     },
+    recordBaseline: (repoDir, step, sha) => void rec.recordBaselines.push({ repoDir, step, sha }),
     persistAccept: (_r, state) => void rec.accepts.push(state),
     advanceFlow: (r) => void rec.advances.push(r),
     audit: (_r, cmd, exit) => void rec.audits.push({ cmd, exit }),
@@ -206,6 +210,53 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     await approve(deps);
     expect(rec.commitSideEffects).toEqual([{ label: '', dirtyAtPhaseStart: [] }]); // the executor never invents a label from ambient state
     expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('IT-DECISION-1: records the baseline (repoDir, decision step, EXACT sha) on a committed approve (§28.5.1)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: slice-x') });
+    await approve(deps);
+    // §6 identity — the recorded sha is exactly the one the side-effect returned, under the decision's own step,
+    // never re-derived from ambient git state.
+    expect(rec.recordBaselines).toEqual([{ repoDir: '/repo', step: 'plan', sha: 'a'.repeat(40) }]);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect') && a.exit === 0)).toBe(true); // committed audit unchanged
+  });
+
+  it('IT-DECISION-2: records NO baseline on nothing-to-commit (nothing committed to diff from); the notice still fires', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('refactor: noop'), commitOutcome: 'nothing-to-commit' });
+    await approve(deps);
+    expect(rec.recordBaselines).toEqual([]);
+    expect(rec.notices).toHaveLength(1); // the S2 nothing-to-commit notice is unchanged
+  });
+
+  it('IT-DECISION-3: a throwing baseline store never mis-attributes the LANDED commit as a failed side-effect — the commit is still audited committed, the failure surfaces as its OWN distinct baseline-record-failed audit + a live notice (never emitError), and the accept still advances (best-effort, §28.5.1/§27.13)', async () => {
+    const { deps, rec } = mkDeps({
+      gate: APPROVE_COMMIT('RED: baseline blows up'),
+      // the raw disjoint-file store's fail-loud contract — the executor (not the composition root) wraps it.
+      recordBaseline: () => {
+        throw new Error('§27 loop area is unresolvable');
+      },
+    });
+    await approve(deps);
+    // the commit LANDED — its success audit fires at exit 0 and is NEVER re-attributed to "side-effect failed".
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect:') && a.exit === 0)).toBe(true);
+    expect(rec.audits.some((a) => a.cmd.includes('side-effect failed'))).toBe(false);
+    // the baseline failure is recorded on its OWN distinct audit outcome at exit 1 (never swallowed, §25).
+    expect(rec.audits.some((a) => a.cmd.includes('clear-polish failed'))).toBe(false);
+    expect(rec.audits.some((a) => a.cmd.includes('baseline') && a.exit === 1)).toBe(true);
+    // surfaced LIVE as a NOTICE (the accept succeeded — a blocking error would alarm over a landed commit),
+    // naming the degraded state so the operator learns the downstream frozen check will refuse.
+    expect(rec.notices.some((n) => /baseline/i.test(n))).toBe(true);
+    expect(rec.errors).toEqual([]);
+    // best-effort — the accept persisted and the flow advanced regardless (§27.13/AC3).
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
+
+  it('IT-DECISION-4: records NO baseline when the commit side-effect throws (the S2 failure path is unchanged)', async () => {
+    const { deps, rec } = mkDeps({ gate: APPROVE_COMMIT('RED: fails'), commitThrows: 'git commit failed' });
+    await approve(deps);
+    expect(rec.recordBaselines).toEqual([]);
+    expect(rec.errors).toHaveLength(1); // surfaced as a side-effect-failed error, no baseline
   });
 });
 

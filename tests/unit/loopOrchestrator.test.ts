@@ -160,6 +160,66 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
+  // §28 Option C — an optional pre-evaluated gate the caller (the engine, for a RED turn) ANDs into completion.
+  // Absent (every non-RED turn) preserves the existing behavior; false fails with the caller's reason. Because
+  // resolveCompletion runs while state is still 'in-flight', fail()->retry-then-error works with NO new state.
+  describe('the threaded completion gate (Option C)', () => {
+    // IT-RUNNER-1 — a gate arg is optional; no gate completes on the artifact alone (behavior preserved).
+    it('completes on the artifact alone when no gate is passed', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal(); // no gate
+      expect(onComplete).toHaveBeenCalledWith('work-plan');
+    });
+
+    // IT-RUNNER-2 — a false gate fails even when the artifact is present (both required), and retries.
+    it('fails on a false gate even when the artifact is present, and retries', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal({ ok: false, reason: 'RED requires a failing test — no test file was added' });
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenCalledTimes(2); // retried, exactly like a missing artifact
+    });
+
+    // IT-RUNNER-3 — a passing gate still requires the artifact (both conditions).
+    it('a passing gate still requires the artifact', () => {
+      artifact = false;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal({ ok: true });
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(inject).toHaveBeenCalledTimes(2); // artifact absent -> retry
+    });
+
+    // IT-RUNNER-4 — a false-gate done-signal drives retry-then-error carrying the caller's OWN reason.
+    it('a false-gate done-signal drives retry-then-error carrying the caller reason', () => {
+      artifact = true;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      const reason = 'RED requires a failing test — no test file was added';
+      r.onDoneSignal({ ok: false, reason }); // attempt 1 -> retry
+      r.onDoneSignal({ ok: false, reason }); // attempt 2 -> error
+      expect(inject).toHaveBeenCalledTimes(2);
+      expect(writeError).toHaveBeenCalledTimes(1);
+      expect(writeError.mock.calls[0][0]).toBe(reason); // the caller's reason, not the generic missing-artifact text
+      expect(r.state()).toBe('error');
+    });
+
+    // IT-RUNNER-5 — a PASSING gate with the artifact absent errors with the generic missing-artifact text, not a
+    // gate reason: the two failure causes never mislabel each other.
+    it('a passing gate with a missing artifact errors with the missing-artifact text', () => {
+      artifact = false;
+      const r = createTurnRunner(deps);
+      r.requestTurn('work-plan');
+      r.onDoneSignal({ ok: true }); // attempt 1 -> retry
+      r.onDoneSignal({ ok: true }); // attempt 2 -> error
+      expect(writeError).toHaveBeenCalledTimes(1);
+      expect(writeError.mock.calls[0][0]).toContain('artifact is missing');
+    });
+  });
+
   it('never injects over a busy instance: defers until injectable (§27.2)', () => {
     hosted = 'busy';
     const r = createTurnRunner(deps);

@@ -1,5 +1,14 @@
-// §28.5.1 — the frozen-tests detection. Cross-cutting: the diff paths are string-matched, never opened or
-// walked, so the repo-path confinement rule does NOT apply to this module.
+// §28.5.1/§28.5.2a — git-only test-path detection for the §28 completion predicates, in two modes, each with NO
+// knowledge of any test framework (the engine never runs the test command, §28.5.4; it only asks git):
+//   • changedTestPaths — which test-glob files CHANGED between two COMMITS (baseline↔head): the frozen-tests
+//     check (§28.5.1). "Changed" is the right predicate there — a deleted frozen test is a real change.
+//   • workingTreeTestPaths — which test-glob files this turn ADDED LINES to in the WORKING TREE vs HEAD: the RED
+//     "a failing test was authored" check (§28.5.2a), run before the RED commit; a deletion or a line-removal
+//     is deliberately NOT "added" (the intentional asymmetry with the frozen check above).
+//
+// Paths are string-matched against `testGlobs`, never opened or walked, so no path confinement applies to the
+// diff output. Both fail TOWARD the check firing (CWE-20/770): a bad baseline, an empty glob list, a
+// non-object-id baseline, or an unresolvable HEAD reject rather than reading as "nothing changed".
 
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -15,11 +24,37 @@ import {
   MAX_CAPABILITIES_BYTES,
   type LoopCapabilities,
 } from '../shared/loopCapabilities';
+import { loadLoopCapabilities } from './loopCapabilities';
+import { isUnderAppStateDir } from './appStateDirs';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
 // capabilities-file-times-diff amplification (CWE-400).
 const MAX_MATCH_WORK = 100_000_000;
+
+// The object-source hardening every §28 git READ shares (CWE-345/829): ignore repo-planted refs/replace/* so a
+// tamper cannot substitute the compared objects, and deny every transport so a partial-clone lazy-fetch cannot
+// run an agent-configured promisor command (with the GIT_NO_LAZY_FETCH env backstop). ONE definition every §28
+// git read in this module uses — the two path detections and the baseline-capabilities read — so the posture
+// cannot be present in one and absent in another. The working-tree read reaches it on every RED completion
+// attempt, retries included.
+const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
+const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
+
+/** Match `paths` against `testGlobs`, bounding aggregate glob-match work against MAX_MATCH_WORK (CWE-400) — the
+ *  guard BOTH detections share, so the bound cannot be present in one and absent in its twin. globMatch bounds
+ *  each individual pair; this bounds their sum. Returns the matched paths, order preserved. */
+function matchTestGlobsWithinBudget(paths: readonly string[], testGlobs: readonly string[]): string[] {
+  const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
+  let work = 0;
+  const matched: string[] = [];
+  for (const path of paths) {
+    work += globChars * path.length;
+    if (work > MAX_MATCH_WORK) throw new Error('test-path detection: aggregate glob-match work budget exceeded');
+    if (matchesAnyGlob(path, testGlobs)) matched.push(path);
+  }
+  return matched;
+}
 
 export interface FrozenTestsQuery {
   /** The checked-out repo working tree; git runs here as cwd. */
@@ -69,9 +104,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   const stdout = await runBuffer(
     'git',
     [
-      '--no-replace-objects', // ignore any repo-planted refs/replace/* so the recorded baseline is used verbatim (tamper-evidence)
-      '-c',
-      'protocol.allow=never', // on a partial clone a diff can lazy-fetch missing objects; deny every transport so an agent-configured promisor cannot run a command (backstop for GIT_NO_LAZY_FETCH below)
+      ...OBJECT_SOURCE_HARDENING, // ignore repo-planted refs/replace/* (tamper-evidence) + deny every transport
       ...coreExecHardeningArgs(disabledHooks),
       'diff',
       '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
@@ -84,23 +117,10 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     ],
     repoDir,
     'frozen-tests diff failed',
-    { GIT_NO_LAZY_FETCH: '1' }, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
+    NO_LAZY_FETCH_ENV, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
 
-  const changed = strictDecodeNulPaths(stdout);
-  // Aggregate work guard (CWE-400): a bloated capabilities file (many long globs) times many changed paths can
-  // amplify matching far past any single pair. Charge (Σ glob chars)·(path chars) per path and reject once the
-  // running total passes the budget — fail toward firing, never a silent hang in the main process. globMatch
-  // bounds each individual pair; this bounds their sum.
-  const globChars = testGlobs.reduce((sum, glob) => sum + glob.length, 0);
-  let work = 0;
-  const matched: string[] = [];
-  for (const path of changed) {
-    work += globChars * path.length;
-    if (work > MAX_MATCH_WORK) throw new Error('frozen-tests: aggregate glob-match work budget exceeded');
-    if (matchesAnyGlob(path, testGlobs)) matched.push(path);
-  }
-  return [...new Set(matched)].sort();
+  return [...new Set(matchTestGlobsWithinBudget(strictDecodeNulPaths(stdout), testGlobs))].sort();
 }
 
 /** The changed test paths, sourcing the globs from the RED baseline's loop-capabilities.yaml (a git blob, so
@@ -124,8 +144,8 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
   const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-  const harden = ['--no-replace-objects', '-c', 'protocol.allow=never', ...coreExecHardeningArgs(disabledHooks)];
-  const env = { GIT_NO_LAZY_FETCH: '1' };
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
+  const env = NO_LAZY_FETCH_ENV;
   // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
   await run(
     'git',
@@ -193,5 +213,103 @@ export async function changedTestPathsFromCapabilities(query: {
   const capabilities = await baselineCapabilities(query.repoDir, query.baseline);
   if (!capabilities.ok) return capabilities;
   const paths = await changedTestPaths({ ...query, testGlobs: capabilities.value.testGlobs });
+  return { ok: true, paths };
+}
+
+/** The working-tree detection's result. Unlike the commit↔commit `ChangedTestPathsResult` (baseline-blob
+ *  sourced, so `confinement` is unreachable there and stays out of its type — #105 round 20), the working-tree
+ *  wrapper reads the repo's OWN loop-capabilities.yaml through the working-tree loader, which CAN refuse on
+ *  confinement — so this arm carries the third `cause`. */
+export type WorkingTreeTestPathsResult =
+  | { ok: true; paths: string[] }
+  | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
+
+/** The test-glob paths this turn ADDED LINES to in the working tree vs HEAD — the RED "a failing test was
+ *  authored" check (§28.5.2a), run BEFORE the RED commit (the commit is the approve side-effect). Two hardened
+ *  reads, unioned: a `--numstat` diff of tracked files (kept only where added-lines > 0) plus every untracked
+ *  file. Neither mutates the index — the check must never stage into the working tree the live agent shares.
+ *  Fails TOWARD the check firing (CWE-20/770): an empty glob list or an unresolvable HEAD reject.
+ *
+ *  Why added-lines > 0, not merely "changed": §28.5.2a's clause is "must ADD lines in test_globs files". A
+ *  turn that only DELETES a test, or only removes lines from one (e.g. strips assertions), authored no failing
+ *  test — counting it would be the dangerous false-pass the gate exists to prevent. This is why the tracked arm
+ *  is `--numstat` here, not the `--name-only` the commit↔commit `changedTestPaths` correctly uses (where a
+ *  deletion IS a real change to a frozen test).
+ *
+ *  SECURITY — the tracked `git diff` arm compares the working tree to HEAD, so git re-hashes a changed file and
+ *  can run a repo-planted `filter.<driver>.clean` (in-tree `.gitattributes` + config), on EVERY RED completion
+ *  attempt including retries (not once, as on the S2 approve commit). It is the SAME lever the S2 commit
+ *  side-effect documents-and-accepts (the agent already runs the repo's own code in-turn), so no NEW trust
+ *  boundary — but the higher firing frequency is the novel delta. The `ls-files -o` arm lists names only (no
+ *  hashing), so it is filter-free.
+ *  TODO(dylanb): a plumbing `hash-object --no-filters` staging is the deferred full neutralization (§28.3). */
+export async function workingTreeTestPaths(query: {
+  repoDir: string;
+  testGlobs: readonly string[];
+}): Promise<string[]> {
+  const { repoDir, testGlobs } = query;
+  if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
+
+  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
+  // The SAME object-source hardening the commit↔commit read carries (OBJECT_SOURCE_HARDENING + NO_LAZY_FETCH_ENV):
+  // `git diff HEAD` re-hashes and looks up the HEAD tree, so a repo-planted replace-ref or promisor would steer
+  // or run under a naive read exactly as on the sibling path.
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
+  const trackedOut = await runBuffer(
+    'git',
+    [...harden, 'diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
+    repoDir,
+    'working-tree tests: git diff failed',
+    NO_LAZY_FETCH_ENV,
+  );
+  const untrackedOut = await runBuffer(
+    'git',
+    [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
+    repoDir,
+    'working-tree tests: git ls-files failed',
+    NO_LAZY_FETCH_ENV,
+  );
+
+  // `--numstat -z` records are `<added>\t<deleted>\t<path>` per NUL-terminated entry (no renames → no split
+  // record). The bytes are decoded strictly (a non-UTF-8 path rejects, never a lossy normalization — the same
+  // posture as strictDecodeNulPaths). Keep a tracked path only when its added-line count is a positive integer;
+  // a binary file's `-` count is NaN → excluded. The path is everything after the second tab (a tab CAN appear
+  // in a filename).
+  let trackedText: string;
+  try {
+    trackedText = decodeUtf8Strict(trackedOut);
+  } catch {
+    throw new Error('working-tree tests: git emitted non-UTF-8 path bytes');
+  }
+  const tracked = trackedText
+    .split('\0')
+    .filter((rec) => rec.length > 0)
+    .map((rec) => {
+      const firstTab = rec.indexOf('\t');
+      const secondTab = rec.indexOf('\t', firstTab + 1);
+      if (firstTab < 0 || secondTab < 0) return null;
+      const added = Number(rec.slice(0, firstTab));
+      return Number.isInteger(added) && added > 0 ? rec.slice(secondTab + 1) : null;
+    })
+    .filter((path): path is string => path !== null);
+  const untracked = strictDecodeNulPaths(untrackedOut);
+
+  // The SAME aggregate-work budget the commit↔commit read applies (CWE-400) — matchTestGlobsWithinBudget — so the
+  // bound cannot be present on one detection and absent on its twin; then drop the app's own state dirs.
+  const matched = matchTestGlobsWithinBudget([...tracked, ...untracked], testGlobs).filter(
+    (path) => !isUnderAppStateDir(path),
+  );
+  return [...new Set(matched)].sort();
+}
+
+/** The working-tree test paths, sourcing the globs from the repo's own loop-capabilities.yaml — its failure arm
+ *  is the capabilities-load failure so the RED gate can surface a distinct reason; a git/HEAD failure still
+ *  rejects (fail toward firing). This is the seam the S3 RED completion gate consults. */
+export async function workingTreeTestPathsFromCapabilities(query: {
+  repoDir: string;
+}): Promise<WorkingTreeTestPathsResult> {
+  const capabilities = loadLoopCapabilities(query.repoDir);
+  if (!capabilities.ok) return capabilities;
+  const paths = await workingTreeTestPaths({ repoDir: query.repoDir, testGlobs: capabilities.value.testGlobs });
   return { ok: true, paths };
 }
