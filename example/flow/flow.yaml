@@ -1,4 +1,4 @@
-# §18.1/§27.10
+# §18.1/§27.10/§28.2
 name: feature-dev
 steps:
   - id: preparation
@@ -12,14 +12,36 @@ steps:
       - name: ticket
         type: github-ticket
         required: true
-  - id: plan
+  - id: plan-bundle
     kind: loop
-    loop: plan-loop
+    loop: plan-bundle-loop
     loop_namespace: app
     todo_template: plan-loop-review
-  - id: implement
+  - id: infra
     kind: loop
-    loop: impl-loop
+    loop: infra-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  # One impl-slice per run (red→green→refactor once): §28.2's slice-loop×N needs a repeatable-step
+  # primitive §28.1 bars, so it is deferred — the chain is a static single slice, not an oversight.
+  - id: red
+    kind: loop
+    loop: red-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: green
+    kind: loop
+    loop: green-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: refactor
+    kind: loop
+    loop: refactor-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: integration-slice
+    kind: loop
+    loop: integration-slice-loop
     loop_namespace: app
     todo_template: impl-loop-review
   - id: finalize

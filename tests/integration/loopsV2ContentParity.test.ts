@@ -191,31 +191,35 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
   }
 });
 
-// §28.10 (the S6/S7 boundary) — nothing resolves these dirs until S7 wires the yamls.
-describe('loops-v2 content-parity — the new content is closed and inert', () => {
+// §28.10 (the S6/S7 boundary) — asserted iff-wired (not a fixed set) so it holds at every intermediate
+// S7 slice.
+describe('loops-v2 content-parity — S6 content stays present, a dir resolves once wired', () => {
   const newDirs = [...new Set([...NEW_CHARTERS, ...NEW_RECIPES].map((r) => r.file.split('/')[0]))];
   const repoDir = resolve(__dirname, '..', '..');
 
-  const present = (sub: 'charter' | 'prompts'): string[] =>
-    newDirs
-      .flatMap((dir) => {
+  const present = (sub: 'charter' | 'prompts'): Set<string> =>
+    new Set(
+      newDirs.flatMap((dir) => {
         const d = join(SOURCE_TREE, dir, sub);
         return existsSync(d) ? readdirSync(d).map((f) => `${dir}/${sub}/${f}`) : [];
-      })
-      .sort();
+      }),
+    );
 
-  it('the charter files present under the new dirs are exactly the manifest charters', () => {
-    expect(present('charter')).toEqual(NEW_CHARTERS.map((c) => c.file).sort());
+  it('keeps every S6-authored charter present under its new dir', () => {
+    const files = present('charter');
+    for (const c of NEW_CHARTERS) expect(files.has(c.file), c.file).toBe(true);
   });
 
-  it('the recipe files present under the new dirs are exactly the manifest recipes', () => {
-    expect(present('prompts')).toEqual(NEW_RECIPES.map((r) => r.file).sort());
+  it('keeps every S6-authored recipe present under its new dir', () => {
+    const files = present('prompts');
+    for (const r of NEW_RECIPES) expect(files.has(r.file), r.file).toBe(true);
   });
 
   for (const dir of newDirs) {
-    it(`${dir} resolves to no loop def — the bundled-tier miss, not an ambient repo override`, () => {
+    it(`${dir} resolves to a def iff its yaml exists`, () => {
+      const wired = existsSync(join(SOURCE_TREE, dir, `${dir}.yaml`));
       const r = resolveLoopDefV2(dir, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
-      expect(r.ok).toBe(false);
+      expect(r.ok).toBe(wired);
       if (!r.ok) expect(r.reason).toContain(`no ${SECTION}27 def named ${dir}`);
     });
   }

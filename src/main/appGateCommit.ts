@@ -18,9 +18,10 @@ export interface AppGateCommitCtx {
   dirtyAtPhaseStart: readonly string[];
 }
 
-/** The result of firing the side-effect: on `committed`, the new HEAD SHA (§28.5.1); on `nothing-to-commit`,
- *  no SHA — a discriminated union so no field one mode ignores. */
-export type AppGateCommitResult = { outcome: 'committed'; sha: string } | { outcome: 'nothing-to-commit' };
+/** The result of firing the side-effect: on `committed`, the new HEAD SHA and the BRANCH it landed on (the
+ *  §28.5.1 baseline key the next phase's frozen check matches); on `nothing-to-commit`, neither — a
+ *  discriminated union so no field one mode ignores. */
+export type AppGateCommitResult = { outcome: 'committed'; sha: string; branch: string } | { outcome: 'nothing-to-commit' };
 
 /** Fire the commit for the descriptor's label. THROWS only on a genuine failure (empty label, git error, a
  *  commit whose parent is not the pre-commit head, or a non-object-id SHA); a benign nothing-to-commit is a
@@ -29,15 +30,17 @@ export type RunAppGateCommitSideEffect = (
   ctx: AppGateCommitCtx,
 ) => Promise<AppGateCommitResult>;
 
-/** One commit of the working tree, reported as a domain concept: the new commit's SHA and the parent it
- *  recorded (so the composition can verify no commit raced the window — §28.5.1), or nothing to commit. */
+/** One commit of the working tree, reported as a domain concept: the new commit's SHA, the parent it recorded
+ *  (so the composition can verify no commit raced the window — §28.5.1), and the branch it landed on (the
+ *  §28.5.1 baseline key, captured in the same post-commit window as the SHA), or nothing to commit. */
 export type AppGateCommitStep =
-  | { outcome: 'committed'; sha: string; parentSha: string }
+  | { outcome: 'committed'; sha: string; parentSha: string; branch: string }
   | { outcome: 'nothing-to-commit' };
 
 /** The injected domain seam — domain concepts, not git mechanics (CODE-STANDARDS seam rule): the current head
- *  (the baseline the commit will build on) and committing the working tree (reporting the new commit + parent),
- *  staging only the phase's own paths — `dirtyAtPhaseStart` is the operator WIP the commit must leave untouched. */
+ *  (the baseline the commit will build on) and committing the working tree (reporting the new commit, its parent,
+ *  and the branch it landed on), staging only the phase's own paths — `dirtyAtPhaseStart` is the operator WIP the
+ *  commit must leave untouched. */
 export interface AppGateCommitOperations {
   headCommit(): Promise<string>;
   commitWorkingTree(label: string, dirtyAtPhaseStart: readonly string[]): Promise<AppGateCommitStep>;
@@ -67,7 +70,12 @@ export function createAppGateCommit(
     if (!isGitObjectId(step.sha)) {
       throw new Error(`refusing a non-object-id phase-commit SHA: ${step.sha}`);
     }
-    return { outcome: 'committed', sha: step.sha };
+    // §28.5.1 — the branch is captured in the SAME tight post-commit window as the SHA (inside commitWorkingTree,
+    // right after the commit), never re-derived from a later read: the operated repo hosts a live agent, so a
+    // deferred read could observe a checkout it made in the window. The gap between the SHA and branch reads is
+    // not fully closable (two git processes), but a raced checkout there is caught by the frozen check's
+    // branch-match (a mismatch blocks — fail toward firing), not silently trusted.
+    return { outcome: 'committed', sha: step.sha, branch: step.branch };
   };
 }
 
@@ -136,7 +144,10 @@ export function createRealAppGateCommit(
       // A phase commit always has a parent (headCommit succeeded, so a prior commit exists); a parentless result
       // is a genuine anomaly, refused rather than returned as an unverifiable baseline.
       if (parentSha === undefined) throw new Error('commit side-effect: the phase commit has no parent');
-      return { outcome: 'committed', sha, parentSha };
+      // §28.5.1 — the branch the commit landed on (the baseline key), read in the SAME tight post-commit window
+      // as the SHA/parent, so it reflects this commit's branch rather than a later checkout the live agent made.
+      const branch = await readRev(['rev-parse', '--abbrev-ref', 'HEAD'], 'commit side-effect: git rev-parse --abbrev-ref HEAD failed');
+      return { outcome: 'committed', sha, parentSha, branch };
     },
   };
   return createAppGateCommit(git);

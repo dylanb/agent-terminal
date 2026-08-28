@@ -469,33 +469,33 @@ export function isPolishActiveForStep(repoDir: string, step: string): boolean {
 // between RED/GREEN/refactor, so a baseline stored in run-state would be clobbered before the next phase's
 // frozen check reads it; a disjoint file is structurally unclobberable (the polish/armed-interrupt pattern).
 // Confined via resolveJail (the loop area sits in the untrusted repo tree, CWE-22/59); field-local validation
-// (CWE-20): a non-object-id sha or blank step is never persisted/read as a baseline.
+// (CWE-20): a non-object-id sha or blank branch is never persisted/read as a baseline.
 const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
 
-/** Record `sha` (the phase commit) under `step` — read by the next phase's frozen check (§28.5.1). A blank step
- *  or a non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop area is
- *  unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the caller
- *  (§28 approve side-effect) MUST wrap it best-effort so a filesystem error never aborts the accept. */
-export function recordBaselineCommit(repoDir: string, step: string, sha: string): void {
-  if (step.length === 0 || !isGitObjectId(sha)) return;
+/** Record `sha` (the phase commit) under `branch` — read by the next phase's frozen check (§28.5.1). A blank
+ *  branch, the detached-HEAD sentinel `HEAD`, or a non-object-id sha is inert (never a phantom or garbage
+ *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
+ *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
+ *  filesystem error never aborts the accept. */
+export function recordBaselineCommit(repoDir: string, branch: string, sha: string): void {
+  // §28.5.1 — `HEAD` is what `rev-parse --abbrev-ref HEAD` yields on a detached commit; refuse it like a blank
+  // branch so the write mirrors currentGitBranch's HEAD→null read (one detached-sentinel rule, not two copies).
+  if (branch.length === 0 || branch === 'HEAD' || !isGitObjectId(sha)) return;
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
-  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step, sha }))) {
+  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, branch, sha }))) {
     throw new Error(`cannot write §27 baseline commit: ${path.dirname(file)} is not a real directory`);
   }
 }
 
 /** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
- *  blank/missing step, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. This is
- *  one repo-keyed single-current baseline, overwritten each phase; the returned `step` is the baseline key the
- *  writer recorded, so the reader (the GREEN frozen check) MUST match it and refuse a mismatch (a stale baseline
- *  from an abandoned/interleaved chain — there is no clear() yet), never key on presence alone.
- *  §12 (phase-stable): when §28.4's RED/GREEN/refactor phase-loops name steps phase-qualified, the writer and
- *  this reader MUST reduce the step to ONE shared PHASE-STABLE slice identity before comparing — matching the raw
- *  `red-<slice>` (written) against `green-<slice>` (read) would mismatch on every happy path and disable the
- *  check. Drive that comparison in a cross-slice test with the real phase-loop step values (not a `plan` fixture,
- *  which never exercises the key semantics) before the reader ships. */
-export function readBaselineCommit(repoDir: string): { step: string; sha: string } | null {
+ *  blank/missing branch, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. One
+ *  repo-keyed single-current baseline, overwritten each phase; the key is the git BRANCH the phase loops share
+ *  — §28.4 makes RED/GREEN/refactor DISTINCT flow steps, so a step key would mismatch every cross-phase read;
+ *  the branch is their one phase-stable slice identity. The frozen check refuses a DIFFERENT-branch baseline
+ *  (another run); a stale SAME-branch baseline from a prior phase/slice is NOT yet refused — there is no clear()
+ *  and the key is not per-slice — so it can be matched rather than blocking (TODO(dylanb) #123). */
+export function readBaselineCommit(repoDir: string): { branch: string; sha: string } | null {
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;
   let text: string;
@@ -512,9 +512,9 @@ export function readBaselineCommit(repoDir: string): { step: string; sha: string
   }
   if (!isRecord(doc)) return null;
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
-  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+  if (typeof doc.branch !== 'string' || doc.branch.length === 0) return null;
   if (typeof doc.sha !== 'string' || !isGitObjectId(doc.sha)) return null;
-  return { step: doc.step, sha: doc.sha };
+  return { branch: doc.branch, sha: doc.sha };
 }
 
 // §28.5.3/§28.8.3 — the changed-tests flag: the test-glob files the machine detected changed since the RED
@@ -528,9 +528,8 @@ const CHANGED_TESTS_FILE = 'changed-tests.yaml';
 export const MAX_CHANGED_TEST_PATHS = 1000;
 export const MAX_CHANGED_TEST_PATH_LEN = 4096;
 
-/** The recorded changed-test flag: the decision `step` it was recorded under (the §12 baseline key) and the
- *  test-glob paths that changed. `paths` is `[]` on a clean GREEN (checked, none changed — distinct from an
- *  absent file, which reads null). */
+/** The recorded changed-test flag: the flow `step` it was recorded under and the test-glob paths that changed.
+ *  `paths` is `[]` on a clean GREEN (checked, none changed — distinct from an absent file, which reads null). */
 export interface ChangedTestsRecord {
   step: string;
   paths: string[];
@@ -566,9 +565,9 @@ export function recordChangedTests(repoDir: string, step: string, paths: readonl
 
 /** The recorded changed-tests flag, or null when unset. Whole-doc invalidity (not a record, wrong schema,
  *  blank step, or `paths` not an array) reads null; a valid doc's `paths` are per-entry sanitized (a planted
- *  garbage entry is dropped, never surfaced). The returned `step` is the baseline key — see readBaselineCommit's
- *  §12 note: the GREEN/regression-guard reader MUST reduce a phase-qualified step to one PHASE-STABLE slice
- *  identity before comparing it to the active turn's step (deferred to S7's phase-loops; S4 steps are stable). */
+ *  garbage entry is dropped, never surfaced). Unlike the branch-keyed baseline, this flag is written AND read
+ *  within ONE step (a GREEN/refactor turn records it; the view surfaces it for that same step), so it never
+ *  crosses a phase boundary and stays step-keyed. */
 export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
   const file = loopAreaFile(repoDir, CHANGED_TESTS_FILE);
   if (file === null) return null;

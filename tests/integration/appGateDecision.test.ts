@@ -68,7 +68,7 @@ interface Recorder {
   redos: Array<{ step: string; turnKey: string; instruction: string }>;
   polishEnters: Array<{ repoDir: string; step: string }>;
   polishClears: string[];
-  recordBaselines: Array<{ repoDir: string; step: string; sha: string }>;
+  recordBaselines: Array<{ repoDir: string; branch: string; sha: string }>;
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
@@ -93,9 +93,9 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       if (over.commitThrows) throw new Error(over.commitThrows);
       return over.commitOutcome === 'nothing-to-commit'
         ? { outcome: 'nothing-to-commit' }
-        : { outcome: 'committed', sha: 'a'.repeat(40) };
+        : { outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' };
     },
-    recordBaseline: (repoDir, step, sha) => void rec.recordBaselines.push({ repoDir, step, sha }),
+    recordBaseline: (repoDir, branch, sha) => void rec.recordBaselines.push({ repoDir, branch, sha }),
     persistAccept: (_r, state) => void rec.accepts.push(state),
     advanceFlow: (r) => void rec.advances.push(r),
     audit: (_r, cmd, exit) => void rec.audits.push({ cmd, exit }),
@@ -217,7 +217,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     await approve(deps);
     // §6 identity — the recorded sha is exactly the one the side-effect returned, under the decision's own step,
     // never re-derived from ambient git state.
-    expect(rec.recordBaselines).toEqual([{ repoDir: '/repo', step: 'plan', sha: 'a'.repeat(40) }]);
+    expect(rec.recordBaselines).toEqual([{ repoDir: '/repo', branch: 'main', sha: 'a'.repeat(40) }]);
     expect(rec.audits.some((a) => a.cmd.includes('side-effect') && a.exit === 0)).toBe(true); // committed audit unchanged
   });
 
@@ -244,7 +244,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     expect(rec.audits.some((a) => a.cmd.includes('clear-polish failed'))).toBe(false);
     expect(rec.audits.some((a) => a.cmd.includes('baseline') && a.exit === 1)).toBe(true);
     // surfaced LIVE as a NOTICE (the accept succeeded — a blocking error would alarm over a landed commit),
-    // naming the degraded state so the operator learns the downstream frozen check will refuse.
+    // naming the degraded state so the operator learns to re-run this phase before the next frozen check.
     expect(rec.notices.some((n) => /baseline/i.test(n))).toBe(true);
     expect(rec.errors).toEqual([]);
     // best-effort — the accept persisted and the flow advanced regardless (§27.13/AC3).

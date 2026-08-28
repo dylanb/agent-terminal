@@ -1,0 +1,37 @@
+version: v2
+name: red-loop
+work:
+  recipe: prompts/work.md
+  artifact: red-result
+  completion: red
+reviewers:
+  - persona: impl-review-tests
+    charter: charter/tests.md
+    tools: [Read, Grep, Glob, Bash]
+  - persona: impl-review-intent
+    charter: charter/intent.md
+    tools: [Read, Grep, Glob]
+  - persona: impl-review-red-authenticity
+    charter: charter/red-authenticity.md
+    tools: [Read, Grep, Glob, Bash]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: commit
+        label: RED
+  - option: request-changes
+  - option: redo
+  - option: polish
+inputs:
+  - id: plan
+    path: plan.md
+outputs:
+  - id: red-result
+    path: red-result.md

@@ -728,31 +728,41 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
   const baselineFile = (): string => join(loopDir(), 'baseline-commit.yaml');
   const OID = 'a'.repeat(40);
 
-  it('UT-STATE-1: round-trips { step, sha }', () => {
-    recordBaselineCommit(repo, 'red-slice1', OID);
-    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+  it('UT-STATE-1: round-trips { branch, sha }', () => {
+    recordBaselineCommit(repo, 'feature-slice1', OID);
+    expect(readBaselineCommit(repo)).toEqual({ branch: 'feature-slice1', sha: OID });
   });
 
   // The two CWE-20 guards (write-side + read-side re-validation) are pinned SEPARATELY so neither masks the
   // other (CLAUDE.md two-non-redundant-places). 2a isolates the write-side by checking NO file is written; 2b
   // isolates the read-side by PLANTING a bad file the write-side never saw.
-  it('UT-STATE-2a (write-side CWE-20): a non-object-id sha or blank step writes NO file', () => {
+  it('UT-STATE-2a (write-side CWE-20): a non-object-id sha or blank branch writes NO file', () => {
     for (const badSha of ['too-short', 'z'.repeat(40), '   ', `${OID}extra`, '../../etc/passwd']) {
       rmSync(baselineFile(), { force: true });
-      recordBaselineCommit(repo, 'red-slice1', badSha);
+      recordBaselineCommit(repo, 'feature-slice1', badSha);
       expect(existsSync(baselineFile())).toBe(false); // nothing persisted — the write-side guard fired
     }
     rmSync(baselineFile(), { force: true });
-    recordBaselineCommit(repo, '', OID); // a blank step is inert
+    recordBaselineCommit(repo, '', OID); // a blank branch is inert
     expect(existsSync(baselineFile())).toBe(false);
   });
 
-  it('UT-STATE-2b (read-side CWE-20): a PLANTED baseline with a bad sha or blank step reads unset', () => {
+  it('UT-STATE-2c (detached sentinel): the literal HEAD branch is inert — a detached-HEAD commit records no matchable baseline', () => {
+    // §28.5.1 single-sources the detached sentinel: currentGitBranch (the read) maps a detached HEAD to null, so
+    // the write must likewise refuse the raw 'HEAD' that rev-parse --abbrev-ref yields when detached — else a
+    // persisted { branch: 'HEAD' } would stay unmatchable only by the reader's grace (two copies of one rule).
+    rmSync(baselineFile(), { force: true });
+    recordBaselineCommit(repo, 'HEAD', OID);
+    expect(existsSync(baselineFile())).toBe(false);
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('UT-STATE-2b (read-side CWE-20): a PLANTED baseline with a bad sha or blank branch reads unset', () => {
     mkdirSync(loopDir(), { recursive: true });
     for (const bad of [
-      `schema_version: 1\nstep: red\nsha: not-a-sha\n`,
-      `schema_version: 1\nstep: red\nsha: ${'z'.repeat(40)}\n`,
-      `schema_version: 1\nstep: ''\nsha: ${OID}\n`,
+      `schema_version: 1\nbranch: main\nsha: not-a-sha\n`,
+      `schema_version: 1\nbranch: main\nsha: ${'z'.repeat(40)}\n`,
+      `schema_version: 1\nbranch: ''\nsha: ${OID}\n`,
       `not-a-mapping\n`, // isRecord guard
     ]) {
       writeFileSync(baselineFile(), bad);
@@ -762,15 +772,15 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
 
   it('UT-STATE-first-run: records into a repo with NO .agent-terminal yet, creating the tree', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // fresh machine — nothing seeded
-    recordBaselineCommit(repo, 'red-slice1', OID);
+    recordBaselineCommit(repo, 'feature-slice1', OID);
     expect(existsSync(baselineFile())).toBe(true);
-    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+    expect(readBaselineCommit(repo)).toEqual({ branch: 'feature-slice1', sha: OID });
   });
 
   it('UT-STATE-overwrite: a second record replaces the first (single current baseline, last-write-wins)', () => {
-    recordBaselineCommit(repo, 'red-slice1', OID);
-    recordBaselineCommit(repo, 'green-slice1', 'b'.repeat(40));
-    expect(readBaselineCommit(repo)).toEqual({ step: 'green-slice1', sha: 'b'.repeat(40) });
+    recordBaselineCommit(repo, 'feature-slice1', OID);
+    recordBaselineCommit(repo, 'feature-slice2', 'b'.repeat(40));
+    expect(readBaselineCommit(repo)).toEqual({ branch: 'feature-slice2', sha: 'b'.repeat(40) });
   });
 
   it('UT-STATE-3: an absent baseline file reads as unset (null), not an error', () => {
@@ -778,20 +788,20 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
   });
 
   it('UT-STATE-4: neither wholesale write clobbers the other (the disjoint-file rule, RED-first pins)', () => {
-    recordBaselineCommit(repo, 'red-slice1', OID);
+    recordBaselineCommit(repo, 'feature-slice1', OID);
     const baselineBytes = readFileSync(baselineFile(), 'utf8');
     writeAppLoopState(repo, RUN, FIXED); // a wholesale run-state write...
     expect(readFileSync(baselineFile(), 'utf8')).toBe(baselineBytes); // ...leaves the baseline byte-for-byte untouched
-    expect(readBaselineCommit(repo)).toEqual({ step: 'red-slice1', sha: OID });
+    expect(readBaselineCommit(repo)).toEqual({ branch: 'feature-slice1', sha: OID });
 
     const stateBytes = readFileSync(stateFile(), 'utf8');
-    recordBaselineCommit(repo, 'red-slice2', 'b'.repeat(40)); // ...and recording a baseline
+    recordBaselineCommit(repo, 'feature-slice2', 'b'.repeat(40)); // ...and recording a baseline
     expect(readFileSync(stateFile(), 'utf8')).toBe(stateBytes); // ...leaves run-state byte-for-byte unchanged
   });
 
   it('UT-STATE-5: a wrong schema_version reads unset', () => {
     mkdirSync(loopDir(), { recursive: true });
-    writeFileSync(baselineFile(), `schema_version: 999\nstep: red-slice1\nsha: ${OID}\n`);
+    writeFileSync(baselineFile(), `schema_version: 999\nbranch: feature-slice1\nsha: ${OID}\n`);
     expect(readBaselineCommit(repo)).toBeNull();
   });
 
@@ -799,7 +809,7 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
     const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-'));
     try {
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
-      expect(() => recordBaselineCommit(repo, 'red-slice1', OID)).toThrow();
+      expect(() => recordBaselineCommit(repo, 'feature-slice1', OID)).toThrow();
       expect(existsSync(join(elsewhere, 'loop', 'baseline-commit.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });

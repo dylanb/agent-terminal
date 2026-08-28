@@ -47,6 +47,10 @@ import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 // route-out, and resume that never re-drives a stopped or completed turn.
 
 const STEP = 'plan';
+// §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
+// step, so a baseline the RED step recorded is found by the GREEN step (different step, same branch). This
+// fake branch differs from STEP so a lingering step-match would fail these branch-keyed tests.
+const TEST_BRANCH = 'main';
 const TURN_KEY = 'work-plan';
 const REVIEW_KEY = 'review-plan';
 const CONSOLIDATE_KEY = 'consolidate-plan';
@@ -146,6 +150,7 @@ const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot
 function makeEngine(
   persistOverride?: (repoDir: string, state: AppLoopRunState) => void,
   predicatesOverride?: LoopCompletionPredicates,
+  currentBranchOverride: string | null = TEST_BRANCH,
 ): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
@@ -206,6 +211,7 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
+    currentBranch: () => currentBranchOverride,
   };
   return createAppLoopEngine(deps);
 }
@@ -2250,12 +2256,12 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
 });
 
 // §28.5.3 — the GREEN completion gate: sync clause (result well-formed + outcome `passed` + build `built`),
-// async gate (baseline present+step-matched, frozen check via changedTestPaths head-omitted, exit-direction),
+// async gate (baseline present+branch-matched, frozen check via changedTestPaths head-omitted, exit-direction),
 // and the NON-blocking detect-and-flag (§28.8.3) recorded at completion. Mirrors the RED gate's Option-C shape.
 describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen flag)', () => {
   const reviewChained = (): boolean => injected.some((s) => s.includes(ROSTER[0]));
   const OID = 'a'.repeat(40);
-  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(repo, branch, sha);
   const greenFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const greenDef = (withBinding = true): LoopDefV2 => ({
@@ -2399,9 +2405,24 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(readChangedTests(repo)).toBeNull();
   });
 
-  it('IT-GREEN-baseline-b: a baseline recorded under a DIFFERENT step blocks GREEN (step-match)', async () => {
+  it('IT-GREEN-baseline-b: a baseline recorded on a DIFFERENT branch blocks GREEN (branch-match)', async () => {
     const engine = makeEngine(undefined, greenFake());
-    seedBaseline('some-other-step', OID); // recorded, but not this turn's step
+    seedBaseline('a-different-branch', OID); // recorded, but not this run's branch
+    enterGreen(engine);
+    writeGreen();
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline'));
+    expect(reviewChained()).toBe(false);
+  });
+
+  // §28.5.1 — a detached HEAD (currentBranch → null) cannot prove "same slice", so GREEN blocks even with a
+  // baseline recorded (fail toward firing) — the null-branch guard the branch-key relies on.
+  it('IT-GREEN-baseline-c: a null current branch (detached HEAD) blocks GREEN even with a baseline recorded', async () => {
+    const engine = makeEngine(undefined, greenFake(), null);
+    seedBaseline(TEST_BRANCH, OID);
     enterGreen(engine);
     writeGreen();
     engine.onDoneSignal();
@@ -2581,7 +2602,7 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
 // GREEN, whose frozen check's baseline guard blocks).
 describe('§28.5.3 — the refactor round completion gate + non-blocking frozen probe', () => {
   const OID = 'a'.repeat(40);
-  const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(repo, branch, sha);
   const refFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -2742,8 +2763,6 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(completed(engine)).toBe(true);
     expect(readChangedTests(repo)).toBeNull(); // no flag — the probe could not run
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1); // audited, never silent
-    // The baseline is truly ABSENT here, so the audit must not claim it was "recorded under a different step".
-    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('recorded under a different step'), 1);
   });
 
   it('IT-REFAC-capfail: a capabilities-load failure does NOT block the round — completes, no flag, audited', async () => {

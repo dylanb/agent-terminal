@@ -83,6 +83,7 @@ import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
+import { currentGitBranch } from './gitBranch';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -331,6 +332,7 @@ async function createWindow(): Promise<void> {
     // writer, best-effort-wrapped in the engine) and read the RED baseline the frozen check keys off.
     recordChangedTests,
     readBaseline: readBaselineCommit,
+    currentBranch: currentGitBranch,
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
     // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the
