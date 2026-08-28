@@ -473,11 +473,14 @@ export function isPolishActiveForStep(repoDir: string, step: string): boolean {
 const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
 
 /** Record `sha` (the phase commit) under `branch` — read by the next phase's frozen check (§28.5.1). A blank
- *  branch or a non-object-id sha is inert (never a phantom or garbage baseline, CWE-20). Throws when the loop
- *  area is unresolvable (a planted symlink, CWE-59), matching the run-state writer's fail-loud contract; the
- *  caller (§28 approve side-effect) MUST wrap it best-effort so a filesystem error never aborts the accept. */
+ *  branch, the detached-HEAD sentinel `HEAD`, or a non-object-id sha is inert (never a phantom or garbage
+ *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
+ *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
+ *  filesystem error never aborts the accept. */
 export function recordBaselineCommit(repoDir: string, branch: string, sha: string): void {
-  if (branch.length === 0 || !isGitObjectId(sha)) return;
+  // §28.5.1 — `HEAD` is what `rev-parse --abbrev-ref HEAD` yields on a detached commit; refuse it like a blank
+  // branch so the write mirrors currentGitBranch's HEAD→null read (one detached-sentinel rule, not two copies).
+  if (branch.length === 0 || branch === 'HEAD' || !isGitObjectId(sha)) return;
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
   if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, branch, sha }))) {
@@ -489,8 +492,9 @@ export function recordBaselineCommit(repoDir: string, branch: string, sha: strin
  *  blank/missing branch, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. One
  *  repo-keyed single-current baseline, overwritten each phase; the key is the git BRANCH the phase loops share
  *  — §28.4 makes RED/GREEN/refactor DISTINCT flow steps, so a step key would mismatch every cross-phase read;
- *  the branch is their one phase-stable slice identity. The frozen check MUST match the current branch and
- *  refuse a mismatch (a stale baseline from another slice/run — there is no clear() yet), never key on presence. */
+ *  the branch is their one phase-stable slice identity. The frozen check refuses a DIFFERENT-branch baseline
+ *  (another run); a stale SAME-branch baseline from a prior phase/slice is NOT yet refused — there is no clear()
+ *  and the key is not per-slice — so it can be matched rather than blocking (TODO(dylanb) #123). */
 export function readBaselineCommit(repoDir: string): { branch: string; sha: string } | null {
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;

@@ -212,15 +212,17 @@ export async function runAppGateDecision(
           // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
           // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
           // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
-          // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded); the
-          // downstream frozen check refuses on the missing baseline, so the state is recoverable (fail toward
-          // firing). Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
+          // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
+          // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
+          // same-branch baseline from a prior phase is NOT yet refused, so recovery there is a phase re-run, not
+          // an automatic block. Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
+          // TODO(dylanb): clear/slice-key the baseline per slice so a stale same-branch baseline blocks (#123).
           try {
             deps.recordBaseline(repoDir, result.branch, result.sha);
           } catch (e) {
             const reason = e instanceof Error ? e.message : String(e);
             deps.audit(repoDir, gateDecisionAuditCmd('baseline-record-failed', option, reason), 1);
-            deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — the next phase's frozen check will refuse until this is resolved: ${reason}`);
+            deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
           }
         } else {
           // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice

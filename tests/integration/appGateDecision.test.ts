@@ -244,7 +244,7 @@ describe('runAppGateDecision — the commit side-effect (§28.3)', () => {
     expect(rec.audits.some((a) => a.cmd.includes('clear-polish failed'))).toBe(false);
     expect(rec.audits.some((a) => a.cmd.includes('baseline') && a.exit === 1)).toBe(true);
     // surfaced LIVE as a NOTICE (the accept succeeded — a blocking error would alarm over a landed commit),
-    // naming the degraded state so the operator learns the downstream frozen check will refuse.
+    // naming the degraded state so the operator learns to re-run this phase before the next frozen check.
     expect(rec.notices.some((n) => /baseline/i.test(n))).toBe(true);
     expect(rec.errors).toEqual([]);
     // best-effort — the accept persisted and the flow advanced regardless (§27.13/AC3).

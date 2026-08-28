@@ -747,6 +747,16 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
     expect(existsSync(baselineFile())).toBe(false);
   });
 
+  it('UT-STATE-2c (detached sentinel): the literal HEAD branch is inert — a detached-HEAD commit records no matchable baseline', () => {
+    // §28.5.1 single-sources the detached sentinel: currentGitBranch (the read) maps a detached HEAD to null, so
+    // the write must likewise refuse the raw 'HEAD' that rev-parse --abbrev-ref yields when detached — else a
+    // persisted { branch: 'HEAD' } would stay unmatchable only by the reader's grace (two copies of one rule).
+    rmSync(baselineFile(), { force: true });
+    recordBaselineCommit(repo, 'HEAD', OID);
+    expect(existsSync(baselineFile())).toBe(false);
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
   it('UT-STATE-2b (read-side CWE-20): a PLANTED baseline with a bad sha or blank branch reads unset', () => {
     mkdirSync(loopDir(), { recursive: true });
     for (const bad of [

@@ -2256,7 +2256,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
 });
 
 // §28.5.3 — the GREEN completion gate: sync clause (result well-formed + outcome `passed` + build `built`),
-// async gate (baseline present+step-matched, frozen check via changedTestPaths head-omitted, exit-direction),
+// async gate (baseline present+branch-matched, frozen check via changedTestPaths head-omitted, exit-direction),
 // and the NON-blocking detect-and-flag (§28.8.3) recorded at completion. Mirrors the RED gate's Option-C shape.
 describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen flag)', () => {
   const reviewChained = (): boolean => injected.some((s) => s.includes(ROSTER[0]));
@@ -2763,8 +2763,6 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(completed(engine)).toBe(true);
     expect(readChangedTests(repo)).toBeNull(); // no flag — the probe could not run
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1); // audited, never silent
-    // The baseline is truly ABSENT here, so the audit must not claim it was "recorded under a different step".
-    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('recorded under a different step'), 1);
   });
 
   it('IT-REFAC-capfail: a capabilities-load failure does NOT block the round — completes, no flag, audited', async () => {
