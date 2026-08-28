@@ -472,15 +472,15 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         body.append(notice);
       }
 
-      // §28.5.3/§28.8.3 — the changed-tests flag: the machine detected a test-glob file changed during the GREEN
-      // turn. A NON-blocking notice (a live region) naming the files, so the regression-guard persona + the human
-      // at the gate can judge whether it was a legitimate RED correction or a weakening.
+      // §28.5.3/§28.8.3 — the changed-tests flag: the machine detected a test-glob file changed since the RED
+      // baseline (raised by a GREEN turn or a refactor round). A NON-blocking notice (a live region) naming the
+      // files, so the regression-guard persona + the human at the gate can judge legitimate correction vs weakening.
       if (loop.changedTests && loop.changedTests.length > 0) {
         const notice = doc.createElement('p');
         notice.className = 'changed-tests-notice';
         notice.dataset.changedTests = '';
         notice.setAttribute('role', 'status');
-        notice.textContent = `Test file(s) changed during GREEN — flagged for regression-guard: ${loop.changedTests.join(', ')}`;
+        notice.textContent = `Test file(s) changed — flagged for regression-guard: ${loop.changedTests.join(', ')}`;
         body.append(notice);
       }
 

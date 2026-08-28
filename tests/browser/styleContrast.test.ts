@@ -141,12 +141,12 @@ for (const theme of ['light', 'dark'] as const) {
         expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
       });
 
-      // §28.5.3/§28.8.3: the changed-tests flag notice is a CAUTION callout (a test file changed during GREEN,
-      // flagged for regression-guard) — a mouse-only sighted user must perceive the flagged state from the visual
-      // channel (WCAG 1.4.1 / 1.3.1), and its text must clear 4.5:1 on the wash it paints (WCAG 1.4.3). Like the
-      // polish notice it lives in `.lbody`, so it needs its own paint.
-      it('.changed-tests-notice paints a distinct caution callout with 4.5:1 text (loop-panel GREEN flag)', () => {
-        mount(`<div class="loop-panel"><div class="lbody"><p class="changed-tests-notice">Test file(s) changed during GREEN — flagged for regression-guard: tests/a.test.ts</p></div></div>`);
+      // §28.5.3/§28.8.3: the changed-tests flag notice is a CAUTION callout (a test file changed since the RED
+      // baseline, flagged for regression-guard) — a mouse-only sighted user must perceive the flagged state from
+      // the visual channel (WCAG 1.4.1 / 1.3.1), and its text must clear 4.5:1 on the wash it paints (WCAG 1.4.3).
+      // Like the polish notice it lives in `.lbody`, so it needs its own paint.
+      it('.changed-tests-notice paints a distinct caution callout with 4.5:1 text (loop-panel changed-tests flag)', () => {
+        mount(`<div class="loop-panel"><div class="lbody"><p class="changed-tests-notice">Test file(s) changed — flagged for regression-guard: tests/a.test.ts</p></div></div>`);
         const el = card.querySelector('.changed-tests-notice')!;
         expect(parse(getComputedStyle(el).backgroundColor)[3]).toBeGreaterThan(0); // a painted wash, not transparent
         expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);

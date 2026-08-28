@@ -7,8 +7,8 @@
 // The predicate validates the MINIMAL contract (§28.5.5), never a rigid layout. Parsing is a plain linear scan
 // (no RegExp) — the linear-time guarantee on untrusted agent output is load-bearing (CWE-1333/400).
 
-import { isPhaseOutcome, type PhaseOutcome } from './phaseOutcome';
-import { isBuildOutcome, type BuildOutcome } from './buildOutcome';
+import { isPhaseOutcome, PHASE_OUTCOMES, type PhaseOutcome } from './phaseOutcome';
+import { isBuildOutcome, BUILD_OUTCOMES, type BuildOutcome } from './buildOutcome';
 import { fieldValue } from './markdownFields';
 
 export interface PhaseResultGrammar {
@@ -125,4 +125,42 @@ export function examplePhaseResult(outcome: PhaseOutcome, opts?: { build?: Build
     SAMPLE_CAPTURED[outcome],
     '',
   ].join('\n');
+}
+
+/** §28.5.5 / §28 §7d — the phase-result WRITER instruction, single-sourced here so it cannot drift from the
+ *  parse predicate that gates the file it instructs the agent to write (the writer↔predicate coupling no type
+ *  or test spans). */
+export function composePhaseResultInstruction(opts: {
+  resultRel: string;
+  completingOutcome: PhaseOutcome;
+  build?: { completingBuildOutcome: BuildOutcome };
+  closing: string[];
+}): string[] {
+  const g = PHASE_RESULT_GRAMMAR;
+  const lines: string[] = [
+    'Run the test command for this change and classify that run as EXACTLY one of these outcomes:',
+    `  ${PHASE_OUTCOMES.join(', ')}`,
+  ];
+  if (opts.build !== undefined) {
+    lines.push(
+      'Then run the build command and classify it as EXACTLY one of these:',
+      `  ${BUILD_OUTCOMES.join(', ')}`,
+      `Write the result to ${opts.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` and`,
+      `\`${g.buildLabel}:\` lines first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
+    );
+  } else {
+    lines.push(
+      `Write the result to ${opts.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` line`,
+      `first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
+    );
+  }
+  lines.push(
+    '',
+    '```',
+    examplePhaseResult(opts.completingOutcome, opts.build ? { build: opts.build.completingBuildOutcome } : undefined).trimEnd(),
+    '```',
+    '',
+    ...opts.closing,
+  );
+  return lines;
 }

@@ -884,10 +884,10 @@ describe('docked loop panel — the sweep split (§B.9)', () => {
   });
 });
 
-// §28.5.3/§28.8.3 — the changed-tests flag: when the machine detected a test-glob file changed during a GREEN
-// turn, the panel surfaces a NON-blocking notice naming the files (for the regression-guard persona + human at
-// the gate). Modeled on the polish-standdown notice — a role="status" live-region paragraph, present only when
-// the view carries `changedTests`.
+// §28.5.3/§28.8.3 — the changed-tests flag: when the machine detected a test-glob file changed since the RED
+// baseline (a GREEN turn OR a refactor round), the panel surfaces a NON-blocking notice naming the files (for the
+// regression-guard persona + human at the gate). Modeled on the polish-standdown notice — a role="status"
+// live-region paragraph, present only when the view carries `changedTests`.
 describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
   it('surfaces a notice naming the changed test files when the view carries the flag', () => {
     createLoopPanel(host).render(loop({ changedTests: ['tests/a.test.ts', 'tests/b.test.ts'] }), 'plan');
@@ -896,6 +896,16 @@ describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
     expect(notice?.getAttribute('role')).toBe('status'); // a live region so it is announced
     expect(notice?.textContent).toContain('tests/a.test.ts');
     expect(notice?.textContent).toContain('tests/b.test.ts');
+  });
+
+  it('phrases the notice phase-neutrally (§28.5.3 — the same flag is raised by GREEN and by a refactor round)', () => {
+    // The flag is raised by the GREEN work turn AND by a refactor review round (§28.5.3); the notice text must
+    // not hard-code one phase, or a refactor-round flag would read wrong. It still names the persona + the files.
+    createLoopPanel(host).render(loop({ changedTests: ['tests/a.test.ts'] }), 'plan');
+    const notice = host.querySelector('[data-changed-tests]');
+    expect(notice?.textContent).not.toContain('during GREEN');
+    expect(notice?.textContent).toContain('regression-guard'); // still routes to the persona
+    expect(notice?.textContent).toContain('tests/a.test.ts'); // still names the files
   });
 
   it('omits the changed-tests notice when the view carries no flag', () => {

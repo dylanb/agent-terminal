@@ -103,7 +103,7 @@ import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, recordBaselineCommit, recordChangedTests, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -377,6 +377,12 @@ async function createWindow(): Promise<void> {
     resolveConsolidatorLocation: (repoDir, round) => {
       const abs = consolidatorOutputFile(repoDir, round);
       return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
+    },
+    // §28.5.3 — the round-keyed refactor-result location: the confined absolute path the round gate reads back
+    // and the repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).
+    resolveRefactorResultLocation: (repoDir, round) => {
+      const abs = refactorResultFile(repoDir, round);
+      return abs ? { abs, rel: refactorResultRel(round) } : null;
     },
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
