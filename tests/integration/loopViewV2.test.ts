@@ -475,6 +475,25 @@ outputs:
     expect(view.epic).toBeUndefined();
   });
 
+  it('carries no epic split when a NOT-well-formed epic plan would silently drop a slice (dup index)', () => {
+    // A plan classified an epic but malformed — a repeated sub-ticket index — must not raise a promotable
+    // preview: the executor keys on index, so promoting it would create fewer issues than the preview names
+    // (a silent loss of an approved slice on an irreversible action). The gate rejects it via epicPlanWellFormed.
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact(['Classification: epic', '## Sub-tickets',
+      '### Sub-ticket 1 — Slice A', 'Acceptance criteria: a',
+      '### Sub-ticket 1 — Slice B', 'Acceptance criteria: b', ''].join('\n'));
+    seedGate('plan-bundle-loop');
+    expect(deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir }).epic).toBeUndefined();
+  });
+
+  it('carries no epic split when a sub-ticket is missing its acceptance-criteria line (not well-formed)', () => {
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact('Classification: epic\n\n## Sub-tickets\n\n### Sub-ticket 1 — No AC here\n\nsome plan text\n');
+    seedGate('plan-bundle-loop');
+    expect(deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir }).epic).toBeUndefined();
+  });
+
   it('carries no epic split for a loop whose gate declares no promote side-effect', () => {
     plantEpic('plan-loop', false);
     writePlanArtifact(exampleEpicPlan(2));

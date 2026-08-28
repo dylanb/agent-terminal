@@ -188,6 +188,7 @@ Each sub-ticket then runs the per-ticket chain (§28.2) — but, per §27.10, a 
 4. **Full-suite timing → targeted per turn, full e2e at gates.** RED/GREEN/refactor predicates run the slice's targeted + affected tests; the **full Podman `_electron` e2e** runs only at the integration-slice gate and final polish — matching CLAUDE.md's "full suite before *done*", where *done* is the ticket's end, not every micro-phase.
 5. **Capabilities file → a standalone per-repo `loop-capabilities.yaml`** (§28.5.4), referenced by every loop def as data, never executed by the engine.
 6. **Spec §28 first.** This section is written and lands **before** any of the engine changes it describes, mirroring §27's N0 ("the contract the code implements. No code."). Every downstream slice cites §28, and the spec wins on any conflict.
+7. **Epic promotion mechanics → uniform siblings + terminate** (P7b, operator decision — **supersedes §27.10's slice-1 re-point**). Promotion creates every sub-ticket the same way — each carries `agent-loop/subticket` + `agent-loop/ready`, **none assigned** — then **closes** the epic planning PR (rather than re-pointing it onto slice 1) and **terminates** the flow. The operator opens a fresh worktree and picks up slice 1 by hand like every other slice. §27.10's earlier "the current PR keeps implementing slice 1, re-pointed, assigned, ready-label-stripped" design is retired; the epic-as-tracking-issue and the resumable/idempotent chain are unchanged.
 
 ### 28.9 Relationship to [#102](https://github.com/dylanb/agent-terminal/issues/102)
 

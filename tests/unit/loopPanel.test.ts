@@ -946,6 +946,15 @@ describe('docked loop panel — the epic preview (§28.7)', () => {
     expect(host.querySelector('[data-epic-preview]')?.textContent).not.toContain('1 sub-tickets');
   });
 
+  it('associates the sub-ticket list with its "Epic" heading (WCAG 1.3.1 — not a bare "list, N items")', () => {
+    createLoopPanel(host).render(loop({ epic: EPIC }), 'plan');
+    const list = host.querySelector('[data-epic-preview] ul');
+    const labelId = list?.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    const label = labelId ? host.querySelector(`#${labelId}`) : null;
+    expect(label?.textContent).toContain('Epic');
+  });
+
   it('strips display-unsafe bytes from a repo-sourced sub-ticket title (CWE-117)', () => {
     createLoopPanel(host).render(loop({ epic: { subTickets: [{ index: 1, title: 'Wire\u0007the\u0007widget' }] } }), 'plan');
     const item = host.querySelector('[data-epic-subticket]');

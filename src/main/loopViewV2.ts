@@ -24,8 +24,8 @@ export const APP_LOOP_STATUS_ERROR = 'error';
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
-// §28.7 — the epic split surfaced at the gate: the same sub-tickets the promotion executor reads
-// (readEpicSubTicketsAtGate), reduced to the {index,title}s the panel previews so preview and chain can't drift.
+// §28.7 — the gate preview reads the SAME source the promotion executor does (readEpicSubTicketsAtGate), so what
+// the operator is shown and what promotion creates cannot drift.
 function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
   const subs = readEpicSubTicketsAtGate(def);
   return subs ? { subTickets: subs.map((t) => ({ index: t.index, title: t.title })) } : undefined;
@@ -82,7 +82,6 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // pull, like the polish flag.
     const changedRec = readChangedTests(ctx.repoDir);
     const changedTests = changedRec && changedRec.step === run.step && changedRec.paths.length > 0 ? changedRec.paths : null;
-    // §28.7 — the epic split rides only the terminal gate; r.ok narrows the def union.
     const epic = atGate && r.ok ? epicPreviewAtGate(r.def) : undefined;
     return {
       status: run.status,

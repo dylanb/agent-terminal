@@ -5,7 +5,7 @@
 // confirm; resolve completes it — confirm promotes then accepts + stands the flow down, decline drops it.
 
 import { readFileSync, statSync } from 'node:fs';
-import { isEpicPlan, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
+import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
@@ -29,9 +29,12 @@ export function readEpicSubTicketsAtGate(def: LoopDefV2): EpicSubTicket[] | null
   } catch {
     return null;
   }
-  if (!isEpicPlan(text)) return null;
+  // §28.5.5 — the MINIMAL-contract gate BEFORE any preview: a not-well-formed epic (a sub-ticket missing its AC,
+  // or a duplicate index that would collapse two slices onto one issue) must not be promotable, so the
+  // confirm-first preview can never over-promise what promotion will actually create.
+  if (!epicPlanWellFormed(text)) return null;
   const parsed = parseEpicPlan(text);
-  if (parsed === null || parsed.subTickets.length === 0) return null;
+  if (parsed === null) return null;
   return parsed.subTickets;
 }
 
@@ -95,6 +98,16 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
   if (existing === 'corrupt') {
     throw new Error(`a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion-${request.epic}.yaml and re-approve`);
   }
+  // Creates are keyed on `index`; two sub-tickets sharing one would collapse onto a single issue, silently
+  // dropping a slice the preview promised. Refuse the malformed split (defense-in-depth behind the gate's
+  // epicPlanWellFormed check) rather than create fewer issues than were authorized.
+  const seenIndices = new Set<number>();
+  for (const st of request.subTickets) {
+    if (seenIndices.has(st.index)) {
+      throw new Error(`the plan has a duplicate sub-ticket index (#${st.index}) — two slices would collapse onto one issue; fix the plan and re-approve`);
+    }
+    seenIndices.add(st.index);
+  }
   const state: EpicPromotionState = existing ?? { epic: request.epic, created: [], trackingAppended: false, prClosed: false };
   // Reconcile a resumed record against the CURRENT plan: every recorded sub-ticket must still be in the request
   // with the same index AND title, else the plan diverged since the partial run (or the record was planted) and
@@ -117,7 +130,13 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
       issue = await gh.createIssue(st.title, body);
       // Record the created issue BEFORE labelling, so a label failure cannot lose it and force a re-create.
       state.created.push({ index: st.index, issue, title: st.title });
-      store.write(state);
+      try {
+        store.write(state);
+      } catch (e) {
+        // The issue exists on GitHub but its record could not be saved; name it so the operator removes it before
+        // re-approving — a blind retry reads a store missing it and creates a DUPLICATE public issue (§28.7 AC3).
+        throw new Error(`sub-ticket #${issue} was created but its promotion record could not be saved (${errMsg(e)}); remove issue #${issue} before re-approving or the retry will duplicate it`);
+      }
       issueByIndex.set(st.index, issue);
     }
     // Labels are idempotent, so (re)apply them for every sub-ticket — a resume completes labelling a record
@@ -180,6 +199,8 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
     maybeBegin(repoDir, def, loop, step, turnKey, refs) {
       const subTickets = deps.readSubTickets(def);
       if (subTickets === null || refs.epic === null) return false;
+      // TODO(dylanb) #124 — hard-fail a corrupt promotion store HERE, before raising the preview, so the
+      // destructive-op policy is checked before the prompt (today it is enforced only at runEpicPromotion).
       held.set(key(repoDir, step), { def, loop, step, turnKey, epic: refs.epic, pr: refs.pr, subTickets });
       deps.emitPreview({ repoDir, step, epic: refs.epic, pr: refs.pr, subTickets: subTickets.map((t) => ({ index: t.index, title: t.title })) });
       return true;
@@ -189,7 +210,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       if (h === undefined) return; // no pending promotion — a raced or stale answer
       held.delete(key(repoDir, step));
       if (!confirm) {
-        deps.audit(repoDir, 'epic-promotion-declined', 0);
+        deps.audit(repoDir, '§28 epic-promotion declined', 0);
         deps.onViewChanged();
         return;
       }
@@ -210,7 +231,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       // (the approved plan is never lost), and it is never confused with a persist failure.
       try {
         await deps.runPromotion(repoDir, { epic: h.epic, pr: h.pr, subTickets: fresh });
-        deps.audit(repoDir, 'epic-promotion', 0);
+        deps.audit(repoDir, '§28 epic-promotion', 0);
       } catch (e) {
         deps.emitError(repoDir, `epic promotion failed: ${errMsg(e)}`);
         deps.onViewChanged();
@@ -230,7 +251,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       try {
         deps.terminateFlow(repoDir);
       } catch (e) {
-        deps.audit(repoDir, `epic-promotion terminate failed: ${errMsg(e)}`, 1);
+        deps.audit(repoDir, `§28 epic-promotion terminate failed: ${errMsg(e)}`, 1);
       }
       deps.onViewChanged();
     },

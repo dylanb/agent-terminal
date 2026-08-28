@@ -34,7 +34,7 @@ export function createRealAppEpicPromotionGitHub(
       const current = await gh(['issue', 'view', String(issue), '--json', 'body', '-q', '.body'], 'epic body read failed');
       // §27.10 — an empty read must never clobber the human's intent contract with a bare checklist.
       if (current.trim().length === 0) throw new Error('refused to append to an empty epic issue body');
-      if (current.includes(marker)) return; // already appended (idempotent resume) — never double-append
+      if (current.includes(marker)) return;
       await gh(['issue', 'edit', String(issue), '--body-file', '-'], 'epic tracking update failed', `${current.replace(/\n+$/, '')}${textToAppend}`);
     },
     closePr: async (pr) => void (await gh(['pr', 'close', String(pr)], 'epic planning PR close failed')),

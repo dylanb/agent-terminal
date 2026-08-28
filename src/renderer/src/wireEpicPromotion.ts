@@ -1,4 +1,5 @@
 import type { ConfirmDialogOptions } from './confirmDialog';
+import { stripDisplayControlChars } from '../../shared/controlChars';
 
 // §28.7 — mirrors wireAppBootstrapConflict: on the confirm-first preview, name every GitHub mutation the single
 // confirm authorizes as discrete items (WCAG 1.3.1 — never a bare count before an irreversible outward action),
@@ -23,7 +24,7 @@ export function wireEpicPromotion(deps: EpicPromotionDeps): () => void {
     const n = subTickets.length;
     const plural = n === 1 ? '' : 's';
     const resources = [
-      ...subTickets.map((t) => `Create sub-ticket: ${t.title}`),
+      ...subTickets.map((t) => `Create sub-ticket: ${stripDisplayControlChars(t.title)}`),
       `Add tracking checklist to epic #${epic}`,
       ...(pr !== null ? [`Close epic planning PR #${pr}`] : []),
     ];

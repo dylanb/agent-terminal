@@ -58,6 +58,15 @@ describe('wireEpicPromotion (§28.7)', () => {
     expect(h.opts().role).toBe('alertdialog'); // app-raised, not operator-requested
   });
 
+  it('strips display-control chars from a sub-ticket title before naming it (shared sink; WCAG 1.3.2/CWE-117)', () => {
+    const h = harness();
+    const bidi = String.fromCharCode(0x202e); // RIGHT-TO-LEFT OVERRIDE — reverses/corrupts the announced resource line
+    h.deliver({ ...PREVIEW, subTickets: [{ index: 1, title: `Wire ${bidi}the widget` }] });
+    const line = (h.opts().resources ?? [])[0];
+    expect(line).toContain('Create sub-ticket:');
+    expect(line).not.toContain(bidi); // the alertdialog sink sanitizes exactly as loopPanel's list does (loopPanel.ts:506)
+  });
+
   it('omits the PR-close item when the epic has no planning PR', () => {
     const h = harness();
     h.deliver({ ...PREVIEW, pr: null });

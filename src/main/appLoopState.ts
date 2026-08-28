@@ -630,8 +630,9 @@ export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionS
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
-  } catch {
-    return null; // absent → a fresh promotion
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return null; // genuinely absent → a fresh promotion
+    return 'corrupt'; // a present-but-unreadable record fails toward the block, never a fresh re-create
   }
   let doc: unknown;
   try {

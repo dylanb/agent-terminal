@@ -65,7 +65,7 @@ describe('resolve — complete the held promotion (§28.7)', () => {
     expect(deps.runPromotion).toHaveBeenCalledWith('/repo', { epic: 176, pr: 77, subTickets: SUBS });
     expect(deps.persistAccept).toHaveBeenCalledWith('/repo', 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle');
     expect(deps.terminateFlow).toHaveBeenCalledWith('/repo');
-    expect(deps.audit).toHaveBeenCalledWith('/repo', 'epic-promotion', 0);
+    expect(deps.audit).toHaveBeenCalledWith('/repo', '§28 epic-promotion', 0);
     expect(deps.onViewChanged).toHaveBeenCalled();
   });
 
@@ -75,7 +75,7 @@ describe('resolve — complete the held promotion (§28.7)', () => {
     await coord.resolve('/repo', 'plan-bundle', false);
     expect(deps.runPromotion).not.toHaveBeenCalled();
     expect(deps.persistAccept).not.toHaveBeenCalled();
-    expect(deps.audit).toHaveBeenCalledWith('/repo', 'epic-promotion-declined', 0);
+    expect(deps.audit).toHaveBeenCalledWith('/repo', '§28 epic-promotion declined', 0);
     expect(deps.onViewChanged).toHaveBeenCalled(); // re-render the still-actionable gate
   });
 
@@ -123,7 +123,7 @@ describe('resolve — complete the held promotion (§28.7)', () => {
     expect(deps.persistAccept).not.toHaveBeenCalled(); // the approved plan is not lost — gate re-decidable
     expect(deps.terminateFlow).not.toHaveBeenCalled();
     expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('epic promotion failed'));
-    expect(deps.audit).not.toHaveBeenCalledWith('/repo', 'epic-promotion', 0);
+    expect(deps.audit).not.toHaveBeenCalledWith('/repo', '§28 epic-promotion', 0);
   });
 
   it('D48: a persist failure after a successful promotion surfaces as a PERSIST error, not a promotion failure', async () => {
@@ -159,9 +159,9 @@ describe('resolve — complete the held promotion (§28.7)', () => {
 import { runEpicPromotion, type AppEpicPromotionGitHub, type EpicPromotionStore } from '../../src/main/epicPromotion';
 import type { EpicPromotionState } from '../../src/main/appLoopState';
 
-function fakeGh() {
+function fakeGh(start = 500) {
   const events: string[] = [];
-  let next = 500;
+  let next = start;
   const gh: AppEpicPromotionGitHub = {
     createIssue: async (title, body) => {
       next += 1;
@@ -294,12 +294,15 @@ describe('runEpicPromotion — resumable idempotency (§28.7 AC3)', () => {
   });
 
   it('creates ONLY the missing sub-tickets after a partial run (resume), preserving the real stacking number', async () => {
-    const { gh, events } = fakeGh();
+    const { gh, events } = fakeGh(600); // seed the counter ABOVE the recorded #501 so a real reuse-of-stale-number bug can't hide behind a collision
     const partial = memStore({ epic: 176, created: [REC1], trackingAppended: false, prClosed: false });
     await runEpicPromotion(gh, REQUEST, partial.store);
-    expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(1); // only #2 is created
+    expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(1); // only #2 is created, as a fresh #601
+    expect(events.find((e) => e.startsWith('create#'))).toContain('create#601'); // its OWN new number, distinct from the recorded #501
     expect(events.find((e) => e.startsWith('create#'))).toContain('Preceding sub-ticket: #501'); // stacks on recorded #501
-    expect(events.find((e) => e.startsWith('append #176'))).toContain('- [ ] #501 — Slice one'); // checklist names both
+    const append = events.find((e) => e.startsWith('append #176'))!;
+    expect(append).toContain('- [ ] #501 — Slice one'); // checklist names the recorded slice
+    expect(append).toContain('- [ ] #601 — Slice two'); // …and the freshly-created one, by its real new number
     expect(events).toContain('closePr #4242');
   });
 
@@ -339,5 +342,30 @@ describe('runEpicPromotion — resumable idempotency (§28.7 AC3)', () => {
     const { gh, events } = fakeGh();
     await expect(runEpicPromotion(gh, REQUEST, memStore('corrupt').store)).rejects.toThrow(/unreadable/);
     expect(events).toEqual([]);
+  });
+
+  it('BLOCKS a request with duplicate sub-ticket indices — refuses rather than collapsing two slices onto one issue', async () => {
+    // The executor keys creates on `index`; two sub-tickets sharing an index would create ONE issue and silently
+    // drop the other slice's plan. Refuse the malformed split outright (defense-in-depth behind the gate).
+    const { gh, events } = fakeGh();
+    const dup = {
+      epic: 176,
+      pr: null,
+      subTickets: [
+        { index: 1, title: 'Slice A', body: 'Acceptance criteria: a\n\nPLAN-A' },
+        { index: 1, title: 'Slice B', body: 'Acceptance criteria: b\n\nPLAN-B' },
+      ],
+    };
+    await expect(runEpicPromotion(gh, dup, memStore().store)).rejects.toThrow(/duplicate/i);
+    expect(events).toEqual([]); // nothing created — never drop an approved slice
+  });
+
+  it('names the created-but-unrecorded issue when the store write fails after a create (no blind-retry duplicate)', async () => {
+    // A = createIssue (public, non-idempotent), B = store.write. If B throws after A, the issue exists on GitHub
+    // but is unrecorded; a retry reads a store missing it and re-creates a DUPLICATE. The error must name the
+    // orphan so the operator removes it before re-approving (§28.7 AC3; "no unrecoverable state without a route out").
+    const { gh } = fakeGh();
+    const store: EpicPromotionStore = { read: () => null, write: () => { throw new Error('ENOSPC'); } };
+    await expect(runEpicPromotion(gh, REQUEST, store)).rejects.toThrow(/#501/);
   });
 });

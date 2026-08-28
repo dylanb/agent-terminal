@@ -158,9 +158,8 @@ export async function runAppGateDecision(
   // impasse is never executed here.
   if (option !== 'approve') return false;
 
-  // §28.7 — an epic plan intercepts BEFORE the accept: the coordinator raises the confirm-first preview and
-  // holds; the gate is neither accepted nor advanced (the resolve path completes it). A non-epic plan — or a
-  // gate with no promote side-effect — is not intercepted and takes the normal accept below.
+  // §28.7 — an epic plan intercepts here: maybeBegin holds it pending the confirm-first resolve, so `return false`
+  // below means intercepted-and-held, NOT rejected — the gate is neither accepted nor advanced.
   if (deps.maybeBeginEpicPromotion(repoDir, r.def, run.step, run.turnKey)) {
     deps.audit(repoDir, gateDecisionAuditCmd('epic-promotion-preview', option), 0);
     deps.onViewChanged();

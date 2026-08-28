@@ -10,9 +10,9 @@ import { readEpicPromotion, writeEpicPromotion } from '../../src/main/appLoopSta
 // with the persisted record creates NOTHING. This closes "a re-run creates nothing" through real persistence.
 
 let repo: string;
-function fakeGh() {
+function fakeGh(start = 500) {
   const events: string[] = [];
-  let next = 500;
+  let next = start;
   const gh: AppEpicPromotionGitHub = {
     createIssue: async () => {
       next += 1;
@@ -65,9 +65,9 @@ describe('runEpicPromotion over the real store — resumable idempotency (§28.7
   it('a resume after a partial run (only slice 1 recorded) creates only the missing slices through the real store', async () => {
     // Seed the store as if a prior run created only slice 1.
     writeEpicPromotion(repo, { epic: 176, created: [{ index: 1, issue: 501, title: 'Slice one' }], trackingAppended: false, prClosed: false });
-    const { gh, events } = fakeGh();
+    const { gh, events } = fakeGh(600); // seed ABOVE the recorded #501 so a reuse-of-stale-number bug can't hide behind a collision
     await runEpicPromotion(gh, REQUEST, realStore());
-    expect(events.filter((e) => e.startsWith('create#'))).toHaveLength(2); // only slices 2 and 3
+    expect(events.filter((e) => e.startsWith('create#'))).toEqual(['create#601', 'create#602']); // slices 2 and 3, each its OWN fresh number
     expect(readEpicPromotion(repo, 176)).toMatchObject({ trackingAppended: true, prClosed: true });
   });
 });

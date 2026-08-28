@@ -80,10 +80,13 @@ export function parseEpicPlan(planText: string): { subTickets: EpicSubTicket[] }
 }
 
 /** Whether the epic plan meets the MINIMAL contract (§28.5.5): classified an epic, ≥1 sub-ticket block, each
- *  with a non-empty title AND an `Acceptance criteria:` line. Tolerates surrounding prose. */
+ *  with a non-empty title AND an `Acceptance criteria:` line, and DISTINCT indices — the promotion executor keys
+ *  creates on `index`, so a repeat would collapse two slices onto one issue. Tolerates surrounding prose. */
 export function epicPlanWellFormed(planText: string): boolean {
   const parsed = parseEpicPlan(planText);
   if (parsed === null || parsed.subTickets.length === 0) return false;
+  const indices = new Set(parsed.subTickets.map((t) => t.index));
+  if (indices.size !== parsed.subTickets.length) return false;
   return parsed.subTickets.every(
     (t) => t.title.length > 0 && t.body.split('\n').some((l) => l.trim().startsWith(EPIC_GRAMMAR.ac)),
   );

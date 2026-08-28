@@ -123,6 +123,22 @@ describe('epicPlanWellFormed — the minimal contract, never a rigid layout (§2
     expect(epicPlanWellFormed(plan)).toBe(false);
   });
 
+  it('rejects a duplicated sub-ticket index — a collision would collapse two slices onto one created issue', () => {
+    // Both blocks are individually well-formed (title + AC line); the repeated index is the defect. The executor
+    // keys creates on `index`, so promoting this plan creates ONE issue while the preview promised two — a silent
+    // loss of an approved slice on an irreversible outward action (§28.7). The predicate must reject it at the gate.
+    const plan = [
+      'Classification: epic',
+      '## Sub-tickets',
+      '### Sub-ticket 1 — Slice A',
+      'Acceptance criteria: a',
+      '### Sub-ticket 1 — Slice B',
+      'Acceptance criteria: b',
+      '',
+    ].join('\n');
+    expect(epicPlanWellFormed(plan)).toBe(false);
+  });
+
   it('accepts a well-formed epic regardless of surrounding prose (minimal contract)', () => {
     const plan = [
       '# Some heading the agent wrote',

@@ -494,11 +494,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         section.setAttribute('role', 'status'); // WCAG 4.1.3 — announce the split's appearance, like the sibling gate notices
         const segH = doc.createElement('div');
         segH.className = 'seg-h';
+        segH.id = 'epic-preview-heading';
         const count = loop.epic.subTickets.length;
         segH.textContent = `Epic — ${count} sub-ticket${count === 1 ? '' : 's'}`;
         section.append(segH);
         const list = doc.createElement('ul');
         list.className = 'epic-list';
+        list.setAttribute('aria-labelledby', segH.id); // WCAG 1.3.1 — the list carries its "Epic" purpose, not a bare "list, N items"
         for (const st of loop.epic.subTickets) {
           const li = doc.createElement('li');
           li.className = 'epic-subticket';

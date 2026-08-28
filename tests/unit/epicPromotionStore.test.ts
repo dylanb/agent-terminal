@@ -46,6 +46,14 @@ describe('promotion.yaml store (§28.7 AC3)', () => {
     expect(readEpicPromotion(repo, 176)).toBe('corrupt');
   });
 
+  it('reads "corrupt" for a present-but-UNREADABLE store — a non-ENOENT read error blocks, never a fresh re-create', () => {
+    // A directory at the record's path makes readFileSync throw EISDIR: an EXISTING store the read cannot obtain.
+    // It MUST fail toward the block (the record is the sole guard against re-creating duplicate public issues),
+    // never toward null="a fresh promotion". Only a genuinely-absent file (ENOENT) reads null (pinned above).
+    mkdirSync(promotionFile(), { recursive: true });
+    expect(readEpicPromotion(repo, 176)).toBe('corrupt');
+  });
+
   it('reads "corrupt" for every malformed field (the fail-safe guards each — CWE-20/770)', () => {
     mkdirSync(join(repo, '.agent-terminal', 'loop'), { recursive: true });
     const cases = [
