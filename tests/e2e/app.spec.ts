@@ -1714,14 +1714,17 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'while :; do case "$1" in --git-dir) shift 2;; -c) shift 2;; --no-replace-objects) shift;; *) break;; esac; done\n' +
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
-    // §28.5.1 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the baseline
-    // sha+parent capture), ls-files (the working-tree RED test detection, filter-free), and diff (also
-    // workingTreeTestPaths' --numstat arm). rev-parse is delegated ONLY for the EXACT headCommit form
-    // (`--verify --end-of-options HEAD`) — the pre-commit HEAD the parent-linkage guard compares against — so
-    // every canned bootstrap/flow-detection rev-parse arm below (and the plain `rev-parse HEAD` the drive uses)
-    // keeps its scripted answer; a blanket delegation breaks the drive (the loop never starts).
-    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files) exec ${realGit} "$@";; esac\n` : '') +
-    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$4" = "HEAD" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
+    // §28.5.1/§28.5.3 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the
+    // baseline sha+parent capture), ls-files (the working-tree RED test detection + the GREEN frozen check's
+    // untracked arm, filter-free), diff (workingTreeTestPaths' --numstat arm AND the GREEN frozen check's
+    // baseline↔working-tree name-only arm), and ls-tree/cat-file (the GREEN frozen check's baselineCapabilities
+    // reads the committed loop-capabilities.yaml as a blob). rev-parse is delegated ONLY for the object-resolve
+    // form `--verify --end-of-options <rev>` (4 args): the pre-commit HEAD the parent-linkage guard compares
+    // against AND the baseline `<sha>^{commit}` resolve baselineCapabilities does — the canned bootstrap/flow
+    // rev-parse arms below (and the plain `rev-parse HEAD` the drive uses) never take that form, so they keep
+    // their scripted answer; a blanket rev-parse delegation breaks the drive (the loop never starts).
+    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files|ls-tree|cat-file) exec ${realGit} "$@";; esac\n` : '') +
+    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
