@@ -224,25 +224,25 @@ describe('AC7 (§E.4) — the deletion list records itself spent', () => {
   });
 });
 
-// ─── §D.4 row (AC 8): the changelog keeps every pre-sweep entry byte-for-byte and adds exactly one ────────
+// ─── §D.4 row (AC 8): the sweep's changelog record survives and no historical entry is rewritten ─────────
 // The single most plausible mistake in an ~890-line mechanical sweep is a repo-wide rewrite that also lands
 // in docs/spec/changelog.md and silently edits a historical entry (whose text was true when written, AC 7).
-// The pre-sweep changelog — read at the branch's merge-base with origin/main, the point the sweep began —
-// must survive VERBATIM as a contiguous substring of the current file, and the file must gain EXACTLY ONE
-// new entry (the v2.141 sweep record). Falsified for free by editing any existing entry's bytes (the
-// merge-base copy is then no longer a substring) or by landing a second new entry.
-describe('AC8 — the changelog keeps every pre-sweep entry byte-for-byte and adds exactly one', () => {
-  const entryCount = (s: string): number => (s.match(/^> \*\*Changelog v/gm) ?? []).length;
+// The original "+1 entry vs the merge-base" delta is spent once the sweep is merged — every branch cut from
+// post-sweep main carries the v2.141 record in its own merge-base, so the delta is 0 — so the guard is
+// pinned spent-safe instead: the v2.141 sweep record is present, and the merge-base changelog survives
+// VERBATIM as a contiguous substring. Falsified by deleting the v2.141 record, or by editing any historical
+// entry's bytes (the merge-base copy is then no longer a substring).
+describe('AC8 — the sweep changelog record survives and no historical entry is rewritten', () => {
   const base = execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], { encoding: 'utf8' }).trim();
-  const preSweep = execFileSync('git', ['show', `${base}:docs/spec/changelog.md`], { encoding: 'utf8' });
+  const baseChangelog = execFileSync('git', ['show', `${base}:docs/spec/changelog.md`], { encoding: 'utf8' });
   const current = readText('docs/spec/changelog.md');
 
-  it('every pre-sweep changelog entry survives byte-for-byte', () => {
-    expect(current.includes(preSweep), 'a pre-sweep changelog entry was not preserved byte-for-byte').toBe(true);
+  it('the v2.141 sweep changelog record is present', () => {
+    expect(current, 'the N8 sweep changelog record (v2.141) was lost').toMatch(/^> \*\*Changelog v2\.141:/m);
   });
 
-  it('the sweep adds exactly one new changelog entry', () => {
-    expect(entryCount(current) - entryCount(preSweep)).toBe(1);
+  it('every changelog entry present at the merge-base survives byte-for-byte', () => {
+    expect(current.includes(baseChangelog), 'a historical changelog entry was rewritten').toBe(true);
   });
 });
 

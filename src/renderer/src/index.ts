@@ -111,7 +111,11 @@ if (errorDialog) {
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
-  window.flow.onLoopError((reason) => showError({ title: 'Loop error', message: reason }));
+  // §28.3. TODO(dylanb): a `kind: 'notice'` reuses the alertdialog error surface (operator decision); a
+  // future a11y pass could give a benign notice a non-urgent role (dialog / status live region).
+  window.flow.onLoopError((reason, kind) =>
+    showError({ title: kind === 'notice' ? 'Notice' : 'Loop error', message: reason }),
+  );
 }
 
 // §22.3.1.

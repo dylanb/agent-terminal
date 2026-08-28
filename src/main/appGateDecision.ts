@@ -15,6 +15,8 @@ import type {
   LoopDefV2Result,
 } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
+import type { RunAppGateCommitSideEffect } from './appGateCommit';
+import { stripStatusControlChars } from '../shared/loopStatus';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -31,6 +33,9 @@ export interface AppGateDecisionDeps {
   resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   refs(repoDir: string): AppGateRefs;
   runSideEffect: RunAppGateSideEffect;
+  /** §28.3 — the `commit` side-effect port: a local `git commit` carrying the descriptor's phase label,
+   *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
+  runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
   /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback
@@ -54,6 +59,9 @@ export interface AppGateDecisionDeps {
   clearPolish(repoDir: string): void;
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(reason: string): void;
+  /** §28.3 — surface a benign completed no-op (nothing-to-commit) to the operator as a notice, framed so
+   *  it never reads as a failure. Same operator channel as emitError, distinct severity (`kind: 'notice'`). */
+  emitNotice(reason: string): void;
   onViewChanged(): void;
 }
 
@@ -164,24 +172,46 @@ export async function runAppGateDecision(
   }
   deps.onViewChanged();
 
-  // §27.13/AC3
+  // §27.13/§28.3 / AC3 — dispatch each declared side-effect by kind; an unknown kind is silently skipped.
   const refs = deps.refs(repoDir);
   for (const se of gateOpt.sideEffects) {
-    if (se.kind !== 'gh') continue;
-    const action = typeof se.args.action === 'string' ? se.args.action : '';
-    const ctx: AppGateSideEffectCtx = {
-      pr: refs.pr,
-      ticket: refs.ticket,
-      bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-      bootstrap: refs.bootstrap,
-    };
-    try {
-      await deps.runSideEffect(action, ctx);
-      deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `${action}: ${reason}`), 1);
-      deps.emitError(`approve side-effect failed: ${reason}`);
+    if (se.kind === 'gh') {
+      const action = typeof se.args.action === 'string' ? se.args.action : '';
+      const ctx: AppGateSideEffectCtx = {
+        pr: refs.pr,
+        ticket: refs.ticket,
+        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
+        bootstrap: refs.bootstrap,
+      };
+      try {
+        await deps.runSideEffect(action, ctx);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `${action}: ${reason}`), 1);
+        deps.emitError(`approve side-effect failed: ${reason}`);
+      }
+    } else if (se.kind === 'commit') {
+      // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
+      // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
+      const label = typeof se.args.label === 'string' ? se.args.label : '';
+      try {
+        // §28.3 — the phase-start snapshot is captured by the phase lifecycle (§28.5.1), not yet wired; the
+        // executor passes an empty snapshot until then.
+        const outcome = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
+        if (outcome === 'committed') {
+          deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, `commit: ${label}`), 0);
+        } else {
+          // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
+          // wording must never read as a failure, and this path must not throw (the accept/advance run below).
+          deps.audit(repoDir, gateDecisionAuditCmd('side-effect-skipped', option, 'commit: nothing to commit'), 0);
+          deps.emitNotice(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
+        }
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `commit: ${reason}`), 1);
+        deps.emitError(`approve side-effect failed: ${reason}`);
+      }
     }
   }
 

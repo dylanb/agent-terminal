@@ -411,6 +411,30 @@ describe('§27 gate-decision audit vocabulary', () => {
     expect(clearFailed).toContain('EISDIR');
     expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
   });
+
+  // §28.3 / T-taint — an untrusted detail (a def-supplied action / commit phase label) is neutralized
+  // before it lands in the append-only §25 stream (CWE-117): control chars stripped, length bounded.
+  it('neutralizes control chars and bounds the length of an untrusted detail', () => {
+    const evil = 'commit: RED\n\r\x1b[31mfake failed\x07\x00';
+    const out = gateDecisionAuditCmd('side-effect', 'approve', evil);
+    const hasControlChar = [...out].some((ch) => {
+      const c = ch.charCodeAt(0);
+      return c <= 0x1f || c === 0x7f;
+    });
+    expect(hasControlChar).toBe(false); // no control chars reach the append-only stream
+    const long = 'x'.repeat(1000);
+    expect(gateDecisionAuditCmd('side-effect', 'approve', long).length).toBeLessThan(400); // bounded
+  });
+
+  // §28.3 / T13b — a benign nothing-to-commit is a DISTINCT outcome from a real failure, so a reader (a
+  // reconstructed timeline) never mistakes an empty phase for a `git commit` error.
+  it('records a benign skipped side-effect distinctly from a success and a failure', () => {
+    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit');
+    expect(skipped).toContain('approve');
+    expect(skipped).toContain('skipped');
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit'));
+  });
 });
 
 // §27.10/§27.9 / N6 — the chained-transition audit vocabulary lives in this ONE shared module beside the

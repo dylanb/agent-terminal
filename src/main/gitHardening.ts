@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 // Single-sourced local-code-execution hardening for git in an UNTRUSTED checked-out repo (CLAUDE.md
 // shared-semantics), so no consumer drifts a second copy.
 //
@@ -8,4 +12,11 @@
 // if it reaches the network, add protocol/credential hardening ON TOP.
 export function coreExecHardeningArgs(disabledHooksPath: string): string[] {
   return ['-c', `core.hooksPath=${disabledHooksPath}`, '-c', 'core.fsmonitor=false'];
+}
+
+/** A fresh, unpredictable, NEVER-created temp path to point `core.hooksPath` at — with it no repo-planted
+ *  hook can run during a local git op. Single-sourced here so the security-relevant unguessable/never-created
+ *  property cannot drift across its call sites. */
+export function freshDisabledHooksDir(): string {
+  return join(tmpdir(), `agent-terminal-git-hooks-${randomUUID()}`);
 }
