@@ -43,6 +43,9 @@ const NEW_CHARTERS: readonly CharterRow[] = [
   { file: 'green-loop/charter/regression-guard.md', persona: 'impl-review-regression-guard', marker: 'No vacuous green' },
 ];
 
+const isPlanningCharter = (c: CharterRow): boolean => c.file.startsWith('plan-bundle-loop/charter/');
+const isPhaseCharter = (c: CharterRow): boolean => c.persona.startsWith('impl-review-');
+
 const NEW_RECIPES: readonly RecipeRow[] = [
   { kind: 'plan-bundle', file: 'plan-bundle-loop/prompts/work.md', sections: PLANNING_SECTIONS },
   { kind: 'plain', file: 'infra-loop/prompts/work.md' },
@@ -50,8 +53,8 @@ const NEW_RECIPES: readonly RecipeRow[] = [
   { kind: 'phase', file: 'green-loop/prompts/work.md', completes: 'green' },
 ];
 
-/** The file's content, or null when absent/unreadable — so a content pin fails by assertion on missing
- *  content, never an uncaught ENOENT that would read as a collection error. */
+/** null rather than throwing, so a missing-content pin fails by assertion, never an uncaught ENOENT
+ *  that would read as a collection error. */
 function read(rel: string): string | null {
   try {
     return readFileSync(join(SOURCE_TREE, rel), 'utf8');
@@ -71,6 +74,12 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
     for (const c of NEW_CHARTERS) {
       expect(c.marker.trim().length).toBeGreaterThan(0);
       expect(c.persona).toMatch(/^(review-plan|impl-review)-[a-z-]+$/);
+    }
+  });
+
+  it('the two charter-contract classes cover every charter exactly once', () => {
+    for (const c of NEW_CHARTERS) {
+      expect(isPlanningCharter(c) !== isPhaseCharter(c), `${c.file}: not in exactly one contract class`).toBe(true);
     }
   });
 
@@ -109,13 +118,13 @@ function assertCharterContract(row: CharterRow): void {
 }
 
 describe('loops-v2 content-parity — the 3 planning-discipline charters (§28.6 P6b)', () => {
-  for (const row of NEW_CHARTERS.filter((c) => c.file.startsWith('plan-bundle-loop/charter/'))) {
+  for (const row of NEW_CHARTERS.filter(isPlanningCharter)) {
     describe(row.file, () => assertCharterContract(row));
   }
 });
 
 describe('loops-v2 content-parity — the 2 phase-discipline charters (§28.6 P6b)', () => {
-  for (const row of NEW_CHARTERS.filter((c) => c.persona.startsWith('impl-review-'))) {
+  for (const row of NEW_CHARTERS.filter(isPhaseCharter)) {
     describe(row.file, () => assertCharterContract(row));
   }
 
@@ -129,7 +138,7 @@ function completingOutcome(completes: 'red' | 'green'): PhaseOutcome {
   return completes === 'red' ? RED_COMPLETING_OUTCOME : GREEN_COMPLETING_OUTCOME;
 }
 
-/** §28.5.5 — the composer embeds exactly one fenced block; return it. */
+/** §28.5.5 — the composer embeds exactly one fenced block. */
 function fencedExample(lines: string[]): string {
   const open = lines.indexOf('```');
   const close = lines.indexOf('```', open + 1);
@@ -182,8 +191,7 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
   }
 });
 
-// §28.10 (the S6/S7 boundary) — the manifest is closed over the new dirs, and each dir is inert: authored
-// content with no def, so nothing resolves until S7 wires the yamls.
+// §28.10 (the S6/S7 boundary) — nothing resolves these dirs until S7 wires the yamls.
 describe('loops-v2 content-parity — the new content is closed and inert', () => {
   const newDirs = [...new Set([...NEW_CHARTERS, ...NEW_RECIPES].map((r) => r.file.split('/')[0]))];
   const repoDir = resolve(__dirname, '..', '..');
@@ -205,9 +213,10 @@ describe('loops-v2 content-parity — the new content is closed and inert', () =
   });
 
   for (const dir of newDirs) {
-    it(`${dir} resolves to no loop def`, () => {
+    it(`${dir} resolves to no loop def — the bundled-tier miss, not an ambient repo override`, () => {
       const r = resolveLoopDefV2(dir, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
       expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(`no ${SECTION}27 def named ${dir}`);
     });
   }
 });
