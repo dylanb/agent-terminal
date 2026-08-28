@@ -112,6 +112,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
+    maybeBeginEpicPromotion: () => false,
     ...over,
   };
   return { deps, rec };
@@ -543,5 +544,27 @@ describe('runAppGateDecision — inert when the gate cannot be established', () 
     await approve(deps);
     expect(rec.accepts).toEqual([]);
     expect(rec.advances).toEqual([]);
+  });
+});
+
+// §28.7 — approving an epic-classified plan is intercepted BEFORE the accept: the coordinator raises the
+// confirm-first preview and holds, so the gate is neither accepted nor advanced (the resolve path completes
+// it). A non-epic plan is not intercepted and takes the normal accept + advance.
+describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
+  it('intercepts an epic approve before accept: no accept, no advance, no side-effect dispatched', async () => {
+    const { deps, rec } = mkDeps({ maybeBeginEpicPromotion: () => true });
+    await approve(deps);
+    expect(rec.accepts).toHaveLength(0);
+    expect(rec.advances).toHaveLength(0);
+    expect(rec.sideEffects).toHaveLength(0); // mark-ready must not fire on an epic (it terminates, not readies)
+    expect(rec.views).toBeGreaterThan(0); // the panel re-renders to show the held preview
+    expect(rec.audits.some((a) => a.cmd.includes('epic-promotion preview') && a.exit === 0)).toBe(true);
+  });
+
+  it('does not intercept a non-epic approve: the normal accept + advance runs', async () => {
+    const { deps, rec } = mkDeps({ maybeBeginEpicPromotion: () => false });
+    await approve(deps);
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toHaveLength(1);
   });
 });

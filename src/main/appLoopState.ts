@@ -589,3 +589,65 @@ export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
   if (!Array.isArray(doc.paths)) return null;
   return { step: doc.step, paths: sanitizeChangedTestPaths(doc.paths) };
 }
+
+// §28.7 AC3 — the resumable promotion record, PER EPIC in its own file promotion-<epic>.yaml (a wholesale
+// run-state rewrite cannot clobber it, and two epics sharing a loop area cannot clobber each other's resume
+// record). No wall-clock, so an idempotent re-run's "unchanged" assertion is deterministic. This is untrusted
+// persisted state and the SOLE guard against re-creating duplicate PUBLIC issues (CLAUDE.md line 76 /
+// CWE-20/770), so it fails TOWARD the block: a present-but-malformed record — OR an unresolvable loop area (a
+// planted symlink) — reads 'corrupt' (BLOCK), and only a benign absent file reads null (a fresh promotion).
+function promotionFileName(epic: number): string {
+  return `promotion-${epic}.yaml`;
+}
+
+export interface EpicPromotionState {
+  /** Each created sub-ticket carries its `title` so the executor can reconcile a resumed record against the
+   *  current plan and refuse a divergence (a stale/planted record could otherwise orphan or mis-stack issues). */
+  epic: number;
+  created: { index: number; issue: number; title: string }[];
+  trackingAppended: boolean;
+  prClosed: boolean;
+}
+
+export function writeEpicPromotion(repoDir: string, state: EpicPromotionState): void {
+  const file = loopAreaFile(repoDir, promotionFileName(state.epic));
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = {
+    schema_version: APP_LOOP_STATE_SCHEMA,
+    epic: state.epic,
+    created: state.created.map((c) => ({ index: c.index, issue: c.issue, title: c.title })),
+    tracking_appended: state.trackingAppended,
+    pr_closed: state.prClosed,
+  };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §28 promotion record: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionState | 'corrupt' | null {
+  const file = loopAreaFile(repoDir, promotionFileName(epic));
+  if (file === null) return 'corrupt'; // an unresolvable loop area fails toward the block, never a fresh re-create
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return null; // genuinely absent → a fresh promotion
+    return 'corrupt'; // a present-but-unreadable record fails toward the block, never a fresh re-create
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return 'corrupt';
+  }
+  if (!isRecord(doc)) return 'corrupt';
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return 'corrupt';
+  if (!isPositiveInt(doc.epic) || doc.epic !== epic) return 'corrupt';
+  if (!Array.isArray(doc.created)) return 'corrupt';
+  const created: { index: number; issue: number; title: string }[] = [];
+  for (const c of doc.created) {
+    if (!isRecord(c) || !isPositiveInt(c.index) || !isPositiveInt(c.issue) || typeof c.title !== 'string' || c.title.length === 0) return 'corrupt';
+    created.push({ index: c.index, issue: c.issue, title: c.title });
+  }
+  return { epic: doc.epic, created, trackingAppended: doc.tracking_appended === true, prClosed: doc.pr_closed === true };
+}

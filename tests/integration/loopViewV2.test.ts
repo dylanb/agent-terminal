@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { deriveAppLoopView } from '../../src/main/loopViewV2';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { writeAppLoopState, enterPolish, recordChangedTests } from '../../src/main/appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
+import { exampleEpicPlan } from '../../src/shared/epicPlan';
 
 // The §27 loop-view provider (the READ meeting point, engine-selected on the flow step's `app` namespace):
 // it resolves the bound app-def and produces the whole loop view the strip/panel render — a run-less view
@@ -389,5 +391,122 @@ describe('deriveAppLoopView — the changed-tests flag (§28.5.3)', () => {
     seedRun('plan');
     const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
     expect(view.changedTests).toBeUndefined();
+  });
+});
+
+// §28.7 — the epic overlay: when an epic-capable loop (its approve gate declares a `promote` side-effect) reaches
+// its gate and its `plan` artifact is classified an epic, the view carries the parsed sub-ticket split so the
+// panel can show the operator what promotion will create BEFORE they approve (§27.10 "the plan gate is where a
+// human judges whether the split is right"). Derived main-side from the same epicPlan grammar promotion reads.
+describe('deriveAppLoopView — epic classification at the gate (§28.7)', () => {
+  const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
+  const EPIC_DEF = (name: string, promote: boolean): string => `version: v2
+name: ${name}
+work:
+  recipe: prompts/work.md
+  artifact: plan
+reviewers:
+  []
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries: []
+report:
+  sections: [summary]
+gate:
+  - option: approve
+    side_effects:${promote ? '\n      - kind: promote\n        artifact: plan' : ' []'}
+outputs:
+  - id: plan
+    path: plan.md
+`;
+  function plantEpic(name: string, promote: boolean): void {
+    const defDir = join(appDir, 'loops-v2', name);
+    mkdirSync(join(defDir, 'prompts'), { recursive: true });
+    writeFileSync(join(defDir, 'prompts', 'work.md'), 'do work\n');
+    writeFileSync(join(defDir, 'prompts', 'consolidate.md'), 'judge\n');
+    writeFileSync(join(defDir, `${name}.yaml`), EPIC_DEF(name, promote));
+  }
+  function writePlanArtifact(text: string): void {
+    const dir = join(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'plan.md'), text);
+  }
+  function seedGate(name: string): void {
+    writeAppLoopState(
+      repoDir,
+      { loop: name, step: 'plan-bundle', turnKey: 'consolidate-plan-bundle', status: 'complete', round: 1, verdict: 'clean' },
+      FIXED,
+    );
+  }
+
+  it('surfaces the parsed sub-ticket split when the gate plan is classified an epic', () => {
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact(exampleEpicPlan(3));
+    seedGate('plan-bundle-loop');
+    const view = deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir });
+    expect(view.epic?.subTickets.map((t) => t.index)).toEqual([1, 2, 3]);
+    // a concrete title, so a regression mapping the wrong field (e.g. body) into `title` is caught
+    expect(view.epic?.subTickets[0].title).toBe('Slice 1 of the feature');
+  });
+
+  it('still renders the gate (no epic) when the plan artifact is absent — a momentary miss must not throw', () => {
+    plantEpic('plan-bundle-loop', true);
+    seedGate('plan-bundle-loop'); // no writePlanArtifact — the artifact does not exist
+    const ctx = { tiers: tiers(), repoDir };
+    expect(() => deriveAppLoopView('plan-bundle-loop', ctx)).not.toThrow();
+    expect(deriveAppLoopView('plan-bundle-loop', ctx).epic).toBeUndefined();
+  });
+
+  it('caps the plan read (CWE-400): an oversized plan artifact yields no epic and does not block/throw', () => {
+    plantEpic('plan-bundle-loop', true);
+    // a well-formed epic plan padded past the 2 MiB read cap
+    writePlanArtifact(`${exampleEpicPlan(2)}\n${'x'.repeat(3 * 1024 * 1024)}\n`);
+    seedGate('plan-bundle-loop');
+    const ctx = { tiers: tiers(), repoDir };
+    expect(() => deriveAppLoopView('plan-bundle-loop', ctx)).not.toThrow();
+    expect(deriveAppLoopView('plan-bundle-loop', ctx).epic).toBeUndefined();
+  });
+
+  it('carries no epic split when the gate plan is a plain single-ticket plan', () => {
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact('# plan\n\na single-ticket plan\n');
+    seedGate('plan-bundle-loop');
+    const view = deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir });
+    expect(view.epic).toBeUndefined();
+  });
+
+  it('carries no epic split when a NOT-well-formed epic plan would silently drop a slice (dup index)', () => {
+    // A plan classified an epic but malformed — a repeated sub-ticket index — must not raise a promotable
+    // preview: the executor keys on index, so promoting it would create fewer issues than the preview names
+    // (a silent loss of an approved slice on an irreversible action). The gate rejects it via epicPlanWellFormed.
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact(['Classification: epic', '## Sub-tickets',
+      '### Sub-ticket 1 — Slice A', 'Acceptance criteria: a',
+      '### Sub-ticket 1 — Slice B', 'Acceptance criteria: b', ''].join('\n'));
+    seedGate('plan-bundle-loop');
+    expect(deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir }).epic).toBeUndefined();
+  });
+
+  it('carries no epic split when a sub-ticket is missing its acceptance-criteria line (not well-formed)', () => {
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact('Classification: epic\n\n## Sub-tickets\n\n### Sub-ticket 1 — No AC here\n\nsome plan text\n');
+    seedGate('plan-bundle-loop');
+    expect(deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir }).epic).toBeUndefined();
+  });
+
+  it('carries no epic split for a loop whose gate declares no promote side-effect', () => {
+    plantEpic('plan-loop', false);
+    writePlanArtifact(exampleEpicPlan(2));
+    seedGate('plan-loop');
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.epic).toBeUndefined();
+  });
+
+  it('carries no epic split mid-work (no verdict reached — not yet at the gate)', () => {
+    plantEpic('plan-bundle-loop', true);
+    writePlanArtifact(exampleEpicPlan(2));
+    writeAppLoopState(repoDir, { loop: 'plan-bundle-loop', step: 'plan-bundle', turnKey: 'work-plan-bundle', status: 'working' }, FIXED);
+    const view = deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir });
+    expect(view.epic).toBeUndefined();
   });
 });

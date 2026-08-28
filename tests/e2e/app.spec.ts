@@ -15,6 +15,7 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests } from '../../src/main/appLoopState';
@@ -1775,17 +1776,25 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
+    // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
+    // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.issue-body"; exit 0; fi\n' +
-    // epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
-    // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
-    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
+    // §28.7 — the epic-body edit (the tracking append) captures its stdin per-issue so each written body is
+    // independently assertable ($3 is the issue number).
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.issue-body.$3"; exit 0; fi\n' +
+    // §28.7 — each `gh issue create` returns a fresh issue URL (a per-binDir counter seeded at 500) so the
+    // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
+    // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
+    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; exit 0; fi\n' +
+    // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
+    // sub-ticket's label set is independently assertable.
+    'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; echo "$value" >> "$FAKE_GHGIT_LOG.issue-label.$3"; exit 0; fi\n' +
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale.
@@ -6423,6 +6432,285 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   // §28.10 AC1 — end-to-end chaining: the integration gate published plan-bundle's '# plan' artifact as the PR body.
   await expect.poll(() => readIf(`${logFile}.pr-body`)).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// ---- §28.7 S8 — the epic overlay: an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate ----
+// A focused fake-agent driving groom → plan-bundle, whose plan-bundle work arm writes an EPIC-classified plan
+// (exampleEpicPlan — the one authored grammar). Reused by the S8 slices; each drives to the plan-bundle gate.
+function seedEpicChainAgent(binDir: string, subTickets = 2): void {
+  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
+  const art = '.agent-terminal/loop/artifacts';
+  const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
+  const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  const epicPlan = `${exampleEpicPlan(subTickets)}\n${completionMarker('plan-bundle')}\n`;
+
+  const workArm: Record<string, string> = {
+    groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
+    'plan-bundle': `mkdir -p ${art}; ${decode(b64(epicPlan), `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
+  };
+  const arm = (step: string): string => {
+    const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}; ${done(`review-${step}`)}`;
+    const con = `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
+    return `    *turn-done:consolidate-${step}*) ${con} ;;\n    *turn-done:review-${step}*) ${rev} ;;\n    *turn-done:work-${step}*) ${workArm[step]} ;;`;
+  };
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `${['groom', 'plan-bundle'].map(arm).join('\n')}\n` +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
+function seedEpicChainRepo(prefix: string): string {
+  const { dir } = seedFlowRepoBase(prefix, {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+  });
+  return dir;
+}
+
+// Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
+// gate for the caller to inspect/act on.
+async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter groom
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // groom at gate
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click(); // approve groom → enter plan-bundle
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // plan-bundle at gate
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+}
+
+test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicA-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicA-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicA-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 3);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+
+  // The plan the agent wrote is classified an epic → the panel names every sub-ticket promotion will create.
+  await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
+  await expect(loopPanel().locator('[data-epic-subticket]')).toHaveCount(3);
+  await expect(loopPanel()).toContainText('Slice 1 of the feature');
+  await expect(loopPanel()).toContainText('Slice 3 of the feature');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 S8 — approving an epic plan raises a confirm-first preview; declining creates nothing', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicB-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicB-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicB-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+
+  // Approve the epic plan → the confirm-first preview is raised (nothing has reached GitHub yet).
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog).toContainText('Create sub-ticket: Slice 1 of the feature');
+  await expect(dialog).toContainText('Create sub-ticket: Slice 2 of the feature');
+  await expect(dialog).toContainText('Add tracking checklist to epic #176');
+  await expect(dialog).toContainText('Close epic planning PR #4242'); // the bootstrap-created planning PR (the gate ref)
+  // AC1 — before anything reaches GitHub: no sub-ticket has been created at preview time.
+  expect(readGhLog(logFile)).not.toContain('issue create');
+
+  // Decline → the promotion is dropped, nothing is created, and the gate is still actionable.
+  await dialog.locator('.pill.cancel').click();
+  await expect(dialog).toBeHidden({ timeout: 10_000 });
+  expect(readGhLog(logFile)).not.toContain('issue create');
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
+  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // not advanced/terminated on decline
+
+  // Approve again and CONFIRM this time → the promotion runs, the gate is accepted, and the epic flow stands down.
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await dialog.locator('.pill.danger.confirm').click();
+  await expect.poll(() => readGhLog(logFile), { timeout: 30_000 }).toContain('issue create'); // the chain is created now
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain + tracking issue (AC2)', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicC-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicC-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicC-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await dialog.locator('.pill.danger.confirm').click();
+
+  // AC2 — the chain exists on GitHub. Wait for the PR close, the STRICTLY-LAST op (creation → labels → epic
+  // append → close, all awaited in order), so every per-issue sink below is guaranteed flushed before it is read.
+  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('502');
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 30_000 }).toBe(true);
+
+  // Each sub-ticket carries its plan slice VERBATIM + the epic link + the REAL preceding number (plan preserved).
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Plan for slice 1: the thin vertical that delivers criterion 1 end to end.');
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Epic: #176');
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Preceding sub-ticket: none');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Plan for slice 2: the thin vertical that delivers criterion 2 end to end.');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Preceding sub-ticket: #501'); // the REAL preceding issue number
+
+  // Uniform labels — every sub-ticket subticket + ready, none assigned.
+  for (const n of [501, 502]) {
+    expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/subticket');
+    expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/ready');
+  }
+  expect(readIf(`${logFile}.issue-assignee`)).not.toContain('501'); // no sub-ticket assigned (uniform siblings)
+
+  // The epic became a tracking issue: its original body preserved as a prefix, the checklist appended.
+  const epicBody = readIf(`${logFile}.issue-body.176`);
+  expect(epicBody).toContain('Original epic intent — do not overwrite.');
+  expect(epicBody).toContain('- [ ] #501 — Slice 1 of the feature');
+  expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 S8 — a corrupt promotion record BLOCKS confirm, creating nothing (AC3 fail-safe)', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicD-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicD-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicD-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
+  // SOLE guard against duplicate public issues, so it must BLOCK creation, never fall through (SEC-1/AC3).
+  writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
+
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const confirmDialog = page.getByRole('alertdialog').filter({ hasText: 'Create' });
+  await expect(confirmDialog).toBeVisible({ timeout: 15_000 });
+  await confirmDialog.locator('.pill.danger.confirm').click();
+
+  // The promotion was blocked: nothing created, the error surfaced, the gate is NOT accepted (still actionable).
+  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle'); // not stood down — the promotion refused
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// ---- §28.7/§28.10 S8 — the epic overlay end-to-end: an epic plan fans out into a stacked sub-ticket chain ----
+test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (AC1) → confirm → the stacked chain + tracking issue exist and are recorded (AC2/AC3)', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicE2E-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicE2E-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicE2E-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 3);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+
+  // AC1 — the classification is surfaced at the gate: the panel names every sub-ticket the split will create.
+  await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
+  await expect(loopPanel().locator('[data-epic-subticket]')).toHaveCount(3);
+
+  // AC1 — approving raises the confirm-first preview naming every GitHub mutation, BEFORE anything reaches GitHub.
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog').filter({ hasText: 'Create 3 sub-tickets' });
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  for (const n of [1, 2, 3]) await expect(dialog).toContainText(`Create sub-ticket: Slice ${n} of the feature`);
+  await expect(dialog).toContainText('Add tracking checklist to epic #176');
+  await expect(dialog).toContainText('Close epic planning PR #4242');
+  expect(readGhLog(logFile)).not.toContain('issue create'); // nothing on GitHub yet
+
+  // Confirm → AC2: the chain exists on GitHub. Wait on the strictly-last op (PR close) so every sink is flushed.
+  await dialog.locator('.pill.danger.confirm').click();
+  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('503');
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 30_000 }).toBe(true);
+
+  // AC2 — each sub-ticket is self-contained (plan slice verbatim + epic link) and STACKED (the real preceding #).
+  for (const [n, issue] of [[1, 501], [2, 502], [3, 503]] as const) {
+    expect(readIf(`${logFile}.issue-body.${issue}`)).toContain(`Plan for slice ${n}: the thin vertical that delivers criterion ${n} end to end.`);
+    expect(readIf(`${logFile}.issue-body.${issue}`)).toContain('Epic: #176');
+    expect(readIf(`${logFile}.issue-label.${issue}`)).toContain('agent-loop/subticket');
+    expect(readIf(`${logFile}.issue-label.${issue}`)).toContain('agent-loop/ready');
+  }
+  expect(readIf(`${logFile}.issue-body.501`)).toContain('Preceding sub-ticket: none');
+  expect(readIf(`${logFile}.issue-body.502`)).toContain('Preceding sub-ticket: #501');
+  expect(readIf(`${logFile}.issue-body.503`)).toContain('Preceding sub-ticket: #502'); // stacked on the prior slice
+
+  // AC2 — the epic is a tracking issue: original body preserved, the checklist of the whole chain appended.
+  const epicBody = readIf(`${logFile}.issue-body.176`);
+  expect(epicBody).toContain('Original epic intent — do not overwrite.');
+  for (const [n, issue] of [[1, 501], [2, 502], [3, 503]] as const) expect(epicBody).toContain(`- [ ] #${issue} — Slice ${n} of the feature`);
+
+  // AC3 — the promotion is recorded resumably (the substrate that makes a re-run create nothing): the per-epic
+  // store names the epic, every created sub-ticket (with its title), and the completed append + PR-close flags.
+  const store = readIf(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'));
+  expect(store).toContain('epic: 176');
+  for (const issue of [501, 502, 503]) expect(store).toContain(`issue: ${issue}`);
+  expect(store).toContain('tracking_appended: true');
+  expect(store).toContain('pr_closed: true');
+
+  // The epic flow stood down (terminated), and the gate was accepted.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

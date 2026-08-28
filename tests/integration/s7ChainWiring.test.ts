@@ -28,7 +28,7 @@ interface LoopRow {
   name: string;
   kind: 'plan' | 'impl' | 'phase';
   completion: Completion | null;
-  gate: ('commit' | 'gh')[];
+  gate: ('commit' | 'gh' | 'promote')[];
   pickup: boolean;
   consolidateSource: string;
   input: { id: string; path: string };
@@ -48,7 +48,7 @@ const authored = (persona: string, lane: string): PersonaRow => ({ persona, char
 
 export const CHAIN: readonly LoopRow[] = [
   {
-    name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh'], pickup: true,
+    name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: true,
     consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
     personas: [
       ...PLAN_LANES.map(plan),

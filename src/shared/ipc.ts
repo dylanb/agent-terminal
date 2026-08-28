@@ -57,6 +57,8 @@ export const CH = {
   flowOnLoopError: 'flow:onLoopError',
   flowOnAppBootstrapConflict: 'flow:onAppBootstrapConflict',
   flowResolveAppBootstrapConflict: 'flow:resolveAppBootstrapConflict',
+  flowOnEpicPromotionPreview: 'flow:onEpicPromotionPreview',
+  flowResolveEpicPromotion: 'flow:resolveEpicPromotion',
   flowGithubRef: 'flow:githubRef',
   flowAppRouteOut: 'flow:appRouteOut',
   flowAppGateDecision: 'flow:appGateDecision',
@@ -361,6 +363,7 @@ export interface ChannelPayloads {
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
   'flow:onLoopError': FlowLoopErrorMsg;
   'flow:onAppBootstrapConflict': FlowAppBootstrapConflictMsg;
+  'flow:onEpicPromotionPreview': FlowEpicPromotionPreviewMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -505,6 +508,9 @@ export interface FlowLoopView {
    *  persona + the human gate. Absent when none changed (a clean GREEN records an empty flag, which does not
    *  show) or when the record is for another step. Additive and §27-only. */
   changedTests?: string[];
+  /** §28.7 — the epic decomposition (src/shared/epicPlan.ts) surfaced at the gate for an epic-capable loop; the
+   *  operator judges the split before approving (§27.10). Absent otherwise. Additive and §27-only. */
+  epic?: { subTickets: { index: number; title: string }[] };
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -660,6 +666,27 @@ export interface FlowResolveAppBootstrapConflictMsg
   repoKey: string;
   step: string;
   wipe: boolean;
+}
+
+/** §6/§28.7 — the confirm-first preview naming every GitHub mutation the operator authorizes by confirming:
+ *  the sub-tickets promotion will create, plus the epic tracking-issue edit and the epic PR close. `epic`/`pr`
+ *  are the resource identities the renderer names (never re-derived — §6). */
+export interface FlowEpicPromotionPreviewMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  epic: number;
+  pr: number | null;
+  subTickets: { index: number; title: string }[];
+}
+
+/** §6/§28.7 — the operator's answer to the confirm-first preview: `confirm` runs the promotion, otherwise it
+ *  is declined and the gate is left as it was. */
+export interface FlowResolveEpicPromotionMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  confirm: boolean;
 }
 
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
@@ -1044,6 +1071,12 @@ export interface FlowApi {
     wipe: boolean,
     target: AppBootstrapConflictTarget,
   ): void;
+  /** §6/§28.7 — subscribe to the epic-promotion confirm-first preview (main → renderer). Returns unsubscribe. */
+  onEpicPromotionPreview(
+    cb: (preview: { repoKey: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }) => void,
+  ): () => void;
+  /** §6/§28.7 — answer the confirm-first preview (renderer → main): confirm runs the promotion, else decline. */
+  resolveEpicPromotion(repoKey: string, step: string, confirm: boolean): void;
   /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
    *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;

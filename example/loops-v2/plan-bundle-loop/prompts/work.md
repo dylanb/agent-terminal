@@ -22,3 +22,33 @@ scriptable per turn.
 ## Slice plan
 
 The RED/GREEN impl-slices plus a final integration slice, each thin but complete and RED-first.
+
+## Epic classification (§28.7)
+
+Judge whether the ticket is an **epic** — work that decomposes into more than one self-contained,
+independently-shippable sub-ticket at ticket granularity. When it is, add a `Classification: epic` line and a
+`## Sub-tickets` block that partitions the acceptance criteria across the slices with no gaps or overlap
+(reviewed by `tracer-slicer`). Each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
+the preceding slice it depends on, and the approved plan for that slice **verbatim** (it becomes the created
+sub-ticket's body), in this shape:
+
+```text
+Classification: epic
+
+## Sub-tickets
+
+### Sub-ticket 1 — Slice 1 of the feature
+Acceptance criteria: acceptance criterion 1 is observably satisfied
+Depends on: none
+
+Plan for slice 1: the thin vertical that delivers criterion 1 end to end.
+
+### Sub-ticket 2 — Slice 2 of the feature
+Acceptance criteria: acceptance criterion 2 is observably satisfied
+Depends on: #1
+
+Plan for slice 2: the thin vertical that delivers criterion 2 end to end.
+```
+
+A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first, into the
+stacked sub-ticket chain and turns the epic into a tracking issue (§27.10 / §28.7).

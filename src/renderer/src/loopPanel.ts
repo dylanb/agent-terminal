@@ -109,7 +109,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null] : null,
   ]);
 }
 
@@ -482,6 +482,34 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         notice.setAttribute('role', 'status');
         notice.textContent = `Test file(s) changed — flagged for regression-guard: ${loop.changedTests.join(', ')}`;
         body.append(notice);
+      }
+
+      // §28.7/§27.10 — the epic split promotion will create, named for the operator before they approve. Each
+      // sub-ticket is its own node so it is never announced as a bare count (WCAG 1.3.1). The title is
+      // repo/agent-sourced, so it is stripped of display-unsafe bytes (CWE-117).
+      if (loop.epic && loop.epic.subTickets.length > 0) {
+        const section = doc.createElement('div');
+        section.className = 'epic-preview';
+        section.dataset.epicPreview = '';
+        section.setAttribute('role', 'status'); // WCAG 4.1.3 — announce the split's appearance, like the sibling gate notices
+        const segH = doc.createElement('div');
+        segH.className = 'seg-h';
+        segH.id = 'epic-preview-heading';
+        const count = loop.epic.subTickets.length;
+        segH.textContent = `Epic — ${count} sub-ticket${count === 1 ? '' : 's'}`;
+        section.append(segH);
+        const list = doc.createElement('ul');
+        list.className = 'epic-list';
+        list.setAttribute('aria-labelledby', segH.id); // WCAG 1.3.1 — the list carries its "Epic" purpose, not a bare "list, N items"
+        for (const st of loop.epic.subTickets) {
+          const li = doc.createElement('li');
+          li.className = 'epic-subticket';
+          li.dataset.epicSubticket = '';
+          li.textContent = `#${st.index} — ${stripDisplayControlChars(st.title)}`;
+          list.append(li);
+        }
+        section.append(list);
+        body.append(section);
       }
 
       // §27.9/N5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button per

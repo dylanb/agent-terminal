@@ -9,7 +9,8 @@
 
 import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
-import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import { readEpicSubTicketsAtGate } from './epicPromotion';
+import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2 } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState, isPolishActiveForStep, readChangedTests } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
@@ -22,6 +23,13 @@ export const APP_LOOP_STATUS_ERROR = 'error';
  *  `AppLoopRunState` status values (appLoopState.ts) — one vocabulary the writer and this reader share. */
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
+
+// §28.7 — the gate preview reads the SAME source the promotion executor does (readEpicSubTicketsAtGate), so what
+// the operator is shown and what promotion creates cannot drift.
+function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
+  const subs = readEpicSubTicketsAtGate(def);
+  return subs ? { subTickets: subs.map((t) => ({ index: t.index, title: t.title })) } : undefined;
+}
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
   // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
@@ -74,6 +82,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // pull, like the polish flag.
     const changedRec = readChangedTests(ctx.repoDir);
     const changedTests = changedRec && changedRec.step === run.step && changedRec.paths.length > 0 ? changedRec.paths : null;
+    const epic = atGate && r.ok ? epicPreviewAtGate(r.def) : undefined;
     return {
       status: run.status,
       pr: null,
@@ -96,6 +105,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
+      ...(epic ? { epic } : {}),
     };
   }
   if (!r.ok) {
