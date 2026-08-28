@@ -56,10 +56,9 @@ export function parsePhaseResult(text: string): ParsedPhaseResult {
   const outcomeScanEnd = headingIdx === -1 ? lines.length : headingIdx;
   let outcome: PhaseOutcome | null = null;
   let build: BuildOutcome | null = null;
-  // FIRST-match-wins per field (the pre-S4 `outcome` scan `break`s on the first labeled line, valid or not):
-  // `*Seen` records that the field's line was ENCOUNTERED, so an invalid first value stays terminal (→ null) and
-  // a later valid line never overrides it. A `null` value is not "unscanned" — conflating them would weaken the
-  // gate's malformed-result reject (§28.5.3). The two fields are scanned independently (either order).
+  // §28.5.3 — a `null` field value means an invalid/unknown first labeled line was seen, NOT "unscanned": the
+  // first labeled line per field is terminal, so a later valid line never overrides it (conflating the two would
+  // weaken the gate's malformed-result reject). Pinned by UT-RESULT-10.
   let outcomeSeen = false;
   let buildSeen = false;
   for (let i = 0; i < outcomeScanEnd; i++) {

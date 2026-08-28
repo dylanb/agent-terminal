@@ -2383,7 +2383,12 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(reviewChained()).toBe(false);
   });
 
-  it('IT-GREEN-capfail: an absent loop-capabilities surfaces a DISTINCT reason, not the generic missing-artifact text', async () => {
+  it('IT-GREEN-capfail: an absent loop-capabilities surfaces a DISTINCT reason naming the BASELINE COMMIT, not the RED gate\'s working-tree wording', async () => {
+    // The GREEN frozen check sources globs from the RED baseline COMMIT's blob, so `absent` means "not in that
+    // commit" — NOT the RED gate's working-tree "the repository has no loop-capabilities file". A repo whose
+    // loop-capabilities.yaml is uncommitted at the baseline passes RED but blocks GREEN; the operator must be
+    // told to commit it and re-run RED (Retry is futile — the baseline SHA is fixed), so the reason names the
+    // baseline, distinct from the RED wording.
     const engine = makeEngine(undefined, greenFake({ changedTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }));
     seedBaseline();
     enterGreen(engine);
@@ -2393,6 +2398,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     engine.onDoneSignal();
     await flushGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline')); // names the baseline commit, not "the repository"
     expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
   });
 

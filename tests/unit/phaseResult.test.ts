@@ -150,11 +150,10 @@ describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
     expect(parsePhaseResult(spoof).capturedOutput).toContain('built'); // stays in the raw body
   });
 
-  // UT-RESULT-10 (regression) — the two-field scan must keep BOTH fields FIRST-match-wins: an invalid first
-  // `outcome:`/`build:` line is terminal for that field (→ null), NEVER overridden by a later valid one. The
-  // pre-S4 `outcome` scan `break`s on the first match; widening it to also read `build` must not weaken that
-  // (a later valid line silently winning would turn a malformed result into an accepted one — the RED/GREEN
-  // gate reads `resultOutcome`, so this is gate integrity, not cosmetics).
+  // UT-RESULT-10 (regression) — both fields are FIRST-match-wins: an invalid first `outcome:`/`build:` line is
+  // terminal for that field (→ null), NEVER overridden by a later valid one. A later valid line silently winning
+  // would turn a malformed result into an accepted one — the RED/GREEN gate reads `resultOutcome`, so this is
+  // gate integrity, not cosmetics.
   it('keeps outcome and build first-match-wins — a later valid line never overrides an invalid earlier one', () => {
     const outcomeDup = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: bogus\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
     expect(parsePhaseResult(outcomeDup).outcome).toBeNull();

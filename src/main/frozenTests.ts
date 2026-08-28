@@ -63,10 +63,10 @@ function matchTestGlobsWithinBudget(paths: readonly string[], testGlobs: readonl
   return matched;
 }
 
-/** The test-glob paths among `paths` — budget-bounded matched (matchTestGlobsWithinBudget), with the app's own
- *  state dirs excluded (never a legitimate test path even under a broad glob, independent of `.gitignore` —
- *  CWE-200/754), deduped and sorted. The final filter shared by every frozen-tests query (commit↔commit,
- *  working-tree frozen, and added-lines); the differing diff plumbing that produces `paths` stays per-query. */
+/** The final filter shared by every frozen-tests query (commit↔commit, working-tree frozen, and added-lines) —
+ *  so the app's own state dirs are excluded on ALL of them (never a legitimate test path even under a broad
+ *  glob, independent of `.gitignore` — CWE-200/754); the differing diff plumbing that produces `paths` stays
+ *  per-query. */
 function matchedTestPaths(paths: readonly string[], testGlobs: readonly string[]): string[] {
   const matched = matchTestGlobsWithinBudget(paths, testGlobs).filter((path) => !isUnderAppStateDir(path));
   return [...new Set(matched)].sort();

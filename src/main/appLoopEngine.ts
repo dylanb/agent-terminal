@@ -387,9 +387,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // pass. This flag suppresses a duplicate signal WHILE a gate is pending; a genuine retry's real done-signal
   // (after the flag clears) still spawns a fresh gate. One slot suffices — only one work turn is active at a time.
   let asyncGatePendingFor: ActiveAppTurn | null = null;
-  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths, RESOLVED by greenAsyncGate and AWAITING their record
-  // (a distinct sense from `asyncGatePendingFor`, which tracks an in-flight gate). Computed on the done-signal
-  // and drained by onComplete (which records the flag then enters review). Identity-carrying (`turn`) so a stale
+  // §28.5.3/§28.8.3 — the GREEN turn's changed-test paths resolved by greenAsyncGate and awaiting their record
+  // (distinct from `asyncGatePendingFor`, which tracks an in-flight gate). Identity-carrying (`turn`) so a stale
   // gate that resolves after a retry rebuilt `active` cannot record its paths against the fresh turn.
   let changedTestsToRecord: { turn: ActiveAppTurn; paths: string[] } | null = null;
   let runner: TurnRunner;
@@ -555,10 +554,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
       }
       case 'green': {
-        // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
-        // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
-        // result). The async clauses (baseline present+step-matched, the exit-direction, and the NON-blocking
-        // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
+        // §28.5.3 — the SYNCHRONOUS GREEN clause. The ASYNC clauses (baseline present+step-matched, the
+        // exit-direction, and the NON-blocking frozen detection) live in greenAsyncGate, ANDed on both
+        // completion routes like the RED gate.
         const content = deps.readArtifact(active.completion.resultPath);
         if (content === null) return false;
         return (
@@ -569,10 +567,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.3 / §28 Option C — the RED turn's ASYNC machine ground truth (git + best-effort exit code), computed
-   *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
-   *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
-   *  rejects — an unexpected throw is a fail-toward-firing gate. */
   // §28.5.4/CWE-117 — map the closed capabilities-load `cause` enum to a STATIC operator reason, NEVER embedding
   // the load failure's `.reason` (whose malformed arm can carry untrusted repo yaml text). One definition shared
   // by both async gates, so the CWE-117 invariant cannot drift when one gate is edited and the other is not.
@@ -583,6 +577,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ? 'the repository loop-capabilities file is malformed'
         : 'the repository has no loop-capabilities file';
 
+  // §28.5.3/CWE-117 — the GREEN gate's cause is from the baseline COMMIT's blob, so its wording names the
+  // baseline commit, distinct from capabilitiesCauseReason's working-tree "repository" text (the full why +
+  // recovery is the IT-GREEN-capfail test's). Static strings only, never the untrusted `.reason`.
+  const baselineCapabilitiesCauseReason = (cause: 'absent' | 'malformed'): string =>
+    cause === 'malformed'
+      ? 'the RED baseline commit has a malformed loop-capabilities file'
+      : 'the RED baseline commit has no loop-capabilities file — commit it and re-run RED';
+
+  /** §28.5.3 / §28 Option C — the RED turn's ASYNC machine ground truth (git + best-effort exit code), computed
+   *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
+   *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
+   *  rejects — an unexpected throw is a fail-toward-firing gate. */
   const redAsyncGate = async (a: ActiveAppTurn): Promise<PrecomputedGate> => {
     try {
       const added = await deps.completionPredicates.workingTreeTestPaths({ repoDir: a.repoDir });
@@ -628,7 +634,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
       if (!changed.ok) {
         return {
-          gate: { ok: false, reason: `GREEN cannot run the frozen check — ${capabilitiesCauseReason(changed.cause)}` },
+          gate: { ok: false, reason: `GREEN cannot run the frozen check — ${baselineCapabilitiesCauseReason(changed.cause)}` },
           changedTests: null,
         };
       }
