@@ -2680,9 +2680,9 @@ function seedFakeAgentV2(
     stepId: string;
     artifactRel: string;
     work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor';
-    // §28.5.5 RED work mode (work: 'red'): the classified outcome the fake writes into the phase-result file
-    // (the completion:red gate reads it back), and whether it authors a test-glob file this turn (the
-    // "a test was added" async clause). Ignored unless work === 'red'.
+    // §28.5.5 — the classified outcome the fake writes into the phase-result file, read back by every
+    // result-producing work mode's completion gate (red/green/refactor). `writeTest` is RED-only: whether the
+    // turn authors a test-glob file this turn (the "a test was added" async clause).
     resultOutcome?: PhaseOutcome;
     writeTest?: boolean;
     // §28.5.3 GREEN work mode (work: 'green'): the build classification written alongside `resultOutcome`

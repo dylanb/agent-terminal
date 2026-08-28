@@ -2574,10 +2574,11 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
 });
 
 // §28.5.3/§28.8.3/S5 — the REFACTOR round completion GATE + the NON-blocking frozen probe. A refactor round is
-// done ⟺ {round report well-formed} ∧ {result shape-valid ∧ outcome == passed} — the SYNC softer clause, no
-// build, no exit-direction, no PrecomputedGate. The frozen check is a best-effort SIDE probe that records the
-// non-blocking changed-test flag; a probe that cannot run (no baseline / capfail) records NO flag and is
-// AUDITED, and the round STILL completes on the sync clause (the opposite of GREEN, which blocks).
+// done ⟺ {round report well-formed} ∧ {result shape-valid ∧ outcome == passed} ∧ {exit == 0 where recoverable}
+// (§28.5.3:124, the GREEN exit-direction via a PrecomputedGate) — softer than GREEN only in carrying no build.
+// The frozen check is a best-effort SIDE probe that records the non-blocking changed-test flag; a probe that
+// cannot run (no baseline / capfail) records NO flag, is AUDITED, and does NOT block the round (the opposite of
+// GREEN, whose frozen check's baseline guard blocks).
 describe('§28.5.3 — the refactor round completion gate + non-blocking frozen probe', () => {
   const OID = 'a'.repeat(40);
   const seedBaseline = (step = STEP, sha = OID): void => recordBaselineCommit(repo, step, sha);
@@ -2674,6 +2675,61 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(completed(engine)).toBe(false);
   });
 
+  it('IT-REFAC-exit: exit-direction — a non-zero test exit blocks the refactor round (§28.5.3:124, same direction as GREEN); exit 0 completes', async () => {
+    // §28.5.3:124 — a refactor round carries the same recoverable exit-code direction as GREEN: a fixer that
+    // claims `passed` while the real test exit is non-zero may not complete the round. DORMANT until #92 wires
+    // recoverExitCode; injecting an exit code exercises the direction.
+    const rejects = makeEngine(undefined, refFake({ recoverExitCode: async () => 1 }));
+    seedBaseline();
+    driveToRefactorReview(rejects);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    rejects.onDoneSignal();
+    await flushGate();
+    rejects.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('exited 1'));
+    expect(completed(rejects)).toBe(false);
+
+    // exit 0 -> the round completes
+    const allows = makeEngine(undefined, refFake({ recoverExitCode: async () => 0 }));
+    seedBaseline();
+    driveToRefactorReview(allows);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    allows.onDoneSignal();
+    await flushGate();
+    expect(completed(allows)).toBe(true);
+  });
+
+  it('IT-REFAC-exit-accept: human-ACCEPT REFUSES a non-zero test exit (machine ground truth, not overridable — same as GREEN accept)', async () => {
+    const engine = makeEngine(undefined, refFake({ recoverExitCode: async () => 1 }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []); // well-formed report + passing result
+    writeRefactorResult(passed());
+    engine.onStall();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — the exit gate is machine-authoritative on accept too
+  });
+
+  it('IT-REFAC-exit-throws: a THROWING recoverExitCode fails toward firing — the round BLOCKS, never falsely completes', async () => {
+    // §28.5.3 — refactorAsyncGate must never let broken exit-recovery pass the round: a throw yields a BLOCKING
+    // gate ('completion check failed'), the fail-toward-firing direction (the RED/GREEN async-gate twin).
+    const engine = makeEngine(undefined, refFake({ recoverExitCode: async () => { throw new Error('boom'); } }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('completion check failed'));
+    expect(completed(engine)).toBe(false);
+  });
+
   it('IT-REFAC-nobaseline: an absent baseline does NOT block the round (non-blocking probe) — completes, no flag, audited', async () => {
     const engine = makeEngine(undefined, refFake());
     // no seedBaseline() — the probe cannot run, but the round still completes on the sync clause (softer than GREEN)
@@ -2686,6 +2742,8 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(completed(engine)).toBe(true);
     expect(readChangedTests(repo)).toBeNull(); // no flag — the probe could not run
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1); // audited, never silent
+    // The baseline is truly ABSENT here, so the audit must not claim it was "recorded under a different step".
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('recorded under a different step'), 1);
   });
 
   it('IT-REFAC-capfail: a capabilities-load failure does NOT block the round — completes, no flag, audited', async () => {
@@ -2699,7 +2757,27 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(emitError).not.toHaveBeenCalled(); // NOT blocked (the opposite of IT-GREEN-capfail)
     expect(completed(engine)).toBe(true);
     expect(readChangedTests(repo)).toBeNull();
+    // The probe's cause is baseline-COMMIT-sourced (the same shared core the GREEN gate reads), so the audit
+    // names the baseline commit — the GREEN twin's baseline wording, NOT the RED gate's working-tree "repository".
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe'), 1);
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('the RED baseline commit'), 1);
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('the repository has no loop-capabilities'), 1);
+  });
+
+  it('IT-REFAC-probe-throws: a THROWING frozen probe still completes the round — no block, no hang, audited', async () => {
+    // The probe is fired `void refactorFrozenProbe(a).then(...)` with no outer .catch, so a reject would leave
+    // asyncGatePendingFor pinned and the round would hang; its internal try/catch must audit and yield null instead.
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => { throw new Error('git exploded'); } }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []);
+    writeRefactorResult(passed());
+    engine.onDoneSignal();
+    await flushGate();
+    expect(completed(engine)).toBe(true); // the round still completes on the sync clause
+    expect(emitError).not.toHaveBeenCalled();
+    expect(readChangedTests(repo)).toBeNull(); // the probe threw — no flag
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe error'), 1);
   });
 
   it('IT-REFAC-recordfail: a throwing recordChangedTests NEVER aborts the advance (best-effort wrap)', async () => {
@@ -2778,6 +2856,22 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     await flushGate();
     expect(readAppLoopState(repo)?.status).toBe('complete'); // finalized (report well-formedness relaxed)
     expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // flag recorded on the accept route too
+  });
+
+  it('IT-REFAC-2b-throws: human-ACCEPT still finalizes when the frozen probe throws (acceptFinalize is inside the probe .then)', async () => {
+    // On this route acceptFinalize runs INSIDE `refactorFrozenProbe(a).then(...)`, so a reject would silently
+    // never finalize the human's Accept; the probe's internal try/catch must yield null so acceptFinalize still runs.
+    const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => { throw new Error('git exploded'); } }));
+    seedBaseline();
+    driveToRefactorReview(engine);
+    writeRoundReport(1, []); // well-formed report + passing result
+    writeRefactorResult(passed());
+    engine.onStall();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete'); // finalized despite the probe throw
+    expect(readChangedTests(repo)).toBeNull(); // the probe threw — no flag
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe error'), 1);
   });
 
   it('IT-REFAC-2b-b: human-ACCEPT REFUSES a non-passing result (passed is machine ground truth, not overridable)', async () => {
