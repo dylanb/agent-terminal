@@ -28,6 +28,38 @@ describe('changedTestPathsFromCapabilities (§28.5.1 + §28.5.4 composed)', () =
     });
   });
 
+  it('with head omitted, sources globs and returns the working-tree changed tests (§28.5.3 GREEN frozen check)', async () => {
+    const dir = repos.makeGitRepo('frozen-caps-wt');
+    repos.writeRepoFile(dir, LOOP_CAPABILITIES_FILENAME, 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline)');
+    repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a2\n'); // uncommitted working-tree edit
+    repos.writeRepoFile(dir, 'tests/new.test.ts', 'n\n'); // untracked add
+
+    await expect(changedTestPathsFromCapabilities({ repoDir: dir, baseline })).resolves.toEqual({
+      ok: true,
+      paths: ['tests/foo.test.ts', 'tests/new.test.ts'],
+    });
+  });
+
+  it('with head omitted, sources globs from the BASELINE blob so a narrowed working-tree config cannot hide a test edit (§28.5.3 tamper-evidence)', async () => {
+    // The GREEN agent controls the working tree, so if test_globs were read from THERE it could narrow tests/**
+    // to src/** and make an edited tests/a.test.ts vanish from the frozen-check flag. The globs come from the RED
+    // baseline's COMMITTED config instead — the head-omitted twin of the commit↔commit "narrowing the
+    // working-tree config cannot hide a test edit" pin.
+    const dir = repos.makeGitRepo('frozen-caps-wt-narrow');
+    repos.writeRepoFile(dir, LOOP_CAPABILITIES_FILENAME, 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline, globs = tests/**)');
+    repos.writeRepoFile(dir, LOOP_CAPABILITIES_FILENAME, 'test_globs: [src/**]\ntest_command: t\nbuild_command: b\n'); // narrowed, uncommitted
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n'); // uncommitted edit to a frozen test
+
+    await expect(changedTestPathsFromCapabilities({ repoDir: dir, baseline })).resolves.toEqual({
+      ok: true,
+      paths: ['tests/a.test.ts'], // still detected via the baseline's tests/**, not the narrowed working-tree src/**
+    });
+  });
+
   it('surfaces cause "absent" when the repo has no capabilities file', async () => {
     const dir = repos.makeGitRepo('frozen-caps-absent');
     repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a\n');

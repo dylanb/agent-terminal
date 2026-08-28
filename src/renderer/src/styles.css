@@ -553,6 +553,8 @@ button:hover { border-color:var(--dim); }
    --text foreground on that wash clears 4.5:1 (WCAG 1.4.3). Lives in .lbody, so it carries its own paint (the
    modal .ph rule above never reaches it). */
 .loop-panel .polish-notice { margin:14px 0 4px; padding:9px 11px; font-size:12px; line-height:1.45; color:var(--text); background:var(--signal-wash); border-left:2px solid var(--signal); border-radius:6px; }
+/* §28.5.3/§28.8.3 — the changed-tests flag: a CAUTION callout (amber --reveal), distinct from polish's neutral --signal, so a mouse-only sighted user perceives the flagged state visually (WCAG 1.4.1). */
+.loop-panel .changed-tests-notice { margin:14px 0 4px; padding:9px 11px; font-size:12px; line-height:1.45; color:var(--text); background:var(--reveal-wash); border-left:2px solid var(--reveal); border-radius:6px; }
 .flow-modal .field { margin-bottom:14px; }
 .flow-modal .field .flab { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
 .flow-modal .field .flab .nm { font-size:12px; font-weight:600; }

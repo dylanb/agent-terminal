@@ -8,7 +8,8 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../shared/phaseResult';
-import { PHASE_OUTCOMES, RED_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { PHASE_OUTCOMES, RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { BUILD_OUTCOMES, GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -50,11 +51,13 @@ export interface AppWorkPromptReq {
   /** The repo-relative §27 done-file path the agent writes last (`.agent-terminal/loop/turn-done`). */
   doneRelPath: string;
   /** The completion contract, discriminated by how the turn proves it produced its product (never a flat record
-   *  with mode-dead fields, CODE-STANDARDS): `file` — end an artifact with a marker line (§27.12); `red` — write
-   *  the §28.5.5 phase-result file the RED gate classifies; `null` — a commit-producing turn (done-signal alone). */
+   *  with mode-dead fields, CODE-STANDARDS): `file` — end an artifact with a marker line (§27.12); `red`/`green`
+   *  — write the §28.5.5 phase-result file the RED/GREEN gate classifies; `null` — a commit-producing turn
+   *  (done-signal alone). `red` and `green` share the result-file shape, differing only in the bar the prose sets. */
   completion:
     | { kind: 'file'; artifactRel: string; marker: string }
     | { kind: 'red'; resultRel: string }
+    | { kind: 'green'; resultRel: string }
     | null;
   /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
@@ -120,11 +123,33 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
       'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
     );
+  } else if (req.completion?.kind === 'green') {
+    // §28.5.3 §7d — the GREEN phase-result instruction. Same WRITER contract as the RED branch: every grammar
+    // token and BOTH vocabularies (test + build) are interpolated from the shared descriptors, and the few-shot
+    // is the ONE canonical example (fence-free by contract). GREEN carries a second classification, `build:`.
+    const g = PHASE_RESULT_GRAMMAR;
+    parts.push(
+      '',
+      'Run the test command for this change and classify that run as EXACTLY one of these outcomes:',
+      `  ${PHASE_OUTCOMES.join(', ')}`,
+      'Then run the build command and classify it as EXACTLY one of these:',
+      `  ${BUILD_OUTCOMES.join(', ')}`,
+      `Write the result to ${req.completion.resultRel} in this exact shape — the \`${g.outcomeLabel}:\` and`,
+      `\`${g.buildLabel}:\` lines first, then the raw run verbatim under a \`${g.capturedOutputHeading}\` heading:`,
+      '',
+      '```',
+      examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME }).trimEnd(),
+      '```',
+      '',
+      `This turn is a valid GREEN only when the tests pass (\`${g.outcomeLabel}: ${GREEN_COMPLETING_OUTCOME}\`) AND the build succeeds (\`${g.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}\`).`,
+      'A failing or errored test, a broken build (`build-failed`), or any non-passing outcome does NOT complete it —',
+      'fix the implementation so the tests pass and the build succeeds, then re-run and re-classify.',
+    );
   }
   const verifyRel =
     req.completion?.kind === 'file'
       ? req.completion.artifactRel
-      : req.completion?.kind === 'red'
+      : req.completion?.kind === 'red' || req.completion?.kind === 'green'
         ? req.completion.resultRel
         : undefined;
   parts.push('', doneSignalInstruction(req.turnKey, verifyRel, req.doneRelPath));

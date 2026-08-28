@@ -99,6 +99,22 @@ describe('changedTestPaths (§28.5.1)', () => {
     ]);
   });
 
+  // A REAL git-detected rename (git mv to a NOT-pre-existing destination) — the case the fixture above cannot
+  // exercise (it modifies a pre-seeded src/a.ts, which git classifies as Modify, not a rename). With git's
+  // default rename detection ON, `--name-only base..HEAD` would show only the destination and the moved-out
+  // frozen test would VANISH; `--no-renames` is what decomposes it back to a delete so the frozen check still
+  // sees it. This test fails if `--no-renames` is ever dropped (a silent hole this slice's review found).
+  it('flags a frozen test moved out via a REAL detected rename (pins --no-renames)', async () => {
+    const dir = repos.makeGitRepo('frozen-tests');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'unique frozen body\nl2\nl3\n');
+    const baseline = repos.commitAll(dir, 'seed with test (no dest yet)');
+    repos.git(dir, ['mv', 'tests/a.test.ts', 'moved.ts']); // git-detected rename (identical content)
+    const head = repos.commitAll(dir, 'move test out (rename)');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
   it('accepts a symbolic head ref (HEAD)', async () => {
     const { dir, baseline } = seeded();
     repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
@@ -348,5 +364,146 @@ describe('changedTestPaths (§28.5.1)', () => {
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toContain(
       'tests/sub',
     );
+  });
+
+  // The app's own state dirs are never a test path even under a matching glob, on the commit↔commit branch too
+  // (the shared matchedTestPaths applies the exclusion to BOTH modes — pinned here so the commit-mode behavior is
+  // not left to the working-tree block alone; CWE-200).
+  it('never counts the app state dirs as a changed test even under a matching glob (commit↔commit)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n');
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n');
+    const head = repos.commitAll(dir, 'app state + a real test');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: ['**'] })).resolves.toEqual([
+      'tests/real.test.ts',
+    ]);
+  });
+});
+
+// §28.5.3 (S4) — the GREEN frozen check: `changedTestPaths` with `head` OMITTED compares the baseline commit to
+// the WORKING TREE (git's own "one revision diffs against the working tree" convention), because at GREEN
+// completion the phase commit has not landed yet (HEAD is still the RED baseline) and the GREEN edits live in
+// the working tree. "Changed" is name-only (any change, incl. a deletion — the deliberate asymmetry with the RED
+// added-lines `workingTreeTestPaths`), UNION untracked files so a brand-new test authored this turn is caught.
+describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)', () => {
+  let repos: GitRepoFixture;
+  const TEST_GLOBS = ['tests/**'];
+
+  beforeEach(() => {
+    repos = createGitRepoFixture();
+  });
+  afterEach(() => repos.cleanup());
+
+  /** A repo whose baseline commit CONTAINS a test file (the completed-RED state) + a source file. */
+  function seeded(): { dir: string; baseline: string } {
+    const dir = repos.makeGitRepo('frozen-wt');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n');
+    repos.writeRepoFile(dir, 'src/a.ts', 's\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline)');
+    return { dir, baseline };
+  }
+
+  it('reports a tracked test edited in the working tree since baseline (uncommitted)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n'); // edited, NOT committed
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('reports a tracked test whose working-tree edit only REMOVED lines (name-only counts any change)', async () => {
+    const dir = repos.makeGitRepo('frozen-wt');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\nc\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\n'); // removed 2 lines, added 0 — a real change to a frozen test
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('reports a frozen test DELETED in the working tree (the asymmetry with the RED added-lines check)', async () => {
+    const { dir, baseline } = seeded();
+    repos.removeRepoFile(dir, 'tests/a.test.ts'); // deleted, uncommitted — a real change to the frozen set
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('reports a brand-new UNTRACKED test file (the ls-files -o union — a two-dot diff alone would miss it)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/new.test.ts', 't\n'); // untracked, uncommitted
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/new.test.ts',
+    ]);
+  });
+
+  it('returns [] when only a non-test file changed in the working tree', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'src/a.ts', 's2\n'); // tracked non-test edit
+    repos.writeRepoFile(dir, 'src/new.ts', 'n\n'); // untracked non-test
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('returns [] when the working tree matches the baseline (clean GREEN)', async () => {
+    const { dir, baseline } = seeded();
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('flags a frozen test moved out via a REAL detected rename in the working tree (pins --no-renames)', async () => {
+    const dir = repos.makeGitRepo('frozen-wt');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'unique frozen body\nl2\nl3\n');
+    const baseline = repos.commitAll(dir, 'seed (RED baseline)');
+    repos.git(dir, ['mv', 'tests/a.test.ts', 'moved.ts']); // staged rename, uncommitted — the working tree
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('keys off the RECORDED baseline, so a test committed during the turn (HEAD moved off baseline) still shows', async () => {
+    const { dir, baseline } = seeded();
+    // the agent committed a test change during GREEN, moving HEAD off the baseline:
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    repos.commitAll(dir, 'agent commit during green');
+    // diffing against the recorded baseline (not HEAD) still reports the change:
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('unions and sorts both arms (tracked-changed ∪ untracked), deduped', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n'); // tracked change (diff arm)
+    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\n'); // untracked add (ls-files arm)
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/a.test.ts',
+      'tests/z.test.ts',
+    ]);
+  });
+
+  it('never counts the app state dirs as a changed test even under a matching glob', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n'); // the loop's own state
+    repos.writeRepoFile(dir, '.agent-loop/pr-context.md', 'x\n');
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n'); // a genuine changed test
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: ['**'] })).resolves.toEqual([
+      'tests/real.test.ts',
+    ]);
+  });
+
+  it('detects an untracked test with a non-ASCII name (the -z contract on the ls-files arm)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\n');
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/café-ünïcode.test.ts',
+    ]);
+  });
+
+  it('rejects an empty testGlobs and a non-object-id baseline in working-tree mode too (fail toward firing)', async () => {
+    const { dir, baseline } = seeded();
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: [] })).rejects.toThrow();
+    await expect(
+      changedTestPaths({ repoDir: dir, baseline: '--upload-pack=evil', testGlobs: TEST_GLOBS }),
+    ).rejects.toThrow();
   });
 });

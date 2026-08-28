@@ -45,9 +45,10 @@ const addCompletion = (value: string) => (y: string): string =>
 
 describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
   it('UT-DEF-4: WORK_COMPLETIONS is the single-sourced closed set the type and guard both derive from', () => {
-    expect(WORK_COMPLETIONS).toEqual(['red']);
+    expect(WORK_COMPLETIONS).toEqual(['red', 'green']);
     expect(isWorkCompletion('red')).toBe(true);
-    expect(isWorkCompletion('green')).toBe(false); // extends the set in S4/S5, not here
+    expect(isWorkCompletion('green')).toBe(true); // S4 adds the GREEN completion mode
+    expect(isWorkCompletion('refactor')).toBe(false); // extends the set in S5, not here
     expect(isWorkCompletion('RED')).toBe(false); // never normalized
     expect(isWorkCompletion('')).toBe(false);
   });
@@ -56,6 +57,12 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     const r = resolvePatched(addCompletion('red'));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.work.completion).toBe('red');
+  });
+
+  it('UT-DEF-1g: parses work.completion: green onto the def', () => {
+    const r = resolvePatched(addCompletion('green'));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.work.completion).toBe('green');
   });
 
   it('UT-DEF-2: leaves completion undefined when the field is absent (S1/S2 defs still valid)', () => {
@@ -84,9 +91,18 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
   });
 
-  it('UT-DEF-5b: an unresolvable artifact WITHOUT completion: red is still accepted (the check is red-specific)', () => {
-    // a `commits`-style artifact legitimately names no binding — only completion: red requires one.
+  it('UT-DEF-5b: an unresolvable artifact with NO completion mode is still accepted (the guard is completion-specific)', () => {
+    // a `commits`-style artifact legitimately names no binding — the binding requirement fires for a DECLARED
+    // completion mode (red or green, UT-DEF-5/5g), never for a completion-less def.
     const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n'));
     expect(r.ok).toBe(true);
+  });
+
+  // §28.5.5 F1 — the result-file binding guard is completion-generic: GREEN also validates a result FILE, so
+  // completion: green requires work.artifact to name a real output binding (same fail-closed as red).
+  it('UT-DEF-5g: rejects completion: green when work.artifact names no output binding', () => {
+    const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: green\n'));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/output binding|artifact/i);
   });
 });

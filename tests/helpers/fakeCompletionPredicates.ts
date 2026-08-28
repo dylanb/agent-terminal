@@ -7,7 +7,7 @@ import {
   createLoopCompletionPredicates,
   type LoopCompletionPredicates,
 } from '../../src/main/loopCompletionPredicates';
-import type { WorkingTreeTestPathsResult } from '../../src/main/frozenTests';
+import type { ChangedTestPathsResult, WorkingTreeTestPathsResult } from '../../src/main/frozenTests';
 
 export function makeFakeCompletionPredicates(
   overrides: Partial<LoopCompletionPredicates> = {},
@@ -32,4 +32,18 @@ export function deferredWorkingTree(): {
     resolve = res;
   });
   return { workingTreeTestPaths: () => pending, resolve };
+}
+
+/** A `changedTestPaths` that stays pending until `resolve` is called — the GREEN-gate twin of
+ *  `deferredWorkingTree`, so an engine-level concurrency test can fire a concurrent event (a stall, a retry, a
+ *  duplicate signal) while the engine awaits the GREEN frozen check. */
+export function deferredChangedTestPaths(): {
+  changedTestPaths: LoopCompletionPredicates['changedTestPaths'];
+  resolve: (r: ChangedTestPathsResult) => void;
+} {
+  let resolve!: (r: ChangedTestPathsResult) => void;
+  const pending = new Promise<ChangedTestPathsResult>((res) => {
+    resolve = res;
+  });
+  return { changedTestPaths: () => pending, resolve };
 }

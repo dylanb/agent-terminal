@@ -9,7 +9,8 @@ import {
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult, phaseResultWellFormed } from '../../src/shared/phaseResult';
-import { PHASE_OUTCOMES } from '../../src/shared/phaseOutcome';
+import { PHASE_OUTCOMES, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
+import { BUILD_OUTCOMES, GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop
@@ -320,5 +321,61 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
     // appear regardless), so a mis-dispatch of a red turn into the file branch fails this.
     expect(redPrompt().toLowerCase()).not.toContain('marker line');
     expect(redPrompt()).not.toContain('work-turn-complete');
+  });
+});
+
+// §28.5.3/§28.5.5 — the GREEN work turn: the agent runs the tests AND the build, classifies each into its
+// framework-neutral vocabulary, and writes both into the SAME phase-result file the GREEN gate reads. Like the
+// RED prompt it is the WRITER half of the shared-semantics contract: every grammar token + both vocabularies are
+// interpolated from the shared descriptors, and the embedded few-shot is the canonical example asserted
+// well-formed against the gate predicate — so the instruction and the gate cannot drift.
+describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion mode)', () => {
+  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
+  const greenPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
+    composeAppWorkPrompt({
+      recipeBody: '# work turn\nImplement the adder so the failing test passes.',
+      turnKey: 'work-green-slice1',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { kind: 'green', resultRel: RESULT_REL },
+      ...over,
+    });
+
+  it('names the phase-result file the agent must write and the §27 done-file that verifies it', () => {
+    const prompt = greenPrompt();
+    expect(prompt).toContain('Implement the adder so the failing test passes.'); // the recipe body still leads
+    expect(prompt).toContain(RESULT_REL); // the file to write
+    expect(prompt).toContain('turn-done:work-green-slice1'); // the turn id the fake-agent matches
+    expect(prompt.toLowerCase()).toContain('re-read'); // verifies the RESULT FILE on disk first
+  });
+
+  it('interpolates the grammar tokens and BOTH the test and build vocabularies from the shared descriptors', () => {
+    const prompt = greenPrompt();
+    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel); // `outcome`
+    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.buildLabel); // `build`
+    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // `## captured output`
+    for (const outcome of PHASE_OUTCOMES) expect(prompt).toContain(outcome); // the test-outcome vocabulary
+    for (const build of BUILD_OUTCOMES) expect(prompt).toContain(build); // the build-outcome vocabulary
+  });
+
+  it('embeds the ONE canonical GREEN example, well-formed against the gate predicate (single-source)', () => {
+    const example = examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME });
+    expect(phaseResultWellFormed(example)).toBe(true);
+    expect(greenPrompt()).toContain(example);
+    // the few-shot carries BOTH the `passed` outcome and the `built` build (not a RED example):
+    expect(greenPrompt()).toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}`);
+  });
+
+  it('states the GREEN completion bar (tests pass AND build built), distinct from a failing test / broken build', () => {
+    const prompt = greenPrompt().toLowerCase();
+    expect(prompt).toContain('valid green only when'); // the bar prose (deleting it fails this)
+    expect(prompt).toContain(GREEN_COMPLETING_OUTCOME); // `passed`
+    expect(prompt).toContain(GREEN_COMPLETING_BUILD_OUTCOME); // `built`
+  });
+
+  it('is a distinct shape from a RED turn and a file-with-marker turn', () => {
+    // GREEN wants `passed`+`built`, never the RED `failed-assertion` bar, and never a marker-line artifact:
+    expect(greenPrompt().toLowerCase()).not.toContain('valid red only when');
+    expect(greenPrompt().toLowerCase()).not.toContain('marker line');
+    expect(greenPrompt()).not.toContain('work-turn-complete');
   });
 });

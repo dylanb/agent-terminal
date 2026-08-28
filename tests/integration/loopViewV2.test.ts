@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deriveAppLoopView } from '../../src/main/loopViewV2';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
-import { writeAppLoopState, enterPolish } from '../../src/main/appLoopState';
+import { writeAppLoopState, enterPolish, recordChangedTests } from '../../src/main/appLoopState';
 
 // The §27 loop-view provider (the READ meeting point, engine-selected on the flow step's `app` namespace):
 // it resolves the bound app-def and produces the whole loop view the strip/panel render — a run-less view
@@ -347,5 +347,47 @@ describe('deriveAppLoopView — live-error fallback when the persisted state can
     );
     expect(view.status).toBe('not-started');
     expect(view.appTurn).toBeUndefined();
+  });
+});
+
+// §28.5.3/§28.8.3 — the changed-tests flag surfaces on the loop view when the machine detected a test-glob file
+// changed during a GREEN turn (recorded under the run's step). Non-blocking detect-and-escalate: it rides the
+// view for the review round + human gate to see. A step-mismatched or empty (clean-green) record does not show.
+describe('deriveAppLoopView — the changed-tests flag (§28.5.3)', () => {
+  const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
+  const seedRun = (step = 'plan'): void => {
+    plant('plan-loop', ['approve'], ['review-plan-principal']);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step, turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+  };
+
+  it('surfaces the changed-test flag naming the files recorded under the run step', () => {
+    seedRun('plan');
+    recordChangedTests(repoDir, 'plan', ['tests/a.test.ts', 'tests/b.test.ts']);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.changedTests).toEqual(['tests/a.test.ts', 'tests/b.test.ts']);
+  });
+
+  it('does NOT surface a flag recorded under a DIFFERENT step (step-match, §12)', () => {
+    seedRun('plan');
+    recordChangedTests(repoDir, 'some-other-step', ['tests/a.test.ts']);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.changedTests).toBeUndefined();
+  });
+
+  it('does NOT surface an empty-paths flag (a clean GREEN records [], which is not a flag to show)', () => {
+    seedRun('plan');
+    recordChangedTests(repoDir, 'plan', []);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.changedTests).toBeUndefined();
+  });
+
+  it('does NOT surface a flag when none was recorded', () => {
+    seedRun('plan');
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.changedTests).toBeUndefined();
   });
 });

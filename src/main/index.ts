@@ -103,7 +103,7 @@ import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, recordBaselineCommit, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, recordBaselineCommit, recordChangedTests, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -327,6 +327,10 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: true }),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
+    // §28.5.3/§28.8.3 — the GREEN engine ports: record the changed-test flag (the disjoint changed-tests.yaml
+    // writer, best-effort-wrapped in the engine) and read the RED baseline the frozen check keys off.
+    recordChangedTests,
+    readBaseline: readBaselineCommit,
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
     // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the

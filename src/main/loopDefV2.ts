@@ -71,8 +71,8 @@ export interface GateOptionDef {
 
 /** The framework-neutral completion mode a work turn declares (§28.4/§28.5.5) — which machine completion
  *  predicate gates it. A closed set recognized by exact string, single-sourced so the field type AND the
- *  parser's validation both derive from it (mirroring PHASE_OUTCOMES); it grows to green/refactor in S4/S5. */
-export const WORK_COMPLETIONS = ['red'] as const;
+ *  parser's validation both derive from it (mirroring PHASE_OUTCOMES). */
+export const WORK_COMPLETIONS = ['red', 'green'] as const;
 export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
 const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
 export function isWorkCompletion(value: string): value is WorkCompletion {

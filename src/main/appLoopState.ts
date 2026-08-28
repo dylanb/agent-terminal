@@ -500,3 +500,77 @@ export function readBaselineCommit(repoDir: string): { step: string; sha: string
   if (typeof doc.sha !== 'string' || !isGitObjectId(doc.sha)) return null;
   return { step: doc.step, sha: doc.sha };
 }
+
+// §28.5.3/§28.8.3 — the changed-tests flag: the test-glob files the machine detected changed since the RED
+// baseline, recorded at GREEN completion as a NON-blocking flag the regression-guard persona + human gate read.
+// Its own file, disjoint from run-state.yaml (the §28.4 wholesale-rewrite hazard, same as the baseline store).
+const CHANGED_TESTS_FILE = 'changed-tests.yaml';
+
+/** Bounds on the persisted flag: the hosted agent shares the working tree and can PLANT this file, and its
+ *  `paths` reach FlowLoopView → the renderer DOM, so a corrupt/oversized file must not become an unbounded
+ *  render or memory cost (CWE-20/400). Both the writer and the reader enforce them (two non-redundant places). */
+export const MAX_CHANGED_TEST_PATHS = 1000;
+export const MAX_CHANGED_TEST_PATH_LEN = 4096;
+
+/** The recorded changed-test flag: the decision `step` it was recorded under (the §12 baseline key) and the
+ *  test-glob paths that changed. `paths` is `[]` on a clean GREEN (checked, none changed — distinct from an
+ *  absent file, which reads null). */
+export interface ChangedTestsRecord {
+  step: string;
+  paths: string[];
+}
+
+/** Per-entry sanitize shared by the writer and reader (whole-doc invalidity stays the reader's concern below).
+ *  Two properties the code alone does not state: entries are kept VERBATIM (a git-exact path, never trimmed —
+ *  the frozen check emits exact repo-relative paths), and the count cap makes `paths` NON-EXHAUSTIVE above the
+ *  cap — a safety bound against a planted/pathological file (a real GREEN turn touches a handful of tests), not
+ *  an expected operational case, so no `truncated` signal is carried; G5/G6 consumers treat an at-cap list as
+ *  advisory. The cap is applied after dedupe+sort so the surviving set is deterministic across writer and reader. */
+function sanitizeChangedTestPaths(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const valid = raw.filter(
+    (p): p is string => typeof p === 'string' && p.trim().length > 0 && p.length <= MAX_CHANGED_TEST_PATH_LEN,
+  );
+  return [...new Set(valid)].sort().slice(0, MAX_CHANGED_TEST_PATHS);
+}
+
+/** Record `paths` (the changed test-glob files) under `step` as the GREEN turn's changed-tests flag. A blank
+ *  step is inert (CWE-20). Entries are sanitized (see above) before writing. Throws when the loop area is
+ *  unresolvable (a planted symlink, CWE-59), matching the run-state/baseline writers' fail-loud contract; the
+ *  caller (§28.5.3 GREEN completion) MUST wrap it best-effort so a filesystem error never aborts the turn. */
+export function recordChangedTests(repoDir: string, step: string, paths: readonly string[]): void {
+  if (step.length === 0) return;
+  const file = loopAreaFile(repoDir, CHANGED_TESTS_FILE);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const clean = sanitizeChangedTestPaths(paths);
+  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step, paths: clean }))) {
+    throw new Error(`cannot write §28 changed-tests: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** The recorded changed-tests flag, or null when unset. Whole-doc invalidity (not a record, wrong schema,
+ *  blank step, or `paths` not an array) reads null; a valid doc's `paths` are per-entry sanitized (a planted
+ *  garbage entry is dropped, never surfaced). The returned `step` is the baseline key — see readBaselineCommit's
+ *  §12 note: the GREEN/regression-guard reader MUST reduce a phase-qualified step to one PHASE-STABLE slice
+ *  identity before comparing it to the active turn's step (deferred to S7's phase-loops; S4 steps are stable). */
+export function readChangedTests(repoDir: string): ChangedTestsRecord | null {
+  const file = loopAreaFile(repoDir, CHANGED_TESTS_FILE);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc)) return null;
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+  if (!Array.isArray(doc.paths)) return null;
+  return { step: doc.step, paths: sanitizeChangedTestPaths(doc.paths) };
+}

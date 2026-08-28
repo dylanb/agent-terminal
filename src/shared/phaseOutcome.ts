@@ -12,3 +12,8 @@ export function isPhaseOutcome(value: string): value is PhaseOutcome {
 // `errored`, not `passed`). Single-sourced here so the RED completion gate that compares against it and the RED
 // work prompt that names it as the bar derive from one definition and cannot drift (CLAUDE.md shared-semantics).
 export const RED_COMPLETING_OUTCOME: PhaseOutcome = 'failed-assertion';
+
+// §28.5.3 — the ONE test outcome that completes a GREEN turn: the tests ran and all passed. Single-sourced here
+// (the RED twin above) so the GREEN completion gate and the GREEN work prompt derive from one definition. GREEN
+// additionally requires `build == built` (src/shared/buildOutcome.ts), which is an orthogonal classification.
+export const GREEN_COMPLETING_OUTCOME: PhaseOutcome = 'passed';

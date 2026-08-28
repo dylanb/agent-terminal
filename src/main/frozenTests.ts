@@ -1,7 +1,9 @@
 // §28.5.1/§28.5.2a — git-only test-path detection for the §28 completion predicates, in two modes, each with NO
 // knowledge of any test framework (the engine never runs the test command, §28.5.4; it only asks git):
-//   • changedTestPaths — which test-glob files CHANGED between two COMMITS (baseline↔head): the frozen-tests
-//     check (§28.5.1). "Changed" is the right predicate there — a deleted frozen test is a real change.
+//   • changedTestPaths — which test-glob files CHANGED since the baseline: between two COMMITS (baseline↔head)
+//     for the commit↔commit frozen check (§28.5.1), or (head omitted) between the baseline and the WORKING TREE
+//     for the GREEN frozen check run at completion before the phase commit lands (§28.5.3). "Changed" is the
+//     right predicate for both — a deleted frozen test is a real change.
 //   • workingTreeTestPaths — which test-glob files this turn ADDED LINES to in the WORKING TREE vs HEAD: the RED
 //     "a failing test was authored" check (§28.5.2a), run before the RED commit; a deletion or a line-removal
 //     is deliberately NOT "added" (the intentional asymmetry with the frozen check above).
@@ -41,6 +43,11 @@ const MAX_MATCH_WORK = 100_000_000;
 const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
 const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
 
+/** A fresh, unpredictable, never-created hooks dir: with core.hooksPath pointed here no hook can run. */
+function freshDisabledHooksDir(): string {
+  return join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
+}
+
 /** Match `paths` against `testGlobs`, bounding aggregate glob-match work against MAX_MATCH_WORK (CWE-400) — the
  *  guard BOTH detections share, so the bound cannot be present in one and absent in its twin. globMatch bounds
  *  each individual pair; this bounds their sum. Returns the matched paths, order preserved. */
@@ -56,13 +63,24 @@ function matchTestGlobsWithinBudget(paths: readonly string[], testGlobs: readonl
   return matched;
 }
 
+/** The final filter shared by every frozen-tests query (commit↔commit, working-tree frozen, and added-lines) —
+ *  so the app's own state dirs are excluded on ALL of them (never a legitimate test path even under a broad
+ *  glob, independent of `.gitignore` — CWE-200/754); the differing diff plumbing that produces `paths` stays
+ *  per-query. */
+function matchedTestPaths(paths: readonly string[], testGlobs: readonly string[]): string[] {
+  const matched = matchTestGlobsWithinBudget(paths, testGlobs).filter((path) => !isUnderAppStateDir(path));
+  return [...new Set(matched)].sort();
+}
+
 export interface FrozenTestsQuery {
   /** The checked-out repo working tree; git runs here as cwd. */
   repoDir: string;
   /** The baseline commit (the RED loop's recorded SHA, §28.5.1) — validated as a git object id. */
   baseline: string;
-  /** The head to diff against, usually the ref `HEAD`. */
-  head: string;
+  /** The head to diff against (usually the ref `HEAD`) — the commit↔commit frozen check (§28.5.1). OMITTED
+   *  (§28.5.3) diffs the baseline against the WORKING TREE: the GREEN frozen check runs at completion, before
+   *  the phase commit lands, so the GREEN edits live in the working tree, not in any commit. */
+  head?: string;
   /** The repository's test path globs (from loop-capabilities.yaml, §28.5.4). */
   testGlobs: readonly string[];
 }
@@ -91,27 +109,52 @@ function isSafeRef(ref: string): boolean {
   return ref.length > 0;
 }
 
-/** The changed paths between `baseline` and `head` that match `testGlobs`, sorted and deduped. Empty when no
- *  matching path changed; never a non-test path. Rejects on a git failure or an invalid baseline/head. */
+/** The changed test-glob paths between `baseline` and (with `head`) another commit, or (head omitted) the
+ *  WORKING TREE — sorted, deduped, never a non-test path. "Changed" is name-only: any change, INCLUDING a
+ *  deletion (a removed frozen test is a real change — the deliberate asymmetry with the added-lines
+ *  `workingTreeTestPaths`). Empty when nothing matching changed. Rejects on a git failure or an invalid
+ *  baseline/head (fail toward firing, never reads as "∅"). */
 export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[]> {
   const { repoDir, baseline, head, testGlobs } = query;
   if (testGlobs.length === 0) throw new Error('frozen-tests: testGlobs is empty');
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
-  if (!isSafeRef(head)) throw new Error('frozen-tests: head is not a usable ref');
 
-  // A fresh, unpredictable, never-created hooks dir: with core.hooksPath pointed here no hook can run.
-  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
+  // Shared diff flags: names only (no patch → no textconv/external-diff), NUL-delimited raw pathname BYTES (git
+  // does not C-quote, decoded strictly), renames decomposed to delete+add (§28.5.1), a changed gitlink shown
+  // regardless of a repo-local diff.ignoreSubmodules, and the revision(s) neutralized against option-injection.
+  const diffFlags = ['diff', '--name-only', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options'];
+
+  if (head === undefined) {
+    // §28.5.3 — baseline ↔ WORKING TREE (one revision). `git diff <baseline>` reports tracked changes but NEVER
+    // lists untracked files, so a brand-new test authored this turn would be missed — union `ls-files -o` (which
+    // lists names only, no re-hash, so it is filter-free) to catch it.
+    // SECURITY: the one-revision diff re-hashes changed files vs the working tree, so a repo-planted
+    // `filter.<driver>.clean` can run on every GREEN completion — the SAME accepted residual as
+    // `workingTreeTestPaths`/the §28.3 commit (the agent already runs the repo's code in-turn); no new boundary.
+    const diffOut = await runBuffer(
+      'git',
+      [...harden, ...diffFlags, `${baseline}^{commit}`],
+      repoDir,
+      'frozen-tests working-tree diff failed',
+      NO_LAZY_FETCH_ENV,
+    );
+    const untrackedOut = await runBuffer(
+      'git',
+      [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
+      repoDir,
+      'frozen-tests ls-files failed',
+      NO_LAZY_FETCH_ENV,
+    );
+    return matchedTestPaths([...strictDecodeNulPaths(diffOut), ...strictDecodeNulPaths(untrackedOut)], testGlobs);
+  }
+
+  if (!isSafeRef(head)) throw new Error('frozen-tests: head is not a usable ref');
   const stdout = await runBuffer(
     'git',
     [
-      ...OBJECT_SOURCE_HARDENING, // ignore repo-planted refs/replace/* (tamper-evidence) + deny every transport
-      ...coreExecHardeningArgs(disabledHooks),
-      'diff',
-      '--name-only', // names only — never generates a patch, so no textconv/external-diff runs
-      '-z', // NUL-delimited raw pathname BYTES (git does not C-quote), decoded strictly below
-      '--no-renames', // decompose renames to delete+add (config-independent) so a test moved out still shows
-      '--ignore-submodules=none', // a changed test tree tracked as a gitlink must show regardless of a repo-local diff.ignoreSubmodules
-      '--end-of-options', // the two revisions cannot be read as options (CWE-88)
+      ...harden,
+      ...diffFlags,
       `${baseline}^{commit}`, // peel to a commit: git accepts a bare tree/blob object id as a diff operand, so a
       `${head}^{commit}`, //     non-commit operand would diff instead of failing toward the check firing
     ],
@@ -119,8 +162,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     'frozen-tests diff failed',
     NO_LAZY_FETCH_ENV, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
-
-  return [...new Set(matchTestGlobsWithinBudget(strictDecodeNulPaths(stdout), testGlobs))].sort();
+  return matchedTestPaths(strictDecodeNulPaths(stdout), testGlobs);
 }
 
 /** The changed test paths, sourcing the globs from the RED baseline's loop-capabilities.yaml (a git blob, so
@@ -143,8 +185,7 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // A bad baseline is corrupted loop state (fail toward firing), NOT a degradable capabilities "malformed" —
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
-  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
   const env = NO_LAZY_FETCH_ENV;
   // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
   await run(
@@ -208,7 +249,10 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
 export async function changedTestPathsFromCapabilities(query: {
   repoDir: string;
   baseline: string;
-  head: string;
+  /** Omitted (§28.5.3) → baseline ↔ working tree (the GREEN frozen check); given → commit↔commit (§28.5.1). The
+   *  globs are sourced from the baseline BLOB either way, so the checked agent cannot narrow them by editing the
+   *  working-tree loop-capabilities.yaml before the GREEN frozen check runs. */
+  head?: string;
 }): Promise<ChangedTestPathsResult> {
   const capabilities = await baselineCapabilities(query.repoDir, query.baseline);
   if (!capabilities.ok) return capabilities;
@@ -250,11 +294,10 @@ export async function workingTreeTestPaths(query: {
   const { repoDir, testGlobs } = query;
   if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
 
-  const disabledHooks = join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
   // The SAME object-source hardening the commit↔commit read carries (OBJECT_SOURCE_HARDENING + NO_LAZY_FETCH_ENV):
   // `git diff HEAD` re-hashes and looks up the HEAD tree, so a repo-planted replace-ref or promisor would steer
   // or run under a naive read exactly as on the sibling path.
-  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(disabledHooks)];
+  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
   const trackedOut = await runBuffer(
     'git',
     [...harden, 'diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
@@ -294,12 +337,7 @@ export async function workingTreeTestPaths(query: {
     .filter((path): path is string => path !== null);
   const untracked = strictDecodeNulPaths(untrackedOut);
 
-  // The SAME aggregate-work budget the commit↔commit read applies (CWE-400) — matchTestGlobsWithinBudget — so the
-  // bound cannot be present on one detection and absent on its twin; then drop the app's own state dirs.
-  const matched = matchTestGlobsWithinBudget([...tracked, ...untracked], testGlobs).filter(
-    (path) => !isUnderAppStateDir(path),
-  );
-  return [...new Set(matched)].sort();
+  return matchedTestPaths([...tracked, ...untracked], testGlobs);
 }
 
 /** The working-tree test paths, sourcing the globs from the repo's own loop-capabilities.yaml — its failure arm

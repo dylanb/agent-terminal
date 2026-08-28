@@ -500,6 +500,11 @@ export interface FlowLoopView {
    *  rather than the full gate options. App-owned loop state, persisted independently of the run-state so it
    *  survives a relaunch until the operator approves. Additive and §27-only. */
   polish?: boolean;
+  /** §28.5.3/§28.8.3 — the test-glob files the machine detected changed during a GREEN turn, recorded under
+   *  this run's step. A NON-blocking detect-and-escalate flag: the panel surfaces it for the regression-guard
+   *  persona + the human gate. Absent when none changed (a clean GREEN records an empty flag, which does not
+   *  show) or when the record is for another step. Additive and §27-only. */
+  changedTests?: string[];
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,

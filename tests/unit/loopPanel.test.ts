@@ -883,3 +883,31 @@ describe('docked loop panel — the sweep split (§B.9)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]')); // the first route-out button
   });
 });
+
+// §28.5.3/§28.8.3 — the changed-tests flag: when the machine detected a test-glob file changed during a GREEN
+// turn, the panel surfaces a NON-blocking notice naming the files (for the regression-guard persona + human at
+// the gate). Modeled on the polish-standdown notice — a role="status" live-region paragraph, present only when
+// the view carries `changedTests`.
+describe('docked loop panel — the changed-tests flag (§28.5.3)', () => {
+  it('surfaces a notice naming the changed test files when the view carries the flag', () => {
+    createLoopPanel(host).render(loop({ changedTests: ['tests/a.test.ts', 'tests/b.test.ts'] }), 'plan');
+    const notice = host.querySelector('[data-changed-tests]');
+    expect(notice).not.toBeNull();
+    expect(notice?.getAttribute('role')).toBe('status'); // a live region so it is announced
+    expect(notice?.textContent).toContain('tests/a.test.ts');
+    expect(notice?.textContent).toContain('tests/b.test.ts');
+  });
+
+  it('omits the changed-tests notice when the view carries no flag', () => {
+    createLoopPanel(host).render(loop({}), 'plan');
+    expect(host.querySelector('[data-changed-tests]')).toBeNull();
+  });
+
+  it('drops the changed-tests notice on a re-render once the flag clears (structural transition)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ changedTests: ['tests/a.test.ts'] }), 'plan');
+    expect(host.querySelector('[data-changed-tests]')).not.toBeNull();
+    panel.render(loop({}), 'plan'); // the flag is gone → the notice must not linger
+    expect(host.querySelector('[data-changed-tests]')).toBeNull();
+  });
+});

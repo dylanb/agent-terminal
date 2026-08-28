@@ -3,7 +3,7 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
@@ -16,7 +16,8 @@ import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
-import { readBaselineCommit } from '../../src/main/appLoopState';
+import type { BuildOutcome } from '../../src/shared/buildOutcome';
+import { readBaselineCommit, recordBaselineCommit, readChangedTests } from '../../src/main/appLoopState';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -1713,14 +1714,17 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'while :; do case "$1" in --git-dir) shift 2;; -c) shift 2;; --no-replace-objects) shift;; *) break;; esac; done\n' +
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
-    // §28.5.1 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the baseline
-    // sha+parent capture), ls-files (the working-tree RED test detection, filter-free), and diff (also
-    // workingTreeTestPaths' --numstat arm). rev-parse is delegated ONLY for the EXACT headCommit form
-    // (`--verify --end-of-options HEAD`) — the pre-commit HEAD the parent-linkage guard compares against — so
-    // every canned bootstrap/flow-detection rev-parse arm below (and the plain `rev-parse HEAD` the drive uses)
-    // keeps its scripted answer; a blanket delegation breaks the drive (the loop never starts).
-    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files) exec ${realGit} "$@";; esac\n` : '') +
-    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$4" = "HEAD" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
+    // §28.5.1/§28.5.3 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the
+    // baseline sha+parent capture), ls-files (the working-tree RED test detection + the GREEN frozen check's
+    // untracked arm, filter-free), diff (workingTreeTestPaths' --numstat arm AND the GREEN frozen check's
+    // baseline↔working-tree name-only arm), and ls-tree/cat-file (the GREEN frozen check's baselineCapabilities
+    // reads the committed loop-capabilities.yaml as a blob). rev-parse is delegated ONLY for the object-resolve
+    // form `--verify --end-of-options <rev>` (4 args): the pre-commit HEAD the parent-linkage guard compares
+    // against AND the baseline `<sha>^{commit}` resolve baselineCapabilities does — the canned bootstrap/flow
+    // rev-parse arms below (and the plain `rev-parse HEAD` the drive uses) never take that form, so they keep
+    // their scripted answer; a blanket rev-parse delegation breaks the drive (the loop never starts).
+    (opts.realCommitOps ? `case "$1" in add|reset|commit|diff|rev-list|ls-files|ls-tree|cat-file) exec ${realGit} "$@";; esac\n` : '') +
+    (opts.realCommitOps ? `if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--end-of-options" ] && [ "$#" -eq 4 ]; then exec ${realGit} "$@"; fi\n` : '') +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
@@ -2675,12 +2679,17 @@ function seedFakeAgentV2(
   opts: {
     stepId: string;
     artifactRel: string;
-    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red';
+    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green';
     // §28.5.5 RED work mode (work: 'red'): the classified outcome the fake writes into the phase-result file
     // (the completion:red gate reads it back), and whether it authors a test-glob file this turn (the
     // "a test was added" async clause). Ignored unless work === 'red'.
     resultOutcome?: PhaseOutcome;
     writeTest?: boolean;
+    // §28.5.3 GREEN work mode (work: 'green'): the build classification written alongside `resultOutcome`
+    // (default 'built'), and whether the turn MODIFIES a committed test-glob file (`touchTest`, the frozen-check
+    // detection) vs a non-test file. Ignored unless work === 'green'. `resultOutcome` defaults to 'passed'.
+    buildOutcome?: BuildOutcome;
+    touchTest?: boolean;
     // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
     review?: 'full' | 'omit-persona' | 'none' | 'failed';
     // Round-2 review report kind (multi-round runs), default `full`.
@@ -2721,12 +2730,25 @@ function seedFakeAgentV2(
   const writeRedResult =
     `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${redResultB64}' | base64 -d > ${opts.artifactRel}`;
   const redAct = [bump, writeRedTest, writeRedResult, done(turnKey)].filter((s) => s.length > 0).join('; ');
+  // §28.5.3 — the GREEN work turn: implement (touch a committed test-glob file when `touchTest`, else a non-test
+  // file), then write the phase-result classifying `passed` + `built`. The frozen check diffs the committed
+  // baseline against the working tree, so editing the committed tests/frozen.test.ts is what raises the flag.
+  const greenResultB64 = b64(examplePhaseResult(opts.resultOutcome ?? 'passed', { build: opts.buildOutcome ?? 'built' }));
+  const writeGreenChange =
+    opts.touchTest === true
+      ? `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' >> tests/frozen.test.ts`
+      : `printf '%s\\n' 'export const y = 2;' > feature.ts`;
+  const writeGreenResult =
+    `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${greenResultB64}' | base64 -d > ${opts.artifactRel}`;
+  const greenAct = [bump, writeGreenChange, writeGreenResult, done(turnKey)].filter((s) => s.length > 0).join('; ');
   const workAct =
     opts.work === 'noop'
       ? ':'
-      : opts.work === 'red'
-        ? redAct
-        : opts.work === 'file-only'
+      : opts.work === 'green'
+        ? greenAct
+        : opts.work === 'red'
+          ? redAct
+          : opts.work === 'file-only'
           ? `${bump}; ${writeArtifact(true)}`
           : opts.work === 'no-marker'
             ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
@@ -5726,7 +5748,7 @@ const gitCount = (repo: string): number => Number(gitIn(repo, 'rev-list', '--cou
 // `capabilities`, when given, is a §28.5.4 loop-capabilities.yaml committed INTO the baseline (the RED
 // working-tree check sources its test globs from it). Shared by the §28.3 commit and §28.5 RED tracers so the
 // flow/flow-state literals have one home.
-function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabilities?: string }): string {
+function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabilities?: string; seedTestFile?: string }): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
   g('init', '-q');
@@ -5736,6 +5758,12 @@ function seedCommitFlowRepo(prefix: string, opts: { withChange: boolean; capabil
   writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
   writeFileSync(join(dir, 'seed.txt'), 'seed\n');
   if (opts.capabilities !== undefined) writeFileSync(join(dir, 'loop-capabilities.yaml'), opts.capabilities);
+  // §28.5.3 — a test-glob file committed INTO the baseline (default: none), so the GREEN frozen check
+  // (baseline↔working-tree) sees a change when a later turn edits it. A no-op for the S2/S3 callers.
+  if (opts.seedTestFile !== undefined) {
+    mkdirSync(join(dir, dirname(opts.seedTestFile)), { recursive: true });
+    writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
+  }
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
@@ -5839,18 +5867,22 @@ test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a L
 // globs the working-tree RED check sources. The fake-agent authors a test file + writes the phase-result file
 // the completion:red gate classifies; the git shim delegates the real ops (add/commit/rev-list/ls-files/diff)
 // to real git so HEAD genuinely advances and the working-tree test detection sees the added file.
-function seedRedGateConfig(prefix: string): string {
+// Clone the example config, set the plan-loop's work.completion, and swap its gh mark-ready gate for a commit
+// side-effect carrying `label` — the shared shape of the §28.5 RED (S3) and GREEN (S4) tracer configs; they
+// differ only in the completion value and the commit label.
+function seedCompletionGateConfig(prefix: string, completion: 'red' | 'green', label: string): string {
   const cfg = mkdtempSync(join(tmpdir(), prefix));
   cpSync(exampleConfigDir, cfg, { recursive: true });
   const defPath = join(cfg, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
   const def = readFileSync(defPath, 'utf8');
-  const withRed = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', 'work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: red\n');
-  if (withRed === def) throw new Error('seedRedGateConfig: plan-loop work block not found to set completion: red');
-  const swapped = withRed.replace('      - kind: gh\n        action: mark-ready', '      - kind: commit\n        label: "RED: s3-tracer"');
-  if (swapped === withRed) throw new Error('seedRedGateConfig: plan-loop gh gate not found to swap for commit');
+  const withCompletion = def.replace('work:\n  recipe: prompts/work.md\n  artifact: plan\n', `work:\n  recipe: prompts/work.md\n  artifact: plan\n  completion: ${completion}\n`);
+  if (withCompletion === def) throw new Error(`seedCompletionGateConfig: plan-loop work block not found to set completion: ${completion}`);
+  const swapped = withCompletion.replace('      - kind: gh\n        action: mark-ready', `      - kind: commit\n        label: "${label}"`);
+  if (swapped === withCompletion) throw new Error('seedCompletionGateConfig: plan-loop gh gate not found to swap for commit');
   writeFileSync(defPath, swapped);
   return cfg;
 }
+const seedRedGateConfig = (prefix: string): string => seedCompletionGateConfig(prefix, 'red', 'RED: s3-tracer');
 
 // The RED flow repo: seedCommitFlowRepo with NO pre-seeded change (the fake-agent authors the test file this
 // turn — the untracked change the working-tree RED check sees and the approve commit records) plus a
@@ -5944,6 +5976,150 @@ test('§28.5 / AC2 — a RED loop whose test PASSES never completes: it retries 
   // AC2 — no clean gate was reached, so HEAD never advanced and no baseline was recorded.
   expect(gitCount(repo)).toBe(before);
   expect(readBaselineCommit(repo)).toBeNull();
+
+  await errorDialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+// ─── §28.5.3 — the GREEN loop, end-to-end (the S4 tracer bullet) ───────────────────────────────────────
+// The plan-loop set to `work.completion: green` whose approve gate commits. A loop-capabilities.yaml supplies
+// the test globs; a test file (tests/frozen.test.ts) is committed INTO the baseline and its SHA recorded as
+// the §28.5.1 baseline (simulating a completed RED phase). The fake-agent implements + writes a passed/built
+// phase-result; the frozen check (baseline↔working-tree) detects a touched test as a NON-blocking flag.
+const seedGreenGateConfig = (prefix: string): string => seedCompletionGateConfig(prefix, 'green', 'GREEN: s4-tracer');
+
+// The GREEN flow repo: a committed tests/frozen.test.ts, capabilities (globs = tests/**), and the baseline SHA
+// recorded under the `plan` step (the RED phase's product the GREEN frozen check diffs against).
+const seedGreenFlowRepo = (prefix: string): string => {
+  const dir = seedCommitFlowRepo(prefix, {
+    withChange: false,
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+    seedTestFile: 'tests/frozen.test.ts',
+  });
+  recordBaselineCommit(dir, 'plan', gitIn(dir, 'rev-parse', 'HEAD'));
+  return dir;
+};
+
+test('§28.5.3 — a clean GREEN (passed + built, no test changed) completes and commits; the panel shows NO changed-test flag', { tag: '@ownapp' }, async () => {
+  const repo = seedGreenFlowRepo('agent-term-e2e-green-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-home-'));
+  const cfg = seedGreenGateConfig('agent-term-e2e-green-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: false, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // passed+built + no test changed → the GREEN gate completed and the loop drove to the clean gate.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  // clean GREEN records an EMPTY flag, so the panel shows NO changed-test notice:
+  await expect(loopPanel().locator('[data-changed-tests]')).toHaveCount(0);
+  expect(readChangedTests(repo)).toEqual({ step: 'plan', paths: [] });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // approve fired the commit side-effect: HEAD advanced by one with the GREEN label, the impl file rode in.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  expect(gitIn(repo, 'log', '-1', '--format=%s')).toBe('GREEN: s4-tracer');
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('feature.ts');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5.3 / AC2 — a GREEN turn that touches a test file STILL completes, and the changed-test flag is recorded + surfaced (detect-and-escalate)', { tag: '@ownapp' }, async () => {
+  const repo = seedGreenFlowRepo('agent-term-e2e-green-flag-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-flag-home-'));
+  const cfg = seedGreenGateConfig('agent-term-e2e-green-flag-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-flag-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: true, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // the touched test did NOT block — the turn still completed and drove to the clean gate (§28.8.3).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  // the changed-test flag was recorded (naming the touched test) AND surfaced in the panel notice:
+  expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
+  const notice = loopPanel().locator('[data-changed-tests]');
+  await expect(notice).toBeVisible({ timeout: 10_000 });
+  await expect(notice).toContainText('tests/frozen.test.ts');
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // approve committed the change (HEAD+1, the touched test rode in) — the flag is a caution, not a block.
+  await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('tests/frozen.test.ts');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5.3 / AC3 — a GREEN turn whose tests do NOT pass never completes: it retries then routes out as a loop error, HEAD unchanged', { tag: '@ownapp' }, async () => {
+  const repo = seedGreenFlowRepo('agent-term-e2e-green-sad-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-sad-home-'));
+  const cfg = seedGreenGateConfig('agent-term-e2e-green-sad-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-sad-bin-', { realCommitOps: true });
+  // the impl "runs" but the fake classifies the outcome as failed-assertion — the GREEN gate requires `passed`.
+  // (AC3's other half — a broken BUILD, `build: build-failed` — fails the same sync clause and is proven at the
+  // integration layer by IT-GREEN-3b; the `buildOutcome` fake knob exercises it there, so it is not re-run e2e.)
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', resultOutcome: 'failed-assertion', touchTest: false, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // a non-passing outcome never satisfies the GREEN gate → the work turn retries once then routes out.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2);
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('Loop error');
+
+  // AC3 — no clean gate was reached, so HEAD never advanced and no flag was recorded.
+  expect(gitCount(repo)).toBe(before);
+  expect(readChangedTests(repo)).toBeNull();
 
   await errorDialog.locator('.dismiss').click();
   await app.close();

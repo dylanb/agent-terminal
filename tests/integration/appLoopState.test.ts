@@ -24,8 +24,13 @@ import {
   readAppLoopBootstrap,
   recordBaselineCommit,
   readBaselineCommit,
+  recordChangedTests,
+  readChangedTests,
+  MAX_CHANGED_TEST_PATHS,
+  MAX_CHANGED_TEST_PATH_LEN,
   type AppLoopBootstrap,
   type AppLoopRunState,
+  type ChangedTestsRecord,
 } from '../../src/main/appLoopState';
 
 // §27.10/§27.12 — the app-owned §27 loop-state file under <repo>/.agent-terminal/loop/, carrying a
@@ -767,6 +772,121 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
       expect(() => recordBaselineCommit(repo, 'red-slice1', OID)).toThrow();
       expect(existsSync(join(elsewhere, 'loop', 'baseline-commit.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('§28.5.3 — the changed-tests flag store, disjoint from the run-state document', () => {
+  // §28.8.3 detect-and-escalate: at GREEN completion the engine records WHICH test-glob files changed since the
+  // RED baseline as a NON-blocking flag the regression-guard persona + human gate read. App-owned machine state
+  // whose lifecycle is independent of the run-state document lives in its OWN file (the polish/armed-interrupt/
+  // baseline pattern), so a wholesale run-state write cannot clobber or resurrect it.
+  const changedFile = (): string => join(loopDir(), 'changed-tests.yaml');
+
+  it('CT-1: round-trips { step, paths }', () => {
+    recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts', 'tests/b.test.ts']);
+    const rec: ChangedTestsRecord | null = readChangedTests(repo);
+    expect(rec).toEqual({ step: 'green-slice1', paths: ['tests/a.test.ts', 'tests/b.test.ts'] });
+  });
+
+  it('CT-2: an empty paths list records an explicit empty record (checked-none, distinct from unset)', () => {
+    recordChangedTests(repo, 'green-slice1', []);
+    expect(readChangedTests(repo)).toEqual({ step: 'green-slice1', paths: [] });
+    // …distinct from "never recorded" (which reads null):
+  });
+
+  it('CT-3: an absent file reads as unset (null), not an error', () => {
+    expect(readChangedTests(repo)).toBeNull();
+  });
+
+  it('CT-4 (write-side): a blank step writes NO file (inert)', () => {
+    rmSync(changedFile(), { force: true });
+    recordChangedTests(repo, '', ['tests/a.test.ts']);
+    expect(existsSync(changedFile())).toBe(false);
+  });
+
+  it('CT-5 (write-side per-entry filtering): non-string/blank/over-length path entries are dropped, valid kept', () => {
+    // a blank and an over-length entry are dropped; the valid siblings are kept, sorted+deduped:
+    const tooLong = 'tests/' + 'x'.repeat(MAX_CHANGED_TEST_PATH_LEN) + '.test.ts';
+    recordChangedTests(repo, 'green-slice1', ['tests/b.test.ts', '', '   ', tooLong, 'tests/a.test.ts', 'tests/a.test.ts']);
+    expect(readChangedTests(repo)).toEqual({ step: 'green-slice1', paths: ['tests/a.test.ts', 'tests/b.test.ts'] });
+  });
+
+  it('CT-6 (write-side count cap): at most MAX_CHANGED_TEST_PATHS entries are kept', () => {
+    const many = Array.from({ length: MAX_CHANGED_TEST_PATHS + 50 }, (_, i) => `tests/f${String(i).padStart(6, '0')}.test.ts`);
+    recordChangedTests(repo, 'green-slice1', many);
+    const rec = readChangedTests(repo);
+    expect(rec?.paths.length).toBe(MAX_CHANGED_TEST_PATHS);
+  });
+
+  it('CT-7 (read-side CWE-20): a PLANTED file with a bad shape reads unset (null)', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    for (const bad of [
+      `not-a-mapping\n`, // isRecord guard
+      `schema_version: 999\nstep: green\npaths: []\n`, // wrong schema
+      `schema_version: 1\nstep: ''\npaths: []\n`, // blank step
+      `schema_version: 1\nstep: green\npaths: not-an-array\n`, // paths not an array
+    ]) {
+      writeFileSync(changedFile(), bad);
+      expect(readChangedTests(repo)).toBeNull();
+    }
+  });
+
+  it('CT-8 (read-side per-entry filtering): a planted file with garbage entries filters them out, keeps valid', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    // a planted array mixing a valid path, a number, an object, a blank — only the valid string survives:
+    writeFileSync(changedFile(), `schema_version: 1\nstep: green\npaths:\n  - tests/ok.test.ts\n  - 42\n  - ''\n  - {a: 1}\n`);
+    expect(readChangedTests(repo)).toEqual({ step: 'green', paths: ['tests/ok.test.ts'] });
+  });
+
+  // CT-8b (read-side CWE-400/CWE-20, pinned SEPARATELY from the write-side CT-5/CT-6 so neither masks the other,
+  // mirroring baseline-commit's UT-STATE-2a/2b): a PLANTED file (bypassing the writer) whose paths exceed the
+  // count cap and include an over-length entry is re-bounded on READ — the reader independently re-enforces the
+  // caps, since the hosted agent can write this file directly and its paths reach the DOM.
+  it('CT-8b (read-side cap re-enforcement): a planted oversized / over-length file is capped on read', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    const many = Array.from({ length: MAX_CHANGED_TEST_PATHS + 50 }, (_, i) => `tests/f${String(i).padStart(6, '0')}.test.ts`);
+    const overLong = 'tests/' + 'x'.repeat(MAX_CHANGED_TEST_PATH_LEN) + '.test.ts';
+    const paths = [overLong, ...many]; // plain scalars — safe as an unquoted yaml list
+    writeFileSync(changedFile(), `schema_version: 1\nstep: green\npaths:\n${paths.map((p) => `  - ${p}`).join('\n')}\n`);
+    const rec = readChangedTests(repo);
+    expect(rec?.paths.length).toBe(MAX_CHANGED_TEST_PATHS); // count cap re-enforced on read
+    expect(rec?.paths).not.toContain(overLong); // over-length entry dropped on read
+  });
+
+  it('CT-9 first-run: records into a repo with NO .agent-terminal yet, creating the tree', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // fresh machine — nothing seeded
+    recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts']);
+    expect(existsSync(changedFile())).toBe(true);
+    expect(readChangedTests(repo)).toEqual({ step: 'green-slice1', paths: ['tests/a.test.ts'] });
+  });
+
+  it('CT-10 overwrite: a second record replaces the first (single current flag)', () => {
+    recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts']);
+    recordChangedTests(repo, 'green-slice2', []);
+    expect(readChangedTests(repo)).toEqual({ step: 'green-slice2', paths: [] });
+  });
+
+  it('CT-11: neither wholesale write clobbers the other (disjoint-file rule, RED-first pins)', () => {
+    recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts']);
+    const flagBytes = readFileSync(changedFile(), 'utf8');
+    writeAppLoopState(repo, RUN, FIXED); // a wholesale run-state write...
+    expect(readFileSync(changedFile(), 'utf8')).toBe(flagBytes); // ...leaves the flag byte-for-byte untouched
+    expect(readChangedTests(repo)).toEqual({ step: 'green-slice1', paths: ['tests/a.test.ts'] });
+
+    const stateBytes = readFileSync(stateFile(), 'utf8');
+    recordChangedTests(repo, 'green-slice2', ['tests/c.test.ts']); // ...and recording the flag
+    expect(readFileSync(stateFile(), 'utf8')).toBe(stateBytes); // ...leaves run-state byte-for-byte unchanged
+  });
+
+  it('CT-12: refuses to write through a symlinked loop container (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-ct-evil-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts'])).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'changed-tests.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
