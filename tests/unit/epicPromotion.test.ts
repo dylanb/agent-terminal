@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEpicPromotionCoordinator, type EpicPromotionCoordinatorDeps } from '../../src/main/epicPromotion';
+import { createEpicPromotionCoordinator, type EpicGateOutcome, type EpicPromotionCoordinatorDeps, type EpicPromotionRefs } from '../../src/main/epicPromotion';
+import { gateDecisionAuditCmd } from '../../src/shared/audit';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { EpicSubTicket } from '../../src/shared/epicPlan';
 
-// §28.7 — the epic-promotion coordinator: a gate-decision-time confirm-first hold. maybeBegin intercepts an
-// approve on an epic plan (raise the preview, hold, do NOT accept); resolve completes it — confirm runs the
-// promotion then accepts + stands the flow down, decline drops it and leaves the gate. Mirrors the
-// bootstrap-conflict coordinator's held/resolve pattern.
+// §28.7 — the epic-promotion coordinator: a gate-decision-time confirm-first hold. maybeBegin classifies an
+// approve into three outcomes: not-epic (the normal accept runs), preview-raised (hold pending the confirm-first
+// preview), or blocked (a precondition failed — an error is surfaced and the gate holds, WITHOUT raising the
+// preview); resolve completes a held promotion — confirm runs it then accepts + stands the flow down, decline
+// drops it and leaves the gate. Mirrors the bootstrap-conflict coordinator's held/resolve pattern.
+
+// §25 — the caller fires the preview audit iff maybeBegin returned preview-raised; the detection needle both the
+// block-string guard and these tests key on is derived from its single producer, never hardcoded (shared-semantics),
+// so a rename of the preview cmd re-flows here rather than leaving a stale literal that matches vacuously.
+const PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
 
 const DEF = {} as LoopDefV2;
 const SUBS: EpicSubTicket[] = [
@@ -17,6 +24,7 @@ const SUBS: EpicSubTicket[] = [
 function harness(over: Partial<EpicPromotionCoordinatorDeps> = {}) {
   const deps: EpicPromotionCoordinatorDeps = {
     readSubTickets: vi.fn(() => SUBS),
+    promotionRecordCorrupt: vi.fn(() => false),
     emitPreview: vi.fn(),
     runPromotion: vi.fn(() => Promise.resolve()),
     persistAccept: vi.fn(),
@@ -32,8 +40,8 @@ function harness(over: Partial<EpicPromotionCoordinatorDeps> = {}) {
 describe('maybeBegin — intercept an approve on an epic plan (§28.7)', () => {
   it('holds and emits the preview naming every sub-ticket, without accepting', () => {
     const { deps, coord } = harness();
-    const intercepted = coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', { epic: 176, pr: 77 });
-    expect(intercepted).toBe(true);
+    const outcome = coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', { epic: 176, pr: 77 });
+    expect(outcome).toEqual({ kind: 'preview-raised' });
     expect(deps.emitPreview).toHaveBeenCalledWith({
       repoDir: '/repo', step: 'plan-bundle', epic: 176, pr: 77,
       subTickets: [{ index: 1, title: 'Slice one' }, { index: 2, title: 'Slice two' }],
@@ -43,19 +51,72 @@ describe('maybeBegin — intercept an approve on an epic plan (§28.7)', () => {
 
   it('does not intercept a non-epic plan (readSubTickets null)', () => {
     const { deps, coord } = harness({ readSubTickets: vi.fn(() => null) });
-    expect(coord.maybeBegin('/repo', DEF, 'l', 's', 't', { epic: 176, pr: 77 })).toBe(false);
+    expect(coord.maybeBegin('/repo', DEF, 'l', 's', 't', { epic: 176, pr: 77 })).toEqual({ kind: 'not-epic' });
     expect(deps.emitPreview).not.toHaveBeenCalled();
+    expect(deps.emitError).not.toHaveBeenCalled(); // a non-epic plan is not a block — it runs the normal accept
+  });
+});
+
+// §28.7 / #124 — the authorizing preconditions are checked in maybeBegin BEFORE the preview is raised
+// (CODE-STANDARDS policy-checked-at-the-operation). A failed precondition returns `blocked`: an operator error is
+// surfaced, NO preview is raised, and no held promotion is registered — so once the condition is corrected a
+// fresh approve re-decides the gate cleanly (AC4). The block is audited with a §28-pattern cmd distinct from the
+// §25 preview cmd.
+describe('maybeBegin — block a precondition failure before the preview (§28.7 / #124)', () => {
+  const approveEpic = (coord: ReturnType<typeof harness>['coord'], refs: EpicPromotionRefs = { epic: 176, pr: 77 }): EpicGateOutcome =>
+    coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', refs);
+
+  // The cmd recorded on the most recent block, captured from the audit dep (never the full literal — §3).
+  const blockAuditCmd = (deps: EpicPromotionCoordinatorDeps): string => {
+    const calls = vi.mocked(deps.audit).mock.calls;
+    return calls.length === 0 ? '' : calls[calls.length - 1][1];
+  };
+
+  it('Slice 1 — a corrupt promotion record blocks before the preview: error surfaced, block audited, NO preview', () => {
+    const { deps, coord } = harness({ promotionRecordCorrupt: vi.fn(() => true) });
+    expect(approveEpic(coord)).toEqual({ kind: 'blocked' });
+    expect(deps.emitPreview).not.toHaveBeenCalled(); // the confirm-first preview is never raised on a block
+    expect(deps.persistAccept).not.toHaveBeenCalled();
+    expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('unreadable'));
+    expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd was recorded
+    expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
   });
 
-  it('does not intercept when the epic issue number is unknown (cannot promote)', () => {
+  it('Slice 1 — the corrupt-record predicate is passed the epic issue number the gate resolved', () => {
+    const promotionRecordCorrupt = vi.fn(() => true);
+    const { coord } = harness({ promotionRecordCorrupt });
+    approveEpic(coord, { epic: 176, pr: 77 });
+    expect(promotionRecordCorrupt).toHaveBeenCalledWith('/repo', 176);
+  });
+
+  it('Slice 1 — AC4: after a corrupt-record block, a corrected record re-decides to preview-raised (gate not stranded)', () => {
+    const promotionRecordCorrupt = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const { deps, coord } = harness({ promotionRecordCorrupt });
+    expect(approveEpic(coord)).toEqual({ kind: 'blocked' }); // first approve blocks
+    expect(approveEpic(coord)).toEqual({ kind: 'preview-raised' }); // the record is fixed → the gate re-decides
+    expect(deps.emitPreview).toHaveBeenCalledTimes(1); // the preview is raised only on the re-decision
+  });
+
+  it('Slice 2 — a well-formed epic plan with an unresolvable epic issue (epic: null) BLOCKS, never silently advances', () => {
     const { deps, coord } = harness();
-    expect(coord.maybeBegin('/repo', DEF, 'l', 's', 't', { epic: null, pr: 77 })).toBe(false);
+    expect(approveEpic(coord, { epic: null, pr: 77 })).toEqual({ kind: 'blocked' });
     expect(deps.emitPreview).not.toHaveBeenCalled();
+    expect(deps.persistAccept).not.toHaveBeenCalled();
+    expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('epic issue'));
+    expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd, distinct from Slice 1
+    expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
+  });
+
+  it('Slice 2 — AC4: after an unresolvable-issue block, a resolvable epic re-decides to preview-raised', () => {
+    const { deps, coord } = harness();
+    expect(approveEpic(coord, { epic: null, pr: 77 })).toEqual({ kind: 'blocked' });
+    expect(approveEpic(coord, { epic: 176, pr: 77 })).toEqual({ kind: 'preview-raised' });
+    expect(deps.emitPreview).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('resolve — complete the held promotion (§28.7)', () => {
-  const begin = (coord: ReturnType<typeof harness>['coord']): boolean =>
+  const begin = (coord: ReturnType<typeof harness>['coord']): EpicGateOutcome =>
     coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', { epic: 176, pr: 77 });
 
   it('confirm runs the promotion then persists the accept + stands the flow down', async () => {

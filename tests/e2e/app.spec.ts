@@ -10,7 +10,7 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
-import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
+import { parseAuditStream, gateDecisionAuditCmd, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
@@ -18,7 +18,7 @@ import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
-import { readBaselineCommit, recordBaselineCommit, readChangedTests } from '../../src/main/appLoopState';
+import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -1921,6 +1921,16 @@ const auditRunFiles = (home: string, repo: string): string[] => {
 };
 const readAuditRun = (home: string, repo: string, file: string): { header: unknown; events: AuditEvent[] } =>
   parseAuditStream(readFileSync(join(auditDir(home, repo), file), 'utf8'));
+
+// §28.7/§25 — the confirm-first preview's §25 `command` event, derived from its single producer so a rename of the
+// cmd re-flows here rather than leaving a stale literal (shared-semantics). Its count in the reconstructed timeline
+// is the "a preview was raised" pin: >0 on the clean path (§25 iff, epicE2E), 0 when the gate blocked (#124).
+const EPIC_PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
+const epicPreviewAuditCount = (home: string, repo: string): number =>
+  auditRunFiles(home, repo).reduce(
+    (n, f) => n + readAuditRun(home, repo, f).events.filter((e) => e.type === 'command' && e.cmd.includes(EPIC_PREVIEW_AUDIT_CMD)).length,
+    0,
+  );
 
 test('flow Start opens an audit run file with a flow.started event (§25.4)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-audit-', 'groom');
@@ -6439,6 +6449,69 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §28.7 / #124 Slice 2 — a repo seeded DIRECTLY at the plan-bundle epic gate whose flow declares NO github-ticket
+// input on any step, so computeRefs yields refs.ticket === null → refs.epic === null at the gate. Seeded statically
+// (never driven live): a live pickup would call acceptBootstrap and install a trusted bootstrap whose issue would
+// then supply refs.ticket, defeating the unresolvable-epic-issue reproduction. No bootstrap.yaml on disk. The gate
+// reconstructs on cd from the persisted §27 run-state (a reached clean verdict + the def's declared options).
+function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  const at = join(dir, '.agent-terminal');
+  mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
+  writeFileSync(
+    join(at, 'flow.yaml'),
+    'name: epic-no-ticket\nsteps:\n  - id: plan-bundle\n    kind: loop\n    loop: plan-bundle-loop\n    loop_namespace: app\n  - id: done\n    kind: manual\n',
+  );
+  // Already ENTERED at plan-bundle (in_progress), so no Start click is needed — hence no pickup runs and no
+  // trusted bootstrap is installed; the epic issue ref stays unresolvable.
+  writeFileSync(join(at, 'flow-state.yaml'), 'step: plan-bundle\nstatus: in_progress\n');
+  writeFileSync(
+    join(at, 'loop', 'run-state.yaml'),
+    `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-bundle-loop\nstep: plan-bundle\nturn_key: consolidate-plan-bundle\nstatus: complete\nverdict: clean\nround: 1\n`,
+  );
+  writeFileSync(join(at, 'loop', 'artifacts', 'plan.md'), `${exampleEpicPlan(subTickets)}\n`);
+  return dir;
+}
+
+test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic issue BLOCKS at approve, never silently advances', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicNoTicketGateRepo('agent-term-e2e-epicNoTicket-', 2);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicNoTicket-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicNoTicket-bin-', { realCommitOps: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // The gate reconstructs on cd — no live drive (see seedEpicNoTicketGateRepo). The panel classifies the seeded
+  // plan an epic (the pre-approve label still offers the promotion — a documented Non-goal; #124 blocks at approve).
+  await typeCommand(`cd "${repo}"`);
+  await expect(loopReadout()).toBeVisible({ timeout: 15_000 });
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  // The gate settles into the BLOCKED state first — a blocking error that the epic issue is unresolvable. Anchoring
+  // the negative checks on this visible settle keeps them from passing by racing ahead of a state that would advance.
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'no resolvable epic issue' })).toBeVisible({ timeout: 15_000 });
+  // #124 — no confirm-first preview was raised, nothing reached GitHub, and the flow HOLDS at plan-bundle: the RED
+  // here is the silent single-ticket accept that advanced the flow to `done`.
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  // §25 — no preview event is pinned NON-vacuously at the unit + integration layers (this reconstruction path
+  // Starts no flow, so it opens no audit run to read); the observable gate outcomes above are the e2e's job.
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // ---- §28.7 S8 — the epic overlay: an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate ----
 // A focused fake-agent driving groom → plan-bundle, whose plan-bundle work arm writes an EPIC-classified plan
 // (exampleEpicPlan — the one authored grammar). Reused by the S8 slices; each drives to the plan-bundle gate.
@@ -6617,7 +6690,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('§28.7 S8 — a corrupt promotion record BLOCKS confirm, creating nothing (AC3 fail-safe)', { tag: '@ownapp' }, async () => {
+test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE any confirm preview (AC3 fail-safe)', { tag: '@ownapp' }, async () => {
   const repo = seedEpicChainRepo('agent-term-e2e-epicD-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicD-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicD-bin-', { realCommitOps: true });
@@ -6631,19 +6704,21 @@ test('§28.7 S8 — a corrupt promotion record BLOCKS confirm, creating nothing 
 
   await driveToEpicPlanBundleGate(repo);
   // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
-  // SOLE guard against duplicate public issues, so it must BLOCK creation, never fall through (SEC-1/AC3).
+  // SOLE guard against duplicate public issues, so #124 refuses at approve — before the confirm preview is raised.
   writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
 
   await loopPanel().locator('[data-gate-option="approve"]').click();
-  const confirmDialog = page.getByRole('alertdialog').filter({ hasText: 'Create' });
-  await expect(confirmDialog).toBeVisible({ timeout: 15_000 });
-  await confirmDialog.locator('.pill.danger.confirm').click();
-
-  // The promotion was blocked: nothing created, the error surfaced, the gate is NOT accepted (still actionable).
-  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  // The gate settles into the BLOCKED state first — the error naming the record unreadable. Anchoring the negative
+  // checks on this visible settle keeps them from passing by racing ahead of a confirm dialog that would still render.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
+  // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle'); // not stood down — the promotion refused
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  // §25 — the reconstructed timeline records NO preview event (the block fired no `epic-promotion-preview` cmd).
+  await expect.poll(() => epicPreviewAuditCount(home, repo), { timeout: 10_000 }).toBe(0);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -6678,6 +6753,9 @@ test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (
   await expect(dialog).toContainText('Add tracking checklist to epic #176');
   await expect(dialog).toContainText('Close epic planning PR #4242');
   expect(readGhLog(logFile)).not.toContain('issue create'); // nothing on GitHub yet
+  // §25 iff — the clean path DID raise the preview, so the reconstructed timeline records the preview event
+  // (the positive half of the #124 block tests' negative assertion, so the pin can never pass vacuously).
+  await expect.poll(() => epicPreviewAuditCount(home, repo), { timeout: 10_000 }).toBeGreaterThan(0);
 
   // Confirm → AC2: the chain exists on GitHub. Wait on the strictly-last op (PR close) so every sink is flushed.
   await dialog.locator('.pill.danger.confirm').click();
