@@ -14,6 +14,7 @@ import type {
   LoopDefV2,
   LoopDefV2Result,
 } from './loopDefV2';
+import type { EpicGateOutcome } from './epicPromotion';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 import type { RunAppGateCommitSideEffect } from './appGateCommit';
 import { stripStatusControlChars } from '../shared/loopStatus';
@@ -38,11 +39,9 @@ export interface AppGateDecisionDeps {
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
-  /** §28.7 — when the approve gate declares a `promote` side-effect and the plan is classified an epic, raise
-   *  the confirm-first preview and HOLD, returning true (the resolve path accepts + stands the flow down). The
-   *  gate is neither accepted nor advanced here. Returns false for a non-epic plan or a gate with no promote
-   *  side-effect — the normal accept below runs. */
-  maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): boolean;
+  /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
+   *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
+  maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): EpicGateOutcome;
   /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback
    *  (a domain port the composition root wires to the §27 engine). It is NOT approve: the flow does not
    *  advance and no gh side-effect runs — the loop returns to iterate on the step. Returns whether the round
@@ -158,12 +157,23 @@ export async function runAppGateDecision(
   // impasse is never executed here.
   if (option !== 'approve') return false;
 
-  // §28.7 — an epic plan intercepts here: maybeBegin holds it pending the confirm-first resolve, so `return false`
-  // below means intercepted-and-held, NOT rejected — the gate is neither accepted nor advanced.
-  if (deps.maybeBeginEpicPromotion(repoDir, r.def, run.step, run.turnKey)) {
-    deps.audit(repoDir, gateDecisionAuditCmd('epic-promotion-preview', option), 0);
-    deps.onViewChanged();
-    return false;
+  // §28.7 — an epic plan intercepts here: `return false` is intercepted-and-held, not a reject. The `blocked`
+  // branch surfaces no error of its own — the coordinator already surfaced it before returning.
+  const epicOutcome = deps.maybeBeginEpicPromotion(repoDir, r.def, run.step, run.turnKey);
+  switch (epicOutcome.kind) {
+    case 'preview-raised':
+      deps.audit(repoDir, gateDecisionAuditCmd('epic-promotion-preview', option), 0);
+      deps.onViewChanged();
+      return false;
+    case 'blocked':
+      deps.onViewChanged();
+      return false;
+    case 'not-epic':
+      break;
+    default: {
+      const unhandled: never = epicOutcome;
+      return unhandled;
+    }
   }
 
   // D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and

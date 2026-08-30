@@ -70,4 +70,13 @@ describe('runEpicPromotion over the real store — resumable idempotency (§28.7
     expect(events.filter((e) => e.startsWith('create#'))).toEqual(['create#601', 'create#602']); // slices 2 and 3, each its OWN fresh number
     expect(readEpicPromotion(repo, 176)).toMatchObject({ trackingAppended: true, prClosed: true });
   });
+
+  it('a resumed record whose recorded split diverges from the plan is refused (defense-in-depth behind the gate-time block)', async () => {
+    // The gate now blocks a stale record before the preview; this pins the executor guard that still refuses one
+    // that went stale AFTER confirm — it must never orphan or mis-stack the recorded slice.
+    writeEpicPromotion(repo, { epic: 176, created: [{ index: 1, issue: 501, title: 'A slice the plan no longer has' }], trackingAppended: false, prClosed: false });
+    const { gh, events } = fakeGh(600);
+    await expect(runEpicPromotion(gh, REQUEST, realStore())).rejects.toThrow('plan changed since a partial promotion');
+    expect(events).toEqual([]); // refused before any GitHub mutation
+  });
 });

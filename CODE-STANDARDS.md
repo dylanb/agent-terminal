@@ -273,6 +273,23 @@ shipped this way: `wipeConflict: true` deleted the branch (and closed its PR) re
 `on_conflict` was `wipe-and-retry`, because the policy was consulted only on the path that *asked*. The
 confirm-first rule for hard-to-reverse and outward-facing actions stands on top of this, not instead of it.
 
+## Every entry in the run log must be true
+
+The app keeps a running record of what it did during each task — the run log (we call it the §25 audit log). People read it afterwards to understand what actually happened, so every entry is a statement of fact: "we showed the user a confirmation," "we skipped this step," "this step failed." Those statements have to be accurate. A wrong entry isn't a cosmetic issue — it misleads whoever reads the log into believing something that never occurred: a confirmation the user was never shown, a failure that never happened, or a "success" that was really a cancellation.
+
+Two mistakes to avoid:
+
+- **Never record something that didn't happen** — and never leave out something that did. Don't write "confirmation shown" for a run where you actually blocked the action and showed nothing, and don't log a cancelled review as a success.
+- **Never use one entry for two different things.** If "skipped on purpose" and "tried and failed" write the same entry, nobody reading the log later can tell them apart. Same trap when a small follow-up failure gets recorded as if the main action failed — now the log blames a step that actually succeeded.
+
+To write the right entry, the code has to be able to tell the situations apart — and this is usually where it breaks. A function returns a plain yes/no, but yes/no can't separate two outcomes that both count as "yes." When that happens, change the function to return a value that names which outcome actually occurred, and choose the log entry from that. Don't guess by picking the closest-looking entry off a yes/no.
+
+A worked example: our epic-promotion gate used to return true/false, where "true" meant "we held the action." But it held in two different cases — either we showed the user a confirmation, or we blocked the action entirely. True/false can't tell those apart, yet we should record "confirmation shown" in only the first case. The fix was to return a value that names the real outcome (shown / blocked / not-applicable) and record "confirmation shown" only when it was actually shown. The gate-decision log already works this way: "skipped" and "failed" are separate entries, a cancelled decision is recorded as a cancellation and never as a success, and a bookkeeping failure is its own entry so it's never mistaken for the main action failing.
+
+Prove it with a test that would fail if the log lied, and check both directions: the entry shows up when the outcome happened, and does not show up when a different outcome happened. Checking only the first isn't enough — a bug that writes the entry every single time would still pass. So the "blocked" test confirms the block was recorded and that no "confirmation shown" entry appears; the cancellation tests confirm the cancellation was recorded and that no "success" entry appears.
+
+In the code: the gate returns `EpicGateOutcome` (not the old boolean). The "confirmation shown" entry, recorded only on the `preview-raised` outcome, is produced by the shared `gateDecisionAuditCmd` (`src/shared/audit.ts`); each block entry is its own §28-pattern constant in `epicPromotion.ts`, deliberately distinct from that preview entry so a block is never recorded as a confirmation.
+
 ## Comments state ONLY what the code cannot
 
 If a fact is recoverable by reading the code, commenting it is forbidden. The test is mechanical and

@@ -1,8 +1,7 @@
 // §28.7 — the epic overlay. `readEpicSubTicketsAtGate` reads an epic-capable loop's `plan` artifact and parses
-// its authored sub-tickets (the one read both the gate preview and the promotion consume, so they cannot
-// drift). The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
-// coordinator (§27.10): maybeBegin intercepts an approve on an epic plan and holds pending the operator's
-// confirm; resolve completes it — confirm promotes then accepts + stands the flow down, decline drops it.
+// its authored sub-tickets — the one read both the gate preview and the promotion consume, so they cannot
+// drift. The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
+// coordinator (§27.10).
 
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
@@ -88,6 +87,28 @@ export interface EpicPromotionStore {
   write(state: EpicPromotionState): void;
 }
 
+/** The operator message when the epic's promotion record is present-but-unreadable — one source for both the
+ *  gate-time block (maybeBegin) and the op-level guard (runEpicPromotion), so they read identically. */
+export function promotionRecordUnreadableError(epic: number): string {
+  return `a promotion record for this epic is unreadable — it may have already opened sub-ticket issues and added a tracking checklist to the epic, so do not remove .agent-terminal/loop/promotion-${epic}.yaml and re-approve until you have fully undone any partial run (delete those issues and remove the epic's tracking checklist), or the retry will duplicate issues and leave the checklist pointing at deleted ones`;
+}
+
+/** The operator message when a readable resumed promotion record's split has diverged from the current plan —
+ *  one source for both the gate-time block (maybeBegin) and the op-level guard (runEpicPromotion). */
+export function promotionRecordStaleError(epic: number): string {
+  return `the plan changed since a partial promotion — its record already opened sub-ticket issues and may have added a tracking checklist to the epic, so clearing it and re-approving would duplicate the issues and leave the checklist pointing at the old ones; either restore the plan's split to match the record and re-approve, or fully undo the partial run — delete the opened issues and remove the epic's tracking checklist — before removing .agent-terminal/loop/promotion-${epic}.yaml, then re-approve`;
+}
+
+/** Whether a resumed promotion record has gone stale against the current plan: a recorded sub-ticket the plan no
+ *  longer carries at the same index AND title would orphan a real slice or mis-stack the chain on resume. The
+ *  gate-time block and the executor guard both derive "stale" from HERE, so they cannot diverge (§28.7). */
+export function promotionRecordStale(created: { index: number; title: string }[], subTickets: EpicSubTicket[]): boolean {
+  return created.some((rec) => {
+    const cur = subTickets.find((st) => st.index === rec.index);
+    return cur === undefined || cur.title !== rec.title;
+  });
+}
+
 /** Create the sub-ticket chain + tracking issue (§28.7 AC2), RESUMABLY and IDEMPOTENTLY (AC3). Ordered so the
  *  approved plan is never lost: every sub-ticket (each carrying its plan slice verbatim) is created BEFORE the
  *  epic PR is closed. Each sub-ticket carries the epic link and the REAL preceding issue number, labelled
@@ -96,7 +117,7 @@ export interface EpicPromotionStore {
 export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: EpicPromotionRequest, store: EpicPromotionStore): Promise<void> {
   const existing = store.read(request.epic);
   if (existing === 'corrupt') {
-    throw new Error(`a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion-${request.epic}.yaml and re-approve`);
+    throw new Error(promotionRecordUnreadableError(request.epic));
   }
   // Creates are keyed on `index`; two sub-tickets sharing one would collapse onto a single issue, silently
   // dropping a slice the preview promised. Refuse the malformed split (defense-in-depth behind the gate's
@@ -109,16 +130,11 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
     seenIndices.add(st.index);
   }
   const state: EpicPromotionState = existing ?? { epic: request.epic, created: [], trackingAppended: false, prClosed: false };
-  // Reconcile a resumed record against the CURRENT plan: every recorded sub-ticket must still be in the request
-  // with the same index AND title, else the plan diverged since the partial run (or the record was planted) and
-  // resuming would orphan real slices / mis-stack. Block rather than act on a stale split. (Fabricated issue
-  // NUMBERS with valid titles cannot be caught without re-querying GitHub — a documented non-goal; the loop area
-  // is shared with the agent, the pre-existing trust boundary.)
-  for (const rec of state.created) {
-    const cur = request.subTickets.find((st) => st.index === rec.index);
-    if (cur === undefined || cur.title !== rec.title) {
-      throw new Error(`the plan changed since a partial promotion — clear .agent-terminal/loop/promotion-${request.epic}.yaml and re-approve`);
-    }
+  // Defense-in-depth behind the gate-time block (maybeBegin): refuse a record that went stale after confirm
+  // rather than orphan real slices / mis-stack. (Fabricated issue NUMBERS with valid titles cannot be caught
+  // without re-querying GitHub — a documented non-goal; the loop area is the pre-existing agent trust boundary.)
+  if (promotionRecordStale(state.created, request.subTickets)) {
+    throw new Error(promotionRecordStaleError(request.epic));
   }
   const issueByIndex = new Map(state.created.map((c) => [c.index, c.issue]));
   let preceding: number | null = null;
@@ -162,6 +178,12 @@ export interface EpicPromotionCoordinatorDeps {
   /** The gate's authored sub-tickets, or null when the plan is not an epic (the real port is
    *  `readEpicSubTicketsAtGate`; the coordinator stays a pure hold/resolve over it). */
   readSubTickets(def: LoopDefV2): EpicSubTicket[] | null;
+  /** Why the epic's resumable promotion record forbids promoting THIS plan at the gate, or null when it does not
+   *  — the authorizing precondition checked BEFORE the preview. `corrupt`: present-but-unreadable; `stale-split`:
+   *  a readable resumed record whose created slices have diverged from the current plan. Its wiring MUST consult
+   *  the SAME store `runEpicPromotion` does and derive "stale" from the SAME `promotionRecordStale`, so the gate
+   *  block and the op-level guard cannot diverge (never the store `read` primitive — the domain concept). */
+  promotionRecordBlock(repoDir: string, epic: number, subTickets: EpicSubTicket[]): EpicPromotionGateBlock | null;
   /** Raise the confirm-first preview naming every sub-ticket (→ flow:onEpicPromotionPreview). */
   emitPreview(msg: { repoDir: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }): void;
   /** Create the sub-ticket chain + tracking issue (§28.7 AC2/AC3) — resumably, over the promotion store. */
@@ -178,10 +200,17 @@ export interface EpicPromotionCoordinatorDeps {
   onViewChanged(): void;
 }
 
+/** §28.7 — the three ways an approve at the epic gate resolves. The caller fires the §25 preview audit iff the
+ *  outcome is `preview-raised` (CODE-STANDARDS discriminated-union for mutually-exclusive modes). */
+export type EpicGateOutcome =
+  | { kind: 'not-epic' }
+  | { kind: 'preview-raised' }
+  | { kind: 'blocked' };
+
 export interface EpicPromotionCoordinator {
-  /** Intercept an approve on an epic plan: raise the preview and hold, returning true. Returns false (the
-   *  normal accept runs) for a non-epic plan, a gate with no promote side-effect, or an unknown epic issue. */
-  maybeBegin(repoDir: string, def: LoopDefV2, loop: string, step: string, turnKey: string, refs: EpicPromotionRefs): boolean;
+  /** Classify an approve at the epic gate into an `EpicGateOutcome`. Authorizing preconditions are checked
+   *  HERE, before the preview is raised (§28.7 / CODE-STANDARDS policy-checked-at-the-operation). */
+  maybeBegin(repoDir: string, def: LoopDefV2, loop: string, step: string, turnKey: string, refs: EpicPromotionRefs): EpicGateOutcome;
   /** Answer a held promotion: confirm promotes then accepts + stands down; decline drops it and leaves the gate. */
   resolve(repoDir: string, step: string, confirm: boolean): Promise<void>;
 }
@@ -192,18 +221,43 @@ function sameSplit(a: EpicSubTicket[], b: EpicSubTicket[]): boolean {
   return a.length === b.length && a.every((t, i) => t.index === b[i].index && t.title === b[i].title);
 }
 
+/** Why a persisted promotion record forbids promoting a plan at the gate: `corrupt` (present-but-unreadable) or
+ *  `stale-split` (readable, but its recorded slices have diverged from the current plan). Each maps to its OWN
+ *  §28 block audit entry so the run log never blurs the two outcomes (CODE-STANDARDS run-log truthfulness). */
+export type EpicPromotionGateBlock = 'corrupt' | 'stale-split';
+
+const EPIC_PROMOTION_BLOCKED_UNREADABLE = '§28 epic-promotion blocked — unreadable promotion record';
+const EPIC_PROMOTION_BLOCKED_STALE = '§28 epic-promotion blocked — plan diverged from partial-promotion record';
+const EPIC_PROMOTION_BLOCKED_UNRESOLVABLE = '§28 epic-promotion blocked — unresolvable epic issue';
+
+const EPIC_ISSUE_UNRESOLVABLE_ERROR = 'this epic plan has no resolvable epic issue to promote — its flow carries no epic issue reference; fix the flow state and re-approve';
+
 export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDeps): EpicPromotionCoordinator {
   const held = new Map<string, { def: LoopDefV2; loop: string; step: string; turnKey: string; epic: number; pr: number | null; subTickets: EpicSubTicket[] }>();
   const key = (repoDir: string, step: string): string => `${repoDir}\0${step}`;
   return {
     maybeBegin(repoDir, def, loop, step, turnKey, refs) {
       const subTickets = deps.readSubTickets(def);
-      if (subTickets === null || refs.epic === null) return false;
-      // TODO(dylanb) #124 — hard-fail a corrupt promotion store HERE, before raising the preview, so the
-      // destructive-op policy is checked before the prompt (today it is enforced only at runEpicPromotion).
+      if (subTickets === null) return { kind: 'not-epic' };
+      // §28.7 — a well-formed epic plan whose epic issue is unresolvable cannot be promoted; block loudly here
+      // rather than fall through to the silent single-ticket accept (the UI-offered-X / got-Y divergence).
+      if (refs.epic === null) {
+        deps.emitError(repoDir, EPIC_ISSUE_UNRESOLVABLE_ERROR);
+        deps.audit(repoDir, EPIC_PROMOTION_BLOCKED_UNRESOLVABLE, 1);
+        return { kind: 'blocked' };
+      }
+      // §28.7 — the promotion record is the sole guard against re-creating duplicate public issues, so a record
+      // that forbids promotion must refuse HERE, before the confirm preview is raised (never prompt-then-refuse).
+      const block = deps.promotionRecordBlock(repoDir, refs.epic, subTickets);
+      if (block !== null) {
+        const corrupt = block === 'corrupt';
+        deps.emitError(repoDir, corrupt ? promotionRecordUnreadableError(refs.epic) : promotionRecordStaleError(refs.epic));
+        deps.audit(repoDir, corrupt ? EPIC_PROMOTION_BLOCKED_UNREADABLE : EPIC_PROMOTION_BLOCKED_STALE, 1);
+        return { kind: 'blocked' };
+      }
       held.set(key(repoDir, step), { def, loop, step, turnKey, epic: refs.epic, pr: refs.pr, subTickets });
       deps.emitPreview({ repoDir, step, epic: refs.epic, pr: refs.pr, subTickets: subTickets.map((t) => ({ index: t.index, title: t.title })) });
-      return true;
+      return { kind: 'preview-raised' };
     },
     async resolve(repoDir, step, confirm) {
       const h = held.get(key(repoDir, step));
