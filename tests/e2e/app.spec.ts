@@ -6733,6 +6733,47 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   rmSync(binDir, { recursive: true, force: true });
 });
 
+test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at approve through the real wiring, BEFORE any confirm preview', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicStale-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicStale-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicStale-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  // A READABLE partial-promotion record whose recorded split has diverged from the plan (an index the current
+  // plan no longer carries). This exercises the REAL gate wiring — readEpicPromotion + promotionRecordStale in
+  // index.ts, not an injected stub — so a deleted stale branch would raise the preview here and fail this test.
+  writeFileSync(
+    join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'),
+    `schema_version: ${APP_LOOP_STATE_SCHEMA}\nepic: 176\ncreated:\n  - index: 99\n    issue: 599\n    title: A slice the current plan does not have\ntracking_appended: false\npr_closed: false\n`,
+  );
+
+  const promoMutationsBefore = ghPromotionMutations(logFile); // snapshot before the approve: the block must add none
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  // The gate settles into the BLOCKED state first — the error naming the diverged partial promotion. Anchoring the
+  // negative checks on this visible settle keeps them from passing by racing ahead of a preview that would still render.
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'partial promotion' })).toBeVisible({ timeout: 15_000 });
+  // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  // §25 — the reconstructed timeline records NO preview event (the block fired no `epic-promotion-preview` cmd).
+  await expect.poll(() => epicPreviewAuditCount(home, repo), { timeout: 10_000 }).toBe(0);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // ---- §28.7/§28.10 S8 — the epic overlay end-to-end: an epic plan fans out into a stacked sub-ticket chain ----
 test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (AC1) → confirm → the stacked chain + tracking issue exist and are recorded (AC2/AC3)', { tag: '@ownapp' }, async () => {
   const repo = seedEpicChainRepo('agent-term-e2e-epicE2E-');

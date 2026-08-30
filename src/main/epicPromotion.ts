@@ -96,7 +96,7 @@ export function promotionRecordUnreadableError(epic: number): string {
 /** The operator message when a readable resumed promotion record's split has diverged from the current plan —
  *  one source for both the gate-time block (maybeBegin) and the op-level guard (runEpicPromotion). */
 export function promotionRecordStaleError(epic: number): string {
-  return `the plan changed since a partial promotion — clear .agent-terminal/loop/promotion-${epic}.yaml and re-approve`;
+  return `the plan changed since a partial promotion — its record lists sub-ticket issues that already exist, so clearing it and re-approving would duplicate them; restore the plan's split to match the record, or delete every recorded issue before removing .agent-terminal/loop/promotion-${epic}.yaml, then re-approve`;
 }
 
 /** Whether a resumed promotion record has gone stale against the current plan: a recorded sub-ticket the plan no
