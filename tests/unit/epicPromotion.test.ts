@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEpicPromotionCoordinator, type EpicGateOutcome, type EpicPromotionCoordinatorDeps, type EpicPromotionRefs } from '../../src/main/epicPromotion';
+import { createEpicPromotionCoordinator, promotionRecordStale, type EpicGateOutcome, type EpicPromotionCoordinatorDeps, type EpicPromotionRefs } from '../../src/main/epicPromotion';
 import { gateDecisionAuditCmd } from '../../src/shared/audit';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { EpicSubTicket } from '../../src/shared/epicPlan';
@@ -24,7 +24,7 @@ const SUBS: EpicSubTicket[] = [
 function harness(over: Partial<EpicPromotionCoordinatorDeps> = {}) {
   const deps: EpicPromotionCoordinatorDeps = {
     readSubTickets: vi.fn(() => SUBS),
-    promotionRecordCorrupt: vi.fn(() => false),
+    promotionRecordBlock: vi.fn(() => null),
     emitPreview: vi.fn(),
     runPromotion: vi.fn(() => Promise.resolve()),
     persistAccept: vi.fn(),
@@ -73,7 +73,7 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
   };
 
   it('Slice 1 — a corrupt promotion record blocks before the preview: error surfaced, block audited, NO preview', () => {
-    const { deps, coord } = harness({ promotionRecordCorrupt: vi.fn(() => true) });
+    const { deps, coord } = harness({ promotionRecordBlock: vi.fn(() => 'corrupt' as const) });
     expect(approveEpic(coord)).toEqual({ kind: 'blocked' });
     expect(deps.emitPreview).not.toHaveBeenCalled(); // the confirm-first preview is never raised on a block
     expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('unreadable'));
@@ -81,16 +81,16 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
     expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
   });
 
-  it('Slice 1 — the corrupt-record predicate is passed the epic issue number the gate resolved', () => {
-    const promotionRecordCorrupt = vi.fn(() => true);
-    const { coord } = harness({ promotionRecordCorrupt });
+  it('Slice 1 — the gate block predicate is passed the epic issue number the gate resolved and the plan split', () => {
+    const promotionRecordBlock = vi.fn(() => 'corrupt' as const);
+    const { coord } = harness({ promotionRecordBlock });
     approveEpic(coord, { epic: 176, pr: 77 });
-    expect(promotionRecordCorrupt).toHaveBeenCalledWith('/repo', 176);
+    expect(promotionRecordBlock).toHaveBeenCalledWith('/repo', 176, SUBS);
   });
 
   it('Slice 1 — AC4: after a corrupt-record block, a corrected record re-decides to preview-raised (gate not stranded)', () => {
-    const promotionRecordCorrupt = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
-    const { deps, coord } = harness({ promotionRecordCorrupt });
+    const promotionRecordBlock = vi.fn().mockReturnValueOnce('corrupt').mockReturnValueOnce(null);
+    const { deps, coord } = harness({ promotionRecordBlock });
     expect(approveEpic(coord)).toEqual({ kind: 'blocked' }); // first approve blocks
     expect(approveEpic(coord)).toEqual({ kind: 'preview-raised' }); // the record is fixed → the gate re-decides
     expect(deps.emitPreview).toHaveBeenCalledTimes(1); // the preview is raised only on the re-decision
@@ -110,6 +110,46 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
     expect(approveEpic(coord, { epic: null, pr: 77 })).toEqual({ kind: 'blocked' });
     expect(approveEpic(coord, { epic: 176, pr: 77 })).toEqual({ kind: 'preview-raised' });
     expect(deps.emitPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it('Slice 3 — a readable but STALE promotion record (its split diverges from the plan) BLOCKS before the preview', () => {
+    const { deps, coord } = harness({ promotionRecordBlock: vi.fn(() => 'stale-split' as const) });
+    expect(approveEpic(coord)).toEqual({ kind: 'blocked' });
+    expect(deps.emitPreview).not.toHaveBeenCalled(); // never prompt-then-refuse: no confirm-first preview on a stale record
+    expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('plan changed since a partial promotion'));
+    expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd
+    expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
+  });
+
+  it('Slice 3 — the stale-record block cmd is DISTINCT from the corrupt-record block cmd (§25 — the two outcomes stay distinguishable)', () => {
+    const stale = harness({ promotionRecordBlock: vi.fn(() => 'stale-split' as const) });
+    const corrupt = harness({ promotionRecordBlock: vi.fn(() => 'corrupt' as const) });
+    approveEpic(stale.coord);
+    approveEpic(corrupt.coord);
+    expect(blockAuditCmd(stale.deps)).not.toBe(blockAuditCmd(corrupt.deps));
+  });
+
+  it('Slice 3 — AC4: after a stale-record block, a reconciled record re-decides to preview-raised', () => {
+    const promotionRecordBlock = vi.fn().mockReturnValueOnce('stale-split').mockReturnValueOnce(null);
+    const { deps, coord } = harness({ promotionRecordBlock });
+    expect(approveEpic(coord)).toEqual({ kind: 'blocked' });
+    expect(approveEpic(coord)).toEqual({ kind: 'preview-raised' });
+    expect(deps.emitPreview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('promotionRecordStale — a resumed record reconciled against the current plan (§28.7)', () => {
+  it('is not stale when every recorded sub-ticket is still present at the same index AND title', () => {
+    expect(promotionRecordStale([{ index: 1, title: 'Slice one' }, { index: 2, title: 'Slice two' }], SUBS)).toBe(false);
+  });
+  it('is stale when a recorded sub-ticket title diverges from the plan', () => {
+    expect(promotionRecordStale([{ index: 1, title: 'Renamed slice' }], SUBS)).toBe(true);
+  });
+  it('is stale when a recorded index is absent from the plan (a slice was removed or reordered)', () => {
+    expect(promotionRecordStale([{ index: 9, title: 'Slice one' }], SUBS)).toBe(true);
+  });
+  it('an empty record (a fresh promotion) is never stale', () => {
+    expect(promotionRecordStale([], SUBS)).toBe(false);
   });
 });
 

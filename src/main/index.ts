@@ -111,7 +111,7 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
-import { createEpicPromotionCoordinator, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
+import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
@@ -799,8 +799,14 @@ async function createWindow(): Promise<void> {
   // §28.7
   const epicPromotionCoordinator = createEpicPromotionCoordinator({
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
-    // §28.7 — `readEpicPromotion` never throws (§appLoopState), so this bare `=== 'corrupt'` callsite needs no guard.
-    promotionRecordCorrupt: (repoDir, epic) => readEpicPromotion(repoDir, epic) === 'corrupt',
+    // §28.7 — read the SAME store runEpicPromotion consults and derive "stale" from the SAME shared predicate, so
+    // the gate block and the op-level guard cannot diverge. `readEpicPromotion` never throws (§appLoopState).
+    promotionRecordBlock: (repoDir, epic, subTickets) => {
+      const rec = readEpicPromotion(repoDir, epic);
+      if (rec === 'corrupt') return 'corrupt';
+      if (rec !== null && promotionRecordStale(rec.created, subTickets)) return 'stale-split';
+      return null;
+    },
     emitPreview: ({ repoDir, step, epic, pr, subTickets }) =>
       send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
     // §28.7 AC2/AC3 — create the sub-ticket chain + tracking issue through the real gh adapter, resumably: the

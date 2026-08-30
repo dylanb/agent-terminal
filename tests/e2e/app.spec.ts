@@ -2972,6 +2972,11 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
 }
 
 const readGhLog = (logFile: string): string => (existsSync(logFile) ? readFileSync(logFile, 'utf8') : '');
+// §28.7 — the promotion's GitHub MUTATIONS (createRealAppEpicPromotionGitHub): `gh issue create`, `gh issue edit`
+// (label + tracking append), `gh pr close`. The epic body READ (`gh issue view`) is not a mutation. A blocked
+// approve must add NONE of these — a stronger pin than "no issue create" (the block could still edit/close).
+const ghPromotionMutations = (logFile: string): string[] =>
+  readGhLog(logFile).split('\n').filter((l) => /^gh (issue create|issue edit|pr close)\b/.test(l));
 const appFlowState = (repo: string): string => join(repo, '.agent-terminal', 'flow-state.yaml');
 
 test('a §27 app plan gate renders approve + request-changes, and approve runs the loop\'s gh side-effect → terminal accept → the flow advances (AC1,2,7)', { tag: '@ownapp' }, async () => {
@@ -6493,6 +6498,7 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
 
+  const promoMutationsBefore = ghPromotionMutations(logFile); // snapshot before the approve: the block must add none
   await loopPanel().locator('[data-gate-option="approve"]').click();
   // The gate settles into the BLOCKED state first — a blocking error that the epic issue is unresolvable. Anchoring
   // the negative checks on this visible settle keeps them from passing by racing ahead of a state that would advance.
@@ -6500,7 +6506,7 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   // #124 — no confirm-first preview was raised, nothing reached GitHub, and the flow HOLDS at plan-bundle: the RED
   // here is the silent single-ticket accept that advanced the flow to `done`.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
-  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
   // §25 — no preview event is pinned NON-vacuously at the unit + integration layers (this reconstruction path
@@ -6707,6 +6713,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   // SOLE guard against duplicate public issues, so #124 refuses at approve — before the confirm preview is raised.
   writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
 
+  const promoMutationsBefore = ghPromotionMutations(logFile); // snapshot before the approve: the block must add none
   await loopPanel().locator('[data-gate-option="approve"]').click();
   // The gate settles into the BLOCKED state first — the error naming the record unreadable. Anchoring the negative
   // checks on this visible settle keeps them from passing by racing ahead of a confirm dialog that would still render.
@@ -6714,7 +6721,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
   // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
-  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).not.toContain('issue create');
+  await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
   // §25 — the reconstructed timeline records NO preview event (the block fired no `epic-promotion-preview` cmd).
