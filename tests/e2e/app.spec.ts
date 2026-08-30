@@ -6505,7 +6505,7 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   await expect(page.getByRole('alertdialog').filter({ hasText: 'no resolvable epic issue' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was raised, nothing reached GitHub, and the flow HOLDS at plan-bundle: the RED
   // here is the silent single-ticket accept that advanced the flow to `done`.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
@@ -6719,7 +6719,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   // checks on this visible settle keeps them from passing by racing ahead of a confirm dialog that would still render.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
@@ -6760,7 +6760,7 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   // negative checks on this visible settle keeps them from passing by racing ahead of a preview that would still render.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'partial promotion' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create' })).toHaveCount(0);
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });

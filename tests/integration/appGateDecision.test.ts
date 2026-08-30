@@ -548,10 +548,7 @@ describe('runAppGateDecision — inert when the gate cannot be established', () 
   });
 });
 
-// §28.7 — approving an epic-classified plan is classified into one of three outcomes BEFORE the accept:
-// `preview-raised` holds the confirm-first preview (the resolve path completes it); `blocked` surfaces a
-// precondition error and holds WITHOUT a preview event; `not-epic` takes the normal accept + advance. On the
-// two held outcomes the gate is neither accepted nor advanced.
+// §28.7 — approving an epic-classified plan is classified into an EpicGateOutcome BEFORE the accept.
 describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
   // The §25 preview event's cmd, derived from its single producer so a rename re-flows here (shared-semantics).
   const previewAuditCmd = gateDecisionAuditCmd('epic-promotion-preview', 'approve');

@@ -90,7 +90,7 @@ export interface EpicPromotionStore {
 /** The operator message when the epic's promotion record is present-but-unreadable — one source for both the
  *  gate-time block (maybeBegin) and the op-level guard (runEpicPromotion), so they read identically. */
 export function promotionRecordUnreadableError(epic: number): string {
-  return `a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion-${epic}.yaml and re-approve`;
+  return `a promotion record for this epic is unreadable — it may record sub-ticket issues that already exist, so do not clear .agent-terminal/loop/promotion-${epic}.yaml until you have confirmed no issues were created (or deleted any that were), then re-approve`;
 }
 
 /** The operator message when a readable resumed promotion record's split has diverged from the current plan —

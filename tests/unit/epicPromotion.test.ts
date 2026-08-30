@@ -4,11 +4,8 @@ import { gateDecisionAuditCmd } from '../../src/shared/audit';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { EpicSubTicket } from '../../src/shared/epicPlan';
 
-// §28.7 — the epic-promotion coordinator: a gate-decision-time confirm-first hold. maybeBegin classifies an
-// approve into three outcomes: not-epic (the normal accept runs), preview-raised (hold pending the confirm-first
-// preview), or blocked (a precondition failed — an error is surfaced and the gate holds, WITHOUT raising the
-// preview); resolve completes a held promotion — confirm runs it then accepts + stands the flow down, decline
-// drops it and leaves the gate. Mirrors the bootstrap-conflict coordinator's held/resolve pattern.
+// §28.7 — the epic-promotion coordinator: a gate-decision-time confirm-first hold (mirrors the §27.10
+// bootstrap-conflict coordinator's held/resolve pattern).
 
 // §25 — the caller fires the preview audit iff maybeBegin returned preview-raised; the detection needle both the
 // block-string guard and these tests key on is derived from its single producer, never hardcoded (shared-semantics),
