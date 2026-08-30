@@ -90,13 +90,13 @@ export interface EpicPromotionStore {
 /** The operator message when the epic's promotion record is present-but-unreadable — one source for both the
  *  gate-time block (maybeBegin) and the op-level guard (runEpicPromotion), so they read identically. */
 export function promotionRecordUnreadableError(epic: number): string {
-  return `a promotion record for this epic is unreadable — it may record sub-ticket issues that already exist, so do not clear .agent-terminal/loop/promotion-${epic}.yaml until you have confirmed no issues were created (or deleted any that were), then re-approve`;
+  return `a promotion record for this epic is unreadable — it may have already opened sub-ticket issues and added a tracking checklist to the epic, so do not remove .agent-terminal/loop/promotion-${epic}.yaml and re-approve until you have fully undone any partial run (delete those issues and remove the epic's tracking checklist), or the retry will duplicate issues and leave the checklist pointing at deleted ones`;
 }
 
 /** The operator message when a readable resumed promotion record's split has diverged from the current plan —
  *  one source for both the gate-time block (maybeBegin) and the op-level guard (runEpicPromotion). */
 export function promotionRecordStaleError(epic: number): string {
-  return `the plan changed since a partial promotion — its record lists sub-ticket issues that already exist, so clearing it and re-approving would duplicate them; restore the plan's split to match the record, or delete every recorded issue before removing .agent-terminal/loop/promotion-${epic}.yaml, then re-approve`;
+  return `the plan changed since a partial promotion — its record already opened sub-ticket issues and may have added a tracking checklist to the epic, so clearing it and re-approving would duplicate the issues and leave the checklist pointing at the old ones; either restore the plan's split to match the record and re-approve, or fully undo the partial run — delete the opened issues and remove the epic's tracking checklist — before removing .agent-terminal/loop/promotion-${epic}.yaml, then re-approve`;
 }
 
 /** Whether a resumed promotion record has gone stale against the current plan: a recorded sub-ticket the plan no
