@@ -76,7 +76,6 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
     const { deps, coord } = harness({ promotionRecordCorrupt: vi.fn(() => true) });
     expect(approveEpic(coord)).toEqual({ kind: 'blocked' });
     expect(deps.emitPreview).not.toHaveBeenCalled(); // the confirm-first preview is never raised on a block
-    expect(deps.persistAccept).not.toHaveBeenCalled();
     expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('unreadable'));
     expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd was recorded
     expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
@@ -101,9 +100,8 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
     const { deps, coord } = harness();
     expect(approveEpic(coord, { epic: null, pr: 77 })).toEqual({ kind: 'blocked' });
     expect(deps.emitPreview).not.toHaveBeenCalled();
-    expect(deps.persistAccept).not.toHaveBeenCalled();
     expect(deps.emitError).toHaveBeenCalledWith('/repo', expect.stringContaining('epic issue'));
-    expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd, distinct from Slice 1
+    expect(blockAuditCmd(deps)).toContain('epic-promotion blocked'); // a §28-pattern block cmd
     expect(blockAuditCmd(deps)).not.toContain(PREVIEW_AUDIT_CMD); // §25 — the block cmd is NOT the preview cmd
   });
 

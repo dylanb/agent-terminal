@@ -1,10 +1,7 @@
 // §28.7 — the epic overlay. `readEpicSubTicketsAtGate` reads an epic-capable loop's `plan` artifact and parses
-// its authored sub-tickets (the one read both the gate preview and the promotion consume, so they cannot
-// drift). The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
-// coordinator (§27.10): maybeBegin classifies an approve on an epic plan into one of three outcomes — hold
-// pending the operator's confirm, block-and-hold on a failed authorizing precondition (an error surfaced, no
-// preview), or not-epic (the normal accept runs); resolve completes a held one — confirm promotes then accepts +
-// stands the flow down, decline drops it.
+// its authored sub-tickets — the one read both the gate preview and the promotion consume, so they cannot
+// drift. The coordinator is a gate-decision-time confirm-first hold, mirroring the bootstrap-conflict
+// coordinator (§27.10).
 
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
@@ -91,8 +88,7 @@ export interface EpicPromotionStore {
 }
 
 /** The operator message when the epic's promotion record is present-but-unreadable — one source for both the
- *  gate-time block (maybeBegin) and the op-level guard (runEpicPromotion), so they read identically. Retains the
- *  word "unreadable" the AC6 op-level pin matches. */
+ *  gate-time block (maybeBegin) and the op-level guard (runEpicPromotion), so they read identically. */
 export function promotionRecordUnreadableError(epic: number): string {
   return `a promotion record for this epic is unreadable — clear .agent-terminal/loop/promotion-${epic}.yaml and re-approve`;
 }
@@ -172,8 +168,8 @@ export interface EpicPromotionCoordinatorDeps {
    *  `readEpicSubTicketsAtGate`; the coordinator stays a pure hold/resolve over it). */
   readSubTickets(def: LoopDefV2): EpicSubTicket[] | null;
   /** Whether the epic's resumable promotion record is present-but-unreadable — the narrowest domain predicate
-   *  (never the store `read` primitive), wired to `readEpicPromotion(...) === 'corrupt'`, the SAME store
-   *  `runEpicPromotion` consults, so the gate check and the op-level guard cannot diverge on "corrupt". */
+   *  (never the store `read` primitive). Its wiring MUST resolve "corrupt" from the SAME store `runEpicPromotion`
+   *  consults, so the gate check and the op-level guard cannot diverge on "corrupt". */
   promotionRecordCorrupt(repoDir: string, epic: number): boolean;
   /** Raise the confirm-first preview naming every sub-ticket (→ flow:onEpicPromotionPreview). */
   emitPreview(msg: { repoDir: string; step: string; epic: number; pr: number | null; subTickets: { index: number; title: string }[] }): void;
@@ -192,18 +188,15 @@ export interface EpicPromotionCoordinatorDeps {
 }
 
 /** §28.7 — the three ways an approve at the epic gate resolves. The caller fires the §25 preview audit iff the
- *  outcome is `preview-raised` (CODE-STANDARDS discriminated-union for mutually-exclusive modes; single-sourced
- *  here and imported type-only by appGateDecision). */
+ *  outcome is `preview-raised` (CODE-STANDARDS discriminated-union for mutually-exclusive modes). */
 export type EpicGateOutcome =
-  | { kind: 'not-epic' } // not an epic plan → the normal single-ticket accept runs
-  | { kind: 'preview-raised' } // held pending the confirm-first preview → the §25 preview event fires
-  | { kind: 'blocked' }; // a precondition failed → an error was surfaced, the gate holds, NO preview event fires
+  | { kind: 'not-epic' }
+  | { kind: 'preview-raised' }
+  | { kind: 'blocked' };
 
 export interface EpicPromotionCoordinator {
-  /** Classify an approve at the epic gate into one of `EpicGateOutcome`'s three kinds. `preview-raised` holds
-   *  pending the confirm-first resolve; `blocked` surfaces an error and holds without raising the preview;
-   *  `not-epic` runs the normal accept. Authorizing preconditions are checked HERE, before the preview is
-   *  raised (§28.7 / CODE-STANDARDS policy-checked-at-the-operation). */
+  /** Classify an approve at the epic gate into an `EpicGateOutcome`. Authorizing preconditions are checked
+   *  HERE, before the preview is raised (§28.7 / CODE-STANDARDS policy-checked-at-the-operation). */
   maybeBegin(repoDir: string, def: LoopDefV2, loop: string, step: string, turnKey: string, refs: EpicPromotionRefs): EpicGateOutcome;
   /** Answer a held promotion: confirm promotes then accepts + stands down; decline drops it and leaves the gate. */
   resolve(repoDir: string, step: string, confirm: boolean): Promise<void>;
@@ -215,13 +208,9 @@ function sameSplit(a: EpicSubTicket[], b: EpicSubTicket[]): boolean {
   return a.length === b.length && a.every((t, i) => t.index === b[i].index && t.title === b[i].title);
 }
 
-// §25 — the §28-pattern audit cmd for a precondition block. Each is distinct and, unlike the preview cmd
-// (`gateDecisionAuditCmd('epic-promotion-preview', …)` → `…epic-promotion preview raised`), contains no
-// `epic-promotion preview` substring, so a block is never classified a preview event (the block-string guard pins it).
 const EPIC_PROMOTION_BLOCKED_UNREADABLE = '§28 epic-promotion blocked — unreadable promotion record';
 const EPIC_PROMOTION_BLOCKED_UNRESOLVABLE = '§28 epic-promotion blocked — unresolvable epic issue';
 
-/** The operator message when a well-formed epic plan reaches the gate with no resolvable epic issue to promote. */
 const EPIC_ISSUE_UNRESOLVABLE_ERROR = 'this epic plan has no resolvable epic issue to promote — its flow carries no epic issue reference; fix the flow state and re-approve';
 
 export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDeps): EpicPromotionCoordinator {
@@ -231,14 +220,14 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
     maybeBegin(repoDir, def, loop, step, turnKey, refs) {
       const subTickets = deps.readSubTickets(def);
       if (subTickets === null) return { kind: 'not-epic' };
-      // #124 — a well-formed epic plan whose epic issue is unresolvable cannot be promoted; block loudly here
+      // §28.7 — a well-formed epic plan whose epic issue is unresolvable cannot be promoted; block loudly here
       // rather than fall through to the silent single-ticket accept (the UI-offered-X / got-Y divergence).
       if (refs.epic === null) {
         deps.emitError(repoDir, EPIC_ISSUE_UNRESOLVABLE_ERROR);
         deps.audit(repoDir, EPIC_PROMOTION_BLOCKED_UNRESOLVABLE, 1);
         return { kind: 'blocked' };
       }
-      // #124 — the promotion record is the sole guard against re-creating duplicate public issues, so a corrupt
+      // §28.7 — the promotion record is the sole guard against re-creating duplicate public issues, so a corrupt
       // one must refuse the promotion HERE, before the confirm preview is raised (never prompt-then-refuse).
       if (deps.promotionRecordCorrupt(repoDir, refs.epic)) {
         deps.emitError(repoDir, promotionRecordUnreadableError(refs.epic));

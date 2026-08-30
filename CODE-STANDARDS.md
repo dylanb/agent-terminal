@@ -288,7 +288,7 @@ A worked example: our epic-promotion gate used to return true/false, where "true
 
 Prove it with a test that would fail if the log lied, and check both directions: the entry shows up when the outcome happened, and does not show up when a different outcome happened. Checking only the first isn't enough — a bug that writes the entry every single time would still pass. So the "blocked" test confirms the block was recorded and that no "confirmation shown" entry appears; the cancellation tests confirm the cancellation was recorded and that no "success" entry appears.
 
-In the code: the gate returns `EpicGateOutcome` (not the old boolean); the shared log entries live in `gateDecisionAuditCmd` (`src/shared/audit.ts`).
+In the code: the gate returns `EpicGateOutcome` (not the old boolean). The "confirmation shown" entry, recorded only on the `preview-raised` outcome, is produced by the shared `gateDecisionAuditCmd` (`src/shared/audit.ts`); the two block entries are their own §28-pattern constants in `epicPromotion.ts`, deliberately distinct from that preview entry so a block is never recorded as a confirmation.
 
 ## Comments state ONLY what the code cannot
 

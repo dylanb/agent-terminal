@@ -574,6 +574,7 @@ describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
     expect(rec.sideEffects).toHaveLength(0);
     expect(rec.views).toBeGreaterThan(0); // the panel re-renders (the coordinator already surfaced the error)
     expect(rec.audits.some((a) => a.cmd.includes(previewAuditCmd))).toBe(false); // §25 — NO preview event on a block
+    expect(rec.errors).toHaveLength(0); // the blocked branch surfaces no error of its own — the coordinator already did
   });
 
   it('does not intercept a non-epic approve: the normal accept + advance runs', async () => {

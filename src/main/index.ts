@@ -796,14 +796,10 @@ async function createWindow(): Promise<void> {
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
-  // §28.7 — the epic-promotion confirm-first coordinator: an approve on an epic plan intercepts here. An
-  // authorized promotion raises the preview and holds; a precondition failure (an unresolvable epic issue, or an
-  // unreadable promotion record) surfaces an error and holds WITHOUT a preview; resolve completes a held one
-  // (confirm promotes then accepts + terminates, decline drops).
+  // §28.7
   const epicPromotionCoordinator = createEpicPromotionCoordinator({
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
-    // §28.7 — the narrowest domain predicate the gate needs, wired to the SAME store runEpicPromotion consults
-    // (`=== 'corrupt'` catches both a malformed and a present-but-unreadable record; it never throws — §appLoopState).
+    // §28.7 — `readEpicPromotion` never throws (§appLoopState), so this bare `=== 'corrupt'` callsite needs no guard.
     promotionRecordCorrupt: (repoDir, epic) => readEpicPromotion(repoDir, epic) === 'corrupt',
     emitPreview: ({ repoDir, step, epic, pr, subTickets }) =>
       send(CH.flowOnEpicPromotionPreview, { sessionId: SESSION_ID, repoKey: repoDir, step, epic, pr, subTickets }),
