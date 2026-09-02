@@ -25,6 +25,9 @@ export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
   github: AppBootstrapGitHub;
   conflicts: AppBootstrapConflicts;
+  /** Clear the prior ticket's per-run §27 loop reconstruction state, invoked once at the pickup commit point
+   *  (§27.10). May throw to abort the pickup before the branch is created. */
+  wipeLoopReconstructionState(): void;
   prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
   clearBootstrap(): void;
@@ -213,6 +216,10 @@ export async function runAppLoopBootstrap(
       }
       return fail(`branch ${branch} already exists`);
     }
+
+    // Commit point: this clears PRIOR loop state, so it must run after the conflict gate and before the new
+    // branch is created (§27.10).
+    deps.wipeLoopReconstructionState();
 
     deps.prepareBootstrap({ branch, issue: req.issue, initialStatus: req.spec.initialStatus });
     try {

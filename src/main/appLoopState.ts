@@ -7,6 +7,7 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { isErrno } from './errno';
 import { isGitObjectId } from '../shared/appBootstrap';
+import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
@@ -650,4 +651,29 @@ export function readEpicPromotion(repoDir: string, epic: number): EpicPromotionS
     created.push({ index: c.index, issue: c.issue, title: c.title });
   }
   return { epic: doc.epic, created, trackingAppended: doc.tracking_appended === true, prClosed: doc.pr_closed === true };
+}
+
+/** Delete the prior ticket's per-run §27 loop reconstruction state — `run-state.yaml`, the turn-done signal,
+ *  and the round-keyed `reports`/`consolidate`/`refactor-results` subtrees — at a fresh pickup's commit point,
+ *  preserving every other loop-area file (§27.10). Confined to the loop area, fail-visible on an unresolvable
+ *  area or non-ENOENT fs error (CWE-22/59). */
+export function wipeLoopReconstructionState(repoDir: string): void {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null || confinedRealPath(jail, jail) !== jail) {
+    throw new Error('§27 loop area is unresolvable');
+  }
+  // TODO(dylanb): bind this manifest to one classified loop-area leaf registry so a newly added engine-written
+  // per-run file cannot silently escape the wipe and re-bleed prior state (§27.10; CLAUDE.md shared-semantics).
+  const leaves = [
+    RUN_STATE_FILE,
+    TURN_DONE_FILENAME,
+    REPORTS_SUBDIR,
+    CONSOLIDATE_SUBDIR,
+    REFACTOR_RESULTS_SUBDIR,
+  ];
+  for (const leaf of leaves) {
+    const entry = path.join(jail, leaf);
+    if (confinedRealPath(jail, entry) === null) continue; // an escaping leaf symlink — never touch (CWE-22/59)
+    rmSync(entry, { recursive: true, force: true });
+  }
 }

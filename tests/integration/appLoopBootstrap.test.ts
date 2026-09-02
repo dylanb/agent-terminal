@@ -227,21 +227,28 @@ function fakeConflicts(initial = noTarget()): {
   };
 }
 
+interface RunnerOverrides {
+  writeBootstrap?: (identity: AppLoopBootstrap) => void;
+  prepareBootstrap?: (identity: Omit<AppLoopBootstrap, 'pr'>) => void;
+  clearBootstrap?: () => void;
+  conflicts?: ReturnType<typeof fakeConflicts>;
+  wipeLoopReconstructionState?: () => void;
+}
+
 function runnerDeps(
   g: ReturnType<typeof fakeGit>,
   h: ReturnType<typeof fakeGitHub>,
-  writeBootstrap: (identity: AppLoopBootstrap) => void = () => {},
-  prepareBootstrap: (identity: Omit<AppLoopBootstrap, 'pr'>) => void = () => {},
-  clearBootstrap: () => void = () => {},
-  conflicts: ReturnType<typeof fakeConflicts> = fakeConflicts(),
+  overrides: RunnerOverrides = {},
 ) {
+  const noop = (): void => {};
   return {
     git: g.git,
     github: h.github,
-    conflicts: conflicts.conflicts,
-    writeBootstrap,
-    prepareBootstrap,
-    clearBootstrap,
+    conflicts: (overrides.conflicts ?? fakeConflicts()).conflicts,
+    writeBootstrap: overrides.writeBootstrap ?? noop,
+    prepareBootstrap: overrides.prepareBootstrap ?? noop,
+    clearBootstrap: overrides.clearBootstrap ?? noop,
+    wipeLoopReconstructionState: overrides.wipeLoopReconstructionState ?? noop,
   };
 }
 
@@ -278,13 +285,11 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     const g = fakeGit();
     const h = fakeGitHub();
     let written: AppLoopBootstrap | null = null;
-    const deps = runnerDeps(
-      g,
-      h,
-      (identity) => {
+    const deps = runnerDeps(g, h, {
+      writeBootstrap: (identity) => {
         written = identity;
       },
-    );
+    });
 
     const result = await runAppLoopBootstrap(deps, request());
 
@@ -315,6 +320,51 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       issue: 78,
       initialStatus: 'planning',
     });
+  });
+
+  // §27.10 — a fresh pickup clears the prior ticket's per-run loop state at the commit point: after the
+  // clean-tree/conflict gate passes and BEFORE the new branch is prepared/created, so it clears PRIOR state,
+  // never the new run's. The invariant observed at the seam is that the new branch does not yet exist when
+  // the wipe runs.
+  it('clears prior per-run loop state at the commit point, before the new branch is created', async () => {
+    const g = fakeGit();
+    const h = fakeGitHub();
+    let branchAtWipe: boolean | null = null;
+    const wipeLoopReconstructionState = vi.fn(() => {
+      branchAtWipe = g.hasBranch('plan-loop/issue-78');
+    });
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, h, { wipeLoopReconstructionState }),
+      request(),
+    );
+    expect(result).toMatchObject({ ok: true });
+    expect(wipeLoopReconstructionState).toHaveBeenCalledTimes(1);
+    expect(branchAtWipe).toBe(false); // the wipe ran before the new branch existed — it clears the prior run, not this one
+    expect(g.hasBranch('plan-loop/issue-78')).toBe(true); // …and the bootstrap still created the new branch afterwards
+  });
+
+  // §27.10 — the wipe is fail-visible, not best-effort: an unresolvable loop area (or any non-ENOENT fs error)
+  // throws, and the throw at the commit point rolls the step back — no branch, no PR, no gh work — rather than
+  // proceeding onto stale state.
+  it('fails the pickup with no branch or gh work when clearing prior loop state throws', async () => {
+    const g = fakeGit();
+    const h = fakeGitHub();
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, h, {
+        wipeLoopReconstructionState: () => {
+          throw new Error('§27 loop area is unresolvable');
+        },
+      }),
+      request(),
+    );
+    expect(result).toEqual({
+      ok: false,
+      kind: 'error' as const,
+      error: expect.stringMatching(/loop area is unresolvable/i),
+    });
+    expect(g.hasBranch('plan-loop/issue-78')).toBe(false);
+    expect(g.calls.some((call) => call.startsWith('branch:'))).toBe(false);
+    expect(h.calls).toEqual([]);
   });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -368,38 +418,44 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
   ])('fails safely for $name without opening a PR', async ({ git, error }) => {
     const g = fakeGit(git);
     const h = fakeGitHub();
+    const wipe = vi.fn();
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
+      runnerDeps(g, h, { wipeLoopReconstructionState: wipe }),
       request(),
     );
     expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(error) });
     expect(h.calls.some((call) => call.startsWith('pr:'))).toBe(false);
+    expect(wipe).not.toHaveBeenCalled(); // the wipe fires only at the commit point, never on a pre-gate abort (§27.10)
   });
 
   it('detects a wipe-authorized conflict without deleting anything before confirmation', async () => {
     const h = fakeGitHub();
     const conflicts = fakeConflicts(target());
+    const wipe = vi.fn();
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(fakeGit(), h, undefined, undefined, undefined, conflicts),
+      runnerDeps(fakeGit(), h, { conflicts, wipeLoopReconstructionState: wipe }),
       request({ spec: wipeSpec() }),
     );
 
     expect(result).toEqual({ ok: false, kind: 'conflict' as const, conflict: target() });
     expect(conflicts.wiped).toEqual([]);
     expect(h.calls).toEqual([]);
+    expect(wipe).not.toHaveBeenCalled(); // a detected conflict aborts before the commit point — prior loop state is untouched (§27.10)
   });
 
   it('hard-fails a conflict with no wipe policy instead of offering a destructive decision', async () => {
     const conflicts = fakeConflicts(target());
+    const wipe = vi.fn();
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(fakeGit(), fakeGitHub(), { conflicts, wipeLoopReconstructionState: wipe }),
       request(),
     );
 
     expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/already exists/i) });
     expect(conflicts.wiped).toEqual([]);
+    expect(wipe).not.toHaveBeenCalled(); // a hard-failed conflict never reaches the commit point wipe (§27.10)
   });
 
   // The authorizing policy is re-read at the destructive operation, not merely at the prompt that
@@ -422,7 +478,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     const conflicts = fakeConflicts(target());
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(fakeGit(), fakeGitHub(), { conflicts }),
       request({ spec: wipeSpec(), confirmedWipe: target() }),
     );
 
@@ -453,7 +509,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     const conflicts = fakeConflicts(moved);
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(g, fakeGitHub(), { conflicts }),
       request({ spec: wipeSpec(), confirmedWipe: target() }),
     );
 
@@ -468,7 +524,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     conflicts.failWipe(new Error('PR #321 could not be closed'));
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(g, fakeGitHub(), { conflicts }),
       request({ spec: wipeSpec(), confirmedWipe: target() }),
     );
 
@@ -486,7 +542,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     g.git.rollbackCreatedBranch = rollback;
     const writeBootstrap = vi.fn();
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h, writeBootstrap),
+      runnerDeps(g, h, { writeBootstrap }),
       request(),
     );
     expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/PR creation/i) });
@@ -573,8 +629,10 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     };
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h, () => {
-        throw new Error('ENOSPC while writing bootstrap identity');
+      runnerDeps(g, h, {
+        writeBootstrap: () => {
+          throw new Error('ENOSPC while writing bootstrap identity');
+        },
       }),
       request(),
     );
@@ -717,8 +775,10 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     g.git.rollbackCreatedBranch = rollback;
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h, () => {
-        throw new Error('bootstrap state is unwritable');
+      runnerDeps(g, h, {
+        writeBootstrap: () => {
+          throw new Error('bootstrap state is unwritable');
+        },
       }),
       request(),
     );
@@ -740,14 +800,11 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     const g = fakeGit();
     const h = fakeGitHub();
     const result = await runAppLoopBootstrap(
-      runnerDeps(
-        g,
-        h,
-        () => {},
-        () => {
+      runnerDeps(g, h, {
+        prepareBootstrap: () => {
           throw new Error('EISDIR: bootstrap.yaml is a directory');
         },
-      ),
+      }),
       request(),
     );
 
@@ -764,9 +821,11 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     h.github.setPrLabel = async () => Promise.reject('PR label rejected');
     let written: AppLoopBootstrap | null = null;
 
-    const deps = runnerDeps(g, h, (identity) => {
+    const deps = runnerDeps(g, h, {
+      writeBootstrap: (identity) => {
         written = identity;
-      });
+      },
+    });
     const result = await runAppLoopBootstrap(deps, request());
     await createAppLoopBootstrapSession(deps).finalize(request(), completed(result).identity);
 
@@ -791,8 +850,10 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
   it('compensates the created branch when persisting the completed identity fails', async () => {
     const g = fakeGit();
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, fakeGitHub(), () => {
-        throw new Error('bootstrap state is unwritable');
+      runnerDeps(g, fakeGitHub(), {
+        writeBootstrap: () => {
+          throw new Error('bootstrap state is unwritable');
+        },
       }),
       request(),
     );
@@ -900,7 +961,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       );
     };
     const session = createAppLoopBootstrapSession(
-      runnerDeps(g, h, () => {}, () => {}, clearBootstrap),
+      runnerDeps(g, h, { clearBootstrap }),
     );
     const accepted = await session.run(request());
     await expect(session.compensate(completed(accepted).ownership)).rejects.toThrow(
@@ -931,16 +992,13 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       await closePr(number);
     };
     const session = createAppLoopBootstrapSession(
-      runnerDeps(
-        g,
-        h,
-        () => {},
-        () => trace.push('prepare'),
-        () => {
+      runnerDeps(g, h, {
+        prepareBootstrap: () => trace.push('prepare'),
+        clearBootstrap: () => {
           trace.push('clear');
           clearBootstrap();
         },
-      ),
+      }),
     );
     const first = await session.run(request());
     await expect(session.compensate(completed(first).ownership)).rejects.toThrow(/close failure/i);
@@ -1920,7 +1978,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
     const g = fakeGit();
     const conflicts = fakeConflicts(target({ branch: 'main' }));
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(g, fakeGitHub(), { conflicts }),
       request({ spec: { ...wipeSpec(), branchTemplate: 'main' } }),
     );
 
