@@ -143,6 +143,33 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
   });
 });
 
+// §27.6 — the materiality floor that lets the termination rule reach a fixed point on PROSE. §27.6's
+// convergence argument (a memory-less fixer "re-dismisses a settled judgment every round … the loop
+// terminates when a round produces no changes") holds only if an in-scope finding that changes no
+// observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
+// refinement is what manufactures the next round's findings. The composer must state that criterion.
+describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
+  const req = () => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+  });
+
+  it('tells the fixer to fix only an issue that changes an observable outcome', () => {
+    expect(composeReviewAndFixPrompt(req())).toContain('observable outcome');
+  });
+
+  it('tells the fixer that an already-correct refinement is dismissed, not fixed (so a round can reach no-change)', () => {
+    const p = composeReviewAndFixPrompt(req());
+    expect(p.toLowerCase()).toContain('already correct');
+    // it names the dismissal disposition for such a refinement — never `fixed`
+    expect(p).toContain('dismissed — invalid');
+  });
+});
+
 // §27.9/§19.4 / N5 (AC4) — a request-changes decision delivers the operator's feedback into the NEXT
 // review-and-fix round, "alongside the reviewers' findings." The composer carries it as an optional block; the
 // engine threads it from the run-state a request-changes wrote. Absent feedback leaves the round unchanged.
