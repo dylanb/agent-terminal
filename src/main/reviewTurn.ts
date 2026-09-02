@@ -80,7 +80,19 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     '',
     'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket and its charter —',
     'no diff, no plan, no prior review. Each pulls what it needs with tools. Receive their findings into your',
-    'own context, fix every valid in-scope issue yourself, and dismiss what is out of scope or invalid.',
+    'own context, then fix or dismiss each per the criterion below.',
+    '',
+    // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on
+    // prose: an in-scope finding that changes no observable outcome must be DISMISSED, not fixed, or each
+    // rewrite of already-correct text manufactures the next round's findings and the loop never converges.
+    'Fix an issue only when acting on it changes an OBSERVABLE OUTCOME — correctness, safety, a contract two',
+    'surfaces actually read, or whether the next reader/implementer can follow the artifact. An in-scope finding',
+    'that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct',
+    'where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not',
+    'require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`. Do not rewrite an already-correct',
+    'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
+    'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
+    'only what the loop is not entitled to decide.',
     '',
     'Reviewers (persona — charter):',
   );

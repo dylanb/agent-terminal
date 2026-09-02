@@ -5,8 +5,12 @@ judge the round against the ticket. Emit a verdict and, for `another round`, the
 
 - `clean` — the round changed nothing: every issue was dismissed and nothing was fixed. A round that
   fixed something is `another round`, not `clean`.
-- `another round` — more work remains. Choose the next round's roster from this loop's reviewer catalog
-  (a subset, or the whole catalog when the artifact changed enough to warrant it).
+- `another round` — more work remains. Choose the next round's roster from this loop's reviewer catalog:
+  prefer the SMALLEST roster that covers the open work — the lenses that raised an unresolved issue this
+  round plus any whose subject the round's fixes actually touched. Do not re-summon a lens that returned
+  clean for a change elsewhere, and drop any lens whose subject the artifact does not contain (no code →
+  no tests/taint/accessibility lens). Re-run the whole catalog only when a structural change genuinely
+  warrants fresh eyes across every lens.
 - `stop for a human` — a reviewer raised an issue only a human can resolve, or a reviewer failed to run
   again after a re-review. Give the reason.
 
