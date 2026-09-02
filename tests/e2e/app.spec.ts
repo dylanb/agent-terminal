@@ -3208,6 +3208,99 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// §27.10 — a fresh pickup clears the PRIOR ticket's per-run §27 loop RECONSTRUCTION state at its commit point,
+// so a stale terminal (the wrong-termination cause) and stale gate flags / round reports do not bleed into the
+// new loop. It must NOT touch what chains within a run (the artifacts groom → plan → impl consume, the §28
+// baseline RED → GREEN → refactor consume) nor the promotion record (the SOLE guard against duplicate PUBLIC
+// issues, §28.7), because the pickup fires on the FIRST loop step, which is those artifacts' consumer. The wipe
+// fires before the branch/PR are created, so bootstrap.yaml carrying the PR proves it already ran. The seeded
+// files are ones the plan-loop work turn NEVER recreates, so the assertion is stable.
+test('a fresh pickup clears the prior ticket\'s reconstruction state but preserves chained + promotion state (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-pickup-wipe-');
+  const loopDir = join(repo, '.agent-terminal', 'loop');
+  mkdirSync(join(loopDir, 'reports'), { recursive: true });
+  mkdirSync(join(loopDir, 'consolidate'), { recursive: true });
+  mkdirSync(join(loopDir, 'artifacts'), { recursive: true });
+  // Cleared: the reconstruction family — a stale terminal run-state plus a stale round report + consolidator
+  // output (round 9, which the plan-loop work turn never regenerates, so the "deleted" assertion is stable).
+  const staleReport = join(loopDir, 'reports', '9.md');
+  const staleConsolidate = join(loopDir, 'consolidate', '9.md');
+  // Preserved: operator/gate intent armed before Start (armed-interrupt), chained phase state + artifact the
+  // current run consumes, the promotion guard, and an unrelated artifact — the wipe must not destroy any of these.
+  const preservedArm = join(loopDir, 'armed-interrupt.yaml');
+  const preservedBaseline = join(loopDir, 'baseline-commit.yaml');
+  const preservedGroomed = join(loopDir, 'artifacts', 'groomed-ticket.md');
+  const promotionGuard = join(loopDir, 'promotion-500.yaml');
+  const unrelatedArtifact = join(loopDir, 'artifacts', 'design-notes.md');
+  const promotionBytes = 'schema_version: 1\nepic: 500\ncreated: []\ntracking_appended: false\npr_closed: false\n';
+  writeFileSync(join(loopDir, 'run-state.yaml'), 'schema_version: 1\nloop: work-loop\nstep: work\nturn_key: t1\nstatus: complete\nround: 9\nverdict: clean\n');
+  writeFileSync(staleReport, 'stale round 9\n');
+  writeFileSync(staleConsolidate, 'verdict: clean\n');
+  writeFileSync(preservedArm, 'schema_version: 1\nstep: plan\n');
+  writeFileSync(preservedBaseline, `schema_version: 1\nbranch: prior\nsha: ${'a'.repeat(40)}\n`);
+  writeFileSync(preservedGroomed, 'stale groomed ticket\n');
+  writeFileSync(unrelatedArtifact, 'operator notes\n');
+  writeFileSync(promotionGuard, promotionBytes);
+
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-pickup-wipe-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-pickup-wipe-config-', (yaml) =>
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  initial_labels:\n' +
+        '    - target: issue\n      action: add\n      label: agent-loop/in-progress\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-pickup-wipe-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // The pickup commits (branch created, PR opened, identity written) only AFTER the commit-point wipe, so
+  // bootstrap.yaml carrying the PR is proof the wipe already fired.
+  const bootstrapState = join(loopDir, 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 15_000 }).toContain('pr: 4242');
+
+  // The prior run's reconstruction state (stale round report + consolidator output) is gone.
+  expect(existsSync(staleReport)).toBe(false);
+  expect(existsSync(staleConsolidate)).toBe(false);
+  // …but the pre-armed interrupt, the chained baseline + groomed artifact, the promotion guard, and an
+  // unrelated artifact survive byte-for-byte — the wipe must never drop operator intent, the current run's
+  // upstream work, or the dedup guard.
+  expect(existsSync(preservedArm)).toBe(true);
+  expect(readFileSync(preservedBaseline, 'utf8')).toContain('sha:');
+  expect(readFileSync(preservedGroomed, 'utf8')).toBe('stale groomed ticket\n');
+  expect(existsSync(promotionGuard)).toBe(true);
+  expect(readFileSync(promotionGuard, 'utf8')).toBe(promotionBytes);
+  expect(readFileSync(unrelatedArtifact, 'utf8')).toBe('operator notes\n');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('a def resolved from the REPOSITORY tier declaring a pickup contract bootstraps — branch, draft PR and its own initial_labels reach gh (§B.13a / §F item 18)', { tag: '@ownapp' }, async () => {
   // The operator's origin decision made visible (§F item 18): the executor no longer refuses a
   // non-operator-tier def, so a repo whose .agent-loop.yaml maps the bound name to an IN-REPO v2 def with a

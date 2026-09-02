@@ -25,6 +25,12 @@ export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
   github: AppBootstrapGitHub;
   conflicts: AppBootstrapConflicts;
+  /** Clear the prior ticket's per-run §27 loop state at the pickup commit point (§27.10) so it does not bleed
+   *  into the new loop. Invoked ONCE, only when the pickup will actually create the branch — after the
+   *  clean-tree/conflict gate passes, before `prepareBootstrap`. Fail-visible: a throw (unresolvable loop area,
+   *  a non-ENOENT fs error) is caught by the outer handler and rolls the step back with `createdBranch` still
+   *  null, never proceeding onto stale state. */
+  wipeLoopRunState(): void;
   prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
   clearBootstrap(): void;
@@ -213,6 +219,11 @@ export async function runAppLoopBootstrap(
       }
       return fail(`branch ${branch} already exists`);
     }
+
+    // The single point of no return: the pickup will create the new branch. Clear the prior ticket's per-run
+    // loop state here — after the conflict gate, before the new branch/bootstrap — so it clears PRIOR state and
+    // not the new run's (§27.10). A throw rolls the step back below (createdBranch still null → fail(error)).
+    deps.wipeLoopRunState();
 
     deps.prepareBootstrap({ branch, issue: req.issue, initialStatus: req.spec.initialStatus });
     try {
