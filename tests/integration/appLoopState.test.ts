@@ -28,7 +28,7 @@ import {
   readBaselineCommit,
   recordChangedTests,
   readChangedTests,
-  wipeLoopRunState,
+  wipeLoopReconstructionState,
   MAX_CHANGED_TEST_PATHS,
   MAX_CHANGED_TEST_PATH_LEN,
   type AppLoopBootstrap,
@@ -937,7 +937,7 @@ describe('§28.5.3 — the changed-tests flag store, disjoint from the run-state
 // wrong-termination cause) and a stale plan/groomed artifact do not bleed into the new loop, while the
 // promotion record (the SOLE guard against duplicate PUBLIC issues, §28.7) and the flow definition/state ONE
 // LEVEL ABOVE the loop area are preserved. Real temp files, no fs mocks; fail-visible like the writers.
-describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, preserves the promotion guard', () => {
+describe('§27 wipeLoopReconstructionState — clears prior per-run loop state at pickup, preserves the promotion guard', () => {
   const loopFile = (leaf: string): string => join(loopDir(), leaf);
   const seedLoopArea = (): void => {
     mkdirSync(loopDir(), { recursive: true });
@@ -963,7 +963,7 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
 
   it('deletes the run-state reconstruction family: run-state, the turn-done signal, and the round subtrees', () => {
     seedLoopArea();
-    wipeLoopRunState(repo);
+    wipeLoopReconstructionState(repo);
     for (const gone of [
       'run-state.yaml',
       'turn-done',
@@ -993,7 +993,7 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
       join('artifacts', 'groomed-ticket.md'),
     ];
     const before = new Map(preserved.map((leaf) => [leaf, readFileSync(loopFile(leaf), 'utf8')]));
-    wipeLoopRunState(repo);
+    wipeLoopReconstructionState(repo);
     for (const leaf of preserved) {
       expect(readFileSync(loopFile(leaf), 'utf8'), leaf).toBe(before.get(leaf));
     }
@@ -1004,7 +1004,7 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
     const promo = loopFile('promotion-500.yaml');
     const promoBytes = 'schema_version: 1\nepic: 500\ncreated: []\ntracking_appended: false\npr_closed: false\n';
     writeFileSync(promo, promoBytes);
-    wipeLoopRunState(repo);
+    wipeLoopReconstructionState(repo);
     expect(existsSync(promo)).toBe(true);
     expect(readFileSync(promo, 'utf8')).toBe(promoBytes);
   });
@@ -1015,7 +1015,7 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
     const flowState = join(repo, '.agent-terminal', 'flow-state.yaml');
     writeFileSync(flowYaml, 'name: refs-flow\n');
     writeFileSync(flowState, 'step: plan\nstatus: not_started\n');
-    wipeLoopRunState(repo);
+    wipeLoopReconstructionState(repo);
     const notes = join(loopFile('artifacts'), 'design-notes.md');
     expect(existsSync(notes)).toBe(true);
     expect(readFileSync(notes, 'utf8')).toBe('operator notes\n');
@@ -1025,13 +1025,13 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
 
   it('is a harmless no-op on a fresh repo with no loop area (first-run pickup)', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false);
-    expect(() => wipeLoopRunState(repo)).not.toThrow();
+    expect(() => wipeLoopReconstructionState(repo)).not.toThrow();
   });
 
   it('re-clears idempotently (the conflict→confirmed-wipe double entry is harmless)', () => {
     seedLoopArea();
-    wipeLoopRunState(repo);
-    expect(() => wipeLoopRunState(repo)).not.toThrow();
+    wipeLoopReconstructionState(repo);
+    expect(() => wipeLoopReconstructionState(repo)).not.toThrow();
     expect(existsSync(loopFile('run-state.yaml'))).toBe(false);
   });
 
@@ -1042,8 +1042,44 @@ describe('§27 wipeLoopRunState — clears prior per-run loop state at pickup, p
     writeFileSync(victim, 'operator owned\n');
     try {
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
-      expect(() => wipeLoopRunState(repo)).toThrow();
+      expect(() => wipeLoopReconstructionState(repo)).toThrow();
       expect(readFileSync(victim, 'utf8')).toBe('operator owned\n'); // nothing outside the jail was deleted
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  // CWE-59 — a reconstruction leaf planted as a symlink to a PRESERVED in-jail sibling (e.g. `run-state.yaml`
+  // -> `promotion-500.yaml`, or `reports` -> `artifacts`) must lose only the stale link, never the sibling it
+  // points at: the wipe deletes the NAMED entry, it does not follow a leaf redirect to delete its target.
+  it('preserves an in-jail sibling a planted leaf symlink redirects to, and still clears the named entry (CWE-59)', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    const promoBytes = 'schema_version: 1\nepic: 500\ncreated: []\ntracking_appended: false\npr_closed: false\n';
+    writeFileSync(loopFile('promotion-500.yaml'), promoBytes);
+    mkdirSync(loopFile('artifacts'), { recursive: true });
+    writeFileSync(join(loopFile('artifacts'), 'plan.md'), 'chained plan\n');
+    symlinkSync('promotion-500.yaml', loopFile('run-state.yaml'));
+    symlinkSync('artifacts', loopFile('reports'));
+    wipeLoopReconstructionState(repo);
+    // the preserved siblings the links pointed at survive byte-for-byte…
+    expect(readFileSync(loopFile('promotion-500.yaml'), 'utf8')).toBe(promoBytes);
+    expect(readFileSync(join(loopFile('artifacts'), 'plan.md'), 'utf8')).toBe('chained plan\n');
+    // …and the reconstruction entries (the links themselves) are cleared.
+    expect(existsSync(loopFile('run-state.yaml'))).toBe(false);
+    expect(existsSync(loopFile('reports'))).toBe(false);
+  });
+
+  it('leaves an external target intact when a reconstruction leaf symlink escapes the jail (CWE-22/59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-wipe-leaf-'));
+    const victim = join(elsewhere, 'victim.yaml');
+    writeFileSync(victim, 'operator owned\n');
+    try {
+      mkdirSync(loopDir(), { recursive: true });
+      writeFileSync(loopFile('run-state.yaml'), 'stale\n');
+      symlinkSync(victim, loopFile('turn-done'));
+      wipeLoopReconstructionState(repo);
+      expect(readFileSync(victim, 'utf8')).toBe('operator owned\n'); // nothing outside the jail was deleted
+      expect(existsSync(loopFile('run-state.yaml'))).toBe(false); // the real reconstruction file is still cleared
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }

@@ -234,7 +234,7 @@ function runnerDeps(
   prepareBootstrap: (identity: Omit<AppLoopBootstrap, 'pr'>) => void = () => {},
   clearBootstrap: () => void = () => {},
   conflicts: ReturnType<typeof fakeConflicts> = fakeConflicts(),
-  wipeLoopRunState: () => void = () => {},
+  wipeLoopReconstructionState: () => void = () => {},
 ) {
   return {
     git: g.git,
@@ -243,7 +243,7 @@ function runnerDeps(
     writeBootstrap,
     prepareBootstrap,
     clearBootstrap,
-    wipeLoopRunState,
+    wipeLoopReconstructionState,
   };
 }
 
@@ -327,15 +327,15 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     const g = fakeGit();
     const h = fakeGitHub();
     let branchAtWipe: boolean | null = null;
-    const wipeLoopRunState = vi.fn(() => {
+    const wipeLoopReconstructionState = vi.fn(() => {
       branchAtWipe = g.hasBranch('plan-loop/issue-78');
     });
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h, undefined, undefined, undefined, undefined, wipeLoopRunState),
+      runnerDeps(g, h, undefined, undefined, undefined, undefined, wipeLoopReconstructionState),
       request(),
     );
     expect(result).toMatchObject({ ok: true });
-    expect(wipeLoopRunState).toHaveBeenCalledTimes(1);
+    expect(wipeLoopReconstructionState).toHaveBeenCalledTimes(1);
     expect(branchAtWipe).toBe(false); // the wipe ran before the new branch existed — it clears the prior run, not this one
     expect(g.hasBranch('plan-loop/issue-78')).toBe(true); // …and the bootstrap still created the new branch afterwards
   });
@@ -413,38 +413,44 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
   ])('fails safely for $name without opening a PR', async ({ git, error }) => {
     const g = fakeGit(git);
     const h = fakeGitHub();
+    const wipe = vi.fn();
     const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
+      runnerDeps(g, h, undefined, undefined, undefined, undefined, wipe),
       request(),
     );
     expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(error) });
     expect(h.calls.some((call) => call.startsWith('pr:'))).toBe(false);
+    expect(wipe).not.toHaveBeenCalled(); // the wipe fires only at the commit point, never on a pre-gate abort (§27.10)
   });
 
   it('detects a wipe-authorized conflict without deleting anything before confirmation', async () => {
     const h = fakeGitHub();
     const conflicts = fakeConflicts(target());
+    const wipe = vi.fn();
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(fakeGit(), h, undefined, undefined, undefined, conflicts),
+      runnerDeps(fakeGit(), h, undefined, undefined, undefined, conflicts, wipe),
       request({ spec: wipeSpec() }),
     );
 
     expect(result).toEqual({ ok: false, kind: 'conflict' as const, conflict: target() });
     expect(conflicts.wiped).toEqual([]);
     expect(h.calls).toEqual([]);
+    expect(wipe).not.toHaveBeenCalled(); // a detected conflict aborts before the commit point — prior loop state is untouched (§27.10)
   });
 
   it('hard-fails a conflict with no wipe policy instead of offering a destructive decision', async () => {
     const conflicts = fakeConflicts(target());
+    const wipe = vi.fn();
 
     const result = await runAppLoopBootstrap(
-      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts),
+      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts, wipe),
       request(),
     );
 
     expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/already exists/i) });
     expect(conflicts.wiped).toEqual([]);
+    expect(wipe).not.toHaveBeenCalled(); // a hard-failed conflict never reaches the commit point wipe (§27.10)
   });
 
   // The authorizing policy is re-read at the destructive operation, not merely at the prompt that
