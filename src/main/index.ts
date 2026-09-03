@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -76,6 +76,10 @@ import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
+import { completionArtifact } from './appWorkTurn';
+import { runSubTicketPickup } from './subTicketPickup';
+import { createRealSubTicketIssueReader } from './subTicketIssueGithub';
+import { GROOMED_TICKET_ARTIFACT_ID } from '../shared/epicSubTicket';
 import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding';
 import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
@@ -489,23 +493,68 @@ async function createWindow(): Promise<void> {
     enterAppLoop: (step) => {
       const t = activeFlowEntryOccurrence;
       if (!t || step.loop === undefined) return;
-      const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+      const loopName = step.loop;
+      const resolved = resolveLoopDefV2(loopName, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
-      if (!resolved.ok || appBootstrapCoordinator === null) {
-        appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
-        armAppTurnDoneWatch(t.repoKey);
-        return;
+      const enterNormally = (): void => {
+        if (!resolved.ok || appBootstrapCoordinator === null) {
+          appEngine.enter(t.repoKey, loopName, step.id, t.entry);
+          armAppTurnDoneWatch(t.repoKey);
+          return;
+        }
+        appBootstrapCoordinator.enter({
+          repoDir: t.repoKey,
+          loopName,
+          stepId: step.id,
+          entryToken: t.token,
+          entry: t.entry,
+          issue,
+          bootstrap: resolved.def.pickup,
+          ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
+        });
+      };
+      // §27.10/§28.7 N10 (§28 P7a) — an epic sub-ticket entering its groom producer reconstructs the groomed
+      // ticket from the issue body (the plan slice promotion posted verbatim) and SKIPS groom, landing the flow
+      // at the next step; anything else enters normally. Detection reads GitHub (no local signal), so it is async;
+      // a non-sub-ticket falls straight through to the normal entry after the read.
+      if (resolved.ok && issue !== null && resolved.def.work.artifact === GROOMED_TICKET_ARTIFACT_ID) {
+        const artifact = completionArtifact(resolved.def);
+        if (artifact !== null) {
+          const subTicketIssue = issue;
+          const artifactPath = artifact.path;
+          void (async () => {
+            const outcome = await runSubTicketPickup(
+              {
+                readIssue: createRealSubTicketIssueReader(t.repoKey),
+                writeGroomedTicket: (content) => {
+                  mkdirSync(path.dirname(artifactPath), { recursive: true });
+                  writeFileSync(artifactPath, content);
+                },
+                // Advance past groom only while this pickup is still the current step (mirrors the coordinator's
+                // rollbackStep guard) — a raced terminate/navigate must not advance a flow that moved on.
+                advancePastGroom: () => {
+                  const cur = flow.state(t.repoKey);
+                  if (
+                    currentFlowEntryTokens.get(t.repoKey) !== t.token ||
+                    cur.status !== 'in_progress' ||
+                    cur.stepName !== step.id ||
+                    (cur.refs?.ticket ?? null) !== subTicketIssue
+                  ) {
+                    return;
+                  }
+                  autoAdvanceFlow(t.repoKey);
+                },
+                surfaceError: (reason) =>
+                  send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey: t.repoKey, step: step.id, reason }),
+              },
+              subTicketIssue,
+            );
+            if (outcome.kind === 'not-subticket') enterNormally();
+          })();
+          return;
+        }
       }
-      appBootstrapCoordinator.enter({
-        repoDir: t.repoKey,
-        loopName: step.loop,
-        stepId: step.id,
-        entryToken: t.token,
-        entry: t.entry,
-        issue,
-        bootstrap: resolved.def.pickup,
-        ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
-      });
+      enterNormally();
     },
   });
   const flow = createFlowManager({

@@ -5,6 +5,7 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
+import { EPIC_SUBTICKET_LABEL, composeSubTicketBody } from '../shared/epicSubTicket';
 import { errMsg } from './errno';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
@@ -50,16 +51,10 @@ export interface EpicPromotionRequest {
   subTickets: EpicSubTicket[];
 }
 
-// §27.10 (line 194) / §28.7 (line 176) / CLAUDE.md (line 95) — the labels every promoted sub-ticket carries.
-export const EPIC_SUBTICKET_LABEL = 'agent-loop/subticket';
+// §27.10 (line 194) / §28.7 (line 176) / CLAUDE.md (line 95) — the ready label every promoted sub-ticket carries
+// alongside the shared EPIC_SUBTICKET_LABEL. (The subticket marker and the body-footer grammar live in
+// src/shared/epicSubTicket, so the pickup reader and this writer share one definition.)
 export const EPIC_READY_LABEL = 'agent-loop/ready';
-
-// §27.10 — the machine footer appended to each posted sub-ticket body, delimited by `---` so a future pickup
-// reader parses only past it. Distinct from EPIC_GRAMMAR's `Depends on:` (which the verbatim plan slice already
-// carries with an authored ordinal), so the two never collide on divergent values. Single-sourced here for that
-// reader to import.
-export const EPIC_LINK_TOKEN = 'Epic:';
-export const PRECEDING_SUBTICKET_TOKEN = 'Preceding sub-ticket:';
 
 // A distinctive marker in the appended tracking checklist so the append is idempotent: if a resume re-reaches
 // the append (the flag persist failed after the append landed), the marker's presence skips a second append.
@@ -141,8 +136,7 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
   for (const st of request.subTickets) {
     let issue = issueByIndex.get(st.index);
     if (issue === undefined) {
-      const precedingRef = preceding === null ? 'none' : `#${preceding}`;
-      const body = `${st.body}\n\n---\n${EPIC_LINK_TOKEN} #${request.epic}\n${PRECEDING_SUBTICKET_TOKEN} ${precedingRef}\n`;
+      const body = composeSubTicketBody(st.body, { epic: request.epic, preceding });
       issue = await gh.createIssue(st.title, body);
       // Record the created issue BEFORE labelling, so a label failure cannot lose it and force a re-create.
       state.created.push({ index: st.index, issue, title: st.title });

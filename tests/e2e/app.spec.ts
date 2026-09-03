@@ -1776,6 +1776,11 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
+    // §27.10 N10 — the sub-ticket pickup read (`gh issue view <n> --json body,labels`) returns whatever a test
+    // seeds in FAKE_SUBTICKET_ISSUE_JSON; unset → empty output, which the reader treats as "not a sub-ticket", so
+    // every other test's groom entry falls through unchanged. BEFORE the `--json body` arm (whose glob is a prefix
+    // of `body,labels`) so it is not shadowed.
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"body,labels"* ]]; then printf \'%s\' "$FAKE_SUBTICKET_ISSUE_JSON"; exit 0; fi\n' +
     // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
@@ -3091,6 +3096,118 @@ function withoutPickup(yaml: string): string {
 function withPickup(yaml: string, block: string): string {
   return yaml.replace(PICKUP_BLOCK, block);
 }
+
+// §27.10/§28.7 N10 (§28 P7a) — picking up an epic sub-ticket reconstructs its groomed-ticket artifact from the
+// issue body (the plan slice promotion posted verbatim) and SKIPS the groom step, landing the flow at the next
+// step without ever running groom's loop. The groomed producer is the groom-loop (its work.artifact); the fake
+// gh returns the seeded sub-ticket body + `agent-loop/subticket` label to the `--json body,labels` read.
+test('picking up an epic sub-ticket skips groom: reconstruct the groomed ticket from the body and land at the next step (§27.10/§28.7 N10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: subticket-skip\nsteps:\n' +
+      '  - id: groom\n    kind: loop\n    loop: groom-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
+      '  - id: landing\n    kind: manual\n',
+  );
+  // The real groom-loop def, resolvable from CLAUDE_CONFIG_DIR — its work.artifact `groomed-ticket` is what marks
+  // the producer step. No pickup block on groom (the sub-ticket's own PR is plan-bundle's job downstream).
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-config-'));
+  cpSync(join(exampleConfigDir, 'loops-v2', 'groom-loop'), join(config, 'loops-v2', 'groom-loop'), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-subticket-bin-');
+  const slice = '### Sub-ticket 1 — the slice\n\nAcceptance criteria: it ships\n\nPlan: build the thin slice end to end.';
+  const subTicketBody = `${slice}\n\n---\nEpic: #176\nPreceding sub-ticket: none\n`;
+  const subTicketJson = JSON.stringify({ body: subTicketBody, labels: [{ name: 'agent-loop/subticket' }, { name: 'agent-loop/ready' }] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_SUBTICKET_ISSUE_JSON: subTicketJson,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click(); // Start → enter groom (loop, required ticket input) → input modal
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('501');
+  await inputModal().locator('.confirm').click();
+
+  // groom is skipped: the flow lands at `landing` (station 2 active), groom (station 1) is done, and its loop
+  // never ran (no run-state.yaml written) — while the groomed-ticket artifact is materialized from the body.
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/, { timeout: 20_000 });
+  await expect(flowStation(1)).toHaveClass(/\bdone\b/);
+  const groomed = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+  await expect.poll(() => readIf(groomed), { timeout: 10_000 }).toBe(slice);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// §27.10 N10 fail-visible — a sub-ticket whose body is malformed where reconstruction reads it (labelled a
+// sub-ticket but carrying no epic-promotion machine footer) must create nothing and surface WHY, leaving the flow
+// at groom for the operator to fix, rather than reconstructing a half-state or silently advancing.
+test('a sub-ticket with a malformed body creates nothing and surfaces why, staying at groom (§27.10 N10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-bad-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: subticket-skip\nsteps:\n' +
+      '  - id: groom\n    kind: loop\n    loop: groom-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
+      '  - id: landing\n    kind: manual\n',
+  );
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-bad-config-'));
+  cpSync(join(exampleConfigDir, 'loops-v2', 'groom-loop'), join(config, 'loops-v2', 'groom-loop'), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-bad-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-subticket-bad-bin-');
+  // Labelled a sub-ticket, but the body has no `--- Epic:` machine footer, so the groomed ticket cannot be
+  // reconstructed from it.
+  const subTicketJson = JSON.stringify({ body: 'a labelled sub-ticket body with no machine footer at all', labels: [{ name: 'agent-loop/subticket' }] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_SUBTICKET_ISSUE_JSON: subTicketJson,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('501');
+  await inputModal().locator('.confirm').click();
+
+  // The reason surfaces on the blocking flow-error dialog; the flow stays at groom (never advances), and nothing
+  // is materialized from the malformed body.
+  await expect(page.locator('#flow-error-host .flow-modal')).toContainText(/machine footer|groomed/, { timeout: 20_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
 
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
