@@ -229,7 +229,7 @@ The same `plan-review-loop` step is a **silent auto-advance** for a single ticke
 
 ## 8. Recommended sequencing
 
-1. **A0 spec → A1–A4** (flow catalog + pointer + picker), shipping against the existing flows.
+1. **A0 spec → A1–A5** (flow catalog + pointer + picker + the **§18.7.7 recovery slice A5**), shipping against the existing flows. **A5 — or its interim guard (withhold catalog-entry pointer selection) — MUST land in this same increment**: §18.7.7 makes a deterministic recovery from the loop-less flow-load-error and corrupt-progression states a **release prerequisite** of enabling pointer selection, so shipping A1–A4 without it would ship the never-unrecoverable-state violation §18.7.7 exists to prevent.
 2. **B0 spec → B1** (gate authority), the one engine primitive Theme B needs.
 3. **B2–B3** (the five loops, recipes, curation) — content, pinned by parity tests.
 4. **B4** (the granular flow definition), now selectable via Theme A and running on the B1 gate authority.
