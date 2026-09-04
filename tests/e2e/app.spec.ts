@@ -1197,6 +1197,63 @@ test('the viewer live-reloads an open artifact when it changes on disk, with no 
   await expect(body).toContainText('LIVERELOADMARKER', { timeout: 6_000 });
 });
 
+test('surfaces the .agent-terminal/loop/ tree in the viewer, hides the app-state siblings, and live-reloads an edited loop file (#126 AC1/AC2/AC4/AC5)', async () => {
+  // #126's tracer bullet, RED-first top of the slice ladder (plan §Slice): the §28 in-terminal loop's
+  // working tree under .agent-terminal/loop/ must surface in the viewer tagged `loop` (at any depth — the
+  // depth-0 run-state file and the nested artifacts/reports/consolidate files), while the app's OWN state
+  // files directly under .agent-terminal/ stay hidden (AC4), and an on-disk edit to an OPEN loop file must
+  // re-render with no cd / no manual refresh (AC5, the §20.1 live-reload path). flow-state.yaml is COMMITTED
+  // so "state absent" is can-fail in whole-repo scope (a tracked sibling only the isUnderAppStateDir filter
+  // keeps out), not vacuously green against the untracked-.agent-terminal git collapse.
+  const dir = '/tmp/agent-term-e2e-artloop';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/.agent-terminal/loop/artifacts" "${dir}/.agent-terminal/loop/reports" "${dir}/.agent-terminal/loop/consolidate" && ` +
+      `cd "${dir}" && git init -q && git config user.email t@t && git config user.name T && ` +
+      `printf '# Base\\n' > README.md && git add -A && git commit -qm init && ` +
+      `printf '# Loop plan\\n\\nThe sliced plan for this run.\\n' > .agent-terminal/loop/artifacts/plan.md && ` +
+      `printf '# Round 1 report\\n' > .agent-terminal/loop/reports/1.md && ` +
+      `printf '# Round 1 consolidation\\n' > .agent-terminal/loop/consolidate/1.md && ` +
+      `printf 'schema_version: 1\\nloop: work\\nstep: work\\nstatus: working\\n' > .agent-terminal/loop/run-state.yaml && ` +
+      `printf 'schema_version: 1\\nstatus: idle\\n' > .agent-terminal/flow-state.yaml && ` +
+      `printf '[]\\n' > .agent-terminal/todos.json && ` +
+      `git add -f .agent-terminal/flow-state.yaml && git commit -qm state && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.locator('[data-viewbtn="2"]').click();
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const tree = page.locator('#artifacts .tree');
+  const body = page.locator('#artifacts .vbody');
+
+  // AC1/AC2 — the loop tree surfaces (depth-0 run-state.yaml + the three nested files), each row carrying
+  // the `loop` provenance tag.
+  const planRow = tree.locator('.f').filter({ hasText: 'plan.md' });
+  await expect(planRow).toHaveCount(1);
+  await expect(planRow).toContainText('loop');
+  await expect(tree.locator('.f').filter({ hasText: 'run-state.yaml' })).toHaveCount(1);
+  await expect(tree.locator('.f').filter({ hasText: '1.md' })).toHaveCount(2); // reports/1.md + consolidate/1.md
+
+  // AC1 — a loop file opens in the viewer body.
+  await planRow.click();
+  await expect(body).toContainText('The sliced plan for this run');
+
+  // AC5 — an on-disk edit to the OPEN loop file re-renders with no cd, even though it lives under
+  // .agent-terminal/ (gitignore-excluded in a real run; the live-reload watch surface still covers it).
+  appendFileSync(join(dir, '.agent-terminal/loop/artifacts/plan.md'), '\nAC5LOOPRELOADMARKER\n');
+  await expect(body).toContainText('AC5LOOPRELOADMARKER', { timeout: 6_000 });
+
+  // AC4 — the app's own state files never surface, even in whole-repo scope where the committed
+  // flow-state.yaml is a TRACKED file discovery would otherwise list (the can-fail half — an untracked
+  // sibling would collapse and be vacuously absent). The loop tree is re-admitted in curated scope only
+  // (§20.1, artifactTree.ts): switching to whole-repo scope drops it too, since it is untracked working
+  // state under .agent-terminal/, not a tracked file — so its disappearance here pins that curated-only rule.
+  await page.locator('#artifacts .scope-toggle input').check();
+  await expect(planRow).toHaveCount(0); // loop tree is curated-only; whole-repo scope shows tracked files
+  await expect(tree.locator('.f').filter({ hasText: 'flow-state.yaml' })).toHaveCount(0);
+  await expect(tree.locator('.f').filter({ hasText: 'todos.json' })).toHaveCount(0);
+});
+
 test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', { tag: '@ownapp' }, async () => {
   // bash spawns in $HOME (§5/§20.1): the viewer must discover there from the first paint, not in the
   // Electron process dir — so a marker placed in a controlled HOME must show with no cd.

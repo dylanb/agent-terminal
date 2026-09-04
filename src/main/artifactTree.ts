@@ -349,7 +349,7 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
 
   const rels =
     scope === 'repo'
-      ? trackedFiles(root, git).filter((f) => !isUnderAppStateDir(f))
+      ? [...notAppState(trackedFiles(root, git))]
       : // §20.1: the loop tree lives under .agent-terminal/, which `notAppState` excludes from changed/pr —
         // so `loop` is the only term re-admitting it (curated-only, never repo scope). Dropping either the
         // exclusion or this re-add silently changes which files carry the `loop` tag.

@@ -3,8 +3,7 @@
 // files directly under `.agent-terminal/` (kept hidden). One place single-sources those on-disk shapes so the
 // #126 discovery and watch-surface integration tests can seed one canonical loop tree rather than drifting
 // re-spellings when they adopt it — the same single-source discipline tests/helpers/loopCapabilities.ts
-// applies to its yaml (CLAUDE.md shared-semantics). Built ahead of that discovery slice; today only its own
-// self-test (loopArtifacts.test.ts) exercises it.
+// applies to its yaml (CLAUDE.md shared-semantics).
 //
 // The loop directory is derived from APP_LOOP_DIR_SEGMENTS — the SAME constant the engine writes through
 // (appLoopState.ts) and the viewer will read (artifactTree.ts) — so a fixture path and the code under test
