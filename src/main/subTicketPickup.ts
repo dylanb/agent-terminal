@@ -27,8 +27,6 @@ export type SubTicketPickupOutcome =
 export async function runSubTicketPickup(deps: SubTicketPickupDeps, issue: number): Promise<SubTicketPickupOutcome> {
   const info = await deps.readIssue(issue);
   if (info === null || !info.labels.includes(EPIC_SUBTICKET_LABEL)) return { kind: 'not-subticket' };
-  // Every side effect below — the malformed dialog included — is gated on the pickup still being current, so a
-  // terminate raced during the read surfaces and materializes nothing for a flow that already moved on.
   if (!deps.isCurrent()) return { kind: 'stale' };
   const reconstructed = reconstructSubTicketGroomedTicket(info.body);
   if (!reconstructed.ok) {
