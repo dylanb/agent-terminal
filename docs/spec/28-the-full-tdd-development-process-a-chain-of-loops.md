@@ -80,6 +80,33 @@ RED, GREEN, and refactor are **three separate single-work-turn loops, chained** 
 [S7-deferral note]: §28.10-S7 below.
 [per-slice-identity TODO]: `TODO(dylanb) #123` in `appLoopState.ts`.
 
+#### 28.4.2 The manual back-to-RED control — redo the current slice (P4b)
+
+§28.4.1's loop-back is automatic and forward (advance the N planned slices). §28.4.2 adds the human
+counterpart: at a phase gate, an operator who sees the agent stopped short sends the flow **back to the
+current slice's RED step** to redo the work it missed. It **redoes the current impl-slice — it does not
+consume or add one** — so it composes with the count-driven loop-back rather than fighting it: a mid-slice
+reopen still finishes the plan on the same slice schedule.
+
+**The flow transition.** `flow.reopenSlice()` jumps the flow's current step back to the slice's RED step —
+the `back_to` target of the flow's repeat step (§28.4.1), the single source for "where the slice restarts"
+— re-entering it (its entry actions re-run) while **preserving `repeat_counts` and the resolved inputs**.
+It is a no-op guard, never a throw: inert unless in progress with a repeat step whose target is at or
+before the current step (a reopen is backward-or-self, never a forward skip), so a stale gate click cannot
+crash or skip the flow forward.
+
+**The human control.** A one-way human gate decision, `back-to-red`, declared on **every phase gate**
+(RED / GREEN / refactor / integration-slice), joins the §27.9 gate vocabulary in the
+reopen-without-advancing family (beside `redo`/`polish`): it runs no side-effect and does not advance — it
+invokes `reopenSlice()` and re-enters RED. It rides the existing one-way `flow:appGateDecision` channel
+(no operator note). **Built in two steps:** the `reopenSlice()` transition first (a foundational slice),
+then the `back-to-red` gate-decision wiring (option → `appGateDecision` → loop-panel button → e2e).
+
+**Scope of the reopen.** Like §28.4.1 this moves the FLOW; whether the re-entered RED work turn **re-runs
+fresh** rather than resuming to its prior `red-result` depends on the same per-slice result-artifact
+identity the [per-slice-identity TODO] tracks. Until that lands, a reopen re-enters RED but the phase
+resumes its prior result.
+
 ### 28.5 Engine change #3 — machine completion predicates for any repo, any framework (P5)
 
 This is the one genuinely hard piece. §27.12 already says a turn is done only when a real done-signal fired **and** the artifact it was to produce exists and is well-formed — but "the tests now fail for the right reason" and "the tests now pass" are artifacts a naive check would gate by running the test command and reading its exit code, which bakes in framework and build-system assumptions. §28 removes those assumptions by **splitting #3 into two predicates with very different portability stories**, and by reusing the §27.5 trust model rather than inventing a cross-framework test interpreter.

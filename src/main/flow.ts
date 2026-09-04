@@ -223,6 +223,12 @@ export interface FlowMachine {
    *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
    *  or is not in_progress) returns the current view untouched rather than raising. */
   revertStep(fromStepId: string): FlowStateView;
+  /** §28.4.2 in_progress → in_progress at the slice's RED step (the repeat step's `backTo`), re-running its
+   *  entry actions and PRESERVING the slice count (`repeat_counts`) and resolved inputs — the human
+   *  "back to RED" move that redoes the current impl-slice without consuming or adding one. A NO-OP GUARD,
+   *  never a throw: inert unless in_progress with a repeat step whose target is at or before the current
+   *  step, so a stale gate click cannot crash or jump the flow forward. */
+  reopenSlice(): FlowStateView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
   terminate(): FlowStateView;
@@ -278,6 +284,7 @@ export function createFlowMachine(
       restart: view,
       undo: view,
       revertStep: view,
+      reopenSlice: view,
       terminate: view,
       provideInput: view,
       setTitle: (text) => {
@@ -501,6 +508,19 @@ export function createFlowMachine(
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
+    },
+    reopenSlice: () => {
+      // §28.4.2 human back-to-RED: jump to the slice's RED step (the repeat step's backTo) and re-enter it,
+      // leaving repeat_counts + inputs untouched so this redoes the current slice rather than counting one.
+      // Guard, don't throw: a stale click after the flow moved is inert, and the target is never ahead of
+      // the current step (a reopen is backward-or-self, never a skip).
+      if (status !== 'in_progress') return view();
+      const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
+      const target = backTo ? names.indexOf(backTo) : -1;
+      if (target < 0 || target > index) return view();
+      index = target;
+      persist();
+      return enter(view()); // re-enter RED so its work turn re-runs
     },
     terminate: () => {
       if (status !== 'in_progress' && status !== 'done') {
