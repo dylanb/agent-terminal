@@ -1,30 +1,28 @@
-// §27.10/§28.7 N10 — picking up an epic sub-ticket. A ticket carrying EPIC_SUBTICKET_LABEL reconstructs its
-// groomed-ticket artifact from the issue body (the plan slice promotion posted verbatim, §28.7) and SKIPS the
-// groom step; the flow lands at plan-bundle, which re-plans this slice's own seams (§28 P7a). A normal ticket is
-// untouched. Pure orchestration over injected domain concepts — the real gh read, artifact write, flow advance and
-// error surface are wired in index.ts and covered by the pickup e2e (CLAUDE.md injection-seam-is-a-concept).
+// §27.10/§28.7 N10 (§28 P7a) — sub-ticket pickup: reconstruct the groomed ticket from the issue body and skip
+// groom. Pure orchestration; the gh read / artifact write / flow advance / error surface are wired in index.ts.
 
 import { EPIC_SUBTICKET_LABEL, reconstructSubTicketGroomedTicket } from '../shared/epicSubTicket';
 
 export interface SubTicketPickupDeps {
   /** The picked-up issue's body + labels, or null when it cannot be read (treated as "not a sub-ticket"). */
   readIssue(issue: number): Promise<{ body: string; labels: string[] } | null>;
-  /** Materialize the reconstructed groomed-ticket artifact into the loop area (the groom producer's output path). */
+  /** Whether this pickup is still the flow's current occurrence — false once a raced terminate/navigate moved it on. */
+  isCurrent(): boolean;
+  /** Materialize the reconstructed groomed-ticket artifact into the groom producer's output path. */
   writeGroomedTicket(content: string): void;
-  /** Advance the flow past groom to plan-bundle (§27.10 "advances … without running groom"). */
+  /** Advance the flow past groom to the next step and notify the renderer (§27.10). */
   advancePastGroom(): void;
-  /** Surface why a sub-ticket body could not be reconstructed, so the operator can fix it (§27.10 fail-visible). */
+  /** Surface why the pickup produced nothing, so the operator can fix it and retry (§27.10 fail-visible). */
   surfaceError(reason: string): void;
 }
 
 export type SubTicketPickupOutcome =
   | { kind: 'not-subticket' }
   | { kind: 'skipped' }
-  | { kind: 'malformed' };
+  | { kind: 'stale' }
+  | { kind: 'malformed' }
+  | { kind: 'materialize-failed' };
 
-/** Reconstruct-and-skip for an epic sub-ticket pickup. `not-subticket` leaves the caller's normal groom path
- *  untouched; `skipped` materialized the groomed ticket and advanced; `malformed` surfaced why and advanced
- *  nothing (§27.10 — a body malformed where reconstruction reads it reconstructs no half-state). */
 export async function runSubTicketPickup(deps: SubTicketPickupDeps, issue: number): Promise<SubTicketPickupOutcome> {
   const info = await deps.readIssue(issue);
   if (info === null || !info.labels.includes(EPIC_SUBTICKET_LABEL)) return { kind: 'not-subticket' };
@@ -33,7 +31,13 @@ export async function runSubTicketPickup(deps: SubTicketPickupDeps, issue: numbe
     deps.surfaceError(reconstructed.reason);
     return { kind: 'malformed' };
   }
-  deps.writeGroomedTicket(reconstructed.groomedTicket);
-  deps.advancePastGroom();
+  if (!deps.isCurrent()) return { kind: 'stale' };
+  try {
+    deps.writeGroomedTicket(reconstructed.groomedTicket);
+    deps.advancePastGroom();
+  } catch (e) {
+    deps.surfaceError(`the sub-ticket's groomed ticket could not be materialized: ${e instanceof Error ? e.message : String(e)}`);
+    return { kind: 'materialize-failed' };
+  }
   return { kind: 'skipped' };
 }

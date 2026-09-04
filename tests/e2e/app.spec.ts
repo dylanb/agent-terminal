@@ -1780,7 +1780,7 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     // seeds in FAKE_SUBTICKET_ISSUE_JSON; unset → empty output, which the reader treats as "not a sub-ticket", so
     // every other test's groom entry falls through unchanged. BEFORE the `--json body` arm (whose glob is a prefix
     // of `body,labels`) so it is not shadowed.
-    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"body,labels"* ]]; then printf \'%s\' "$FAKE_SUBTICKET_ISSUE_JSON"; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"body,labels"* ]]; then [ -n "$FAKE_SUBTICKET_ISSUE_DELAY" ] && sleep "$FAKE_SUBTICKET_ISSUE_DELAY"; printf \'%s\' "$FAKE_SUBTICKET_ISSUE_JSON"; exit 0; fi\n' +
     // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
@@ -3132,6 +3132,11 @@ test('picking up an epic sub-ticket skips groom: reconstruct the groomed ticket 
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
       FAKE_SUBTICKET_ISSUE_JSON: subTicketJson,
+      // Delay the pickup read so the skip advance lands well AFTER the shell's post-`cd` quiescence flip. The
+      // renderer strip is push-only, so with no incidental quiescence flip left to piggyback on, the station-2
+      // assertion below can go green ONLY because the skip fires its own `pushFlowChanged` — the guarantee this
+      // test pins (without that push the strip stays at groom and the assertion times out).
+      FAKE_SUBTICKET_ISSUE_DELAY: '2',
     },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -3151,6 +3156,60 @@ test('picking up an epic sub-ticket skips groom: reconstruct the groomed ticket 
   await expect.poll(() => readIf(groomed), { timeout: 10_000 }).toBe(slice);
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'))).toBe(false);
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// §27.10 N10 fail-visible (materialize failure) — a WELL-FORMED sub-ticket whose groomed ticket cannot be WRITTEN
+// (a directory pre-occupies the artifact path → writeFileSync throws EISDIR) must surface WHY and leave the flow
+// at groom, never a silently stuck flow with no loop and no error (the fire-and-forget write must not swallow it).
+test('a sub-ticket whose groomed ticket cannot be written surfaces why and stays at groom (§27.10 N10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-wfail-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  // A directory squats on the groomed-ticket.md artifact path, so the write throws EISDIR.
+  mkdirSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: subticket-skip\nsteps:\n' +
+      '  - id: groom\n    kind: loop\n    loop: groom-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
+      '  - id: landing\n    kind: manual\n',
+  );
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-wfail-config-'));
+  cpSync(join(exampleConfigDir, 'loops-v2', 'groom-loop'), join(config, 'loops-v2', 'groom-loop'), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-subticket-wfail-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-subticket-wfail-bin-');
+  const slice = '### Sub-ticket 1 — the slice\n\nAcceptance criteria: it ships\n\nPlan: build the thin slice.';
+  const subTicketJson = JSON.stringify({ body: `${slice}\n\n---\nEpic: #176\nPreceding sub-ticket: none\n`, labels: [{ name: 'agent-loop/subticket' }] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_SUBTICKET_ISSUE_JSON: subTicketJson,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('501');
+  await inputModal().locator('.confirm').click();
+
+  // The write failure surfaces on the blocking flow-error dialog (never swallowed); the flow stays at groom and its
+  // loop never bootstraps.
+  await expect(page.locator('#flow-error-host .flow-modal')).toContainText(/materiali|EISDIR|directory/i, { timeout: 20_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'))).toBe(false);
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -3204,6 +3263,7 @@ test('a sub-ticket with a malformed body creates nothing and surfaces why, stayi
   await expect(page.locator('#flow-error-host .flow-modal')).toContainText(/machine footer|groomed/, { timeout: 20_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'))).toBe(false); // groom's loop never bootstrapped
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });

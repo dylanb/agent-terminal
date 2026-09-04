@@ -1,20 +1,23 @@
-// §28.7/§27.10 — the sub-ticket body grammar. Promotion (epicPromotion, the WRITER) appends a machine footer to
-// each posted sub-ticket body; a fresh pickup (N10, the READER) strips it back to recover the groomed-ticket
-// artifact. Both sides derive the markers and the compose↔reconstruct pair from HERE so a change to one cannot
-// desync the other (CLAUDE.md writer↔reader shared-semantics). Shared, so main's writer and reader both import it.
+// §28.7/§27.10 — the sub-ticket body grammar. The promotion WRITER (epicPromotion) and the pickup READER (N10)
+// both derive the compose↔reconstruct pair from here, so a change to one cannot desync the other (CLAUDE.md
+// writer↔reader shared-semantics).
 
 /** The label promotion applies to every sub-ticket and pickup keys on to detect one (§27.10 / §28.7). */
 export const EPIC_SUBTICKET_LABEL = 'agent-loop/subticket';
 
-/** The groomed-ticket artifact id — the loop `work.artifact` that identifies the groom producer at pickup, and the
- *  binding pickup materializes into. Single-sourced so the detection and the write target cannot drift. */
+/** The groom producer's `work.artifact` — the discriminator pickup keys on, and the binding it materializes into. */
 export const GROOMED_TICKET_ARTIFACT_ID = 'groomed-ticket';
 
-/** The machine footer's markers, appended below the verbatim plan slice, delimited by `---`. `Epic:` is distinct
- *  from the plan grammar's `Depends on:` (which the slice already carries) so the two never collide. */
-export const SUBTICKET_FOOTER_DELIM = '---';
-export const EPIC_LINK_TOKEN = 'Epic:';
-export const PRECEDING_SUBTICKET_TOKEN = 'Preceding sub-ticket:';
+/** True iff a loop def's `work.artifact` is the groom producer — the gate the flow uses to decide a sub-ticket
+ *  pickup reconstructs-and-skips groom rather than running it (§27.10 / §28.7 N10). */
+export function isGroomedTicketProducer(artifactId: string): boolean {
+  return artifactId === GROOMED_TICKET_ARTIFACT_ID;
+}
+
+// `Epic:` is distinct from the plan grammar's `Depends on:` (which the slice already carries) so the two never collide.
+const SUBTICKET_FOOTER_DELIM = '---';
+const EPIC_LINK_TOKEN = 'Epic:';
+const PRECEDING_SUBTICKET_TOKEN = 'Preceding sub-ticket:';
 
 // The exact head of the appended footer. The reader finds its LAST occurrence, so a `---`/`Epic:` the authored
 // plan slice itself contains never shadows the real (always-trailing) machine footer.
@@ -39,7 +42,7 @@ export function reconstructSubTicketGroomedTicket(body: string): SubTicketRecons
   if (idx < 0) {
     return { ok: false, reason: 'this sub-ticket has no epic-promotion machine footer, so its groomed ticket cannot be reconstructed from the body' };
   }
-  const groomedTicket = body.slice(0, idx).replace(/\s+$/, '');
+  const groomedTicket = body.slice(0, idx).trimEnd();
   if (groomedTicket.length === 0) {
     return { ok: false, reason: 'this sub-ticket carries no groomed-ticket content above its epic-promotion machine footer' };
   }

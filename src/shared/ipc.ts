@@ -621,11 +621,13 @@ export interface FlowRevealLoopMsg {
   sessionId: SessionId;
 }
 
-/** flow:onBootstrapError push (§27.10): main signals that a loop step's bootstrap could not proceed — an
- *  async in-app pickup that failed and rolled back to the previous step (revertStep), OR (AC 10) a declared
- *  `bootstrap` the bound def carries no contract for. The failure is never silent — the renderer raises a
- *  blocking error dialog carrying `reason` (the human-readable cause). `repoKey` and `step` name the failed
- *  resource, so a late push cannot be attributed to ambient flow state. */
+/** flow:onBootstrapError push (§27.10): main signals that a loop step's bootstrap could not proceed — an async
+ *  in-app pickup that failed and rolled back to the previous step (revertStep); a sub-ticket pickup whose body
+ *  cannot be reconstructed or whose groomed ticket cannot be materialized, which leaves the flow AT the step for
+ *  the operator to fix (§28.7 N10, no revert); OR (AC 10) a declared `bootstrap` the bound def carries no contract
+ *  for. The failure is never silent — the renderer raises a blocking error dialog carrying `reason` (the
+ *  human-readable cause). `repoKey` and `step` name the failed resource, so a late push cannot be attributed to
+ *  ambient flow state. */
 export interface FlowBootstrapErrorMsg {
   sessionId: SessionId;
   repoKey: string;

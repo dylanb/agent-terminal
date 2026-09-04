@@ -7,12 +7,14 @@ import { composeSubTicketBody, EPIC_SUBTICKET_LABEL } from '../../src/shared/epi
 // action fired), never the internals.
 function deps(over: Partial<SubTicketPickupDeps> = {}): SubTicketPickupDeps & {
   readIssue: ReturnType<typeof vi.fn>;
+  isCurrent: ReturnType<typeof vi.fn>;
   writeGroomedTicket: ReturnType<typeof vi.fn>;
   advancePastGroom: ReturnType<typeof vi.fn>;
   surfaceError: ReturnType<typeof vi.fn>;
 } {
   return {
     readIssue: vi.fn(async () => ({ body: '', labels: [] as string[] })),
+    isCurrent: vi.fn(() => true),
     writeGroomedTicket: vi.fn(),
     advancePastGroom: vi.fn(),
     surfaceError: vi.fn(),
@@ -57,5 +59,32 @@ describe('§27.10/§28.7 runSubTicketPickup', () => {
     expect(d.advancePastGroom).not.toHaveBeenCalled();
     expect(d.surfaceError).toHaveBeenCalledTimes(1);
     expect(d.surfaceError.mock.calls[0][0]).toMatch(/machine footer|groomed/i);
+  });
+
+  it('a raced pickup (the flow moved on during the read) neither materializes nor advances', async () => {
+    const slice = '### Ticket\n\nAcceptance criteria: it works\n\nPlan: build the slice.';
+    const d = deps({
+      readIssue: vi.fn(async () => ({ body: subTicketBody(slice), labels: [EPIC_SUBTICKET_LABEL] })),
+      isCurrent: vi.fn(() => false),
+    });
+    const outcome = await runSubTicketPickup(d, 501);
+    expect(outcome.kind).toBe('stale');
+    expect(d.writeGroomedTicket).not.toHaveBeenCalled();
+    expect(d.advancePastGroom).not.toHaveBeenCalled();
+  });
+
+  it('a write failure surfaces why and does not advance (fail-visible, not a silent stuck flow)', async () => {
+    const slice = '### Ticket\n\nAcceptance criteria: it works\n\nPlan: build the slice.';
+    const d = deps({
+      readIssue: vi.fn(async () => ({ body: subTicketBody(slice), labels: [EPIC_SUBTICKET_LABEL] })),
+      writeGroomedTicket: vi.fn(() => {
+        throw new Error('ENOSPC: no space left on device');
+      }),
+    });
+    const outcome = await runSubTicketPickup(d, 501);
+    expect(outcome.kind).toBe('materialize-failed');
+    expect(d.advancePastGroom).not.toHaveBeenCalled();
+    expect(d.surfaceError).toHaveBeenCalledTimes(1);
+    expect(d.surfaceError.mock.calls[0][0]).toMatch(/ENOSPC|materiali/i);
   });
 });

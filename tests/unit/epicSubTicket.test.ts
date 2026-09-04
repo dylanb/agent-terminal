@@ -4,6 +4,7 @@ import {
   GROOMED_TICKET_ARTIFACT_ID,
   composeSubTicketBody,
   exampleSubTicketBody,
+  isGroomedTicketProducer,
   reconstructSubTicketGroomedTicket,
 } from '../../src/shared/epicSubTicket';
 
@@ -24,11 +25,33 @@ describe('§28.7/§27.10 epicSubTicket — the sub-ticket body writer↔reader g
     expect(r.ok && r.groomedTicket).toBe(slice);
   });
 
-  it('keeps a plan slice that itself contains a --- rule and an Epic: line — the footer is the LAST', () => {
-    const slice = 'Context\n\n---\n\nEpic: this word appears in the prose\n\nPlan: ship it.';
+  it('keeps a plan slice that itself embeds the machine footer markers — reconstruct strips only the LAST', () => {
+    // The authored slice contains a real `\n---\nEpic: ` line (single newlines, the exact footer head), so the
+    // composed body carries TWO occurrences. reconstruct must strip only the LAST (the footer promotion appended)
+    // and return the slice verbatim; an `indexOf` reader would stop at the embedded one and truncate to 'Context'.
+    const slice = 'Context\n---\nEpic: #999 mentioned in the plan prose\n\nPlan: ship it.';
     const body = composeSubTicketBody(slice, { epic: 42, preceding: null });
     const r = reconstructSubTicketGroomedTicket(body);
     expect(r.ok && r.groomedTicket).toBe(slice);
+  });
+
+  it('reconstruct stays linear on a pathological trailing-whitespace slice (ReDoS regression)', () => {
+    // A plan slice that is a huge whitespace run before a single non-space char makes `/\s+$/` backtrack
+    // quadratically (measured ~1.4s at 50k, freezing the main process); `.trimEnd()` is linear (~microseconds).
+    // The body is a valid sub-ticket (non-empty above the footer), so reconstruction actually runs the strip.
+    const slice = ' '.repeat(50000) + 'x';
+    const body = composeSubTicketBody(slice, { epic: 1, preceding: null });
+    const t0 = performance.now();
+    const r = reconstructSubTicketGroomedTicket(body);
+    const ms = performance.now() - t0;
+    expect(r.ok && r.groomedTicket).toBe(slice);
+    expect(ms).toBeLessThan(500);
+  });
+
+  it('isGroomedTicketProducer is true only for the groom producer artifact id (the skip gate discriminator)', () => {
+    expect(isGroomedTicketProducer(GROOMED_TICKET_ARTIFACT_ID)).toBe(true);
+    expect(isGroomedTicketProducer('plan-bundle')).toBe(false);
+    expect(isGroomedTicketProducer('')).toBe(false);
   });
 
   it('fails (creates nothing) on a sub-ticket body missing the machine footer', () => {
