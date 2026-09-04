@@ -371,7 +371,7 @@ export type SendChannel = keyof ChannelPayloads;
 // ---- Artifact viewer (§20.1/§20.2) ----
 
 /** Per-file provenance tags (D8): tracked-but-changed in the working tree, under the
- *  agent-loop, or part of the current PR. Empty/omitted when none apply. */
+ *  §27 loop tree (`.agent-terminal/loop/`), or part of the current PR. Empty/omitted when none apply. */
 export type ArtifactProvenance = 'changed' | 'loop' | 'pr';
 
 /** One node of the hierarchical artifact tree (§20.1). A directory carries `children`;

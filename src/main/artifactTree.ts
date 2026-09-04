@@ -2,9 +2,12 @@
 // TODO(agent-loop bridge, §24.2): LoopDef `artifacts:` declarations.
 
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import { isUnderAppStateDir } from './appStateDirs';
+import { confinedRealPath, resolveJail } from './confinedPath';
 import type {
   ArtifactNode,
   ArtifactProvenance,
@@ -272,11 +275,15 @@ function walkDir(dir: string, base = dir, acc: string[] = []): string[] {
 }
 
 function loopFiles(root: string): Set<string> {
-  const loopDir = path.join(root, '.agent-loop');
-  if (!existsSync(loopDir)) return new Set();
-  // MUST POSIX-normalize: provenance is matched against buildTree's '/'-keyed paths, so on Windows
-  // (path.sep '\\') unnormalized loop paths would silently never match (§20.1).
-  return new Set(walkDir(loopDir, root).map((p) => p.split(path.sep).join('/')));
+  // Confine the loop-dir walk: a symlink planted at .agent-terminal/loop or its parent that resolves out of
+  // the (untrusted) working tree is refused, not enumerated into the tree (CWE-59/22). Same confinement the
+  // loop engine reads the area through (appLoopState.ts: resolveJail + confinedRealPath).
+  const jail = resolveJail(root, ...APP_LOOP_DIR_SEGMENTS);
+  const real = jail === null ? null : confinedRealPath(jail, jail);
+  if (real === null) return new Set();
+  // Key relPaths on the loop segments (not path.relative(root, …)) so a symlinked repo root can't escape them,
+  // and POSIX-join so they match buildTree's '/'-keyed paths on Windows too (§20.1).
+  return new Set(walkDir(real, real).map((p) => [...APP_LOOP_DIR_SEGMENTS, ...p.split(path.sep)].join('/')));
 }
 
 function buildTree(relPaths: string[], prov: (rel: string) => ArtifactProvenance[] | undefined): ArtifactNode[] {
@@ -325,11 +332,13 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
     return { root: dir, isRepo: false, scope, nodes: buildTree(files, () => undefined) };
   }
 
-  const changed = changedFiles(root, git);
+  const notAppState = (files: Iterable<string>): Set<string> =>
+    new Set([...files].filter((f) => !isUnderAppStateDir(f)));
+  const changed = notAppState(changedFiles(root, git));
   const loop = loopFiles(root);
   const base = (deps.baseRef ?? ((r: string) => defaultBaseRef(r, git)))(root);
   const mergeBase = base ? mergeBaseOf(base, root, git) : null;
-  const pr = mergeBase ? prFiles(root, mergeBase, git) : new Set<string>();
+  const pr = notAppState(mergeBase ? prFiles(root, mergeBase, git) : new Set<string>());
   const provenance = (rel: string): ArtifactProvenance[] | undefined => {
     const tags: ArtifactProvenance[] = [];
     if (changed.has(rel)) tags.push('changed');
@@ -338,7 +347,13 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
     return tags.length ? tags : undefined;
   };
 
-  const rels = scope === 'repo' ? trackedFiles(root, git) : [...new Set([...changed, ...pr, ...loop])];
+  const rels =
+    scope === 'repo'
+      ? trackedFiles(root, git).filter((f) => !isUnderAppStateDir(f))
+      : // §20.1: the loop tree lives under .agent-terminal/, which `notAppState` excludes from changed/pr —
+        // so `loop` is the only term re-admitting it (curated-only, never repo scope). Dropping either the
+        // exclusion or this re-add silently changes which files carry the `loop` tag.
+        [...new Set([...changed, ...pr, ...loop])];
 
   return { root, isRepo: true, scope, nodes: buildTree(rels, provenance) };
 }
