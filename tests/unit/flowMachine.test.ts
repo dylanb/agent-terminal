@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
 
@@ -968,5 +968,123 @@ describe('flow state machine — state() reflects external disk changes (§19.1)
     const s = flow.state();
     expect(s.status).toBe('not_started');
     expect(s.stepName).toBe('groom'); // back to the first step
+  });
+});
+
+// §28.4 loop-back (repeat) primitive — the flow-machine mechanism §28.2's slice-loop×N needs. A step
+// carrying `repeat: { backTo, countInput }` turns advance() OFF that step into a conditional back-jump:
+// while it has looped back fewer than `count` times (the value of the `countInput` flow input, the slice
+// count the plan decides), `index` jumps to `backTo`; otherwise advance() falls through as normal. The
+// observable contract is purely the step sequence advance() produces and what survives a relaunch — never
+// which private counter moved. Count is clamped [1, MAX_SLICES] so untrusted plan data can neither disable
+// the loop nor run it unbounded (CWE-20/770).
+describe('flow machine loop-back (repeat) primitive (§28.4 — impl-slice×N)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-repeat-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // plan → red → green → refactor(repeat back_to=red, count_input=slices) → finalize
+  const repeatLoad: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'plan', kind: 'manual' },
+        { id: 'red', kind: 'manual' },
+        { id: 'green', kind: 'manual' },
+        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'finalize', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  /** Advance to `done` (or a generous budget guarding against a runaway), counting how many times each
+   *  named step is entered — the only thing a caller can observe about the loop-back. */
+  const runCounting = (flow: ReturnType<typeof createFlowMachine>): Record<string, number> => {
+    const visits: Record<string, number> = {};
+    for (let i = 0; i < 10 * MAX_SLICES && flow.state().status !== 'done'; i++) {
+      const s = flow.state().stepName;
+      visits[s] = (visits[s] ?? 0) + 1;
+      flow.advance();
+    }
+    return visits;
+  };
+
+  it('loops back to back_to once per slice until the count is reached, then falls through to done', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '3' });
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.red).toBe(3); // red re-entered once per slice
+    expect(visits.refactor).toBe(3);
+    expect(visits.finalize).toBe(1); // reached exactly once, after the last slice
+  });
+
+  it('advances a repeat step only once when no slice count is resolved (count defaults to 1 — no runaway)', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // no provideInput: `slices` is unset
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.red).toBe(1);
+    expect(visits.refactor).toBe(1);
+  });
+
+  it('clamps an over-cap slice count to MAX_SLICES (a plan cannot drive an unbounded loop, CWE-770)', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: String(MAX_SLICES + 25) });
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.refactor).toBe(MAX_SLICES);
+  });
+
+  it('treats a non-integer / negative slice count as 1 (validated at the read boundary, CWE-20)', () => {
+    for (const bad of ['-5', 'abc', '', '2.5']) {
+      const d = mkdtempSync(join(tmpdir(), 'flow-repeat-bad-'));
+      const flow = createFlowMachine(repeatLoad, createFlowStateStore(d));
+      flow.start();
+      flow.provideInput({ slices: bad });
+      const visits = runCounting(flow);
+      expect(visits.refactor).toBe(1);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('persists the repeat iteration so a relaunch resumes the same slice, not slice 1', () => {
+    const flow1 = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow1.start();
+    flow1.provideInput({ slices: '3' });
+    flow1.advance(); // red (slice 1)
+    flow1.advance(); // green
+    flow1.advance(); // refactor (slice 1)
+    flow1.advance(); // loop back → red (slice 2)
+    expect(flow1.state().stepName).toBe('red');
+
+    // A fresh machine over the same on-disk state must know it is on slice 2: only slices 2 and 3 remain,
+    // so refactor is entered exactly twice more — not three times (which is what a lost counter would do).
+    const flow2 = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    const visits = runCounting(flow2);
+    expect(flow2.state().status).toBe('done');
+    expect(visits.refactor).toBe(2);
+  });
+
+  it('restart() clears the repeat counters so the next run loops afresh', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(repeatLoad, store);
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    runCounting(flow); // run one full 2-slice pass to done
+    expect(flow.state().status).toBe('done');
+
+    flow.restart(); // done → in_progress at the first step, counters and inputs cleared
+    flow.provideInput({ slices: '2' });
+    const visits = runCounting(flow);
+    expect(visits.refactor).toBe(2); // loops again, not stuck at the exhausted prior count
   });
 });

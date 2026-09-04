@@ -53,7 +53,16 @@ export interface FlowStepDef {
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: 'pickup';
   inputs?: FlowInputDef[];
+  /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
+   *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
+   *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
+   *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
+  repeat?: { backTo: string; countInput: string };
 }
+
+/** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
+ *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
+export const MAX_SLICES = 50;
 
 export interface FlowDefinition {
   name: string;
@@ -152,6 +161,21 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
+    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
+    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
+    let repeat: { backTo: string; countInput: string } | undefined;
+    if (raw.repeat !== undefined) {
+      if (
+        !isRecord(raw.repeat) ||
+        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
+        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
+      )
+        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
+      const backTo = raw.repeat.back_to;
+      if (!steps.some((s) => s.id === backTo))
+        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
+      repeat = { backTo, countInput: raw.repeat.count_input };
+    }
     steps.push({
       id: raw.id,
       kind: raw.kind,
@@ -160,6 +184,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
       ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
+      ...(repeat ? { repeat } : {}),
     });
   }
   return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
@@ -282,6 +307,9 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
+  // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
+  // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
+  let repeatCounts: Record<string, number> = Object.create(null);
   // §22.3.1.
   let userTitle: string | null = null;
 
@@ -294,6 +322,7 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
+    repeatCounts = Object.create(null);
     const persisted = store.read();
     if (persisted) {
       const i = names.indexOf(persisted.step);
@@ -302,6 +331,7 @@ export function createFlowMachine(
         status = persisted.status;
       }
       if (persisted.inputs) inputs = { ...persisted.inputs };
+      if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -315,6 +345,14 @@ export function createFlowMachine(
     if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
     const raw = inputs[name];
     return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+  };
+  // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
+  // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
+  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
+  const slicesFor = (countInput: string): number => {
+    const n = numericInput(countInput);
+    if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
+    return Math.min(n, MAX_SLICES);
   };
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
@@ -382,6 +420,7 @@ export function createFlowMachine(
       step: current().id,
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
 
@@ -416,6 +455,18 @@ export function createFlowMachine(
     },
     advance: () => {
       requireStatus('in_progress', 'advance');
+      const step = current();
+      // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
+      if (step.repeat) {
+        const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
+        const backIndex = names.indexOf(step.repeat.backTo);
+        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+          repeatCounts[step.id] = completed + 1;
+          index = backIndex;
+          persist();
+          return enter(view());
+        }
+      }
       if (index < steps.length - 1) {
         index += 1;
         persist();
@@ -430,6 +481,7 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
+      repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
       persist();
       return enter(view());
     },
@@ -457,6 +509,7 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
+      repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },

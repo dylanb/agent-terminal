@@ -178,6 +178,50 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    inputs:\n      - name: ticket\n');
     expect(loadFlowDefinition(dir).ok).toBe(false); // entry missing `type`
   });
+
+  // §28.4 loop-back (repeat) primitive — a step may declare `repeat: { back_to, count_input }` making
+  // advance() loop back to an EARLIER step `count_input`-many times (§28.2 slice-loop×N). The loader
+  // captures the binding; the machine drives the back-jump.
+  it('loads a step\'s repeat directive, mapping back_to/count_input to backTo/countInput (§28.4)', () => {
+    writeFlow(
+      'name: feature-dev\nsteps:\n' +
+        '  - id: red\n    kind: loop\n    loop: red-loop\n' +
+        '  - id: refactor\n    kind: loop\n    loop: refactor-loop\n' +
+        '    repeat:\n      back_to: red\n      count_input: slices\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) {
+      expect(load.definition.steps[0].repeat).toBeUndefined();
+      expect(load.definition.steps[1].repeat).toEqual({ backTo: 'red', countInput: 'slices' });
+    }
+  });
+
+  it('rejects a repeat whose back_to is not an EARLIER step (a repeat is a loop-back, never a skip) (§28.4)', () => {
+    // forward target
+    writeFlow(
+      'name: f\nsteps:\n' +
+        '  - id: red\n    kind: manual\n    repeat:\n      back_to: finalize\n      count_input: slices\n' +
+        '  - id: finalize\n    kind: manual\n',
+    );
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+    // unknown target
+    writeFlow(
+      'name: f\nsteps:\n' +
+        '  - id: red\n    kind: manual\n' +
+        '  - id: refactor\n    kind: manual\n    repeat:\n      back_to: nope\n      count_input: slices\n',
+    );
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+  });
+
+  it('rejects a malformed repeat: not a mapping, or missing back_to / count_input (§28.4)', () => {
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat: red\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // repeat is not a mapping
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      back_to: red\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // missing count_input
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: manual\n  - id: r\n    kind: manual\n    repeat:\n      count_input: slices\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // missing back_to
+  });
 });
 
 describe('flow machine sourced from a definition (§24.2.2 S2)', () => {

@@ -22,8 +22,10 @@ steps:
     loop: infra-loop
     loop_namespace: app
     todo_template: impl-loop-review
-  # One impl-slice per run (red→green→refactor once): §28.2's slice-loop×N needs a repeatable-step
-  # primitive §28.1 bars, so it is deferred — the chain is a static single slice, not an oversight.
+  # impl-slice×N (§28.2/§28.4): red→green→refactor repeats once per impl-slice. The refactor step's
+  # `repeat` loops back to `red` `slices`-many times (§28.4 loop-back primitive). Until the plan-bundle
+  # phase resolves the `slices` input from the slice-plan, the count defaults to 1 — a single slice, the
+  # prior behavior — so the directive is inert, never a broken multi-slice chain.
   - id: red
     kind: loop
     loop: red-loop
@@ -39,6 +41,9 @@ steps:
     loop: refactor-loop
     loop_namespace: app
     todo_template: impl-loop-review
+    repeat:
+      back_to: red
+      count_input: slices
   - id: integration-slice
     kind: loop
     loop: integration-slice-loop
