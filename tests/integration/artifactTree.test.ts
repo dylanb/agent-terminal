@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS, __resetBaseRefState } from '../../src/main/artifactTree';
+import { isUnderAppStateDir } from '../../src/main/appStateDirs';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -71,8 +72,19 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     git(['commit', '-q', '-m', 'init'], repo);
     writeFileSync(join(repo, 'committed.md'), '# Committed\n\nbody changed');
     writeFileSync(join(repo, 'untracked.txt'), 'scratch');
+    // Residual state from the retired .agent-loop/ engine (#126): must NOT surface or carry the loop tag.
     mkdirSync(join(repo, '.agent-loop'), { recursive: true });
     writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n');
+    // The in-terminal loop engine's working tree (§27) under .agent-terminal/loop/ — a depth-0 run-state
+    // file plus nested artifacts/reports/consolidate — is what the viewer must surface as loop provenance.
+    for (const d of ['artifacts', 'reports', 'consolidate']) mkdirSync(join(repo, '.agent-terminal', 'loop', d), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'), 'status: running\n');
+    writeFileSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'), '# Loop plan\n');
+    writeFileSync(join(repo, '.agent-terminal', 'loop', 'reports', '1.md'), '# Report 1\n');
+    writeFileSync(join(repo, '.agent-terminal', 'loop', 'consolidate', '1.md'), '# Consolidate 1\n');
+    // App state directly under .agent-terminal/ (not the loop tree): must stay hidden in every scope.
+    for (const f of ['flow-state.yaml', 'todos.json', 'monitor-events.json', 'audit-pointer.yaml'])
+      writeFileSync(join(repo, '.agent-terminal', f), 'x\n');
 
     plain = realpathSync(mkdtempSync(join(tmpdir(), 'art-plain-')));
     mkdirSync(join(plain, 'docs'), { recursive: true });
@@ -88,19 +100,74 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     rmSync(plain, { recursive: true, force: true });
   });
 
-  it('curated scope = working-tree changes ∪ agent-loop, excluding unchanged committed files', () => {
+  // AC1 (#126): the in-terminal loop engine's tree under .agent-terminal/loop/ surfaces in curated — the
+  // depth-0 run-state file AND the files nested in artifacts/reports/consolidate (the loop tree "at any depth").
+  it('curated scope surfaces .agent-terminal/loop files (∪ working-tree changes), excluding unchanged committed files', () => {
     const tree = discover(repo, 'curated');
     expect(tree.isRepo).toBe(true);
     expect(tree.root).toBe(repo);
     const files = fileRelPaths(tree.nodes);
-    expect(files).toEqual(expect.arrayContaining(['committed.md', 'untracked.txt', '.agent-loop/plan.md']));
+    expect(files).toEqual(
+      expect.arrayContaining([
+        'committed.md',
+        'untracked.txt',
+        '.agent-terminal/loop/run-state.yaml',
+        '.agent-terminal/loop/artifacts/plan.md',
+        '.agent-terminal/loop/reports/1.md',
+        '.agent-terminal/loop/consolidate/1.md',
+      ]),
+    );
     expect(files).not.toContain('src/a.ts'); // committed, unchanged → not curated
   });
 
-  it('tags provenance: changed for working-tree edits, loop for .agent-loop files', () => {
+  // AC1 complementary (green pre-change — readArtifact path-confines and reads any in-root file
+  // independent of discovery; the RED evidence is the curated LISTING above, not this readback).
+  it('reads a surfaced loop artifact by its .agent-terminal/loop/ relative path', () => {
+    expect(readArtifact(repo, '.agent-terminal/loop/artifacts/plan.md')?.body).toBe('# Loop plan\n');
+  });
+
+  // AC2 (#126): surfaced loop files carry the loop provenance tag and ONLY that — not `changed` (the loop
+  // tree is itself under the app-state-excluded .agent-terminal/, so it is dropped from `changed`/`pr`).
+  it('tags provenance: changed for working-tree edits, loop (only) for .agent-terminal/loop files', () => {
     const tree = discover(repo, 'curated');
     expect(findFile(tree.nodes, 'committed.md')?.provenance).toContain('changed');
-    expect(findFile(tree.nodes, '.agent-loop/plan.md')?.provenance).toContain('loop');
+    expect(findFile(tree.nodes, '.agent-terminal/loop/artifacts/plan.md')?.provenance).toEqual(['loop']);
+    expect(findFile(tree.nodes, '.agent-terminal/loop/run-state.yaml')?.provenance).toEqual(['loop']);
+  });
+
+  // AC3 (#126): loop provenance no longer depends on the retired .agent-loop/ dir — a residual
+  // .agent-loop/plan.md (seeded in beforeEach) never appears and is never loop-tagged, while the
+  // .agent-terminal/loop tree still surfaces independent of it.
+  it('does not surface or loop-tag residual .agent-loop/ files (loop provenance derives from .agent-terminal/loop)', () => {
+    const tree = discover(repo, 'curated');
+    expect(fileRelPaths(tree.nodes)).not.toContain('.agent-loop/plan.md');
+    expect(findFile(tree.nodes, '.agent-loop/plan.md')).toBeUndefined();
+    expect(findFile(tree.nodes, '.agent-terminal/loop/reports/1.md')?.provenance).toEqual(['loop']);
+  });
+
+  // AC4 (#126) — untracked-collapse fixture: app state directly under .agent-terminal/ (flow-state.yaml,
+  // todos.json, monitor-events.json, audit-pointer.yaml) never surfaces in EITHER scope, including the
+  // collapsed `?? .agent-terminal/` node git emits for the otherwise-untracked dir. Only the loop subtree
+  // under .agent-terminal/loop/ is allowed through.
+  it('excludes app state under .agent-terminal/ from both scopes (untracked-collapse fixture)', () => {
+    for (const scope of ['curated', 'repo'] as const) {
+      const files = fileRelPaths(discover(repo, scope).nodes);
+      const appStateNonLoop = files.filter((f) => isUnderAppStateDir(f) && !f.startsWith('.agent-terminal/loop/'));
+      expect(appStateNonLoop).toEqual([]);
+    }
+  });
+
+  // AC4 (#126) — committed-app-state fixture (disjoint from the collapse case: committing un-collapses the
+  // dir): an app-state file committed on the branch over the base enters the `pr` diff, but the filter
+  // drops it before it can surface tagged pr.
+  it('excludes a committed app-state file under .agent-terminal/ from the pr set (absent + untagged)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    git(['add', '-f', '.agent-terminal/flow-state.yaml'], repo);
+    git(['commit', '-q', '-m', 'commit app state'], repo);
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    expect(fileRelPaths(tree.nodes)).not.toContain('.agent-terminal/flow-state.yaml');
+    expect(findFile(tree.nodes, '.agent-terminal/flow-state.yaml')).toBeUndefined();
   });
 
   // §20.1: curated is the SUPERSET — files changed in the working tree (`changed`) ∪ files a branch
