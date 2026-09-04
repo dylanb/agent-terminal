@@ -81,6 +81,7 @@ import { runSubTicketPickup } from './subTicketPickup';
 import { createRealSubTicketIssueReader } from './subTicketIssueGithub';
 import { isGroomedTicketProducer } from '../shared/epicSubTicket';
 import { sameFlowOccurrence, type FlowOccurrenceRef } from './flowOccurrence';
+import { errMsg } from './errno';
 import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding';
 import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
@@ -545,7 +546,7 @@ async function createWindow(): Promise<void> {
               );
               if (outcome.kind === 'not-subticket') enterNormally();
             } catch (e) {
-              surfaceError(`sub-ticket pickup failed: ${e instanceof Error ? e.message : String(e)}`);
+              surfaceError(`sub-ticket pickup failed: ${errMsg(e)}`);
             }
           })();
           return;

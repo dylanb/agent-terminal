@@ -2,6 +2,7 @@
 // groom. Pure orchestration; the gh read / artifact write / flow advance / error surface are wired in index.ts.
 
 import { EPIC_SUBTICKET_LABEL, reconstructSubTicketGroomedTicket } from '../shared/epicSubTicket';
+import { errMsg } from './errno';
 
 export interface SubTicketPickupDeps {
   /** The picked-up issue's body + labels, or null when it cannot be read (treated as "not a sub-ticket"). */
@@ -26,17 +27,19 @@ export type SubTicketPickupOutcome =
 export async function runSubTicketPickup(deps: SubTicketPickupDeps, issue: number): Promise<SubTicketPickupOutcome> {
   const info = await deps.readIssue(issue);
   if (info === null || !info.labels.includes(EPIC_SUBTICKET_LABEL)) return { kind: 'not-subticket' };
+  // Every side effect below — the malformed dialog included — is gated on the pickup still being current, so a
+  // terminate raced during the read surfaces and materializes nothing for a flow that already moved on.
+  if (!deps.isCurrent()) return { kind: 'stale' };
   const reconstructed = reconstructSubTicketGroomedTicket(info.body);
   if (!reconstructed.ok) {
     deps.surfaceError(reconstructed.reason);
     return { kind: 'malformed' };
   }
-  if (!deps.isCurrent()) return { kind: 'stale' };
   try {
     deps.writeGroomedTicket(reconstructed.groomedTicket);
     deps.advancePastGroom();
   } catch (e) {
-    deps.surfaceError(`the sub-ticket's groomed ticket could not be materialized: ${e instanceof Error ? e.message : String(e)}`);
+    deps.surfaceError(`the sub-ticket's groomed ticket could not be materialized: ${errMsg(e)}`);
     return { kind: 'materialize-failed' };
   }
   return { kind: 'skipped' };

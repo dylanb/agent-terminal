@@ -71,6 +71,19 @@ describe('§27.10/§28.7 runSubTicketPickup', () => {
     expect(outcome.kind).toBe('stale');
     expect(d.writeGroomedTicket).not.toHaveBeenCalled();
     expect(d.advancePastGroom).not.toHaveBeenCalled();
+    expect(d.surfaceError).not.toHaveBeenCalled();
+  });
+
+  it('a raced pickup whose body is ALSO malformed stays silent — no spurious dialog for a flow that moved on', async () => {
+    const d = deps({
+      readIssue: vi.fn(async () => ({ body: 'a labelled body with no machine footer', labels: [EPIC_SUBTICKET_LABEL] })),
+      isCurrent: vi.fn(() => false),
+    });
+    const outcome = await runSubTicketPickup(d, 501);
+    expect(outcome.kind).toBe('stale');
+    expect(d.surfaceError).not.toHaveBeenCalled();
+    expect(d.writeGroomedTicket).not.toHaveBeenCalled();
+    expect(d.advancePastGroom).not.toHaveBeenCalled();
   });
 
   it('a write failure surfaces why and does not advance (fail-visible, not a silent stuck flow)', async () => {
