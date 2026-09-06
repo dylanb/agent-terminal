@@ -722,7 +722,7 @@ export interface FlowSetTitleMsg {
  *  wire cannot drift on the set. The guard that a step never runs an option its bound def does not declare
  *  is enforced at the operation, validated against the def's declared options — never inferred from this
  *  type (AC9). */
-export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish'] as const;
+export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish', 'back-to-red'] as const;
 export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
 
 /** The §27-only work-turn error route-out (§27.12c): the human recovers a stopped §27 work turn by

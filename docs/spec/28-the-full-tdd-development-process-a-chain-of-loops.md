@@ -99,8 +99,11 @@ crash or skip the flow forward.
 (RED / GREEN / refactor / integration-slice), joins the §27.9 gate vocabulary in the
 reopen-without-advancing family (beside `redo`/`polish`): it runs no side-effect and does not advance — it
 invokes `reopenSlice()` and re-enters RED. It rides the existing one-way `flow:appGateDecision` channel
-(no operator note). **Built in two steps:** the `reopenSlice()` transition first (a foundational slice),
-then the `back-to-red` gate-decision wiring (option → `appGateDecision` → loop-panel button → e2e).
+(no operator note). The gate decision reopens the flow WITHOUT persisting an accept: the executor calls the
+`reopenSlice` port and audits the decision, and the composition root runs `flow.reopenSlice()` inside a §25
+transition so the backward re-entry lands in the run's audit record (a `step.entered` back at RED). A reopen
+carries no distinct §25 `TransitionKind` — its audit diff is the whole observable, so it borrows the
+backward-re-entry identity rather than widening the closed vocabulary with untestable ceremony.
 
 **Scope of the reopen.** Like §28.4.1 this moves the FLOW; whether the re-entered RED work turn **re-runs
 fresh** rather than resuming to its prior `red-result` depends on the same per-slice result-artifact

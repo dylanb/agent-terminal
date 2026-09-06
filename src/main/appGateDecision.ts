@@ -39,6 +39,10 @@ export interface AppGateDecisionDeps {
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
+  /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
+   *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
+   *  redo/polish family it is NOT approve — no accept, no advance — the flow jumps back and RED re-runs. */
+  reopenSlice(repoDir: string): void;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
   maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): EpicGateOutcome;
@@ -151,6 +155,15 @@ export async function runAppGateDecision(
       const reason = e instanceof Error ? e.message : String(e);
       deps.emitError(`could not enter polish: ${reason}`);
     }
+    deps.onViewChanged();
+    return false;
+  }
+  // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
+  // slice's RED step (reopenSlice) so the operator can redo missed work. One-way like polish (no note to lose):
+  // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED.
+  if (option === 'back-to-red') {
+    deps.reopenSlice(repoDir);
+    deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
     deps.onViewChanged();
     return false;
   }

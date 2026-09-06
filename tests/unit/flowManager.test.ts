@@ -52,6 +52,30 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     expect(fresh.state(b).status).toBe('not_started');
   });
 
+  // §28.4.2 — the manager forwards reopenSlice to the keyed machine, so the human back-to-RED control acts on the
+  // repo the cwd names and no other. The machine's own reopen semantics (jump to the repeat step's back_to,
+  // preserve the slice count) are unit-tested in flowMachine; here the delegation + per-key isolation is the point.
+  const REPEAT_FLOW =
+    'name: slices-mgr\nsteps:\n' +
+    '  - id: red\n    kind: manual\n' +
+    '  - id: green\n    kind: manual\n' +
+    '  - id: refactor\n    kind: manual\n    repeat:\n      back_to: red\n      count_input: slices\n' +
+    '  - id: finalize\n    kind: manual\n';
+  it('reopenSlice delegates to the machine the repo key names, jumping only that repo back to its slice RED step', () => {
+    const c = mkdtempSync(join(tmpdir(), 'flow-mgr-reopen-'));
+    mkdirSync(join(c, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(c, '.agent-terminal', 'flow.yaml'), REPEAT_FLOW);
+    const mgr = createFlowManager({ globalDir: home });
+    mgr.start(c);
+    mgr.advance(c); // green
+    expect(mgr.state(c).stepName).toBe('green');
+    expect(mgr.reopenSlice(c).stepName).toBe('red'); // the delegated jump-back off the repeat step's back_to
+    expect(mgr.state(c).status).toBe('in_progress');
+    mgr.start(a); // a different repo is untouched by c's reopen
+    expect(mgr.state(a).stepName).toBe('alpha-step');
+    rmSync(c, { recursive: true, force: true });
+  });
+
   it('creates no .agent-terminal directory merely from reading state (only writes do, on a transition)', () => {
     const plain = mkdtempSync(join(tmpdir(), 'flow-mgr-readonly-'));
     try {

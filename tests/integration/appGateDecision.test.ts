@@ -70,13 +70,14 @@ interface Recorder {
   polishEnters: Array<{ repoDir: string; step: string }>;
   polishClears: string[];
   recordBaselines: Array<{ repoDir: string; branch: string; sha: string }>;
+  reopens: string[];
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -113,6 +114,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
+    reopenSlice: (repoDir) => void rec.reopens.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
   };
@@ -438,6 +440,46 @@ describe('runAppGateDecision — redo re-enters the work turn carrying the instr
     const { deps, rec } = mkDeps({}); // approve-only default def
     await decide(deps, 'redo', 'do the thing');
     expect(rec.redos).toEqual([]);
+  });
+});
+
+// §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
+// slice's RED step (reopenSlice) so the operator can redo missed work. Like redo/polish it is NOT approve — no
+// accept, no gh side-effect, no advance — and one-way (no note to lose). It is validated against the bound def
+// at the operation (AC9) and acts only on the named step+turn identity (§6/AC7).
+describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2)', () => {
+  const BACK_TO_RED_GATE: GateOptionDef[] = [
+    { option: 'approve', sideEffects: [{ kind: 'commit', args: { label: 'GREEN' } }] },
+    { option: 'back-to-red', sideEffects: [] },
+  ];
+  const GREEN_RUN: AppLoopRunState = { loop: 'green-loop', step: 'green', turnKey: 'consolidate-green', status: 'complete', round: 1, verdict: 'clean' };
+  const atGreen = (deps: AppGateDecisionDeps, option: GateDecisionOption = 'back-to-red'): Promise<boolean> =>
+    runAppGateDecision('/repo', 'green', 'consolidate-green', option, deps);
+
+  it('invokes reopenSlice and neither accepts, runs a side-effect, nor advances', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE });
+    const result = await atGreen(deps);
+    expect(result).toBe(false); // one-way — the caller ignores the result
+    expect(rec.reopens).toEqual(['/repo']); // the flow jumps back to the slice's RED step
+    expect(rec.accepts).toEqual([]); // back-to-red is not terminal — no accept
+    expect(rec.sideEffects).toEqual([]); // no gh side-effect (that is approve's)
+    expect(rec.commitSideEffects).toEqual([]); // and no commit — the reopen only moves the flow
+    expect(rec.advances).toEqual([]); // it goes BACKWARD, never advances off the step
+    expect(rec.audits.some((a) => a.cmd.includes('back-to-red') && a.exit === 0)).toBe(true);
+    expect(rec.views).toBeGreaterThan(0); // the view refreshes so the operator sees the flow back at RED
+  });
+
+  it('is inert when the bound def does not declare back-to-red (validated at the operation, AC9)', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: [{ option: 'approve', sideEffects: [] }] });
+    await atGreen(deps);
+    expect(rec.reopens).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('is inert for a decision naming a different step (§6/AC7)', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE });
+    await runAppGateDecision('/repo', 'refactor', 'consolidate-green', 'back-to-red', deps);
+    expect(rec.reopens).toEqual([]);
   });
 });
 

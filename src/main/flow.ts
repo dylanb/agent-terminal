@@ -565,6 +565,9 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  /** §28.4.2 — the manual back-to-RED transition: re-enter the current slice's RED step (the repeat step's
+   *  `back_to`), preserving the slice count. Delegates to the machine keyed by `repoKey`. */
+  reopenSlice(repoKey: string): FlowStateView;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
@@ -616,6 +619,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    reopenSlice: (k) => machineFor(k).reopenSlice(),
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),

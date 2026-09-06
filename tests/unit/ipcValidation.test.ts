@@ -259,6 +259,14 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(GATE_DECISION_OPTIONS).toContain('request-changes');
   });
 
+  it('the shared GATE_DECISION_OPTIONS set carries the §28.4.2 back-to-red control, so the wire accepts it (§27.9)', () => {
+    // §28.4.2 — back-to-red rides the existing one-way flow:appGateDecision channel (no operator note), so the
+    // only wire change is the shared set gaining the option. Single-sourced, so type + validator cannot drift.
+    expect(GATE_DECISION_OPTIONS).toContain('back-to-red');
+    const base = { sessionId: sid, repoKey: '/repo', step: 'green', turnKey: 'consolidate-green' };
+    expect(isValidFlowAppGateDecision({ ...base, option: 'back-to-red' })).toBe(true);
+  });
+
   it('guards a flow:armInterrupt on the step identity + repoKey/session (§27.9/§6)', () => {
     const base = { sessionId: sid, repoKey: '/repo', step: 'plan' };
     expect(isValidFlowArmInterrupt(base)).toBe(true);

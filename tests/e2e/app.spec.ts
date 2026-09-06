@@ -6511,6 +6511,78 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §28.4.2 — the human back-to-red control, end to end: driving the shipped chain to the GREEN phase gate and
+// clicking "Back to RED" sends the flow BACK to the slice's RED step (never forward), and the reopen is recorded
+// as a §25 flow re-entry. This is the wiring the reopenSlice() transition was built for (loop-panel button →
+// flow:appGateDecision → runAppGateDecision → reopenSlice → the flow machine), on a real chain, real phase gate.
+test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice RED step, without advancing', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-backtored-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter groom
+
+  const approveStep = async (step: string): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  // Drive the chain to the GREEN phase gate: groom → plan-bundle → infra → red → (advance to) green.
+  await approveStep('groom');
+  await approveStep('plan-bundle');
+  await approveStep('infra');
+  await approveStep('red');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
+
+  // Reach the GREEN gate's clean verdict; then, instead of approving, send the flow BACK TO RED.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
+  await expect(backToRed).toBeVisible({ timeout: 30_000 });
+  await expect(backToRed).toHaveText('Back to RED'); // the readable label
+  await backToRed.click();
+
+  // §28.4.2 — the flow jumped BACKWARD to the slice's RED step (the repeat step's back_to), still in progress;
+  // it did NOT advance to refactor. reopenSlice moves the flow only backward-or-self, never forward.
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: red');
+  expect(readIf(appFlowState(repo))).not.toContain('step: refactor');
+  // §25 — the reopen is recorded as a flow re-entry: RED is entered a SECOND time (the first was the forward chain).
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        auditRunFiles(home, repo).reduce(
+          (n, f) =>
+            n +
+            readAuditRun(home, repo, f).events.filter(
+              (e) => e.type === 'step.entered' && (e as Extract<AuditEvent, { type: 'step.entered' }>).step === 'red',
+            ).length,
+          0,
+        ),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThanOrEqual(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // §28.7 / #124 Slice 2 — a repo seeded DIRECTLY at the plan-bundle epic gate whose flow declares NO github-ticket
 // input on any step, so computeRefs yields refs.ticket === null → refs.epic === null at the gate. Seeded statically
 // (never driven live): a live pickup would call acceptBootstrap and install a trusted bootstrap whose issue would

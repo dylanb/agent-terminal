@@ -796,6 +796,18 @@ async function createWindow(): Promise<void> {
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
+  // §28.4.2 — the human back-to-red gate control's flow half: reopen the current slice's RED step. A BACKWARD
+  // re-entry, so it borrows `undo`'s transition identity — its §25 diff (a step.entered back at RED) is the only
+  // observable, and no distinct kind is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind
+  // would be untestable vocabulary. Run inside inTransition so the RED step's entry actions re-fire. Mirrors
+  // autoAdvanceFlow: a void engine-driven transition whose view push is the caller's onViewChanged, not this.
+  const reopenSliceFlow = (repoKey: string): void => {
+    const pre = flow.state(repoKey);
+    if (pre.status !== 'in_progress') return;
+    const view = inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey));
+    audit.recordTransition(repoKey, 'undo', pre, view);
+  };
+
   // §28.7
   const epicPromotionCoordinator = createEpicPromotionCoordinator({
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
@@ -845,6 +857,8 @@ async function createWindow(): Promise<void> {
         runCommitSideEffect: createRealAppGateCommit(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
+        // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
+        reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
         audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
         emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
         emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),
