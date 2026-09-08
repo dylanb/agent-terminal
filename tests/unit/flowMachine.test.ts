@@ -1186,6 +1186,14 @@ describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
     expect(flow.reopenSlice().stepName).toBe('b'); // unchanged
   });
 
+  it('is a no-op before the slice RED step — a reopen is backward-or-self, never a forward jump', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // at 'plan', BEFORE the repeat step's back_to ('red')
+    expect(flow.state().stepName).toBe('plan');
+    expect(flow.reopenSlice().stepName).toBe('plan'); // RED is ahead — a stale reopen must not skip the flow forward
+    expect(flow.state().status).toBe('in_progress');
+  });
+
   it('is inert on a load-error machine', () => {
     const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
     expect(flow.reopenSlice().status).toBe('error');

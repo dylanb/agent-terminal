@@ -104,6 +104,24 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     }
   });
 
+  // §28.4 — repeat_counts feeds the loop-back slice cap (CWE-20/770), so the read boundary keeps only
+  // positive-integer counts: a negative, non-integer, or non-numeric entry from a hand-edited/corrupt file
+  // is dropped rather than trusted as a slice count.
+  it('drops an ill-typed or non-positive repeat count on read, keeping only the positive-integer ones', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    writeFileSync(file, 'step: refactor\nstatus: in_progress\nrepeat_counts:\n  refactor: 2\n  neg: -1\n  frac: 2.5\n  word: nope\n');
+    const state = createFlowStateStore(dir).read();
+    expect(state).toMatchObject({ step: 'refactor', status: 'in_progress', repeatCounts: { refactor: 2 } });
+    for (const dropped of ['neg', 'frac', 'word']) expect(state!.repeatCounts).not.toHaveProperty(dropped);
+  });
+
+  it('omits repeat_counts entirely when a corrupt map leaves no valid count', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: refactor\nstatus: in_progress\nrepeat_counts:\n  refactor: 0\n');
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'refactor', status: 'in_progress' });
+  });
+
   describe('the worktree name, independent of the flow progression', () => {
     it('names a directory that has no progression at all', () => {
       createFlowStateStore(dir).writeTitle('Spike the parser');
@@ -152,6 +170,16 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
       expect(store.read()).toMatchObject({ step: 'plan', status: 'in_progress', inputs: { a: 'ok' } });
       expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
       expect(readFileSync(file, 'utf8')).toContain('b: 5'); // strict write left the un-round-trippable doc intact
+    });
+
+    it('write-side strict validation rejects an ill-typed repeat_counts that the lenient read tolerates', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      writeFileSync(file, 'step: refactor\nstatus: in_progress\nrepeat_counts:\n  refactor: 0\n');
+      const store = createFlowStateStore(dir);
+      expect(store.read()).not.toHaveProperty('repeatCounts'); // lenient read drops the non-positive count
+      expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toContain('refactor: 0'); // strict write left the un-round-trippable doc intact
     });
 
     it('clears the name without disturbing the progression', () => {
@@ -249,5 +277,21 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(state!.inputs!['__proto__']).toBe('PWNED');
     expect(state!.inputs!.ticket).toBe('5');
     expect(({} as Record<string, unknown>).PWNED).toBeUndefined(); // no global pollution
+  });
+
+  it('reads a __proto__ repeat-count key as own data without prototype pollution (§28.4)', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    // A hand-edited flow-state.yaml whose repeat-count map is keyed by the reserved name.
+    writeFileSync(
+      join(dir, '.agent-terminal', 'flow-state.yaml'),
+      'step: refactor\nstatus: in_progress\nrepeat_counts:\n  __proto__: 3\n  refactor: 2\n',
+    );
+    const state = createFlowStateStore(dir).read();
+    expect(state).not.toBeNull();
+    // The reserved key round-trips as own data, not into the prototype setter, and pollutes nothing global.
+    expect(Object.prototype.hasOwnProperty.call(state!.repeatCounts, '__proto__')).toBe(true);
+    expect(state!.repeatCounts!['__proto__']).toBe(3);
+    expect(state!.repeatCounts!.refactor).toBe(2);
+    expect(({} as Record<string, unknown>).__proto__).toBe(Object.prototype); // no prototype pollution
   });
 });
