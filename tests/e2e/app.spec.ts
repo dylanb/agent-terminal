@@ -2291,12 +2291,9 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
 });
 
 test('installing the bundled examples seeds a catalog of >1 flow at the resolver read location (§18.1/§18.7.1 #132)', { tag: '@ownapp' }, async () => {
-  // A1 tracer bullet (§24.2): the Install-examples control already exists and already runs today, so the RED
-  // is the RESULT of running it — after a real install, the location the flow resolver reads,
-  // <home>/.agent-terminal/flows/ (§18.1), must hold MORE THAN ONE runnable flow home (a flow.yaml at each
-  // root). Today's install seeds a single <home>/.agent-terminal/flow.yaml and no flows/ catalog (the
-  // not-yet-built flowCatalog destination), so the enumeration is empty: this fails on the install's
-  // observable result, never on a missing control or a build/setup gap.
+  // A1 tracer bullet (§24.2/§18.7.1): clicking the pre-existing Install-examples control must seed the
+  // location the flow resolver reads — <home>/.agent-terminal/flows/ (§18.1) — with MORE THAN ONE runnable
+  // flow home (a flow.yaml at each root), reported under its own group like every other destination.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flowcat-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flowcat-cfg-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
@@ -2394,8 +2391,8 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
   // The manifest lists only files that are present AND differ, so a one-file conflict would render a
   // one-path manifest — and the footer assertion below would pass against content that never overflowed
-  // anything. Conflict the WHOLE example bundle across all three install destinations (flow, appLoops,
-  // commands), which is the content that clipped the footer (§27.15: the loops tier is loops-v2 now).
+  // anything. Conflict the flow (feature-dev flow home), appLoops, and commands destinations, which is the
+  // content that clipped the footer (§27.15: the loops tier is loops-v2 now).
   const seedConflicts = (src: string, dest: string): number => {
     let n = 0;
     mkdirSync(dest, { recursive: true });
@@ -2410,7 +2407,7 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   };
   const ex = join(process.cwd(), 'example');
   const conflicting =
-    seedConflicts(join(ex, 'flow'), join(home, '.agent-terminal')) +
+    seedConflicts(join(ex, 'flows', 'feature-dev'), join(home, '.agent-terminal')) +
     seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
     seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
@@ -2423,7 +2420,8 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
 
   // Grade the FIRST consent checkbox — the one the dialog gives initial focus. Destinations render in the
-  // contract's order (flow, appLoops, commands), so with all three conflicting the first box is `flow`.
+  // contract's order (flow is first), and this fixture conflicts flow/appLoops/commands, so the first
+  // consent box the dialog focuses is `flow`.
   const box = consentBox('flow');
   await expect(box).toBeVisible();
   // The dialog is genuinely rendering the long manifest — otherwise the footer check below grades a

@@ -43,8 +43,8 @@ const entryDirs = (dir: string): string[] =>
 const filesFor = (groups: InstallDestinationFiles[], id: InstallDestinationId): string[] =>
   groups.find((g) => g.destination === id)?.files ?? [];
 
-/** The bundle's own catalog id set — [] until the bundle carries example/flows/<id> trees. Enumerated, not
- *  hard-coded, so the acceptance set tracks the shipped bundle (§18.1). */
+/** The bundle's own catalog id set, enumerated (never hard-coded) so the acceptance set tracks the shipped
+ *  bundle rather than a frozen literal (§18.1). */
 const bundleCatalogIds = (): string[] => entryDirs(BUNDLE_FLOWS);
 
 let home: string;
@@ -77,7 +77,6 @@ describe('AC1 — the install seeds a catalog of >1 named flow at the resolver r
   it('reports a Flow-catalog group and lands >1 enumerable flow at <home>/.agent-terminal/flows/', () => {
     const res = applyInstallExamples(dirs, []);
 
-    // The install itself succeeds; the RED is that it does no catalog work yet.
     const created = filesFor(res.created, FLOW_CATALOG);
     expect(created.length).toBeGreaterThan(0);
     expect(created).toContain(path.join('feature-dev', 'flow.yaml'));
