@@ -481,6 +481,23 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
     await runAppGateDecision('/repo', 'refactor', 'consolidate-green', 'back-to-red', deps);
     expect(rec.reopens).toEqual([]);
   });
+
+  // §28.4.2 (CWE-703/755) — reopening the slice is best-effort: a throw from the reopen port (the flow-state
+  // write behind flow.reopenSlice cannot land — a symlinked/EACCES `.agent-terminal`, ENOSPC) is surfaced to
+  // the operator and the decision resolves without stranding, never rejecting into the one-way void caller.
+  // Pairs the happy path above; the sibling polish branch pins the same surfacing for its throwing port.
+  it('surfaces a thrown reopen-slice error and resolves without stranding (CWE-703)', async () => {
+    const { deps, rec } = mkDeps({
+      run: GREEN_RUN,
+      gate: BACK_TO_RED_GATE,
+      reopenSlice: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+    await expect(atGreen(deps)).resolves.toBe(false); // resolves — never rejects into the void caller
+    expect(rec.errors.some((e) => e.includes('ENOSPC'))).toBe(true); // the failure is surfaced to the operator
+    expect(rec.views).toBeGreaterThan(0); // the view still refreshes so the operator is not left with a stale gate
+  });
 });
 
 // §27.9 / N5 (AC6) — polish stands the orchestrator down: the executor writes app-owned loop state (enterPolish)

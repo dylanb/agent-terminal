@@ -160,10 +160,17 @@ export async function runAppGateDecision(
   }
   // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
   // slice's RED step (reopenSlice) so the operator can redo missed work. One-way like polish (no note to lose):
-  // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED.
+  // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
+  // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
+  // never crashing the decision path into the one-way void caller as an unhandled rejection.
   if (option === 'back-to-red') {
-    deps.reopenSlice(repoDir);
-    deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+    try {
+      deps.reopenSlice(repoDir);
+      deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      deps.emitError(`could not reopen the slice: ${reason}`);
+    }
     deps.onViewChanged();
     return false;
   }
