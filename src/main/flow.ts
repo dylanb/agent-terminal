@@ -79,6 +79,15 @@ export function flowHomeDir(root: string): string {
   return path.join(root, FLOW_HOME_SUBDIR);
 }
 
+const FLOWS_CATALOG_SUBDIR = 'flows';
+
+/** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
+ *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
+ *  enumerated location cannot drift (CLAUDE.md writer↔reader rule). */
+export function flowCatalogDir(root: string): string {
+  return path.join(flowHomeDir(root), FLOWS_CATALOG_SUBDIR);
+}
+
 /** Validate a step's `inputs:` (§18.4); `required` defaults to false. Absent → []; a malformed entry
  *  → the sentinel 'invalid' so the loader can error rather than silently drop it. */
 function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {

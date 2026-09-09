@@ -2290,6 +2290,47 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   rmSync(repo, { recursive: true, force: true });
 });
 
+test('installing the bundled examples seeds a catalog of >1 flow at the resolver read location (§18.1/§18.7.1 #132)', { tag: '@ownapp' }, async () => {
+  // A1 tracer bullet (§24.2): the Install-examples control already exists and already runs today, so the RED
+  // is the RESULT of running it — after a real install, the location the flow resolver reads,
+  // <home>/.agent-terminal/flows/ (§18.1), must hold MORE THAN ONE runnable flow home (a flow.yaml at each
+  // root). Today's install seeds a single <home>/.agent-terminal/flow.yaml and no flows/ catalog (the
+  // not-yet-built flowCatalog destination), so the enumeration is empty: this fails on the install's
+  // observable result, never on a missing control or a build/setup gap.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flowcat-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flowcat-cfg-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click(); // open the settings view
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+
+  // The install's result at the resolver's read location: >1 flow home, enumerated off disk (never
+  // hard-coded, so it tracks the shipped bundle), feature-dev among them, each with flow.yaml at its root.
+  const catalog = join(home, '.agent-terminal', 'flows');
+  const entries = existsSync(catalog)
+    ? readdirSync(catalog, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort()
+    : [];
+  expect(entries.length).toBeGreaterThanOrEqual(2);
+  expect(entries).toContain('feature-dev');
+  for (const id of entries) {
+    expect(existsSync(join(catalog, id, 'flow.yaml'))).toBe(true);
+  }
+
+  // The grouped result panel then reports the new destination under its own group (§23.4), as every other is.
+  await expect(installReportGroup('flowCatalog')).toBeVisible();
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+});
+
 test('the shipped-flow migration is confirm-first and a decline preserves the existing flow (§18.1/§27.10 #41/#78)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-cfg-'));
@@ -6395,7 +6436,7 @@ function seedFullTddChainAgent(binDir: string): void {
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
 function seedFullTddChainRepo(prefix: string): string {
   const { dir } = seedFlowRepoBase(prefix, {
-    flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
@@ -6551,7 +6592,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
 
 function seedEpicChainRepo(prefix: string): string {
   const { dir } = seedFlowRepoBase(prefix, {
-    flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });

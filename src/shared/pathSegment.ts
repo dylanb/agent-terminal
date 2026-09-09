@@ -13,3 +13,10 @@ export function isSafePathSegment(s: string): boolean {
 /** §18.7.6 (CWE-20): the one shared catalog-ID length bound — A1 install, A2 resolve, and A4 seed import
  *  this single constant so the number cannot drift across slices. */
 export const MAX_CATALOG_ID_LENGTH = 64;
+
+/** §18.7.6: a flow-catalog entry id — a safe path segment within the shared length bound. The entry
+ *  directory name becomes a path segment the resolver later walks, so the install and the resolver gate on
+ *  this one predicate. */
+export function isSafeCatalogId(s: string): boolean {
+  return isSafePathSegment(s) && s.length <= MAX_CATALOG_ID_LENGTH;
+}

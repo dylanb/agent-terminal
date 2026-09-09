@@ -4,7 +4,7 @@ import { INSTALL_DESTINATION_IDS } from '../../src/shared/ipc';
 import { flowHomeDir } from '../../src/main/flow';
 import { userConfigLoopsV2Dir, userConfigCommandsDir } from '../../src/main/userConfig';
 import {
-  resolveExampleFlowDir,
+  resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
@@ -31,7 +31,7 @@ describe('exampleInstallDirs — the destination set is the contract, in the con
 describe('exampleInstallDirs — bundle sources come from the runtime resolvers', () => {
   it('sources each destination from the resolver that reads it back', () => {
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
-    expect(bundleOf(dirs, 'flow')).toBe(resolveExampleFlowDir(loc));
+    expect(bundleOf(dirs, 'flow')).toBe(resolveFeatureDevFlowDir(loc));
     expect(bundleOf(dirs, 'commands')).toBe(resolveExampleCommandsDir(loc));
     expect(bundleOf(dirs, 'appLoops')).toBe(resolveExampleLoopsV2Dir(loc));
   });

@@ -10,11 +10,13 @@ import { errMsg, isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
 import {
   resolveExampleCommandsDir,
-  resolveExampleFlowDir,
+  resolveExampleFlowsDir,
+  resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
 } from './exampleAssets';
-import { FLOW_DEF_FILE, flowHomeDir } from './flow';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
+import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
@@ -115,20 +117,51 @@ function isRealDir(p: string): boolean {
 /** §18.6. The subdir and the extension come from `todoTemplate`'s own definitions — the reader's — so the
  *  installer cannot seed a location or a file type the picker does not read (CLAUDE.md writer↔reader). Each
  *  planned source is a REGULAR file inside a REAL directory: a symlinked flow.yaml, or a symlinked
- *  todo-templates dir, is skipped rather than read through (CWE-59). */
-function flowFiles(bundleDir: string): Plan {
-  if (absent(bundleDir)) return null;
+ *  todo-templates dir, is refused rather than read through (CWE-59). `null` when the flow-home dir is absent
+ *  (a mispackaged bundle, not an empty tree). Shared by the global-fallback `flow` destination and each
+ *  catalog entry, so a catalog flow home is read exactly as the fallback one is. */
+function flowHomeRels(flowHomeBundleDir: string): DestRelativePath[] | null {
+  if (absent(flowHomeBundleDir)) return null;
   const rels: DestRelativePath[] = [];
-  requireRegularIfPresent(path.join(bundleDir, FLOW_DEF_FILE));
+  requireRegularIfPresent(path.join(flowHomeBundleDir, FLOW_DEF_FILE));
   rels.push(destRelative(FLOW_DEF_FILE));
-  const templates = todoTemplatesDir(bundleDir);
+  const templates = todoTemplatesDir(flowHomeBundleDir);
   if (isRealDir(templates)) {
     for (const entry of readDirEntries(templates)) {
       if (!entry.isFile || !isTodoTemplateFile(entry.name)) continue;
       rels.push(destRelative(path.join(TODO_TEMPLATES_SUBDIR, entry.name)));
     }
   }
+  return rels;
+}
+
+function flowFiles(bundleDir: string): Plan {
+  const rels = flowHomeRels(bundleDir);
+  if (rels === null) return null;
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+}
+
+/** A catalog entry whose directory name is not a safe catalog id (§18.7.6): the name becomes a path segment
+ *  the resolver later walks, so a bundle that ships one is refused rather than seeded (CWE-22). */
+const unsafeCatalogId = (p: string, name: string): Error =>
+  new Error(`the bundled examples are damaged: the catalog entry ${JSON.stringify(name)} at ${p} is not a valid flow id`);
+
+/** §18.7.1. Each subdirectory of the catalog bundle is one flow home, seeded under its own entry id. A
+ *  catalog-root member that is not a directory — a symlink or a stray file — is refused (CWE-59), as is an
+ *  entry whose name fails the shared catalog-id gate (§18.7.6). `null` when the catalog bundle is absent,
+ *  so a mispackaged tree is a named refusal, never a successful install of nothing (§18.1). */
+function catalogFiles(catalogBundleDir: string): Plan {
+  if (absent(catalogBundleDir)) return null;
+  const out: PlannedFile[] = [];
+  for (const entry of readDirEntries(catalogBundleDir)) {
+    const abs = path.join(catalogBundleDir, entry.name);
+    if (!entry.isDirectory) throw bundleAnomaly(abs);
+    if (!isSafeCatalogId(entry.name)) throw unsafeCatalogId(abs, entry.name);
+    const rels = flowHomeRels(abs);
+    if (rels === null) throw bundleAnomaly(abs);
+    for (const rel of rels) out.push({ rel: destRelative(path.join(entry.name, rel)), src: path.join(abs, rel) });
+  }
+  return out;
 }
 
 export interface InstallDestination {
@@ -160,10 +193,17 @@ const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 /** §18.1/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
-    bundle: resolveExampleFlowDir,
+    bundle: resolveFeatureDevFlowDir,
     target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
     rootFix: HOME_ROOT_FIX,
     plan: flowFiles,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  flowCatalog: {
+    bundle: resolveExampleFlowsDir,
+    target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowCatalogDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: catalogFiles,
     overwrite: { mode: 'confirm-overwrite' },
   },
   appLoops: {

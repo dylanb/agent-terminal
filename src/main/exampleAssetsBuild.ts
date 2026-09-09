@@ -5,7 +5,7 @@
 
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsV2Dir } from './exampleAssets';
+import { resolveExampleCommandsDir, resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from './exampleAssets';
 
 /** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
  *  link committed under `example/` would be laundered into the bundle — and the install-time walker, which
@@ -21,9 +21,9 @@ function copyTree(src: string, dest: string): void {
   }
 }
 
-export function copyExampleFlow(rootDir: string, mainOutDir: string): string {
-  const dest = resolveExampleFlowDir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'flow'), dest);
+export function copyExampleFlows(rootDir: string, mainOutDir: string): string {
+  const dest = resolveExampleFlowsDir({ packaged: false, appPath: mainOutDir });
+  copyTree(path.join(rootDir, 'example', 'flows'), dest);
   return dest;
 }
 

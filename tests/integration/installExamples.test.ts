@@ -22,7 +22,7 @@ import {
   type InstallExamplesInspection,
 } from '../../src/main/installExamples';
 import { load as parseYaml } from 'js-yaml';
-import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
+import { flowCatalogDir, loadFlowDefinitionLocalFirst } from '../../src/main/flow';
 import {
   isTodoTemplateFile,
   listTodoTemplates,
@@ -44,7 +44,7 @@ import {
 // the installer walks a tree. Every expected file set is enumerated FROM THE BUNDLE, never hard-coded:
 // a hard-coded list silently under-installs the next bundle refresh.
 
-const BUNDLE_FLOW = path.resolve('example', 'flow');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
@@ -219,7 +219,11 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    expect(walk(targetDirOf('flow')).sort()).toEqual([...FLOW_SET].sort());
+    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1);
+    // exclude that subtree so this still pins that the FLOW destination itself seeds only flow.yaml + templates.
+    const catalogRel = path.relative(targetDirOf('flow'), flowCatalogDir(home));
+    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep));
+    expect(flowOnly.sort()).toEqual([...FLOW_SET].sort());
   });
 
   // The writer↔reader pin: the installer must seed the templates where the READER looks for them, so both
@@ -683,8 +687,12 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
     // caller reconciling the outcome must be able to see that, not infer it from silence.
     expect(filesFor(res.skipped, 'appLoops')).toContain(planDefRel);
 
+    // The catalog (§18.7.1) is nested under the flow home, so the walk of the 'flow' root below sees its
+    // files too; they were written by this install, so they belong in the named set exactly as the three
+    // ALL destinations' files do — reported under their own group, not ALL's.
+    const written: InstallDestinationId[] = [...ALL, 'flowCatalog'];
     const named = new Set(
-      ALL.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
+      written.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
     );
     expect(named.size).toBeGreaterThan(0); // writing really had begun
     expect(named.has(preserved)).toBe(false);
@@ -894,7 +902,7 @@ describe('an absent bundle source is a refusal, never a silent success (§18.1)'
   // carries no files. Reported as ok, the user is told the examples were installed and nothing was.
   const absent = path.join(tmpdir(), 'install-examples-no-such-bundle');
 
-  it.each(['appLoops', 'commands', 'flow'] as const)(
+  it.each(['appLoops', 'commands', 'flow', 'flowCatalog'] as const)(
     'reports a failure when the %s bundle tree is missing from the build',
     (id) => {
       const res = applyInstallExamples(withBundle(id, absent), []);
