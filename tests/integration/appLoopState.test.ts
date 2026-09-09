@@ -26,6 +26,7 @@ import {
   readAppLoopBootstrap,
   recordBaselineCommit,
   readBaselineCommit,
+  clearBaselineCommit,
   recordChangedTests,
   readChangedTests,
   MAX_CHANGED_TEST_PATHS,
@@ -768,6 +769,20 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
       writeFileSync(baselineFile(), bad);
       expect(readBaselineCommit(repo)).toBeNull(); // the read-side re-validation fired (no write-side masking)
     }
+  });
+
+  it('UT-STATE-clear (#123): clearBaselineCommit removes the baseline so a stale prior-slice baseline reads unset', () => {
+    recordBaselineCommit(repo, 'feature-slice1', OID);
+    expect(readBaselineCommit(repo)).not.toBeNull();
+    clearBaselineCommit(repo);
+    expect(readBaselineCommit(repo)).toBeNull();
+    expect(existsSync(baselineFile())).toBe(false);
+  });
+
+  it('UT-STATE-clear-absent: clearBaselineCommit on a repo with no baseline is a silent no-op', () => {
+    rmSync(baselineFile(), { force: true });
+    expect(() => clearBaselineCommit(repo)).not.toThrow();
+    expect(readBaselineCommit(repo)).toBeNull();
   });
 
   it('UT-STATE-first-run: records into a repo with NO .agent-terminal yet, creating the tree', () => {

@@ -6516,12 +6516,13 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §28.4 D1 — end to end: a 2-slice run (the `slices` input drives the refactor loop-back) re-enters RED for
-// slice 2, and that re-entered RED runs FRESH — its work turn writes its OWN per-slice result artifact
-// (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice 1's product.
-// The per-slice file is surfaced in the loop viewer (#126). This is the wiring D1 built: flow.currentSlice →
-// enterAppLoop → the bootstrap job → enterWork → the engine's slice-keyed completion artifact.
-test('§28.4 D1 — a loop-back re-entered RED writes its own fresh per-slice result artifact, surfaced in the viewer', { tag: '@ownapp' }, async () => {
+// §28.4 D1+D2 — end to end: a 2-slice run (the `slices` input drives the refactor loop-back) re-enters RED for
+// slice 2, and that re-entered RED starts a FRESH slice on both axes: (D1) its work turn writes its OWN per-slice
+// result artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice
+// 1's product; and (D2/#123) the RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
+// into slice 2's GREEN/refactor frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring:
+// flow.currentSlice → enterAppLoop → the bootstrap job → enterWork → the engine (slice-keyed artifact + clearBaseline).
+test('§28.4 D1+D2 — a loop-back re-entered RED starts a fresh slice: its own result artifact and a cleared baseline, surfaced in the viewer', { tag: '@ownapp' }, async () => {
   const repo = seedFullTddChainRepo('agent-term-e2e-slicen-', { slices: '2' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
@@ -6554,6 +6555,9 @@ test('§28.4 D1 — a loop-back re-entered RED writes its own fresh per-slice re
   await approveStep('infra');
   await approveStep('red');
   await approveStep('green');
+  // §28.4 D2 — slice 1's phase commits recorded a baseline on this branch (the "before" state the clear acts on).
+  const baselineFile = join(repo, '.agent-terminal', 'loop', 'baseline-commit.yaml');
+  expect(existsSync(baselineFile)).toBe(true);
   await approveStep('refactor'); // loop-back → RED (slice 2)
 
   // Slice 2's re-entered RED runs fresh: the work turn writes its OWN slice-keyed result artifact.
@@ -6561,6 +6565,9 @@ test('§28.4 D1 — a loop-back re-entered RED writes its own fresh per-slice re
   await expect.poll(() => existsSync(join(artifacts, 'red-result.slice-2.md')), { timeout: 90_000 }).toBe(true);
   // Distinct from slice 1's product, which remains — slice 2 did NOT resume the prior slice's result.
   expect(existsSync(join(artifacts, 'red-result.md'))).toBe(true);
+  // §28.4 D2/#123 — the slice-2 RED entry cleared slice 1's baseline, so slice 2's frozen check cannot
+  // stale-match it: with no fresh baseline recorded, GREEN/refactor block (fail toward firing) rather than pass.
+  expect(existsSync(baselineFile)).toBe(false);
   // The flow is back on RED (slice 2), not stuck at refactor and not advanced to integration-slice.
   expect(readIf(appFlowState(repo))).toContain('step: red\n');
 

@@ -148,6 +148,10 @@ export interface AppLoopEngineDeps {
    *  tree against. Null when unset; the GREEN gate blocks on an absent or branch-mismatched baseline (D-baseline).
    *  A domain seam (composition root wires `readBaselineCommit`). */
   readBaseline(repoDir: string): { branch: string; sha: string } | null;
+  /** §28.4 D2/#123 — clear the recorded baseline at a RED phase entry (a slice boundary), so a stale
+   *  same-branch baseline from a prior phase/slice is not stale-matched by the next GREEN/refactor frozen
+   *  check. A domain seam (composition root wires `clearBaselineCommit`); the caller wraps it best-effort. */
+  clearBaseline(repoDir: string): void;
   /** §28.5.1 — the repo's current branch (the baseline's slice key), or null when detached/unresolvable. The
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
@@ -1081,6 +1085,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         deps.clearPolish(repoDir);
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
+      }
+      // §28.4 D2/#123 — a RED phase entry starts a fresh slice's test-state baseline: clear any stale same-branch
+      // baseline (a prior phase/slice, or a prior redo of this slice), so the next GREEN/refactor frozen check
+      // BLOCKS (fail toward firing) unless THIS slice's RED records its own — never stale-matches. Fires on every
+      // RED entry (first, loop-back, and human back-to-RED), which is once per slice's RED via enterAppLoop's
+      // §24.2.3-T3 entry action; relaunch resumes via resume(), not enter(), so a mid-slice relaunch never clears.
+      // Best-effort like clearPolish: a throw (unresolvable loop area) must never abort the entry.
+      if (r.def.work.completion === 'red') {
+        try {
+          deps.clearBaseline(repoDir);
+        } catch (e) {
+          deps.audit(repoDir, `§28 ${loopName} ${stepId} enter clear-baseline failed: ${e instanceof Error ? e.message : String(e)}`, 1);
+        }
       }
       let ids: string[] = [];
       let inputs: ChainedInput[] = [];

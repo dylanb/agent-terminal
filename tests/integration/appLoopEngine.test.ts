@@ -22,6 +22,7 @@ import {
   readArmedInterrupt,
   recordBaselineCommit,
   readBaselineCommit,
+  clearBaselineCommit,
   recordChangedTests,
   readChangedTests,
   roundReportFile,
@@ -211,6 +212,7 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
+    clearBaseline: (repoDir) => clearBaselineCommit(repoDir),
     currentBranch: () => currentBranchOverride,
   };
   return createAppLoopEngine(deps);
@@ -355,6 +357,25 @@ describe('§28.4 slice D — per-slice result-artifact identity', () => {
     // static red-result.md would read slice 1's product back and its sync completion clause would pass vacuously.
     expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.md');
     expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.md');
+  });
+});
+
+describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () => {
+  const OID = 'a'.repeat(40);
+  it('entering a RED work turn clears a stale same-branch baseline, so the next GREEN frozen check blocks rather than stale-matching a prior slice', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    expect(readBaselineCommit(repo)).not.toBeNull();
+    defResult = resolved(redDef());
+    makeEngine().enter(repo, 'red-loop', STEP, 'chain-advance');
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('entering a GREEN work turn does NOT clear the baseline — GREEN reads it for the frozen check', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    const g = redDef();
+    defResult = resolved({ ...g, work: { ...g.work, completion: 'green' } });
+    makeEngine().enter(repo, 'green-loop', STEP, 'chain-advance');
+    expect(readBaselineCommit(repo)).not.toBeNull();
   });
 });
 

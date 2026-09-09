@@ -105,7 +105,7 @@ import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -335,6 +335,7 @@ async function createWindow(): Promise<void> {
     // writer, best-effort-wrapped in the engine) and read the RED baseline the frozen check keys off.
     recordChangedTests,
     readBaseline: readBaselineCommit,
+    clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
