@@ -81,6 +81,7 @@ import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
+import { implSliceCount } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -862,6 +863,22 @@ async function createWindow(): Promise<void> {
         runCommitSideEffect: createRealAppGateCommit(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
+        // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
+        // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
+        // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
+        // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
+        // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
+        sourceSliceCount: (repoDir, def) => {
+          const planBinding = def.outputs.find((o) => o.id === 'plan');
+          if (planBinding === undefined) return;
+          let planText = '';
+          try {
+            planText = readFileSync(planBinding.path, 'utf8');
+          } catch {
+            planText = '';
+          }
+          flow.resolveInputs(repoDir, { slices: String(implSliceCount(planText)) });
+        },
         // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
         reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
         audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),

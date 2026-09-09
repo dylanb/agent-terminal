@@ -924,6 +924,24 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
     expect(() => flow.provideInput({ ticket: '176' })).toThrow();
   });
+
+  it('resolveInputs persists the value WITHOUT re-entering the step (§28.4.1 programmatic sourcing, not a prompt answer)', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store, bootEnter);
+    flow.start();
+    bootEnter.mockClear();
+    flow.resolveInputs({ slices: '3' });
+    // Unlike provideInput (which answers a step-entry prompt and re-enters), resolveInputs sets the input quietly:
+    // the plan-bundle gate resolves `slices` for the DOWNSTREAM refactor step, so re-entering plan-bundle here
+    // would wrongly restart its loop.
+    expect(bootEnter).not.toHaveBeenCalled();
+    expect(store.read()?.inputs).toEqual({ slices: '3' });
+  });
+
+  it('resolveInputs is illegal unless a step is being worked (in_progress)', () => {
+    const flow = createFlowMachine(LOAD, undefined, bootEnter);
+    expect(() => flow.resolveInputs({ slices: '3' })).toThrow();
+  });
 });
 
 // The flow-state.yaml on disk is the source of truth (§19.1): another process (the agent-loop CLI

@@ -71,13 +71,14 @@ interface Recorder {
   polishClears: string[];
   recordBaselines: Array<{ repoDir: string; branch: string; sha: string }>;
   reopens: string[];
+  sliceSources: string[];
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -115,6 +116,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
     reopenSlice: (repoDir) => void rec.reopens.push(repoDir),
+    sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
   };
@@ -135,6 +137,16 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
+  });
+
+  it('§28.4.1 — sources the impl-slice count into the flow on approve, never on a non-approve decision', async () => {
+    const { deps, rec } = mkDeps({});
+    await approve(deps);
+    expect(rec.sliceSources).toEqual(['/repo']); // sourced once, on the approve path (before advancing)
+    // redo jumps back without accepting/advancing → the count is not sourced
+    const { deps: d2, rec: r2 } = mkDeps({});
+    await decide(d2, 'redo', 'try again');
+    expect(r2.sliceSources).toEqual([]);
     expect(rec.audits.some((a) => a.cmd.includes('approve') && a.exit === 0)).toBe(true);
     expect(rec.errors).toEqual([]);
   });

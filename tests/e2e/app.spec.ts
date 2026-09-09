@@ -16,6 +16,7 @@ import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
+import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
@@ -6400,16 +6401,21 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
   const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
   const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
+  // sources the `slices` count from; otherwise the plan carries no block and the run stays a single slice.
+  const planB64 = b64(
+    opts.implSlices ? `# plan\n\n${exampleSlicePlan(opts.implSlices)}\n${completionMarker('plan-bundle')}\n` : `# plan\n${completionMarker('plan-bundle')}\n`,
+  );
 
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
-    'plan-bundle': `mkdir -p ${art}; printf '%s\\n' '# plan' '${completionMarker('plan-bundle')}' > ${art}/plan.md; ${done('work-plan-bundle')}`,
+    'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
     green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), '"${RES:-' + art + '/green-result.md}"')}; ${done('work-green')}`,
@@ -6453,12 +6459,10 @@ function seedFullTddChainAgent(binDir: string): void {
 
 // A real-git repo carrying the SHIPPED feature-dev flow.yaml, entered at its first loop `groom`; bootstrap
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
-function seedFullTddChainRepo(prefix: string, opts: { slices?: string } = {}): string {
-  // §28.4 D1 — a `slices` input drives the refactor step's loop-back (count_input: slices) N times.
-  const slicesLine = opts.slices ? `  slices: "${opts.slices}"\n` : '';
+function seedFullTddChainRepo(prefix: string): string {
   const { dir } = seedFlowRepoBase(prefix, {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
-    flowState: `step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n${slicesLine}`,
+    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
   return dir;
@@ -6516,17 +6520,19 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §28.4 D1+D2 — end to end: a 2-slice run (the `slices` input drives the refactor loop-back) re-enters RED for
-// slice 2, and that re-entered RED starts a FRESH slice on both axes: (D1) its work turn writes its OWN per-slice
-// result artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice
-// 1's product; and (D2/#123) the RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
-// into slice 2's GREEN/refactor frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring:
-// flow.currentSlice → enterAppLoop → the bootstrap job → enterWork → the engine (slice-keyed artifact + clearBaseline).
-test('§28.4 D1+D2 — a loop-back re-entered RED starts a fresh slice: its own result artifact and a cleared baseline, surfaced in the viewer', { tag: '@ownapp' }, async () => {
-  const repo = seedFullTddChainRepo('agent-term-e2e-slicen-', { slices: '2' });
+// §28.4 D1+D2+D3 — end to end: the whole impl-slice×N chain. (D3) The plan-bundle writes a `## Impl-slices`
+// block with 2 entries and the plan-bundle approve gate SOURCES that count into the `slices` input (no manual
+// seed) — driving the refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
+// artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice 1's
+// product. (D2/#123) The slice-2 RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
+// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: plan-bundle gate
+// → sourceSliceCount → flow.resolveInputs; then flow.currentSlice → enterAppLoop → the engine (slice-keyed
+// artifact + clearBaseline).
+test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir);
+  seedFullTddChainAgent(binDir, { implSlices: 2 }); // the plan-bundle plans 2 impl-slices
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -6552,6 +6558,9 @@ test('§28.4 D1+D2 — a loop-back re-entered RED starts a fresh slice: its own 
   // `slices` is 2 — loops back to RED for slice 2 (rather than falling through to integration-slice).
   await approveStep('groom');
   await approveStep('plan-bundle');
+  // §28.4 D3 — the plan-bundle gate SOURCED the impl-slice count (2) from the plan's ## Impl-slices block into the
+  // `slices` flow input (no manual seed); this is what drives the loop-back to slice 2 below.
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
   await approveStep('infra');
   await approveStep('red');
   await approveStep('green');

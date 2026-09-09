@@ -239,6 +239,11 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
+  /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
+   *  (unlike provideInput, which answers a step-entry prompt and re-enters). The plan-bundle approve gate uses
+   *  it to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering plan-bundle would
+   *  restart its loop. Legal only while a step is in_progress. */
+  resolveInputs(values: Record<string, string>): FlowStateView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
@@ -292,6 +297,7 @@ export function createFlowMachine(
       reopenSlice: view,
       terminate: view,
       provideInput: view,
+      resolveInputs: view,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
         return view();
@@ -549,6 +555,12 @@ export function createFlowMachine(
       persist();
       return enter(view());
     },
+    resolveInputs: (values) => {
+      requireStatus('in_progress', 'resolveInputs');
+      inputs = { ...inputs, ...values };
+      persist();
+      return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
+    },
     setTitle: (text) => {
       hydrate(); // §19.1
       const prev = userTitle;
@@ -585,6 +597,9 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
+  /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
+   *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
+  resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -637,6 +652,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
+    resolveInputs: (k, values) => machineFor(k).resolveInputs(values),
     setTitle: (k, text) => machineFor(k).setTitle(text),
   };
 }
