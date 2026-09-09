@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { exampleInstallDirs } from '../../src/main/installExamples';
 import { INSTALL_DESTINATION_IDS } from '../../src/shared/ipc';
-import { flowHomeDir } from '../../src/main/flow';
+import { flowHomeDir, flowCatalogDir } from '../../src/main/flow';
 import { userConfigLoopsV2Dir, userConfigCommandsDir } from '../../src/main/userConfig';
 import {
   resolveFeatureDevFlowDir,
+  resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
@@ -32,6 +33,7 @@ describe('exampleInstallDirs — bundle sources come from the runtime resolvers'
   it('sources each destination from the resolver that reads it back', () => {
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
     expect(bundleOf(dirs, 'flow')).toBe(resolveFeatureDevFlowDir(loc));
+    expect(bundleOf(dirs, 'flowCatalog')).toBe(resolveExampleFlowsDir(loc));
     expect(bundleOf(dirs, 'commands')).toBe(resolveExampleCommandsDir(loc));
     expect(bundleOf(dirs, 'appLoops')).toBe(resolveExampleLoopsV2Dir(loc));
   });
@@ -43,6 +45,12 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
     // '.agent-terminal' stays green when the installer reintroduces the parallel literal flowHomeDir()
     // exists to remove, and the seeded flow silently stops being the flow the app reads back.
     expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flow')).toBe(flowHomeDir(FLOW_HOME));
+  });
+
+  it('targets the app-state flow catalog for the flowCatalog destination (§18.7.1)', () => {
+    // The one destination this PR adds: derived from the READER's own resolver (flowCatalogDir), never a
+    // parallel literal, so the seeded catalog and the location A2 reads back cannot drift.
+    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flowCatalog')).toBe(flowCatalogDir(FLOW_HOME));
   });
 
   it('targets the user-config app loop definitions and commands directories (§24.2.3)', () => {

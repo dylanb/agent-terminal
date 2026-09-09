@@ -11,6 +11,7 @@ import {
 } from '../../src/main/installExamples';
 import { isSafePathSegment, MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from '../../src/main/todoTemplate';
+import { flowCatalogDir } from '../../src/main/flow';
 import type { InstallDestinationFiles, InstallDestinationId } from '../../src/shared/ipc';
 import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFixture';
 
@@ -23,10 +24,10 @@ import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFix
 
 const FLOW_CATALOG: InstallDestinationId = 'flowCatalog' as InstallDestinationId;
 
-// The catalog's read location is <A>/.agent-terminal/flows/ (§18.1). flowCatalogDir — this ticket's
-// writer-target resolver that A2 later reads — is not yet built, so this reader-side location is spelled
-// here for the acceptance observation; the writer↔reader coupling is what the install lands here to prove.
-const catalogDirFor = (home: string): string => path.join(home, '.agent-terminal', 'flows');
+// The catalog's read location is derived through flowCatalogDir (§18.1) — the writer-target resolver the
+// install seeds through and A2 reads back — so this acceptance observation cannot drift from the seeded
+// location (CLAUDE.md writer↔reader rule).
+const catalogDirFor = (home: string): string => flowCatalogDir(home);
 const BUNDLE_FLOWS = path.resolve('example', 'flows');
 
 /** Directory names under `dir`, or [] when `dir` is absent — so "the catalog is empty / missing" fails an
@@ -192,6 +193,22 @@ describe('AC4 — a damaged catalog bundle member is refused; nothing is written
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/stray|sneaky/);
     expect(res.created).toEqual([]);
+    expect(entryDirs(catalogDirFor(home))).toEqual([]);
+  });
+
+  it('refuses an existing-but-empty catalog bundle — a mispackaged tree is a named refusal, not a silent install of nothing (§18.1/CWE-754)', () => {
+    // The catalog root EXISTS but ships zero flows — a damaged/tampered bundle (the shipped catalog always
+    // carries feature-dev + ≥1 more, AC1/AC3). It must be refused with a named error like every other
+    // detectable bundle problem, never enumerated as "no files" and reported as a successful install of
+    // nothing (§18.1) — the exact silent-partial-install AC4 forbids.
+    const catalog = fx.makeCatalogDir();
+
+    const res = applyInstallExamples(withBundle(FLOW_CATALOG, catalog), []);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/catalog/i);
+    expect(res.created).toEqual([]);
+    expect(res.overwritten).toEqual([]);
     expect(entryDirs(catalogDirFor(home))).toEqual([]);
   });
 });

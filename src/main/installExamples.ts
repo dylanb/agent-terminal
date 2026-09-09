@@ -146,14 +146,21 @@ function flowFiles(bundleDir: string): Plan {
 const unsafeCatalogId = (p: string, name: string): Error =>
   new Error(`the bundled examples are damaged: the catalog entry ${JSON.stringify(name)} at ${p} is not a valid flow id`);
 
-/** §18.7.1. Each subdirectory of the catalog bundle is one flow home, seeded under its own entry id. A
- *  catalog-root member that is not a directory — a symlink or a stray file — is refused (CWE-59), as is an
- *  entry whose name fails the shared catalog-id gate (§18.7.6). `null` when the catalog bundle is absent,
- *  so a mispackaged tree is a named refusal, never a successful install of nothing (§18.1). */
+/** An existing-but-empty catalog root (CWE-754): the shipped catalog always carries feature-dev and at least
+ *  one more (§18.1/§18.7.1), so a zero-flow tree is a mispackaged bundle. It is a named refusal — never
+ *  resolved as zero files and reported as a successful install of nothing (§18.1). `null` stays reserved for
+ *  an ABSENT tree (the `Plan` contract), so present-but-empty gets its own reason rather than "missing". */
+const emptyCatalog = (p: string): Error =>
+  new Error(`the bundled examples are damaged: the flow catalog at ${p} contains no flows`);
+
+/** §18.7.1. `null` when the catalog bundle is absent, so a mispackaged tree is a named refusal, never a
+ *  successful install of nothing — present-but-damaged throws instead (§18.1, the `Plan` null contract). */
 function catalogFiles(catalogBundleDir: string): Plan {
   if (absent(catalogBundleDir)) return null;
+  const entries = readDirEntries(catalogBundleDir);
+  if (entries.length === 0) throw emptyCatalog(catalogBundleDir);
   const out: PlannedFile[] = [];
-  for (const entry of readDirEntries(catalogBundleDir)) {
+  for (const entry of entries) {
     const abs = path.join(catalogBundleDir, entry.name);
     if (!entry.isDirectory) throw bundleAnomaly(abs);
     if (!isSafeCatalogId(entry.name)) throw unsafeCatalogId(abs, entry.name);

@@ -12,8 +12,8 @@ export function resolveExampleFlowsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'flows');
 }
 
-/** §18.1: the bundled feature-dev flow home — the catalog's `feature-dev` entry, single-sourcing the bytes
- *  the global-fallback `flow` destination seeds so no second copy can drift from the catalog's. */
+/** §18.1. The global-fallback `flow` destination seeds from this same path as the catalog's `feature-dev`
+ *  entry, so the two destinations cannot drift into shipping divergent bytes. */
 export const FEATURE_DEV_ID = 'feature-dev';
 export function resolveFeatureDevFlowDir(loc: BundleLocation): string {
   return path.join(resolveExampleFlowsDir(loc), FEATURE_DEV_ID);
