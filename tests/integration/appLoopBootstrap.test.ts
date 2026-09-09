@@ -991,6 +991,7 @@ function job(over: Partial<AppLoopBootstrapJob> = {}): AppLoopBootstrapJob {
     issue: 78,
     entryToken: 1,
     entry: 'chain-advance',
+    slice: 1, // §28.4 D1 — the impl-slice the work turn is for (production always sets it; default here for parity)
     bootstrap: spec(),
     ...over,
   };
@@ -1068,13 +1069,19 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
   it('enters work immediately when the def declares no pickup', () => {
     const x = coordinator(success);
     x.c.enter(job({ bootstrap: null }));
-    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false);
+    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1);
+  });
+
+  it('§28.4 D1 — threads the job\'s impl-slice through to the work turn (a loop-back re-entry, not slice 1)', () => {
+    const x = coordinator(success);
+    x.c.enter(job({ bootstrap: null, slice: 3 }));
+    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 3);
   });
 
   it('enters work after a successful pickup only while the named step is still current', async () => {
     const x = coordinator(success);
     x.c.enter(job());
-    await vi.waitFor(() => expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false));
+    await vi.waitFor(() => expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1));
     expect(x.rollbackStep).not.toHaveBeenCalled();
     expect(x.finalizeBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ repoDir: '/repo', entryToken: 1 }),
@@ -1159,6 +1166,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       'plan',
       'chain-advance',
       false,
+      1,
     );
 
     finishes[1](success);
@@ -1294,7 +1302,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     c.enter(job());
 
     expect(run).not.toHaveBeenCalled();
-    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false);
+    expect(enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1);
   });
 
   it('treats a pickup-bearing step with no positive ticket identity as an async bootstrap failure', async () => {
@@ -1907,7 +1915,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
       expect.objectContaining({ confirmedWipe: target() }),
     ]);
     await vi.waitFor(() =>
-      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1),
     );
   });
 
@@ -2055,7 +2063,7 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (§B.13a
     x.c.enter(job({ skill: '/plan' }));
     await vi.waitFor(() => expect(x.injected).toEqual(['/plan']));
     // The engine is told to accept-without-request so the skill lands ahead of the boundary (AC10).
-    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', true);
+    expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', true, 1);
     // The turn is NOT requested until the injection's own completion signal arrives.
     expect(x.triggerWork).not.toHaveBeenCalled();
     x.fireInjectComplete();
@@ -2067,7 +2075,7 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (§B.13a
     const x = deferHarness({ busy: true });
     x.c.enter(job({ skill: '/plan' }));
     await vi.waitFor(() =>
-      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1),
     );
     expect(x.injected).toEqual([]);
     expect(x.emitNotice).toHaveBeenCalledWith(
@@ -2102,7 +2110,7 @@ describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (§B.13a
     const x = deferHarness();
     x.c.enter(job());
     await vi.waitFor(() =>
-      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false),
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance', false, 1),
     );
     expect(x.injected).toEqual([]);
     expect(x.emitNotice).not.toHaveBeenCalled();

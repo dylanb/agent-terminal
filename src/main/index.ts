@@ -491,8 +491,11 @@ async function createWindow(): Promise<void> {
       if (!t || step.loop === undefined) return;
       const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
+      // §28.4 D1 — which impl-slice this entry is for; the engine keys the result artifact off it so a
+      // loop-back re-entered RED writes `red-result.slice-N.md` fresh instead of resuming slice 1's product.
+      const slice = flow.currentSlice(t.repoKey);
       if (!resolved.ok || appBootstrapCoordinator === null) {
-        appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
+        appEngine.enter(t.repoKey, step.loop, step.id, t.entry, { slice });
         armAppTurnDoneWatch(t.repoKey);
         return;
       }
@@ -503,6 +506,7 @@ async function createWindow(): Promise<void> {
         entryToken: t.token,
         entry: t.entry,
         issue,
+        slice,
         bootstrap: resolved.def.pickup,
         ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
@@ -608,11 +612,11 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
       return true;
     },
-    enterWork: (repoDir, loopName, stepId, entry, deferRequest) => {
+    enterWork: (repoDir, loopName, stepId, entry, deferRequest, slice) => {
       // §B.20a — with `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
       // the coordinator fires `triggerWork` off the skill injection's completion so the boundary preamble is
       // written strictly after the skill's submit (§B.5 item 6, CWE-74). Non-deferred, the turn requests now.
-      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest });
+      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest, ...(slice !== undefined ? { slice } : {}) });
       if (result === 'entered') {
         armAppTurnDoneWatch(repoDir);
         pushFlowChanged();

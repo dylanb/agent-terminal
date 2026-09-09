@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
@@ -166,7 +166,7 @@ export interface AppLoopEngine {
    *  caller-supplied trigger — the coordinator fires `triggerDeferredTurn` from the skill injection's own
    *  completion so the two injections never share the agent's input line (AC10/CWE-74). Without the flag the
    *  request fires synchronously on the initial arm, exactly as before. */
-  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean }): AppLoopEnterResult;
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean; slice?: number }): AppLoopEnterResult;
   /** §B.20a — fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm (§B.5 item 4b): re-arm
    *  quiescence and wait for a fresh settle before injecting the boundary, so the deferred turn cannot race
    *  the skill injection whose completion triggered it. Inert if no turn is awaiting its trigger. */
@@ -362,9 +362,11 @@ function activeTurnFor(
   loopName: string,
   stepId: string,
   def: LoopDefV2,
-  opts?: { instruction?: string; inputs?: ChainedInput[] },
+  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number },
 ): ActiveAppTurn {
-  const artifact = completionArtifact(def);
+  // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.md`; slice 1 is unsliced.
+  const base = completionArtifact(def);
+  const artifact = base ? sliceArtifact(base, opts?.slice ?? 1) : base;
   return {
     phase: 'work',
     repoDir,
@@ -1093,7 +1095,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
       }
       setCarry(repoDir, stepId, ids);
-      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }), opts?.deferRequest === true);
+      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs, ...(opts?.slice !== undefined ? { slice: opts.slice } : {}) }), opts?.deferRequest === true);
       return 'entered';
     },
     onInjectable() {

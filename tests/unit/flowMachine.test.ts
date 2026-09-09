@@ -1035,6 +1035,34 @@ describe('flow machine loop-back (repeat) primitive (§28.4 — impl-slice×N)',
     expect(visits.refactor).toBe(1);
   });
 
+  it('currentSlice() reports the impl-slice in progress — 1 at first RED, incrementing on each loop-back', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // plan
+    flow.provideInput({ slices: '3' });
+    flow.advance(); // → red (slice 1)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 1]);
+    flow.advance(); // → green
+    flow.advance(); // → refactor
+    flow.advance(); // loops back → red (slice 2)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 2]);
+    flow.advance(); // → green
+    flow.advance(); // → refactor
+    flow.advance(); // loops back → red (slice 3)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 3]);
+  });
+
+  it('currentSlice() is 1 for a flow with no repeat step (the unsliced default)', () => {
+    const noRepeat: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'a', kind: 'manual' }, { id: 'b', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(noRepeat, createFlowStateStore(dir));
+    flow.start();
+    flow.advance();
+    expect(flow.currentSlice()).toBe(1);
+  });
+
   it('clamps an over-cap slice count to MAX_SLICES (a plan cannot drive an unbounded loop, CWE-770)', () => {
     const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
     flow.start();

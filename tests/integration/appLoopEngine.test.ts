@@ -344,6 +344,20 @@ function bindSeededInput(dir: string): string {
   return p;
 }
 
+describe('§28.4 slice D — per-slice result-artifact identity', () => {
+  it('a RED work turn entered for slice N names its own slice-keyed result artifact (red-result.slice-N.md), so a re-entered RED writes fresh instead of resuming the prior slice', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 2 });
+    engine.onInjectable(); // drain the pre-work boundary so the work prompt injects
+    const workPrompt = injected[injected.length - 1];
+    // §28.4 D1 — the prompt must send the agent at slice 2's OWN result file; a re-entered RED that named the
+    // static red-result.md would read slice 1's product back and its sync completion clause would pass vacuously.
+    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.md');
+    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.md');
+  });
+});
+
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();

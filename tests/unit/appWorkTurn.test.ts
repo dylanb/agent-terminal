@@ -3,6 +3,7 @@ import {
   artifactWellFormed,
   boundaryCommand,
   completionArtifact,
+  sliceArtifact,
   completionMarker,
   composeAppWorkPrompt,
 } from '../../src/main/appWorkTurn';
@@ -93,6 +94,28 @@ describe('completionArtifact (§27.12 — file-producing vs commit-producing, da
       ],
     });
     expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
+  });
+});
+
+describe('sliceArtifact (§28.4 D1 — per-slice result-artifact identity)', () => {
+  it('leaves slice 1 unsliced, so a single-slice loop is byte-identical to before', () => {
+    expect(sliceArtifact(artifactOf('red-result.md'), 1)).toEqual(artifactOf('red-result.md'));
+  });
+
+  it('inserts .slice-N before the extension for a loop-back re-entry (N>1), keeping the artifacts subtree', () => {
+    expect(sliceArtifact(artifactOf('red-result.md'), 2)).toEqual(artifactOf('red-result.slice-2.md'));
+    expect(sliceArtifact(artifactOf('green-result.md'), 3)).toEqual(artifactOf('green-result.slice-3.md'));
+  });
+
+  it('suffixes an extensionless leaf without splitting on an absent dot', () => {
+    expect(sliceArtifact(artifactOf('result'), 2)).toEqual(artifactOf('result.slice-2'));
+  });
+
+  it('is the identity for a non-integer or ≤1 slice (fail toward the unsliced name)', () => {
+    const a = artifactOf('red-result.md');
+    expect(sliceArtifact(a, 0)).toEqual(a);
+    expect(sliceArtifact(a, 1.5)).toEqual(a);
+    expect(sliceArtifact(a, Number.NaN)).toEqual(a);
   });
 });
 

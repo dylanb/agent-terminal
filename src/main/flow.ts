@@ -206,6 +206,10 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
 
 export interface FlowMachine {
   state(): FlowStateView;
+  /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
+   *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
+   *  re-entered RED writes fresh instead of resuming the prior slice. 1 for a flow with no repeat step. */
+  currentSlice(): number;
   /** not_started → in_progress; throws on any other current status (inert in the error state). */
   start(): FlowStateView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
@@ -279,6 +283,7 @@ export function createFlowMachine(
     };
     return {
       state: view,
+      currentSlice: () => 1, // an error-state flow (no definition) has no slices
       start: view,
       advance: view,
       restart: view,
@@ -454,6 +459,11 @@ export function createFlowMachine(
       hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
       return view();
     },
+    currentSlice: () => {
+      hydrate(); // §19.1: reflect the on-disk progression, as state() does
+      const repeatStep = steps.find((s) => s.repeat);
+      return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
+    },
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -568,6 +578,9 @@ export interface FlowManager {
   /** §28.4.2 — the manual back-to-RED transition: re-enter the current slice's RED step (the repeat step's
    *  `back_to`), preserving the slice count. Delegates to the machine keyed by `repoKey`. */
   reopenSlice(repoKey: string): FlowStateView;
+  /** §28.4 D1 — the impl-slice a repo's flow is on (default 1). The orchestrator keys each slice's result
+   *  artifact off this so a re-entered RED writes fresh. Delegates to the machine keyed by `repoKey`. */
+  currentSlice(repoKey: string): number;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
@@ -620,6 +633,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
     reopenSlice: (k) => machineFor(k).reopenSlice(),
+    currentSlice: (k) => machineFor(k).currentSlice(),
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),

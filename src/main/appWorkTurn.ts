@@ -29,6 +29,29 @@ export function completionArtifact(def: LoopDefV2): { path: string; rel: string 
   return binding ? { path: binding.path, rel: binding.rel } : null;
 }
 
+/** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.md` →
+ *  `.../red-result.slice-2.md`. Only the basename is rewritten (the directory is untouched), and `slice` is a
+ *  positive integer, so nothing traversal-shaped can reach the string — the already-confined location stays in
+ *  its artifacts subtree. */
+function insertSliceSuffix(p: string, slice: number): string {
+  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  const dir = cut >= 0 ? p.slice(0, cut + 1) : '';
+  const base = cut >= 0 ? p.slice(cut + 1) : p;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  return `${dir}${stem}.slice-${slice}${ext}`;
+}
+
+/** §28.4 D1 — the per-slice result-artifact location. Slice 1 keeps the def's declared name so a single-slice
+ *  loop is byte-identical to before; a slice N>1 (a loop-back re-entry) gets its OWN `.slice-N` file, so a
+ *  re-entered RED writes a fresh product instead of reading the prior slice's back — which would satisfy the
+ *  sync completion clause vacuously. A non-integer/≤1 slice is the identity (fail toward the unsliced name). */
+export function sliceArtifact(artifact: { path: string; rel: string }, slice: number): { path: string; rel: string } {
+  if (!Number.isInteger(slice) || slice <= 1) return artifact;
+  return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
+}
+
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
  *  completion check reads back (§27.12) — present-and-marker, never a quality judgment. Anchored on the
  *  step, so it is stable across retries of the same turn and distinct between steps. */
