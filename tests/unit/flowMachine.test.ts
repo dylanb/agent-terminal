@@ -1087,6 +1087,21 @@ describe('flow machine loop-back (repeat) primitive (§28.4 — impl-slice×N)',
     const visits = runCounting(flow);
     expect(visits.refactor).toBe(2); // loops again, not stuck at the exhausted prior count
   });
+
+  it('terminate() clears the repeat counters so a fresh start loops afresh, not stuck at the exhausted count', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    runCounting(flow); // run one full 2-slice pass to done
+    expect(flow.state().status).toBe('done');
+
+    flow.terminate(); // done → not_started; an abandoned flow carries no loop-back state forward
+    expect(flow.state().status).toBe('not_started');
+    flow.start(); // a fresh run must loop its slices from scratch, not resume the exhausted prior count
+    flow.provideInput({ slices: '2' });
+    const visits = runCounting(flow);
+    expect(visits.refactor).toBe(2); // full count again — a surviving stale counter would force just 1
+  });
 });
 
 // §28.4.2 manual back-to-RED (reopen the current slice) — the human counterpart to the count-driven
