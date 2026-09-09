@@ -40,6 +40,9 @@ flowchart LR
   RED["RED loop<br/>author failing tests"] -->|"commit RED"| GREEN["GREEN loop<br/>implement to pass"]
   GREEN -->|"commit GREEN"| REFAC["refactor loop<br/>review-and-fix cycle"]
   REFAC -->|"commit refactor"| GATE["slice gate<br/>approve to next slice"]
+  REFAC -.->|"loop back to RED: impl-slice xN (§28.4.1)"| RED
+  GATE -.->|"back-to-red: redo this slice (§28.4.2)"| RED
+  linkStyle 3,4 stroke:#c026d3,stroke-width:2px
 ```
 
 **Two levels of "slice", named to avoid collision (P2a).** The word *slice* appears at two granularities; every artifact must keep them distinct:
