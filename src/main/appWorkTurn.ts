@@ -8,7 +8,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
-import { CURRENT_TICKET_INSTRUCTION } from '../shared/currentTicket';
+import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 
@@ -90,6 +90,11 @@ export interface AppWorkPromptReq {
   /** §27.10 — the carried inputs the prompt names (id + repo-relative path); the confined absolute path
    *  never reaches this type, so it cannot enter the prompt's vocabulary (§27.8). */
   inputs?: ChainedInput[];
+  /** The GitHub issue this loop is working — the flow's resolved `github-ticket`, the SAME identity the gate
+   *  side-effects act on (resolveAppGateRefs). Named in the prompt so the agent operates on THIS issue and
+   *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
+   *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
+  ticket?: number;
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -97,9 +102,12 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
-  // §19.1 — the current ticket has one source (flow-state.yaml); injected by the orchestrator here, not per
-  // recipe, so no copy drifts. Above INPUTS/REDO so "the ticket" is defined for everything the turn reads below.
-  parts.push('', CURRENT_TICKET_INSTRUCTION);
+  // Bind the turn to the engine-resolved issue (ticketPromptLines — one shared source across the work /
+  // consolidate / review composers, so they cannot drift) — the SAME identity the gate's update-issue-body writes
+  // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the
+  // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
+  // the plan above" reference covers it.
+  if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {

@@ -7,7 +7,6 @@ import {
   completionMarker,
   composeAppWorkPrompt,
 } from '../../src/main/appWorkTurn';
-import { CURRENT_TICKET_INSTRUCTION } from '../../src/shared/currentTicket';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult, phaseResultWellFormed } from '../../src/shared/phaseResult';
@@ -233,16 +232,6 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
     expect(prompt.indexOf('plan.md')).toBeLessThan(prompt.indexOf('Keep only the schema section.')); // inputs above redo
   });
 
-  it('§19.1 — every work prompt carries the how-to-find-the-current-ticket instruction (one shared source)', () => {
-    const prompt = composeAppWorkPrompt({
-      recipeBody: '# groom-loop — work turn\nGroom the ticket.',
-      turnKey: 'work-groom',
-      doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: null,
-      inputs: [],
-    });
-    expect(prompt).toContain(CURRENT_TICKET_INSTRUCTION); // orchestrator-injected, so no recipe copy can drift
-  });
 });
 
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
@@ -295,6 +284,47 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
     });
     expect(prompt.toLowerCase()).not.toContain('redo');
+  });
+});
+
+describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the turn operates on)', () => {
+  // Regression: a groom turn started from another ticket's branch produced the WRONG ticket's content because
+  // the recipe ("groom the linked GitHub issue") never named the resolved number, so the agent inferred it from
+  // the branch. The prompt must bind the turn to the engine-resolved issue — the SAME identity the gate's
+  // update-issue-body writes to — so read and write cannot diverge (CLAUDE.md: never re-derive the target from
+  // ambient state).
+  it('names the resolved issue and forbids inferring it from the branch/PR/cwd', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nGroom the linked GitHub issue.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
+      ticket: 133,
+    });
+    expect(prompt).toContain('#133'); // the specific resolved issue
+    expect(prompt.toLowerCase()).toContain('do not infer'); // never from the branch/PR/cwd
+  });
+
+  it('emits no ticket line when the flow resolved no github-ticket (ticket absent)', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nShip commits.',
+      turnKey: 'work-impl',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+    });
+    expect(prompt).not.toContain('this loop is working GitHub issue');
+  });
+
+  it('places the ticket binding above the redo block so a redo\'s "the ticket above" reference covers it', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nGroom the linked GitHub issue.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+      ticket: 133,
+      instruction: 'Sharpen the acceptance criteria.',
+    });
+    expect(prompt.indexOf('#133')).toBeLessThan(prompt.indexOf('Sharpen the acceptance criteria.'));
   });
 });
 

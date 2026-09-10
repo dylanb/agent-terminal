@@ -156,6 +156,11 @@ export interface AppLoopEngineDeps {
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
   currentBranch(repoDir: string): string | null;
+  /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
+   *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
+   *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
+   *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
+  workRefs(repoDir: string): { ticket: number | null; pr: number | null };
 }
 
 export interface AppLoopEngine {
@@ -763,6 +768,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose
         const body = deps.readRecipe(active.recipePath);
         if (body === null) return null;
+        // §19.1 — bind the consolidator to the engine-resolved issue it judges the round against, the SAME
+        // identity the work turn and gate side-effects use, never one re-derived from the branch/PR/cwd.
+        const consolidateTicket = deps.workRefs(active.repoDir).ticket;
         return composeConsolidatePrompt({
           recipeBody: body,
           catalog: active.catalog,
@@ -771,10 +779,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
         });
       }
       if (active.phase === 'review') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
+        // §19.1 — the ticket handed to each reviewer is the engine-resolved issue, the SAME identity every other
+        // turn binds to, never one a reviewer re-derives from the branch/PR/cwd.
+        const reviewTicket = deps.workRefs(active.repoDir).ticket;
         return composeReviewAndFixPrompt({
           roster: active.reviewers,
           sections: active.sections,
@@ -782,6 +794,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
@@ -790,10 +803,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const body = deps.readRecipe(active.recipePath);
       if (body === null) return null;
+      // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
+      // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
+      const ticket = deps.workRefs(active.repoDir).ticket;
       return composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
+        ...(ticket !== null ? { ticket } : {}),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'

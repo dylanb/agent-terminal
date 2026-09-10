@@ -9,7 +9,7 @@ import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
-import { CURRENT_TICKET_INSTRUCTION } from '../shared/currentTicket';
+import { ticketPromptLines } from '../shared/currentTicket';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
  *  The engine runs whatever the def declares under this name, never a hardcoded choice (§27.7). */
@@ -44,6 +44,10 @@ export interface ConsolidatePromptReq {
   turnKey: string;
   /** The repo-relative §27 done-file the consolidator writes last (after verifying its output, §27.12a). */
   doneRelPath: string;
+  /** §19.1 — the GitHub issue the flow resolved (the SAME identity the gate side-effects act on), named so the
+   *  consolidator judges the round against THIS ticket, never one re-derived from the branch/PR/cwd. Absent when
+   *  the flow resolved no ticket. */
+  ticket?: number;
 }
 
 /** Compose the §27 consolidator prompt (§27.6): read EXACTLY the last two round reports and nothing else,
@@ -53,10 +57,10 @@ export interface ConsolidatePromptReq {
  *  shared done-signal instruction, verifying the output on disk before the done-file (§27.12a). */
 export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
   const lines: string[] = [];
+  lines.push(req.recipeBody.trimEnd());
+  // §19.1 — bind the consolidator to the engine-resolved ticket it judges the round against (one shared source).
+  if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   lines.push(
-    req.recipeBody.trimEnd(),
-    '',
-    CURRENT_TICKET_INSTRUCTION, // §19.1 — the consolidator judges the round against this ticket
     '',
     `This is the consolidator turn for round ${req.round}.`,
     '',
