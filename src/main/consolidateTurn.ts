@@ -9,6 +9,7 @@ import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
+import { CURRENT_TICKET_INSTRUCTION } from '../shared/currentTicket';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
  *  The engine runs whatever the def declares under this name, never a hardcoded choice (§27.7). */
@@ -54,6 +55,8 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
   const lines: string[] = [];
   lines.push(
     req.recipeBody.trimEnd(),
+    '',
+    CURRENT_TICKET_INSTRUCTION, // §19.1 — the consolidator judges the round against this ticket
     '',
     `This is the consolidator turn for round ${req.round}.`,
     '',

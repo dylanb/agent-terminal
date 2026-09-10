@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
+import { CURRENT_TICKET_INSTRUCTION } from '../../src/shared/currentTicket';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../../src/shared/phaseResult';
@@ -94,6 +95,10 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
       expect(p).toContain(r.persona);
       expect(p).toContain(r.charter);
     }
+  });
+
+  it('§19.1 — tells the turn how to find the current ticket it hands each reviewer', () => {
+    expect(composeReviewAndFixPrompt(req())).toContain(CURRENT_TICKET_INSTRUCTION);
   });
 
   it('tells the fixer exactly the closed disposition set the predicate accepts (one value, one spelling)', () => {

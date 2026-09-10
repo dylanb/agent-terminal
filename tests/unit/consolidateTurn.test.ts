@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from '../../src/main/consolidateTurn';
 import { CONSOLIDATOR_VERDICTS, consolidatorOutputWellFormed } from '../../src/shared/consolidatorOutput';
+import { CURRENT_TICKET_INSTRUCTION } from '../../src/shared/currentTicket';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.6/§27.7 — the pure, data-driven pieces of the §27 consolidator turn: the pre-consolidate boundary
@@ -69,6 +70,10 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
 
   it('conveys the def consolidator recipe body', () => {
     expect(composeConsolidatePrompt(req)).toContain('Judge the round.');
+  });
+
+  it('§19.1 — the consolidator is told how to find the current ticket it judges the round against', () => {
+    expect(composeConsolidatePrompt(req)).toContain(CURRENT_TICKET_INSTRUCTION);
   });
 
   it('names EXACTLY the last two reports as its inputs (AC2)', () => {

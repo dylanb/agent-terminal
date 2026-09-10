@@ -11,6 +11,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { CURRENT_TICKET_INSTRUCTION } from '../shared/currentTicket';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
  *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
@@ -81,6 +82,8 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket and its charter —',
     'no diff, no plan, no prior review. Each pulls what it needs with tools. Receive their findings into your',
     'own context, then fix or dismiss each per the criterion below.',
+    '',
+    CURRENT_TICKET_INSTRUCTION, // §19.1 — the ticket handed to each reviewer comes from this one source
     '',
     // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on
     // prose: an in-scope finding that changes no observable outcome must be DISMISSED, not fixed, or each

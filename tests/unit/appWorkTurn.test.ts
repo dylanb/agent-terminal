@@ -7,6 +7,7 @@ import {
   completionMarker,
   composeAppWorkPrompt,
 } from '../../src/main/appWorkTurn';
+import { CURRENT_TICKET_INSTRUCTION } from '../../src/shared/currentTicket';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult, phaseResultWellFormed } from '../../src/shared/phaseResult';
@@ -230,6 +231,17 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input
     expect(prompt).toContain('Keep only the schema section.'); // the redo instruction
     expect(prompt.indexOf('plan.md')).toBeLessThan(prompt.indexOf('Keep only the schema section.')); // inputs above redo
+  });
+
+  it('§19.1 — every work prompt carries the how-to-find-the-current-ticket instruction (one shared source)', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# groom-loop — work turn\nGroom the ticket.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+      inputs: [],
+    });
+    expect(prompt).toContain(CURRENT_TICKET_INSTRUCTION); // orchestrator-injected, so no recipe copy can drift
   });
 });
 
