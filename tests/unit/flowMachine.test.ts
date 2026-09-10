@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
 
@@ -924,6 +924,24 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
     expect(() => flow.provideInput({ ticket: '176' })).toThrow();
   });
+
+  it('resolveInputs persists the value WITHOUT re-entering the step (§28.4.1 programmatic sourcing, not a prompt answer)', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store, bootEnter);
+    flow.start();
+    bootEnter.mockClear();
+    flow.resolveInputs({ slices: '3' });
+    // Unlike provideInput (which answers a step-entry prompt and re-enters), resolveInputs sets the input quietly:
+    // the plan-bundle gate resolves `slices` for the DOWNSTREAM refactor step, so re-entering plan-bundle here
+    // would wrongly restart its loop.
+    expect(bootEnter).not.toHaveBeenCalled();
+    expect(store.read()?.inputs).toEqual({ slices: '3' });
+  });
+
+  it('resolveInputs is illegal unless a step is being worked (in_progress)', () => {
+    const flow = createFlowMachine(LOAD, undefined, bootEnter);
+    expect(() => flow.resolveInputs({ slices: '3' })).toThrow();
+  });
 });
 
 // The flow-state.yaml on disk is the source of truth (§19.1): another process (the agent-loop CLI
@@ -968,5 +986,277 @@ describe('flow state machine — state() reflects external disk changes (§19.1)
     const s = flow.state();
     expect(s.status).toBe('not_started');
     expect(s.stepName).toBe('groom'); // back to the first step
+  });
+});
+
+// §28.4 loop-back (repeat) primitive — the flow-machine mechanism §28.2's slice-loop×N needs. A step
+// carrying `repeat: { backTo, countInput }` turns advance() OFF that step into a conditional back-jump:
+// while it has looped back fewer than `count` times (the value of the `countInput` flow input, the slice
+// count the plan decides), `index` jumps to `backTo`; otherwise advance() falls through as normal. The
+// observable contract is purely the step sequence advance() produces and what survives a relaunch — never
+// which private counter moved. Count is clamped [1, MAX_SLICES] so untrusted plan data can neither disable
+// the loop nor run it unbounded (CWE-20/770).
+describe('flow machine loop-back (repeat) primitive (§28.4 — impl-slice×N)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-repeat-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // plan → red → green → refactor(repeat back_to=red, count_input=slices) → finalize
+  const repeatLoad: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'plan', kind: 'manual' },
+        { id: 'red', kind: 'manual' },
+        { id: 'green', kind: 'manual' },
+        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'finalize', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  /** Advance to `done` (or a generous budget guarding against a runaway), counting how many times each
+   *  named step is entered — the only thing a caller can observe about the loop-back. */
+  const runCounting = (flow: ReturnType<typeof createFlowMachine>): Record<string, number> => {
+    const visits: Record<string, number> = {};
+    for (let i = 0; i < 10 * MAX_SLICES && flow.state().status !== 'done'; i++) {
+      const s = flow.state().stepName;
+      visits[s] = (visits[s] ?? 0) + 1;
+      flow.advance();
+    }
+    return visits;
+  };
+
+  it('loops back to back_to once per slice until the count is reached, then falls through to done', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '3' });
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.red).toBe(3); // red re-entered once per slice
+    expect(visits.refactor).toBe(3);
+    expect(visits.finalize).toBe(1); // reached exactly once, after the last slice
+  });
+
+  it('advances a repeat step only once when no slice count is resolved (count defaults to 1 — no runaway)', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // no provideInput: `slices` is unset
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.red).toBe(1);
+    expect(visits.refactor).toBe(1);
+  });
+
+  it('currentSlice() reports the impl-slice in progress — 1 at first RED, incrementing on each loop-back', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // plan
+    flow.provideInput({ slices: '3' });
+    flow.advance(); // → red (slice 1)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 1]);
+    flow.advance(); // → green
+    flow.advance(); // → refactor
+    flow.advance(); // loops back → red (slice 2)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 2]);
+    flow.advance(); // → green
+    flow.advance(); // → refactor
+    flow.advance(); // loops back → red (slice 3)
+    expect([flow.state().stepName, flow.currentSlice()]).toEqual(['red', 3]);
+  });
+
+  it('currentSlice() is 1 for a flow with no repeat step (the unsliced default)', () => {
+    const noRepeat: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'a', kind: 'manual' }, { id: 'b', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(noRepeat, createFlowStateStore(dir));
+    flow.start();
+    flow.advance();
+    expect(flow.currentSlice()).toBe(1);
+  });
+
+  it('clamps an over-cap slice count to MAX_SLICES (a plan cannot drive an unbounded loop, CWE-770)', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: String(MAX_SLICES + 25) });
+    const visits = runCounting(flow);
+    expect(flow.state().status).toBe('done');
+    expect(visits.refactor).toBe(MAX_SLICES);
+  });
+
+  it('treats a non-integer / negative slice count as 1 (validated at the read boundary, CWE-20)', () => {
+    for (const bad of ['-5', 'abc', '', '2.5']) {
+      const d = mkdtempSync(join(tmpdir(), 'flow-repeat-bad-'));
+      const flow = createFlowMachine(repeatLoad, createFlowStateStore(d));
+      flow.start();
+      flow.provideInput({ slices: bad });
+      const visits = runCounting(flow);
+      expect(visits.refactor).toBe(1);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('persists the repeat iteration so a relaunch resumes the same slice, not slice 1', () => {
+    const flow1 = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow1.start();
+    flow1.provideInput({ slices: '3' });
+    flow1.advance(); // red (slice 1)
+    flow1.advance(); // green
+    flow1.advance(); // refactor (slice 1)
+    flow1.advance(); // loop back → red (slice 2)
+    expect(flow1.state().stepName).toBe('red');
+
+    // A fresh machine over the same on-disk state must know it is on slice 2: only slices 2 and 3 remain,
+    // so refactor is entered exactly twice more — not three times (which is what a lost counter would do).
+    const flow2 = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    const visits = runCounting(flow2);
+    expect(flow2.state().status).toBe('done');
+    expect(visits.refactor).toBe(2);
+  });
+
+  it('restart() clears the repeat counters so the next run loops afresh', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(repeatLoad, store);
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    runCounting(flow); // run one full 2-slice pass to done
+    expect(flow.state().status).toBe('done');
+
+    flow.restart(); // done → in_progress at the first step, counters and inputs cleared
+    flow.provideInput({ slices: '2' });
+    const visits = runCounting(flow);
+    expect(visits.refactor).toBe(2); // loops again, not stuck at the exhausted prior count
+  });
+
+  it('terminate() clears the repeat counters so a fresh start loops afresh, not stuck at the exhausted count', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    runCounting(flow); // run one full 2-slice pass to done
+    expect(flow.state().status).toBe('done');
+
+    flow.terminate(); // done → not_started; an abandoned flow carries no loop-back state forward
+    expect(flow.state().status).toBe('not_started');
+    flow.start(); // a fresh run must loop its slices from scratch, not resume the exhausted prior count
+    flow.provideInput({ slices: '2' });
+    const visits = runCounting(flow);
+    expect(visits.refactor).toBe(2); // full count again — a surviving stale counter would force just 1
+  });
+});
+
+// §28.4.2 manual back-to-RED (reopen the current slice) — the human counterpart to the count-driven
+// loop-back. reopenSlice() jumps the flow back to the slice's RED step (the repeat step's `backTo`) WITHOUT
+// touching the slice count, so a human who sees the agent stopped short at any phase gate can send it back to
+// redo the current iteration's missed work. The count-driven loop-back and this manual reopen must not fight:
+// a reopen redoes THIS slice, it does not consume or add one.
+describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-reopen-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const repeatLoad: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'plan', kind: 'manual' },
+        { id: 'red', kind: 'manual' },
+        { id: 'green', kind: 'manual' },
+        { id: 'refactor', kind: 'manual', repeat: { backTo: 'red', countInput: 'slices' } },
+        { id: 'finalize', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  const countRefactor = (flow: ReturnType<typeof createFlowMachine>): number => {
+    let refactor = 0;
+    for (let i = 0; i < 10 * MAX_SLICES && flow.state().status !== 'done'; i++) {
+      if (flow.state().stepName === 'refactor') refactor++;
+      flow.advance();
+    }
+    return refactor;
+  };
+
+  it('jumps the flow back to the slice RED step from any later phase, and re-enters it', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '3' });
+    flow.advance(); // red (slice 1)
+    flow.advance(); // green
+    expect(flow.state().stepName).toBe('green');
+    expect(flow.reopenSlice().stepName).toBe('red'); // back to RED from the green gate
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('does NOT consume or add a slice — the reopened slice is redone, then the plan finishes on schedule', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '3' });
+    flow.advance(); // red (slice 1)
+    flow.advance(); // green
+    flow.advance(); // refactor (slice 1)
+    flow.advance(); // loop back → red (slice 2)
+    flow.advance(); // green (slice 2)
+    flow.reopenSlice(); // human: back to RED, redo slice 2
+    expect(flow.state().stepName).toBe('red');
+    // From the reopened slice 2: refactor is entered for slice 2 (redone) then slice 3 = exactly twice more,
+    // and the run still ends after slice 3 — the reopen neither consumed slice 2 nor added a fourth.
+    expect(countRefactor(flow)).toBe(2);
+    expect(flow.state().status).toBe('done');
+  });
+
+  it('persists the jump so a relaunch resumes at RED, not where the gate was', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start();
+    flow.provideInput({ slices: '2' });
+    flow.advance(); // red
+    flow.advance(); // green
+    flow.advance(); // refactor
+    flow.reopenSlice(); // back to RED (slice 1 still)
+    const resumed = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    expect(resumed.state().stepName).toBe('red');
+    expect(resumed.state().status).toBe('in_progress');
+  });
+
+  it('is a no-op when the flow is not in progress', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    expect(flow.reopenSlice().status).toBe('not_started'); // never started
+    expect(flow.state().stepName).toBe('plan');
+  });
+
+  it('is a no-op for a flow with no repeat step (nothing declares where RED is)', () => {
+    const noRepeat: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'a', kind: 'manual' }, { id: 'b', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(noRepeat, createFlowStateStore(dir));
+    flow.start();
+    flow.advance(); // b
+    expect(flow.reopenSlice().stepName).toBe('b'); // unchanged
+  });
+
+  it('is a no-op before the slice RED step — a reopen is backward-or-self, never a forward jump', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    flow.start(); // at 'plan', BEFORE the repeat step's back_to ('red')
+    expect(flow.state().stepName).toBe('plan');
+    expect(flow.reopenSlice().stepName).toBe('plan'); // RED is ahead — a stale reopen must not skip the flow forward
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('is inert on a load-error machine', () => {
+    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
+    expect(flow.reopenSlice().status).toBe('error');
   });
 });

@@ -53,7 +53,16 @@ export interface FlowStepDef {
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: 'pickup';
   inputs?: FlowInputDef[];
+  /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
+   *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
+   *  flow input holding that count — resolved at runtime (the plan decides the slice count), clamped to
+   *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
+  repeat?: { backTo: string; countInput: string };
 }
+
+/** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
+ *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
+export const MAX_SLICES = 50;
 
 export interface FlowDefinition {
   name: string;
@@ -152,6 +161,21 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
+    // §28.4 loop-back: `repeat: { back_to, count_input }`. `back_to` must name an EARLIER step (already in
+    // `steps`) — a repeat is a loop-BACK, so a forward, unknown, or self target is a load error, not a skip.
+    let repeat: { backTo: string; countInput: string } | undefined;
+    if (raw.repeat !== undefined) {
+      if (
+        !isRecord(raw.repeat) ||
+        typeof raw.repeat.back_to !== 'string' || raw.repeat.back_to.length === 0 ||
+        typeof raw.repeat.count_input !== 'string' || raw.repeat.count_input.length === 0
+      )
+        return { ok: false, error: `flow.yaml step "${raw.id}" has a malformed repeat (needs back_to + count_input)` };
+      const backTo = raw.repeat.back_to;
+      if (!steps.some((s) => s.id === backTo))
+        return { ok: false, error: `flow.yaml step "${raw.id}" repeat.back_to "${backTo}" is not an earlier step` };
+      repeat = { backTo, countInput: raw.repeat.count_input };
+    }
     steps.push({
       id: raw.id,
       kind: raw.kind,
@@ -160,6 +184,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
       ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
+      ...(repeat ? { repeat } : {}),
     });
   }
   return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
@@ -181,6 +206,10 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
 
 export interface FlowMachine {
   state(): FlowStateView;
+  /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
+   *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
+   *  re-entered RED writes fresh instead of resuming the prior slice. 1 for a flow with no repeat step. */
+  currentSlice(): number;
   /** not_started → in_progress; throws on any other current status (inert in the error state). */
   start(): FlowStateView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
@@ -198,12 +227,23 @@ export interface FlowMachine {
    *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
    *  or is not in_progress) returns the current view untouched rather than raising. */
   revertStep(fromStepId: string): FlowStateView;
+  /** §28.4.2 in_progress → in_progress at the slice's RED step (the repeat step's `backTo`), re-running its
+   *  entry actions and PRESERVING the slice count (`repeat_counts`) and resolved inputs — the human
+   *  "back to RED" move that redoes the current impl-slice without consuming or adding one. A NO-OP GUARD,
+   *  never a throw: inert unless in_progress with a repeat step whose target is at or before the current
+   *  step, so a stale gate click cannot crash or jump the flow forward. */
+  reopenSlice(): FlowStateView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
   terminate(): FlowStateView;
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
+  /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
+   *  (unlike provideInput, which answers a step-entry prompt and re-enters). The plan-bundle approve gate uses
+   *  it to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering plan-bundle would
+   *  restart its loop. Legal only while a step is in_progress. */
+  resolveInputs(values: Record<string, string>): FlowStateView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
@@ -248,13 +288,16 @@ export function createFlowMachine(
     };
     return {
       state: view,
+      currentSlice: () => 1, // an error-state flow (no definition) has no slices
       start: view,
       advance: view,
       restart: view,
       undo: view,
       revertStep: view,
+      reopenSlice: view,
       terminate: view,
       provideInput: view,
+      resolveInputs: view,
       setTitle: (text) => {
         store?.writeTitle(normalizeTitle(text));
         return view();
@@ -282,6 +325,9 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
+  // §28.4 loop-back state: how many times each repeat step has been reached (own-property map so a step id
+  // like `__proto__` cannot poison the prototype). Persisted, so a relaunch resumes the right impl-slice.
+  let repeatCounts: Record<string, number> = Object.create(null);
   // §22.3.1.
   let userTitle: string | null = null;
 
@@ -294,6 +340,7 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
+    repeatCounts = Object.create(null);
     const persisted = store.read();
     if (persisted) {
       const i = names.indexOf(persisted.step);
@@ -302,6 +349,7 @@ export function createFlowMachine(
         status = persisted.status;
       }
       if (persisted.inputs) inputs = { ...persisted.inputs };
+      if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -315,6 +363,14 @@ export function createFlowMachine(
     if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
     const raw = inputs[name];
     return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+  };
+  // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
+  // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
+  // and an over-cap value clamps to MAX_SLICES rather than disabling the cap (CWE-20/770).
+  const slicesFor = (countInput: string): number => {
+    const n = numericInput(countInput);
+    if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
+    return Math.min(n, MAX_SLICES);
   };
   const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
@@ -382,6 +438,7 @@ export function createFlowMachine(
       step: current().id,
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
 
@@ -408,6 +465,11 @@ export function createFlowMachine(
       hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
       return view();
     },
+    currentSlice: () => {
+      hydrate(); // §19.1: reflect the on-disk progression, as state() does
+      const repeatStep = steps.find((s) => s.repeat);
+      return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
+    },
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -416,6 +478,18 @@ export function createFlowMachine(
     },
     advance: () => {
       requireStatus('in_progress', 'advance');
+      const step = current();
+      // §28.4 loop-back: advancing OFF a repeat step jumps back to `backTo` until the slice count is reached.
+      if (step.repeat) {
+        const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
+        const backIndex = names.indexOf(step.repeat.backTo);
+        if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+          repeatCounts[step.id] = completed + 1;
+          index = backIndex;
+          persist();
+          return enter(view());
+        }
+      }
       if (index < steps.length - 1) {
         index += 1;
         persist();
@@ -430,6 +504,7 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
+      repeatCounts = Object.create(null); // §28.4: a fresh run loops its slices afresh
       persist();
       return enter(view());
     },
@@ -450,6 +525,19 @@ export function createFlowMachine(
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
     },
+    reopenSlice: () => {
+      // §28.4.2 human back-to-RED: jump to the slice's RED step (the repeat step's backTo) and re-enter it,
+      // leaving repeat_counts + inputs untouched so this redoes the current slice rather than counting one.
+      // Guard, don't throw: a stale click after the flow moved is inert, and the target is never ahead of
+      // the current step (a reopen is backward-or-self, never a skip).
+      if (status !== 'in_progress') return view();
+      const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
+      const target = backTo ? names.indexOf(backTo) : -1;
+      if (target < 0 || target > index) return view();
+      index = target;
+      persist();
+      return enter(view()); // re-enter RED so its work turn re-runs
+    },
     terminate: () => {
       if (status !== 'in_progress' && status !== 'done') {
         throw new Error(`illegal flow transition: cannot terminate from ${status}`);
@@ -457,6 +545,7 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
+      repeatCounts = Object.create(null); // §28.4: an abandoned flow carries no loop-back state forward
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
@@ -465,6 +554,12 @@ export function createFlowMachine(
       inputs = { ...inputs, ...values };
       persist();
       return enter(view());
+    },
+    resolveInputs: (values) => {
+      requireStatus('in_progress', 'resolveInputs');
+      inputs = { ...inputs, ...values };
+      persist();
+      return view(); // §28.4.1 — no re-enter: a programmatic input resolution must not restart the current step
     },
     setTitle: (text) => {
       hydrate(); // §19.1
@@ -492,10 +587,19 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  /** §28.4.2 — the manual back-to-RED transition: re-enter the current slice's RED step (the repeat step's
+   *  `back_to`), preserving the slice count. Delegates to the machine keyed by `repoKey`. */
+  reopenSlice(repoKey: string): FlowStateView;
+  /** §28.4 D1 — the impl-slice a repo's flow is on (default 1). The orchestrator keys each slice's result
+   *  artifact off this so a re-entered RED writes fresh. Delegates to the machine keyed by `repoKey`. */
+  currentSlice(repoKey: string): number;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
+  /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
+   *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
+  resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
@@ -543,9 +647,12 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    reopenSlice: (k) => machineFor(k).reopenSlice(),
+    currentSlice: (k) => machineFor(k).currentSlice(),
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
+    resolveInputs: (k, values) => machineFor(k).resolveInputs(values),
     setTitle: (k, text) => machineFor(k).setTitle(text),
   };
 }

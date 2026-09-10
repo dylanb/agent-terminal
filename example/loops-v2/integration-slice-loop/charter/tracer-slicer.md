@@ -8,3 +8,12 @@ with real backing, fireable from an existing UI control and proven RED-first by 
 horizontal layer (main-only, or UI-only) that cannot be exercised on its own. Confirm the plan ends with an
 integration slice that wires the end-to-end path, and that each slice's commit boundary is a working
 increment. Reject any slice that defers its own observable behavior to a later one.
+
+Also grade the plan's **machine-readable** structure, since the engine sources the impl-slice×N loop count
+from it (§28.4.1). A single-ticket plan MUST carry a `## Impl-slices` block whose `### Impl-slice N — <title>`
+entries each state an `Acceptance criteria:` line and use DISTINCT indices — one entry per RED/GREEN slice,
+the final integration slice excluded (it runs once after the loop, not as an entry). Reject a plan that
+describes its slices only in prose: without a well-formed block the count silently defaults to 1 and the chain
+runs a single slice regardless of the breakdown. The **epic** plan is the exception — it carries a
+`## Sub-tickets` block instead (§28.7) and no `## Impl-slices`; for an epic, grade that partition, not the
+impl-slice block.

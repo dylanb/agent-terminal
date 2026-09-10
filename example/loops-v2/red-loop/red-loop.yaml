@@ -29,6 +29,7 @@ gate:
   - option: request-changes
   - option: redo
   - option: polish
+  - option: back-to-red
 inputs:
   - id: plan
     path: plan.md

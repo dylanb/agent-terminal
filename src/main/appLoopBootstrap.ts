@@ -378,6 +378,9 @@ export interface AppLoopBootstrapJob {
   entryToken: number;
   issue: number | null;
   entry: AppLoopEntry;
+  // §28.4 D1 — the impl-slice this work turn is for (the flow's `currentSlice`, default 1). The engine keys
+  // the turn's result artifact off it (`red-result.slice-N.md`) so a loop-back re-entry writes fresh.
+  slice?: number;
   bootstrap: AppLoopBootstrapSpec | null;
   // §B.5 item 6 / AC10: present when the step's bound def declares a `pickup:` block AND carries a skill —
   // the coordinator injects it AFTER work entry is accepted so it is submitted ahead of the boundary
@@ -400,6 +403,7 @@ export interface AppLoopBootstrapCoordinatorDeps {
     stepId: string,
     entry: AppLoopEntry,
     deferRequest: boolean,
+    slice?: number,
   ): AppLoopEnterResult;
   /** Inject the job's (already-collapsed) skill line, submitted, calling `onComplete` once its submit `\r`
    *  has been written (§B.13c). The deferred work turn chains off that signal (§B.5 item 6, AC10). */
@@ -448,7 +452,7 @@ export function createAppLoopBootstrapCoordinator(
   >();
   const heldKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
   const callEnterWork = (job: AppLoopBootstrapJob, deferRequest: boolean): AppLoopEnterResult =>
-    deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry, deferRequest);
+    deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry, deferRequest, job.slice);
   const audit = (job: AppLoopBootstrapJob, kind: AppBootstrapAuditKind, detail?: string): void => {
     try {
       if (detail === undefined) deps.audit(job.repoDir, kind, job.stepId);

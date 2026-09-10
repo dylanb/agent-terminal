@@ -16,6 +16,7 @@ import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
+import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
@@ -1195,6 +1196,63 @@ test('the viewer live-reloads an open artifact when it changes on disk, with no 
   // Edit the open file on disk — no cd, no manual refresh. The live watcher must re-render it.
   appendFileSync(join(dir, 'doc.md'), '\nLIVERELOADMARKER\n');
   await expect(body).toContainText('LIVERELOADMARKER', { timeout: 6_000 });
+});
+
+test('surfaces the .agent-terminal/loop/ tree in the viewer, hides the app-state siblings, and live-reloads an edited loop file (#126 AC1/AC2/AC4/AC5)', async () => {
+  // #126's tracer bullet, RED-first top of the slice ladder (plan §Slice): the §28 in-terminal loop's
+  // working tree under .agent-terminal/loop/ must surface in the viewer tagged `loop` (at any depth — the
+  // depth-0 run-state file and the nested artifacts/reports/consolidate files), while the app's OWN state
+  // files directly under .agent-terminal/ stay hidden (AC4), and an on-disk edit to an OPEN loop file must
+  // re-render with no cd / no manual refresh (AC5, the §20.1 live-reload path). flow-state.yaml is COMMITTED
+  // so "state absent" is can-fail in whole-repo scope (a tracked sibling only the isUnderAppStateDir filter
+  // keeps out), not vacuously green against the untracked-.agent-terminal git collapse.
+  const dir = '/tmp/agent-term-e2e-artloop';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/.agent-terminal/loop/artifacts" "${dir}/.agent-terminal/loop/reports" "${dir}/.agent-terminal/loop/consolidate" && ` +
+      `cd "${dir}" && git init -q && git config user.email t@t && git config user.name T && ` +
+      `printf '# Base\\n' > README.md && git add -A && git commit -qm init && ` +
+      `printf '# Loop plan\\n\\nThe sliced plan for this run.\\n' > .agent-terminal/loop/artifacts/plan.md && ` +
+      `printf '# Round 1 report\\n' > .agent-terminal/loop/reports/1.md && ` +
+      `printf '# Round 1 consolidation\\n' > .agent-terminal/loop/consolidate/1.md && ` +
+      `printf 'schema_version: 1\\nloop: work\\nstep: work\\nstatus: working\\n' > .agent-terminal/loop/run-state.yaml && ` +
+      `printf 'schema_version: 1\\nstatus: idle\\n' > .agent-terminal/flow-state.yaml && ` +
+      `printf '[]\\n' > .agent-terminal/todos.json && ` +
+      `git add -f .agent-terminal/flow-state.yaml && git commit -qm state && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.locator('[data-viewbtn="2"]').click();
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const tree = page.locator('#artifacts .tree');
+  const body = page.locator('#artifacts .vbody');
+
+  // AC1/AC2 — the loop tree surfaces (depth-0 run-state.yaml + the three nested files), each row carrying
+  // the `loop` provenance tag.
+  const planRow = tree.locator('.f').filter({ hasText: 'plan.md' });
+  await expect(planRow).toHaveCount(1);
+  await expect(planRow).toContainText('loop');
+  await expect(tree.locator('.f').filter({ hasText: 'run-state.yaml' })).toHaveCount(1);
+  await expect(tree.locator('.f').filter({ hasText: '1.md' })).toHaveCount(2); // reports/1.md + consolidate/1.md
+
+  // AC1 — a loop file opens in the viewer body.
+  await planRow.click();
+  await expect(body).toContainText('The sliced plan for this run');
+
+  // AC5 — an on-disk edit to the OPEN loop file re-renders with no cd, even though it lives under
+  // .agent-terminal/ (gitignore-excluded in a real run; the live-reload watch surface still covers it).
+  appendFileSync(join(dir, '.agent-terminal/loop/artifacts/plan.md'), '\nAC5LOOPRELOADMARKER\n');
+  await expect(body).toContainText('AC5LOOPRELOADMARKER', { timeout: 6_000 });
+
+  // AC4 — the app's own state files never surface, even in whole-repo scope where the committed
+  // flow-state.yaml is a TRACKED file discovery would otherwise list (the can-fail half — an untracked
+  // sibling would collapse and be vacuously absent). The loop tree is re-admitted in curated scope only
+  // (§20.1, artifactTree.ts): switching to whole-repo scope drops it too, since it is untracked working
+  // state under .agent-terminal/, not a tracked file — so its disappearance here pins that curated-only rule.
+  await page.locator('#artifacts .scope-toggle input').check();
+  await expect(planRow).toHaveCount(0); // loop tree is curated-only; whole-repo scope shows tracked files
+  await expect(tree.locator('.f').filter({ hasText: 'flow-state.yaml' })).toHaveCount(0);
+  await expect(tree.locator('.f').filter({ hasText: 'todos.json' })).toHaveCount(0);
 });
 
 test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', { tag: '@ownapp' }, async () => {
@@ -6343,19 +6401,24 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
   const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
   const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
+  // sources the `slices` count from; otherwise the plan carries no block and the run stays a single slice.
+  const planB64 = b64(
+    opts.implSlices ? `# plan\n\n${exampleSlicePlan(opts.implSlices)}\n${completionMarker('plan-bundle')}\n` : `# plan\n${completionMarker('plan-bundle')}\n`,
+  );
 
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
-    'plan-bundle': `mkdir -p ${art}; printf '%s\\n' '# plan' '${completionMarker('plan-bundle')}' > ${art}/plan.md; ${done('work-plan-bundle')}`,
+    'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
-    red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), `${art}/red-result.md`)}; ${done('work-red')}`,
-    green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), `${art}/green-result.md`)}; ${done('work-green')}`,
+    red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
+    green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), '"${RES:-' + art + '/green-result.md}"')}; ${done('work-green')}`,
     refactor: done('work-refactor'),
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
   };
@@ -6385,6 +6448,9 @@ function seedFullTddChainAgent(binDir: string): void {
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    // §28.4 D1 — honor the phase-result path the prompt names (`red-result.slice-N.md` on a loop-back
+    // re-entry), so a real agent writing where told is modeled rather than a hardcoded slice-1 filename.
+    '    *"Write the result to "*) t=${line#*Write the result to }; RES=${t%% in this exact shape*} ;;\n' +
     `${cases}\n` +
     '  esac\n' +
     'done\n';
@@ -6447,6 +6513,148 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   // §28.10 AC1 — end-to-end chaining: the integration gate published plan-bundle's '# plan' artifact as the PR body.
   await expect.poll(() => readIf(`${logFile}.pr-body`)).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4 D1+D2+D3 — end to end: the whole impl-slice×N chain. (D3) The plan-bundle writes a `## Impl-slices`
+// block with 2 entries and the plan-bundle approve gate SOURCES that count into the `slices` input (no manual
+// seed) — driving the refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
+// artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice 1's
+// product. (D2/#123) The slice-2 RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
+// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: plan-bundle gate
+// → sourceSliceCount → flow.resolveInputs; then flow.currentSlice → enterAppLoop → the engine (slice-keyed
+// artifact + clearBaseline).
+test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir, { implSlices: 2 }); // the plan-bundle plans 2 impl-slices
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter groom
+
+  const approveStep = async (step: string): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  // Slice 1: RED → GREEN → refactor. Approving refactor advances OFF the repeat step, which — because
+  // `slices` is 2 — loops back to RED for slice 2 (rather than falling through to integration-slice).
+  await approveStep('groom');
+  await approveStep('plan-bundle');
+  // §28.4 D3 — the plan-bundle gate SOURCED the impl-slice count (2) from the plan's ## Impl-slices block into the
+  // `slices` flow input (no manual seed); this is what drives the loop-back to slice 2 below.
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
+  await approveStep('infra');
+  await approveStep('red');
+  await approveStep('green');
+  // §28.4 D2 — slice 1's phase commits recorded a baseline on this branch (the "before" state the clear acts on).
+  const baselineFile = join(repo, '.agent-terminal', 'loop', 'baseline-commit.yaml');
+  expect(existsSync(baselineFile)).toBe(true);
+  await approveStep('refactor'); // loop-back → RED (slice 2)
+
+  // Slice 2's re-entered RED runs fresh: the work turn writes its OWN slice-keyed result artifact.
+  const artifacts = join(repo, '.agent-terminal', 'loop', 'artifacts');
+  await expect.poll(() => existsSync(join(artifacts, 'red-result.slice-2.md')), { timeout: 90_000 }).toBe(true);
+  // Distinct from slice 1's product, which remains — slice 2 did NOT resume the prior slice's result.
+  expect(existsSync(join(artifacts, 'red-result.md'))).toBe(true);
+  // §28.4 D2/#123 — the slice-2 RED entry cleared slice 1's baseline, so slice 2's frozen check cannot
+  // stale-match it: with no fresh baseline recorded, GREEN/refactor block (fail toward firing) rather than pass.
+  expect(existsSync(baselineFile)).toBe(false);
+  // The flow is back on RED (slice 2), not stuck at refactor and not advanced to integration-slice.
+  expect(readIf(appFlowState(repo))).toContain('step: red\n');
+
+  // #126 — the per-slice artifact is surfaced in the loop viewer's tree.
+  await page.locator('[data-viewbtn="2"]').click();
+  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'red-result.slice-2.md' })).toHaveCount(1, { timeout: 30_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.2 — the human back-to-red control, end to end: driving the shipped chain to the GREEN phase gate and
+// clicking "Back to RED" sends the flow BACK to the slice's RED step (never forward), and the reopen is recorded
+// as a §25 flow re-entry. This is the wiring the reopenSlice() transition was built for (loop-panel button →
+// flow:appGateDecision → runAppGateDecision → reopenSlice → the flow machine), on a real chain, real phase gate.
+test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice RED step, without advancing', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-backtored-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter groom
+
+  const approveStep = async (step: string): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  // Drive the chain to the GREEN phase gate: groom → plan-bundle → infra → red → (advance to) green.
+  await approveStep('groom');
+  await approveStep('plan-bundle');
+  await approveStep('infra');
+  await approveStep('red');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
+
+  // Reach the GREEN gate's clean verdict; then, instead of approving, send the flow BACK TO RED.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
+  await expect(backToRed).toBeVisible({ timeout: 30_000 });
+  await expect(backToRed).toHaveText('Back to RED'); // the readable label
+  await backToRed.click();
+
+  // §28.4.2 — the flow jumped BACKWARD to the slice's RED step (the repeat step's back_to), still in progress;
+  // it did NOT advance to refactor. reopenSlice moves the flow only backward-or-self, never forward.
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: red');
+  expect(readIf(appFlowState(repo))).not.toContain('step: refactor');
+  // §25 — the reopen is recorded as a flow re-entry: RED is entered a SECOND time (the first was the forward chain).
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        auditRunFiles(home, repo).reduce(
+          (n, f) =>
+            n +
+            readAuditRun(home, repo, f).events.filter(
+              (e) => e.type === 'step.entered' && (e as Extract<AuditEvent, { type: 'step.entered' }>).step === 'red',
+            ).length,
+          0,
+        ),
+      { timeout: 15_000 },
+    )
+    .toBeGreaterThanOrEqual(2);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

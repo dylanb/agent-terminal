@@ -21,7 +21,9 @@ import { captureSubtreeFocus } from './dom';
  *  override then neither defeats the abbreviation nor reaches the label derived from the result (CWE-117). */
 function gateOptionLabel(option: string): string {
   const cleaned = stripDisplayControlChars(option).trim();
-  return cleaned === 'request-changes' ? 'changes' : cleaned;
+  if (cleaned === 'request-changes') return 'changes';
+  if (cleaned === 'back-to-red') return 'Back to RED'; // §28.4.2 — a readable label, not the raw kebab option
+  return cleaned;
 }
 
 /** The §24.2.3 T7 services the panel needs: resolve a ref's detail (best-effort; null → bare number)
@@ -543,7 +545,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           btn.textContent = visible;
           // The accessible name is derived from the STRIPPED visible label, never the raw option, so a bidi
           // override reaches neither and the name still contains the visible text (WCAG 2.5.3 label-in-name).
-          // gateOptionLabel's only abbreviation is request-changes→changes, so expand exactly that.
+          // Only request-changes→changes hides its full name; every other label (incl. Back to RED) is its own name.
           btn.setAttribute('aria-label', visible === 'changes' ? 'request changes' : visible);
           btn.addEventListener('click', () => {
             // §27.9/AC4 — a §27 request-changes opens the feedback composer (its submit carries the feedback on
@@ -557,7 +559,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
               deps.composeRedo?.(appTurn.step, appTurn.turnKey);
               return;
             }
-            // approve and polish are one-way (no human input to lose) — dispatched straight to appGateDecision.
+            // The one-way options (approve, polish, §28.4.2 back-to-red) carry no human input to lose — dispatched
+            // straight to appGateDecision with the step+turn identity.
             deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
           });
           gate.append(btn);

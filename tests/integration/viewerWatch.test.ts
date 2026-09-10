@@ -301,6 +301,23 @@ describe('viewerWatchDirs — scope the watch by git-ness (§20.1)', () => {
     expect(set.has(join(dir, '.agent-terminal'))).toBe(true);
   });
 
+  // AC5 (#126): the §27 loop's working tree under .agent-terminal/loop/ must sit inside the live-reload
+  // watch surface at ANY depth, so an on-disk edit to a surfaced loop artifact re-renders it. It rides on
+  // the APP_STATE_DIRS allow-list above (no watch change was needed for #126); this guards that the NESTED
+  // loop subtree — not just the .agent-terminal root — stays watched even when .gitignore excludes it, so a
+  // future change that stopped covering the subtree fails here rather than silently freezing AC5.
+  it('watches the .agent-terminal/loop/ subtree at any depth (the AC5 live-reload surface, #126)', () => {
+    gitInit(dir);
+    writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n');
+    for (const d of ['artifacts', 'reports', 'consolidate'])
+      mkdirSync(join(dir, '.agent-terminal', 'loop', d), { recursive: true });
+    const set = new Set(viewerWatchDirs(dir));
+    expect(set.has(join(dir, '.agent-terminal', 'loop'))).toBe(true);
+    expect(set.has(join(dir, '.agent-terminal', 'loop', 'artifacts'))).toBe(true);
+    expect(set.has(join(dir, '.agent-terminal', 'loop', 'reports'))).toBe(true);
+    expect(set.has(join(dir, '.agent-terminal', 'loop', 'consolidate'))).toBe(true);
+  });
+
   // The reported crash: launching in ~ (not a repo) watched the entire home filesystem → ENOSPC. Outside a
   // repo the watch must cover ONLY the app-owned state dirs, never the cwd itself nor unrelated siblings.
   it('outside a git repo watches ONLY the app state dirs (.agent-terminal / .agent-loop), never the cwd', () => {

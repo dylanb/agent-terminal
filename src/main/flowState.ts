@@ -22,6 +22,10 @@ export interface PersistedFlowState {
   startedAt?: number;
   /** The name the user gave this worktree's work (§22.3.1). Absent until they name one. */
   title?: string;
+  /** §28.4 loop-back state: per-repeat-step iteration count (how many times each repeat step has been
+   *  reached), so a relaunch resumes the correct impl-slice instead of restarting the loop. Keyed by step
+   *  id; each value a positive integer. Absent for a flow with no repeat steps or none yet reached. */
+  repeatCounts?: Record<string, number>;
 }
 
 export interface FlowStateStore {
@@ -37,7 +41,7 @@ export interface FlowStateStore {
 
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
-const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title']);
+const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title', 'repeat_counts']);
 
 const isStringValue = (v: unknown): v is string => typeof v === 'string';
 
@@ -56,6 +60,19 @@ function readInputs(raw: unknown): Record<string, string> | null {
  *  `writeTitle` throws rather than silently discarding it (§H.2's decode-tolerance boundary). */
 function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+/** True where `v` is a persistable repeat count — a positive integer (§28.4). */
+const isRepeatCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+/** Null when absent/empty (so the round-trip omits the key). Keeps only positive-integer counts on the
+ *  lenient read path; the strict write path rejects a document carrying an ill-typed one, mirroring
+ *  readInputs/readStartedAt (§H.2 decode-tolerance boundary). */
+function readRepeatCounts(raw: unknown): Record<string, number> | null {
+  if (!isRecord(raw)) return null;
+  const out: Record<string, number> = Object.create(null); // null-proto: a `__proto__` key stores as own data
+  for (const [k, v] of Object.entries(raw)) if (isRepeatCount(v)) out[k] = v;
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
@@ -99,12 +116,14 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     const inputs = readInputs(doc.inputs);
     const startedAt = readStartedAt(doc.started_at);
     const title = normalizeTitle(doc.title);
+    const repeatCounts = readRepeatCounts(doc.repeat_counts);
     return {
       step: doc.step,
       status: doc.status as FlowStatus,
       ...(inputs ? { inputs } : {}),
       ...(startedAt !== null ? { startedAt } : {}),
       ...(title !== null ? { title } : {}),
+      ...(repeatCounts ? { repeatCounts } : {}),
     };
   };
 
@@ -115,6 +134,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     if (doc.inputs !== undefined && !(isRecord(doc.inputs) && Object.values(doc.inputs).every(isStringValue))) return null;
     if (doc.started_at !== undefined && readStartedAt(doc.started_at) === null) return null;
     if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
+    if (doc.repeat_counts !== undefined && !(isRecord(doc.repeat_counts) && Object.values(doc.repeat_counts).every(isRepeatCount))) return null;
     return progression;
   };
 
@@ -125,6 +145,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
 
   const write = (state: PersistedFlowState): void => {
     const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
+    const hasRepeatCounts = state.repeatCounts && Object.keys(state.repeatCounts).length > 0;
     const title = normalizeTitle(state.title);
     persist({
       step: state.step,
@@ -132,6 +153,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(hasInputs ? { inputs: state.inputs } : {}),
       ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
       ...(title !== null ? { title } : {}),
+      ...(hasRepeatCounts ? { repeat_counts: state.repeatCounts } : {}),
     });
   };
 

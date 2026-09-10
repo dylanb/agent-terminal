@@ -71,6 +71,11 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
     expect(composeConsolidatePrompt(req)).toContain('Judge the round.');
   });
 
+  it('§19.1 — binds the consolidator to the engine-resolved ticket it judges the round against', () => {
+    expect(composeConsolidatePrompt({ ...req, ticket: 133 })).toContain('working GitHub issue #133');
+    expect(composeConsolidatePrompt(req)).not.toContain('this loop is working GitHub issue'); // absent when none resolved
+  });
+
   it('names EXACTLY the last two reports as its inputs (AC2)', () => {
     const prompt = composeConsolidatePrompt(req);
     for (const rel of req.reportRels) expect(prompt).toContain(rel);

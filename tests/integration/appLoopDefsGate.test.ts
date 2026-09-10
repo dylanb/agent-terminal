@@ -81,3 +81,25 @@ describe('shipped §27 loop defs — approve (§27.13 side-effect) + request-cha
     }
   });
 });
+
+// §28.4.2 — the human back-to-red control is declared on EVERY phase gate (RED / GREEN / refactor /
+// integration-slice), and only there: it re-enters the current slice's RED step, so it makes no sense at the
+// non-phase gates (groom / plan-bundle / plan / impl). Like redo/polish it runs no gh side-effect (one-way).
+describe('shipped §28 PHASE loop defs — the back-to-red control on every phase gate (§28.4.2)', () => {
+  for (const name of ['red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
+    it(`${name} offers back-to-red with no gh side-effect, alongside approve/request-changes/redo/polish`, () => {
+      const opts = gateActions(resolve(name));
+      const backToRed = opts.find((o) => o.option === 'back-to-red');
+      expect(backToRed, `${name} must declare a back-to-red gate option`).toBeDefined();
+      expect(backToRed?.actions).toEqual([]); // one-way: it reopens the slice, it never runs a gh side-effect
+      const options = opts.map((o) => o.option);
+      expect(options).toContain('redo');
+      expect(options).toContain('polish');
+      expect(options).not.toContain('impasse');
+    });
+  }
+
+  it('leaves the non-phase gates (plan-bundle) WITHOUT back-to-red — the control belongs to the slice phases only', () => {
+    expect(gateActions(resolve('plan-bundle-loop')).map((g) => g.option)).not.toContain('back-to-red');
+  });
+});

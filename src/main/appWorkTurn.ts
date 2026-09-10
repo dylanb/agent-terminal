@@ -8,6 +8,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 
@@ -27,6 +28,29 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
 export function completionArtifact(def: LoopDefV2): { path: string; rel: string } | null {
   const binding = def.outputs.find((o) => o.id === def.work.artifact);
   return binding ? { path: binding.path, rel: binding.rel } : null;
+}
+
+/** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.md` →
+ *  `.../red-result.slice-2.md`. Only the basename is rewritten (the directory is untouched), and `slice` is a
+ *  positive integer, so nothing traversal-shaped can reach the string — the already-confined location stays in
+ *  its artifacts subtree. */
+function insertSliceSuffix(p: string, slice: number): string {
+  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  const dir = cut >= 0 ? p.slice(0, cut + 1) : '';
+  const base = cut >= 0 ? p.slice(cut + 1) : p;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  return `${dir}${stem}.slice-${slice}${ext}`;
+}
+
+/** §28.4 D1 — the per-slice result-artifact location. Slice 1 keeps the def's declared name so a single-slice
+ *  loop is byte-identical to before; a slice N>1 (a loop-back re-entry) gets its OWN `.slice-N` file, so a
+ *  re-entered RED writes a fresh product instead of reading the prior slice's back — which would satisfy the
+ *  sync completion clause vacuously. A non-integer/≤1 slice is the identity (fail toward the unsliced name). */
+export function sliceArtifact(artifact: { path: string; rel: string }, slice: number): { path: string; rel: string } {
+  if (!Number.isInteger(slice) || slice <= 1) return artifact;
+  return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -78,17 +102,12 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
-  // Bind the turn to the engine-resolved issue — the SAME identity the gate's update-issue-body writes to — so
-  // the agent grooms/plans/implements THIS ticket rather than one inferred from the branch, open PR, or cwd
-  // (CLAUDE.md: the receiver never re-derives its target from ambient state). Above the redo block so a redo's
-  // "the ticket and the plan above" reference covers it.
-  if (req.ticket !== undefined) {
-    parts.push(
-      '',
-      `TICKET — this loop is working GitHub issue #${req.ticket}. Operate on that issue and no other.`,
-      'Do not infer the issue from the current git branch, open PR, or working directory.',
-    );
-  }
+  // Bind the turn to the engine-resolved issue (ticketPromptLines — one shared source across the work /
+  // consolidate / review composers, so they cannot drift) — the SAME identity the gate's update-issue-body writes
+  // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the
+  // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
+  // the plan above" reference covers it.
+  if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
