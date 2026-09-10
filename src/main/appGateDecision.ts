@@ -40,7 +40,7 @@ export interface AppGateDecisionDeps {
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
   /** §28.4.1 — on an approve, resolve the impl-slice count from the plan-bundle's slice-plan into the `slices`
-   *  flow input the refactor loop-back reads (spec line 81). Data-driven: the composition root reads the count
+   *  flow input the refactor loop-back reads (§28.4.1). Data-driven: the composition root reads the count
    *  only when `def` declares the plan artifact (the plan-bundle's contract), so a non-plan-bundle approve is a
    *  no-op and cannot overwrite it; and it resolves the input WITHOUT re-entering the step. Best-effort — a
    *  failure degrades to the count-1 single-slice default (the caller wraps it, never aborting the advance). */

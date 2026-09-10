@@ -7,8 +7,8 @@ import {
   implSliceCount,
 } from '../../src/shared/slicePlan';
 
-// §28.4.1 — the impl-slice count the plan-bundle sources into the `slices` flow input (spec line 81). An
-// impl-slice is a RED/GREEN unit inside ONE ticket's slice-plan (spec line 51) — DISTINCT from an epic-slice
+// §28.4.1 — the impl-slice count the plan-bundle sources into the `slices` flow input. An impl-slice is a
+// RED/GREEN unit inside ONE ticket's slice-plan (§28.2 P2a) — DISTINCT from an epic-slice
 // (a sub-ticket). One writer (the plan-bundle recipe) and readers (the gate-time derivation, the tests) share
 // this grammar; the predicate grades the MINIMAL contract, never a rigid layout (CLAUDE.md serialized-contract).
 
@@ -44,7 +44,7 @@ describe('implSliceCount — the slices count sourced from the slice-plan (§28.
     expect(implSliceCount('## Impl-slices\n\n### Impl-slice 1 — no ac line\n')).toBe(1);
   });
 
-  it('does not count an epic plan\'s sub-tickets as impl-slices (distinct concepts, spec line 51)', () => {
+  it('does not count an epic plan\'s sub-tickets as impl-slices (distinct concepts, §28.2 P2a)', () => {
     const epic = 'Classification: epic\n\n## Sub-tickets\n\n### Sub-ticket 1 — a\nAcceptance criteria: x\n\n### Sub-ticket 2 — b\nAcceptance criteria: y\n';
     expect(implSliceCount(epic)).toBe(1);
   });
