@@ -151,6 +151,23 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.errors).toEqual([]);
   });
 
+  // §28.4.1 (CWE-703/755) — sourcing the slice count is best-effort, the same discipline IT-DECISION-3 pins for a
+  // throwing baseline store: a throw is recorded on its OWN distinct `source-slices-failed` audit at exit 1 (§25
+  // audit-truth) and the approve STILL advances — the count safely degrades to 1 (a single-slice run), so it is
+  // never surfaced as a blocking error over a landed approve.
+  it('§28.4.1 — a throwing slice-count sourcing is audited distinctly and never aborts the advance', async () => {
+    const { deps, rec } = mkDeps({
+      sourceSliceCount: () => {
+        throw new Error('EACCES: plan.md unreadable');
+      },
+    });
+    await approve(deps);
+    expect(rec.audits.some((a) => a.cmd.includes('source-slices failed') && a.exit === 1)).toBe(true);
+    expect(rec.advances).toEqual(['/repo']); // best-effort — the accept persisted and the flow advanced regardless
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.errors).toEqual([]); // not a blocking error over a successful approve
+  });
+
   it('advances even when the approve declares no side-effect (approve is terminal regardless)', async () => {
     const { deps, rec } = mkDeps({ gate: [{ option: 'approve', sideEffects: [] }] });
     await approve(deps);

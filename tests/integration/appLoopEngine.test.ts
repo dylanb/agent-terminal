@@ -95,6 +95,10 @@ let polishStep: string | null;
  *  swapped for a directory → EISDIR that rmSync's `force` does not swallow). Null (no throw) by default. */
 let clearPolishError: string | null;
 
+/** §28.4 D2 — when set, the engine's `clearBaseline` dep throws this message (an unresolvable loop area behind
+ *  clearBaselineCommit), exercising the RED-entry clear's best-effort catch. Null (no throw) by default. */
+let clearBaselineError: string | null;
+
 /** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null (the loop area is
  *  unresolvable), driving IT-REFAC-unresolvable-result. False (the real resolver) by default. */
 let refactorResultLocationNull: boolean;
@@ -161,6 +165,7 @@ function makeEngine(
   injected = [];
   polishStep = null;
   clearPolishError = null;
+  clearBaselineError = null;
   refactorResultLocationNull = false;
   recordChangedTestsImpl = (repoDir, step, paths) => recordChangedTests(repoDir, step, paths); // the REAL writer
   readArtifact = vi.fn((p: string) => {
@@ -212,7 +217,10 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
-    clearBaseline: (repoDir) => clearBaselineCommit(repoDir),
+    clearBaseline: (repoDir) => {
+      if (clearBaselineError) throw new Error(clearBaselineError);
+      clearBaselineCommit(repoDir);
+    },
     currentBranch: () => currentBranchOverride,
   };
   return createAppLoopEngine(deps);
@@ -376,6 +384,23 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
     defResult = resolved({ ...g, work: { ...g.work, completion: 'green' } });
     makeEngine().enter(repo, 'green-loop', STEP, 'chain-advance');
     expect(readBaselineCommit(repo)).not.toBeNull();
+  });
+
+  // §28.4 D2 (CWE-703/755) — the RED-entry baseline clear is best-effort, the same discipline the approve path
+  // pins for its clear-polish failure: a throwing clearBaseline (an unresolvable loop area) must NOT abort the
+  // entry, or the operator is stranded with a step whose RED turn never starts, and the failure is audited, never
+  // swallowed (§25 audit-truth) so the degraded state is visible before the next frozen check.
+  it('a throwing clearBaseline never aborts the RED entry — the work turn still starts, and the failure is audited', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    defResult = resolved(redDef());
+    const engine = makeEngine(); // resets the toggles, so arm the throw AFTER (as the clear-polish sibling does)
+    clearBaselineError = 'EISDIR: illegal operation on a directory'; // …and clearing the baseline will throw
+    const before = injected.length;
+    expect(() => engine.enter(repo, 'red-loop', STEP, 'chain-advance')).not.toThrow();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the RED turn started anyway
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('clear-baseline'), 1); // recorded, not swallowed
   });
 });
 
