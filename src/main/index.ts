@@ -336,6 +336,13 @@ async function createWindow(): Promise<void> {
     recordChangedTests,
     readBaseline: readBaselineCommit,
     currentBranch: currentGitBranch,
+    // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
+    // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
+    // cannot diverge from the ticket update-issue-body writes to (CLAUDE.md: never re-derive from ambient state).
+    workRefs: (repoDir) => {
+      const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
+      return { ticket: r.ticket, pr: r.pr };
+    },
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
     // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the

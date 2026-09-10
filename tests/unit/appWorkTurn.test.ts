@@ -263,6 +263,47 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
   });
 });
 
+describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the turn operates on)', () => {
+  // Regression: a groom turn started from another ticket's branch produced the WRONG ticket's content because
+  // the recipe ("groom the linked GitHub issue") never named the resolved number, so the agent inferred it from
+  // the branch. The prompt must bind the turn to the engine-resolved issue — the SAME identity the gate's
+  // update-issue-body writes to — so read and write cannot diverge (CLAUDE.md: never re-derive the target from
+  // ambient state).
+  it('names the resolved issue and forbids inferring it from the branch/PR/cwd', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nGroom the linked GitHub issue.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
+      ticket: 133,
+    });
+    expect(prompt).toContain('#133'); // the specific resolved issue
+    expect(prompt.toLowerCase()).toContain('do not infer'); // never from the branch/PR/cwd
+  });
+
+  it('emits no ticket line when the flow resolved no github-ticket (ticket absent)', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nShip commits.',
+      turnKey: 'work-impl',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+    });
+    expect(prompt).not.toContain('this loop is working GitHub issue');
+  });
+
+  it('places the ticket binding above the redo block so a redo\'s "the ticket above" reference covers it', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nGroom the linked GitHub issue.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+      ticket: 133,
+      instruction: 'Sharpen the acceptance criteria.',
+    });
+    expect(prompt.indexOf('#133')).toBeLessThan(prompt.indexOf('Sharpen the acceptance criteria.'));
+  });
+});
+
 // §28.5.5/§28 §7d — the RED work turn: the agent runs the tests, classifies the run into the phase-outcome
 // vocabulary, and writes the phase-result file the RED gate reads. The prompt is the WRITER half of the shared-
 // semantics contract (CODE-STANDARDS "a composed prompt that instructs an agent to produce a serialized

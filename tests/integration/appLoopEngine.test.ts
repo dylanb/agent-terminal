@@ -98,6 +98,11 @@ let clearPolishError: string | null;
  *  unresolvable), driving IT-REFAC-unresolvable-result. False (the real resolver) by default. */
 let refactorResultLocationNull: boolean;
 
+/** The GitHub refs the flow resolved for the repo — what the engine's `workRefs` dep returns. Set per-test to
+ *  a resolved ticket to assert the work prompt binds the agent to that issue; `{ ticket: null }` (no ticket) by
+ *  default so the ordinary drive helpers emit no ticket line. */
+let workRefsResult: { ticket: number | null; pr: number | null };
+
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
 function fileDef(): LoopDefV2 {
@@ -158,6 +163,7 @@ function makeEngine(
   armTimer = vi.fn();
   cancelTimer = vi.fn();
   injected = [];
+  workRefsResult = { ticket: null, pr: null };
   polishStep = null;
   clearPolishError = null;
   refactorResultLocationNull = false;
@@ -212,6 +218,7 @@ function makeEngine(
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
     currentBranch: () => currentBranchOverride,
+    workRefs: () => workRefsResult,
   };
   return createAppLoopEngine(deps);
 }
@@ -357,6 +364,26 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     expect(engine.activeTurnKey()).toBe(TURN_KEY);
     // AC9 — the boundary is recorded in the §25 audit (no round/iteration event, exit null).
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('/clear'), null);
+  });
+
+  it('binds the injected work prompt to the flow-resolved ticket, not one inferred from the branch', () => {
+    // Regression (the groom-from-another-ticket's-branch corruption): the engine must name the ticket the flow
+    // resolved — the SAME identity the gate's update-issue-body writes to — so the agent works that issue rather
+    // than inferring it from ambient state. Observed at the injected prompt, the turn's own boundary.
+    const engine = makeEngine(); // resets workRefsResult, so set the resolved ticket after construction
+    workRefsResult = { ticket: 133, pr: null };
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable(); // boundary drained + idle-confirm → the work prompt injects
+    expect(injected[1]).toContain('#133');
+    expect(injected[1].toLowerCase()).toContain('do not infer');
+  });
+
+  it('emits no ticket line in the work prompt when the flow resolved no ticket', () => {
+    workRefsResult = { ticket: null, pr: null };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(injected[1].toLowerCase()).not.toContain('this loop is working github issue');
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {

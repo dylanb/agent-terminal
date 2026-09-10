@@ -152,6 +152,11 @@ export interface AppLoopEngineDeps {
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
   currentBranch(repoDir: string): string | null;
+  /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
+   *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
+   *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
+   *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
+  workRefs(repoDir: string): { ticket: number | null; pr: number | null };
 }
 
 export interface AppLoopEngine {
@@ -784,10 +789,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const body = deps.readRecipe(active.recipePath);
       if (body === null) return null;
+      // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
+      // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
+      const ticket = deps.workRefs(active.repoDir).ticket;
       return composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
+        ...(ticket !== null ? { ticket } : {}),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'

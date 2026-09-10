@@ -66,6 +66,11 @@ export interface AppWorkPromptReq {
   /** §27.10 — the carried inputs the prompt names (id + repo-relative path); the confined absolute path
    *  never reaches this type, so it cannot enter the prompt's vocabulary (§27.8). */
   inputs?: ChainedInput[];
+  /** The GitHub issue this loop is working — the flow's resolved `github-ticket`, the SAME identity the gate
+   *  side-effects act on (resolveAppGateRefs). Named in the prompt so the agent operates on THIS issue and
+   *  never re-derives it from the current branch, open PR, or working directory (CLAUDE.md: the receiver never
+   *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
+  ticket?: number;
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -73,6 +78,17 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
+  // Bind the turn to the engine-resolved issue — the SAME identity the gate's update-issue-body writes to — so
+  // the agent grooms/plans/implements THIS ticket rather than one inferred from the branch, open PR, or cwd
+  // (CLAUDE.md: the receiver never re-derives its target from ambient state). Above the redo block so a redo's
+  // "the ticket and the plan above" reference covers it.
+  if (req.ticket !== undefined) {
+    parts.push(
+      '',
+      `TICKET — this loop is working GitHub issue #${req.ticket}. Operate on that issue and no other.`,
+      'Do not infer the issue from the current git branch, open PR, or working directory.',
+    );
+  }
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
