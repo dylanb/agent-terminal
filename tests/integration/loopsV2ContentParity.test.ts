@@ -259,6 +259,18 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect((example ?? '').trim()).toBe(exampleSlicePlan(2).trim());
   });
 
+  // §28.4.1 — the tracer-slicer reviewer is the soft gate that the plan carries the machine-readable block the
+  // impl-slice count is sourced from. Its charter must NAME that block from the one grammar token (writer↔reader,
+  // §93 / composed-prompt-is-a-writer) so a token rename moves the charter with it, and must not demand it of an
+  // epic plan, which carries §28.7's `## Sub-tickets` instead.
+  it('§28.4.1 — the tracer-slicer charter requires the impl-slices block, named from the shared grammar', () => {
+    const charter = read('plan-bundle-loop/charter/tracer-slicer.md') ?? '';
+    expect(charter, 'the tracer-slicer charter must exist').not.toBe('');
+    expect(charter).toContain(SLICE_GRAMMAR.implSlicesHeading); // '## Impl-slices'
+    expect(charter).toContain(SLICE_GRAMMAR.implSlice); // '### Impl-slice'
+    expect(charter).toContain(EPIC_GRAMMAR.subTicketsHeading); // '## Sub-tickets' — the epic exception
+  });
+
   it('the approve gate declares the promote side-effect naming the plan artifact', () => {
     const r = resolveLoopDefV2('plan-bundle-loop', { tiers, repoDir });
     expect(r.ok).toBe(true);
