@@ -118,7 +118,8 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
       implStep('infra', 'infra-loop'),
       implStep('red', 'red-loop'),
       implStep('green', 'green-loop'),
-      implStep('refactor', 'refactor-loop'),
+      // §28.4 loop-back: refactor repeats the RED→GREEN→refactor slice `slices`-many times (impl-slice×N).
+      { ...implStep('refactor', 'refactor-loop'), repeat: { backTo: 'red', countInput: 'slices' } },
       implStep('integration-slice', 'integration-slice-loop'),
       { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
     ]);

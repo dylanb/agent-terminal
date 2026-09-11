@@ -3,7 +3,8 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { epicPlanWellFormed, exampleEpicPlan, isEpicPlan, parseEpicPlan } from '../../src/shared/epicPlan';
+import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan, isEpicPlan, parseEpicPlan } from '../../src/shared/epicPlan';
+import { exampleSlicePlan, parseSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, type PhaseOutcome } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
@@ -233,16 +234,41 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   const repoDir = resolve(__dirname, '..', '..');
   const tiers = { operator: null, appBundled: SOURCE_TREE, retired: null };
 
+  // The recipe carries more than one fenced ```text example, so each test picks the fence for ITS grammar
+  // (by a token only that grammar's block contains) rather than "the first fence".
+  const fences = (recipe: string): string[] => [...recipe.matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1]);
+
   it('the work recipe embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
     const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
-    const m = recipe.match(/```text\n([\s\S]*?)```/);
-    expect(m, 'the recipe must embed a fenced epic example').not.toBeNull();
-    const example = m ? m[1] : '';
-    expect(isEpicPlan(example)).toBe(true);
-    expect(epicPlanWellFormed(example)).toBe(true);
-    expect(parseEpicPlan(example)?.subTickets).toHaveLength(2);
+    const example = fences(recipe).find((f) => f.includes(EPIC_GRAMMAR.subTicketsHeading));
+    expect(example, 'the recipe must embed a fenced epic example').not.toBeUndefined();
+    expect(isEpicPlan(example ?? '')).toBe(true);
+    expect(epicPlanWellFormed(example ?? '')).toBe(true);
+    expect(parseEpicPlan(example ?? '')?.subTickets).toHaveLength(2);
     // pin the embedded few-shot to the single source, so a well-formed reword cannot silently drift (§93)
-    expect(example.trim()).toBe(exampleEpicPlan(2).trim());
+    expect((example ?? '').trim()).toBe(exampleEpicPlan(2).trim());
+  });
+
+  it('§28.4.1 — the work recipe embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
+    const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
+    const example = fences(recipe).find((f) => f.includes(SLICE_GRAMMAR.implSlicesHeading));
+    expect(example, 'the recipe must embed a fenced impl-slices example').not.toBeUndefined();
+    expect(slicePlanWellFormed(example ?? '')).toBe(true);
+    expect(parseSlicePlan(example ?? '').implSlices).toHaveLength(2);
+    // pin the embedded few-shot to the single source (§93)
+    expect((example ?? '').trim()).toBe(exampleSlicePlan(2).trim());
+  });
+
+  // §28.4.1 — the tracer-slicer reviewer is the soft gate that the plan carries the machine-readable block the
+  // impl-slice count is sourced from. Its charter must NAME that block from the one grammar token (writer↔reader,
+  // §93 / composed-prompt-is-a-writer) so a token rename moves the charter with it, and must not demand it of an
+  // epic plan, which carries §28.7's `## Sub-tickets` instead.
+  it('§28.4.1 — the tracer-slicer charter requires the impl-slices block, named from the shared grammar', () => {
+    const charter = read('plan-bundle-loop/charter/tracer-slicer.md') ?? '';
+    expect(charter, 'the tracer-slicer charter must exist').not.toBe('');
+    expect(charter).toContain(SLICE_GRAMMAR.implSlicesHeading); // '## Impl-slices'
+    expect(charter).toContain(SLICE_GRAMMAR.implSlice); // '### Impl-slice'
+    expect(charter).toContain(EPIC_GRAMMAR.subTicketsHeading); // '## Sub-tickets' — the epic exception
   });
 
   it('the approve gate declares the promote side-effect naming the plan artifact', () => {

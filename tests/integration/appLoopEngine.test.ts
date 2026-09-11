@@ -22,6 +22,7 @@ import {
   readArmedInterrupt,
   recordBaselineCommit,
   readBaselineCommit,
+  clearBaselineCommit,
   recordChangedTests,
   readChangedTests,
   roundReportFile,
@@ -94,9 +95,18 @@ let polishStep: string | null;
  *  swapped for a directory → EISDIR that rmSync's `force` does not swallow). Null (no throw) by default. */
 let clearPolishError: string | null;
 
+/** §28.4 D2 — when set, the engine's `clearBaseline` dep throws this message (an unresolvable loop area behind
+ *  clearBaselineCommit), exercising the RED-entry clear's best-effort catch. Null (no throw) by default. */
+let clearBaselineError: string | null;
+
 /** §28.5.3/S5 — when true, the engine's `resolveRefactorResultLocation` dep returns null (the loop area is
  *  unresolvable), driving IT-REFAC-unresolvable-result. False (the real resolver) by default. */
 let refactorResultLocationNull: boolean;
+
+/** The GitHub refs the flow resolved for the repo — what the engine's `workRefs` dep returns. Set per-test to
+ *  a resolved ticket to assert the work prompt binds the agent to that issue; `{ ticket: null }` (no ticket) by
+ *  default so the ordinary drive helpers emit no ticket line. */
+let workRefsResult: { ticket: number | null; pr: number | null };
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
@@ -158,8 +168,10 @@ function makeEngine(
   armTimer = vi.fn();
   cancelTimer = vi.fn();
   injected = [];
+  workRefsResult = { ticket: null, pr: null };
   polishStep = null;
   clearPolishError = null;
+  clearBaselineError = null;
   refactorResultLocationNull = false;
   recordChangedTestsImpl = (repoDir, step, paths) => recordChangedTests(repoDir, step, paths); // the REAL writer
   readArtifact = vi.fn((p: string) => {
@@ -211,7 +223,12 @@ function makeEngine(
     // baseline the frozen check keys off (real reader over the seeded baseline-commit.yaml).
     recordChangedTests: (repoDir, step, paths) => recordChangedTestsImpl(repoDir, step, paths),
     readBaseline: (repoDir) => readBaselineCommit(repoDir),
+    clearBaseline: (repoDir) => {
+      if (clearBaselineError) throw new Error(clearBaselineError);
+      clearBaselineCommit(repoDir);
+    },
     currentBranch: () => currentBranchOverride,
+    workRefs: () => workRefsResult,
   };
   return createAppLoopEngine(deps);
 }
@@ -344,6 +361,56 @@ function bindSeededInput(dir: string): string {
   return p;
 }
 
+describe('§28.4 slice D — per-slice result-artifact identity', () => {
+  it('a RED work turn entered for slice N names its own slice-keyed result artifact (red-result.slice-N.md), so a re-entered RED writes fresh instead of resuming the prior slice', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 2 });
+    engine.onInjectable(); // drain the pre-work boundary so the work prompt injects
+    const workPrompt = injected[injected.length - 1];
+    // §28.4 D1 — the prompt must send the agent at slice 2's OWN result file; a re-entered RED that named the
+    // static red-result.md would read slice 1's product back and its sync completion clause would pass vacuously.
+    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.md');
+    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.md');
+  });
+});
+
+describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () => {
+  const OID = 'a'.repeat(40);
+  it('entering a RED work turn clears a stale same-branch baseline, so the next GREEN frozen check blocks rather than stale-matching a prior slice', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    expect(readBaselineCommit(repo)).not.toBeNull();
+    defResult = resolved(redDef());
+    makeEngine().enter(repo, 'red-loop', STEP, 'chain-advance');
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
+  it('entering a GREEN work turn does NOT clear the baseline — GREEN reads it for the frozen check', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    const g = redDef();
+    defResult = resolved({ ...g, work: { ...g.work, completion: 'green' } });
+    makeEngine().enter(repo, 'green-loop', STEP, 'chain-advance');
+    expect(readBaselineCommit(repo)).not.toBeNull();
+  });
+
+  // §28.4 D2 (CWE-703/755) — the RED-entry baseline clear is best-effort, the same discipline the approve path
+  // pins for its clear-polish failure: a throwing clearBaseline (an unresolvable loop area) must NOT abort the
+  // entry, or the operator is stranded with a step whose RED turn never starts, and the failure is audited, never
+  // swallowed (§25 audit-truth) so the degraded state is visible before the next frozen check.
+  it('a throwing clearBaseline never aborts the RED entry — the work turn still starts, and the failure is audited', () => {
+    recordBaselineCommit(repo, TEST_BRANCH, OID);
+    defResult = resolved(redDef());
+    const engine = makeEngine(); // resets the toggles, so arm the throw AFTER (as the clear-polish sibling does)
+    clearBaselineError = 'EISDIR: illegal operation on a directory'; // …and clearing the baseline will throw
+    const before = injected.length;
+    expect(() => engine.enter(repo, 'red-loop', STEP, 'chain-advance')).not.toThrow();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the RED turn started anyway
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('clear-baseline'), 1); // recorded, not swallowed
+  });
+});
+
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();
@@ -357,6 +424,40 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     expect(engine.activeTurnKey()).toBe(TURN_KEY);
     // AC9 — the boundary is recorded in the §25 audit (no round/iteration event, exit null).
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('/clear'), null);
+  });
+
+  it('binds the injected work prompt to the flow-resolved ticket, not one inferred from the branch', () => {
+    // Regression (the groom-from-another-ticket's-branch corruption): the engine must name the ticket the flow
+    // resolved — the SAME identity the gate's update-issue-body writes to — so the agent works that issue rather
+    // than inferring it from ambient state. Observed at the injected prompt, the turn's own boundary.
+    const engine = makeEngine(); // resets workRefsResult, so set the resolved ticket after construction
+    workRefsResult = { ticket: 133, pr: null };
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable(); // boundary drained + idle-confirm → the work prompt injects
+    expect(injected[1]).toContain('#133');
+    expect(injected[1].toLowerCase()).toContain('do not infer');
+  });
+
+  it('emits no ticket line in the work prompt when the flow resolved no ticket', () => {
+    workRefsResult = { ticket: null, pr: null };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(injected[1].toLowerCase()).not.toContain('this loop is working github issue');
+  });
+
+  it('§19.1 — binds the injected consolidator prompt to the flow-resolved ticket it judges the round against', () => {
+    const engine = makeEngine(); // resets workRefsResult, so set the resolved ticket after construction
+    workRefsResult = { ticket: 133, pr: null };
+    driveToConsolidateInjected(engine);
+    expect(injected[injected.length - 1]).toContain('#133'); // the same issue the work turn and gate bind to
+  });
+
+  it('§19.1 — binds the injected review-and-fix prompt to the flow-resolved ticket it hands each reviewer', () => {
+    const engine = makeEngine();
+    workRefsResult = { ticket: 133, pr: null };
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).toContain('#133'); // each reviewer is handed THIS ticket, not an inferred one
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {

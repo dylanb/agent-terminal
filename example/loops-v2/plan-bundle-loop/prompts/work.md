@@ -21,7 +21,25 @@ scriptable per turn.
 
 ## Slice plan
 
-The RED/GREEN impl-slices plus a final integration slice, each thin but complete and RED-first.
+Break the work into RED/GREEN impl-slices — each thin but complete and RED-first — plus a final integration
+slice. Enumerate the impl-slices in a `## Impl-slices` block so the plan-bundle gate can source their COUNT
+into the `slices` flow input that drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>`
+carries that slice's `Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs
+once after the loop and is NOT an `### Impl-slice` entry. Emit the block in this shape:
+
+```text
+## Impl-slices
+
+### Impl-slice 1 — Slice 1 of the feature
+Acceptance criteria: acceptance criterion 1 is observably satisfied
+
+Plan for impl-slice 1: the thin RED/GREEN vertical that delivers criterion 1 end to end.
+
+### Impl-slice 2 — Slice 2 of the feature
+Acceptance criteria: acceptance criterion 2 is observably satisfied
+
+Plan for impl-slice 2: the thin RED/GREEN vertical that delivers criterion 2 end to end.
+```
 
 ## Epic classification (§28.7)
 

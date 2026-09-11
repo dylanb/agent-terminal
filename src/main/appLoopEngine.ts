@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
@@ -148,10 +148,19 @@ export interface AppLoopEngineDeps {
    *  tree against. Null when unset; the GREEN gate blocks on an absent or branch-mismatched baseline (D-baseline).
    *  A domain seam (composition root wires `readBaselineCommit`). */
   readBaseline(repoDir: string): { branch: string; sha: string } | null;
+  /** §28.4 D2/#123 — clear the recorded baseline at a RED phase entry (a slice boundary), so a stale
+   *  same-branch baseline from a prior phase/slice is not stale-matched by the next GREEN/refactor frozen
+   *  check. A domain seam (composition root wires `clearBaselineCommit`); the caller wraps it best-effort. */
+  clearBaseline(repoDir: string): void;
   /** §28.5.1 — the repo's current branch (the baseline's slice key), or null when detached/unresolvable. The
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
   currentBranch(repoDir: string): string | null;
+  /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
+   *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
+   *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
+   *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
+  workRefs(repoDir: string): { ticket: number | null; pr: number | null };
 }
 
 export interface AppLoopEngine {
@@ -166,7 +175,7 @@ export interface AppLoopEngine {
    *  caller-supplied trigger — the coordinator fires `triggerDeferredTurn` from the skill injection's own
    *  completion so the two injections never share the agent's input line (AC10/CWE-74). Without the flag the
    *  request fires synchronously on the initial arm, exactly as before. */
-  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean }): AppLoopEnterResult;
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean; slice?: number }): AppLoopEnterResult;
   /** §B.20a — fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm (§B.5 item 4b): re-arm
    *  quiescence and wait for a fresh settle before injecting the boundary, so the deferred turn cannot race
    *  the skill injection whose completion triggered it. Inert if no turn is awaiting its trigger. */
@@ -362,9 +371,11 @@ function activeTurnFor(
   loopName: string,
   stepId: string,
   def: LoopDefV2,
-  opts?: { instruction?: string; inputs?: ChainedInput[] },
+  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number },
 ): ActiveAppTurn {
-  const artifact = completionArtifact(def);
+  // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.md`; slice 1 is unsliced.
+  const base = completionArtifact(def);
+  const artifact = base ? sliceArtifact(base, opts?.slice ?? 1) : base;
   return {
     phase: 'work',
     repoDir,
@@ -757,6 +768,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose
         const body = deps.readRecipe(active.recipePath);
         if (body === null) return null;
+        // §19.1 — bind the consolidator to the engine-resolved issue it judges the round against, the SAME
+        // identity the work turn and gate side-effects use, never one re-derived from the branch/PR/cwd.
+        const consolidateTicket = deps.workRefs(active.repoDir).ticket;
         return composeConsolidatePrompt({
           recipeBody: body,
           catalog: active.catalog,
@@ -765,10 +779,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
         });
       }
       if (active.phase === 'review') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
+        // §19.1 — the ticket handed to each reviewer is the engine-resolved issue, the SAME identity every other
+        // turn binds to, never one a reviewer re-derives from the branch/PR/cwd.
+        const reviewTicket = deps.workRefs(active.repoDir).ticket;
         return composeReviewAndFixPrompt({
           roster: active.reviewers,
           sections: active.sections,
@@ -776,6 +794,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
@@ -784,10 +803,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const body = deps.readRecipe(active.recipePath);
       if (body === null) return null;
+      // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
+      // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
+      const ticket = deps.workRefs(active.repoDir).ticket;
       return composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
+        ...(ticket !== null ? { ticket } : {}),
         // §28.5.5 §7d
         completion:
           active.completion.kind === 'file'
@@ -1080,6 +1103,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
+      // §28.4 D2/#123 — a RED phase entry starts a fresh slice's test-state baseline: clear any stale same-branch
+      // baseline (a prior phase/slice, or a prior redo of this slice), so the next GREEN/refactor frozen check
+      // BLOCKS (fail toward firing) unless THIS slice's RED records its own — never stale-matches. Fires on every
+      // RED entry (first, loop-back, and human back-to-RED), which is once per slice's RED via enterAppLoop's
+      // §24.2.3-T3 entry action; relaunch resumes via resume(), not enter(), so a mid-slice relaunch never clears.
+      // Best-effort like clearPolish: a throw (unresolvable loop area) must never abort the entry.
+      if (r.def.work.completion === 'red') {
+        try {
+          deps.clearBaseline(repoDir);
+        } catch (e) {
+          deps.audit(repoDir, `§28 ${loopName} ${stepId} enter clear-baseline failed: ${e instanceof Error ? e.message : String(e)}`, 1);
+        }
+      }
       let ids: string[] = [];
       let inputs: ChainedInput[] = [];
       // TODO(dylan): the record conflates "the entry decided not to carry this" with "the entry failed to
@@ -1093,7 +1129,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
       }
       setCarry(repoDir, stepId, ids);
-      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }), opts?.deferRequest === true);
+      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs, ...(opts?.slice !== undefined ? { slice: opts.slice } : {}) }), opts?.deferRequest === true);
       return 'entered';
     },
     onInjectable() {

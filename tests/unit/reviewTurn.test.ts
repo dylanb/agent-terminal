@@ -96,6 +96,11 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     }
   });
 
+  it('§19.1 — binds the turn to the engine-resolved ticket it hands each reviewer', () => {
+    expect(composeReviewAndFixPrompt({ ...req(), ticket: 133 })).toContain('working GitHub issue #133');
+    expect(composeReviewAndFixPrompt(req())).not.toContain('this loop is working GitHub issue'); // absent when none resolved
+  });
+
   it('tells the fixer exactly the closed disposition set the predicate accepts (one value, one spelling)', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const d of DISPOSITIONS) expect(p).toContain(d);

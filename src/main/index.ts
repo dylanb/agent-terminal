@@ -81,6 +81,7 @@ import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
+import { implSliceCount } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -105,7 +106,7 @@ import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -335,7 +336,15 @@ async function createWindow(): Promise<void> {
     // writer, best-effort-wrapped in the engine) and read the RED baseline the frozen check keys off.
     recordChangedTests,
     readBaseline: readBaselineCommit,
+    clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
+    // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
+    // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
+    // cannot diverge from the ticket update-issue-body writes to (CLAUDE.md: never re-derive from ambient state).
+    workRefs: (repoDir) => {
+      const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
+      return { ticket: r.ticket, pr: r.pr };
+    },
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
     // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
     // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the
@@ -491,8 +500,11 @@ async function createWindow(): Promise<void> {
       if (!t || step.loop === undefined) return;
       const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
+      // §28.4 D1 — which impl-slice this entry is for; the engine keys the result artifact off it so a
+      // loop-back re-entered RED writes `red-result.slice-N.md` fresh instead of resuming slice 1's product.
+      const slice = flow.currentSlice(t.repoKey);
       if (!resolved.ok || appBootstrapCoordinator === null) {
-        appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
+        appEngine.enter(t.repoKey, step.loop, step.id, t.entry, { slice });
         armAppTurnDoneWatch(t.repoKey);
         return;
       }
@@ -503,6 +515,7 @@ async function createWindow(): Promise<void> {
         entryToken: t.token,
         entry: t.entry,
         issue,
+        slice,
         bootstrap: resolved.def.pickup,
         ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
@@ -608,11 +621,11 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
       return true;
     },
-    enterWork: (repoDir, loopName, stepId, entry, deferRequest) => {
+    enterWork: (repoDir, loopName, stepId, entry, deferRequest, slice) => {
       // §B.20a — with `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
       // the coordinator fires `triggerWork` off the skill injection's completion so the boundary preamble is
       // written strictly after the skill's submit (§B.5 item 6, CWE-74). Non-deferred, the turn requests now.
-      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest });
+      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest, ...(slice !== undefined ? { slice } : {}) });
       if (result === 'entered') {
         armAppTurnDoneWatch(repoDir);
         pushFlowChanged();
@@ -796,6 +809,18 @@ async function createWindow(): Promise<void> {
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
+  // §28.4.2 — the human back-to-red gate control's flow half: reopen the current slice's RED step. A BACKWARD
+  // re-entry, so it borrows `undo`'s transition identity — its §25 diff (a step.entered back at RED) is the only
+  // observable, and no distinct kind is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind
+  // would be untestable vocabulary. Run inside inTransition so the RED step's entry actions re-fire. Mirrors
+  // autoAdvanceFlow: a void engine-driven transition whose view push is the caller's onViewChanged, not this.
+  const reopenSliceFlow = (repoKey: string): void => {
+    const pre = flow.state(repoKey);
+    if (pre.status !== 'in_progress') return;
+    const view = inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey));
+    audit.recordTransition(repoKey, 'undo', pre, view);
+  };
+
   // §28.7
   const epicPromotionCoordinator = createEpicPromotionCoordinator({
     readSubTickets: (def) => readEpicSubTicketsAtGate(def),
@@ -845,6 +870,24 @@ async function createWindow(): Promise<void> {
         runCommitSideEffect: createRealAppGateCommit(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
+        // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
+        // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
+        // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
+        // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
+        // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
+        sourceSliceCount: (repoDir, def) => {
+          const planBinding = def.outputs.find((o) => o.id === 'plan');
+          if (planBinding === undefined) return;
+          let planText = '';
+          try {
+            planText = readFileSync(planBinding.path, 'utf8');
+          } catch {
+            planText = '';
+          }
+          flow.resolveInputs(repoDir, { slices: String(implSliceCount(planText)) });
+        },
+        // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
+        reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
         audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
         emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
         emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),

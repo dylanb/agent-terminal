@@ -355,8 +355,10 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  `baseline-record-failed` records an approve whose best-effort §28.5.1 baseline-commit recording threw AFTER the
  *  phase commit LANDED — recorded distinctly (never re-attributed to `side-effect-failed`, which would falsely
  *  imply the commit itself failed) and never aborting the accept, since the downstream frozen check safely
- *  refuses on the absent baseline (fail toward firing, §28.5.1). */
-export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed' | 'baseline-record-failed' | 'epic-promotion-preview';
+ *  refuses on the absent baseline (fail toward firing, §28.5.1).
+ *  `source-slices-failed` records an approve whose best-effort §28.4.1 impl-slice-count sourcing threw — recorded
+ *  distinctly and never aborting the advance, since the count safely degrades to 1 (a single-slice run). */
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed' | 'baseline-record-failed' | 'source-slices-failed' | 'epic-promotion-preview';
 
 const GATE_DETAIL_MAX = 200;
 
@@ -382,6 +384,8 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
       return `§27 gate ${option} clear-polish failed: ${d}`;
     case 'baseline-record-failed':
       return `§27 gate ${option} baseline-record failed: ${d}`;
+    case 'source-slices-failed':
+      return `§28 gate ${option} source-slices failed: ${d}`;
     case 'epic-promotion-preview':
       return `§28 gate ${option} epic-promotion preview raised`;
   }

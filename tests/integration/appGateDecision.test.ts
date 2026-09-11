@@ -70,13 +70,15 @@ interface Recorder {
   polishEnters: Array<{ repoDir: string; step: string }>;
   polishClears: string[];
   recordBaselines: Array<{ repoDir: string; branch: string; sha: string }>;
+  reopens: string[];
+  sliceSources: string[];
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -113,6 +115,8 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
+    reopenSlice: (repoDir) => void rec.reopens.push(repoDir),
+    sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
   };
@@ -133,8 +137,35 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
+  });
+
+  it('§28.4.1 — sources the impl-slice count into the flow on approve, never on a non-approve decision', async () => {
+    const { deps, rec } = mkDeps({});
+    await approve(deps);
+    expect(rec.sliceSources).toEqual(['/repo']); // sourced once, on the approve path (before advancing)
+    // redo jumps back without accepting/advancing → the count is not sourced
+    const { deps: d2, rec: r2 } = mkDeps({});
+    await decide(d2, 'redo', 'try again');
+    expect(r2.sliceSources).toEqual([]);
     expect(rec.audits.some((a) => a.cmd.includes('approve') && a.exit === 0)).toBe(true);
     expect(rec.errors).toEqual([]);
+  });
+
+  // §28.4.1 (CWE-703/755) — sourcing the slice count is best-effort, the same discipline IT-DECISION-3 pins for a
+  // throwing baseline store: a throw is recorded on its OWN distinct `source-slices-failed` audit at exit 1 (§25
+  // audit-truth) and the approve STILL advances — the count safely degrades to 1 (a single-slice run), so it is
+  // never surfaced as a blocking error over a landed approve.
+  it('§28.4.1 — a throwing slice-count sourcing is audited distinctly and never aborts the advance', async () => {
+    const { deps, rec } = mkDeps({
+      sourceSliceCount: () => {
+        throw new Error('EACCES: plan.md unreadable');
+      },
+    });
+    await approve(deps);
+    expect(rec.audits.some((a) => a.cmd.includes('source-slices failed') && a.exit === 1)).toBe(true);
+    expect(rec.advances).toEqual(['/repo']); // best-effort — the accept persisted and the flow advanced regardless
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.errors).toEqual([]); // not a blocking error over a successful approve
   });
 
   it('advances even when the approve declares no side-effect (approve is terminal regardless)', async () => {
@@ -438,6 +469,63 @@ describe('runAppGateDecision — redo re-enters the work turn carrying the instr
     const { deps, rec } = mkDeps({}); // approve-only default def
     await decide(deps, 'redo', 'do the thing');
     expect(rec.redos).toEqual([]);
+  });
+});
+
+// §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
+// slice's RED step (reopenSlice) so the operator can redo missed work. Like redo/polish it is NOT approve — no
+// accept, no gh side-effect, no advance — and one-way (no note to lose). It is validated against the bound def
+// at the operation (AC9) and acts only on the named step+turn identity (§6/AC7).
+describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2)', () => {
+  const BACK_TO_RED_GATE: GateOptionDef[] = [
+    { option: 'approve', sideEffects: [{ kind: 'commit', args: { label: 'GREEN' } }] },
+    { option: 'back-to-red', sideEffects: [] },
+  ];
+  const GREEN_RUN: AppLoopRunState = { loop: 'green-loop', step: 'green', turnKey: 'consolidate-green', status: 'complete', round: 1, verdict: 'clean' };
+  const atGreen = (deps: AppGateDecisionDeps, option: GateDecisionOption = 'back-to-red'): Promise<boolean> =>
+    runAppGateDecision('/repo', 'green', 'consolidate-green', option, deps);
+
+  it('invokes reopenSlice and neither accepts, runs a side-effect, nor advances', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE });
+    const result = await atGreen(deps);
+    expect(result).toBe(false); // one-way — the caller ignores the result
+    expect(rec.reopens).toEqual(['/repo']); // the flow jumps back to the slice's RED step
+    expect(rec.accepts).toEqual([]); // back-to-red is not terminal — no accept
+    expect(rec.sideEffects).toEqual([]); // no gh side-effect (that is approve's)
+    expect(rec.commitSideEffects).toEqual([]); // and no commit — the reopen only moves the flow
+    expect(rec.advances).toEqual([]); // it goes BACKWARD, never advances off the step
+    expect(rec.audits.some((a) => a.cmd.includes('back-to-red') && a.exit === 0)).toBe(true);
+    expect(rec.views).toBeGreaterThan(0); // the view refreshes so the operator sees the flow back at RED
+  });
+
+  it('is inert when the bound def does not declare back-to-red (validated at the operation, AC9)', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: [{ option: 'approve', sideEffects: [] }] });
+    await atGreen(deps);
+    expect(rec.reopens).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('is inert for a decision naming a different step (§6/AC7)', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE });
+    await runAppGateDecision('/repo', 'refactor', 'consolidate-green', 'back-to-red', deps);
+    expect(rec.reopens).toEqual([]);
+  });
+
+  // §28.4.2 (CWE-703/755) — reopening the slice is best-effort: a throw from the reopen port (the flow-state
+  // write behind flow.reopenSlice cannot land — a symlinked/EACCES `.agent-terminal`, ENOSPC) is surfaced to
+  // the operator and the decision resolves without stranding, never rejecting into the one-way void caller.
+  // Pairs the happy path above; the sibling polish branch pins the same surfacing for its throwing port.
+  it('surfaces a thrown reopen-slice error and resolves without stranding (CWE-703)', async () => {
+    const { deps, rec } = mkDeps({
+      run: GREEN_RUN,
+      gate: BACK_TO_RED_GATE,
+      reopenSlice: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+    await expect(atGreen(deps)).resolves.toBe(false); // resolves — never rejects into the void caller
+    expect(rec.errors.some((e) => e.includes('ENOSPC'))).toBe(true); // the failure is surfaced to the operator
+    expect(rec.views).toBeGreaterThan(0); // the view still refreshes so the operator is not left with a stale gate
   });
 });
 

@@ -488,6 +488,17 @@ export function recordBaselineCommit(repoDir: string, branch: string, sha: strin
   }
 }
 
+/** §28.4 D2/#123 — clear the recorded baseline at a slice boundary (a RED phase re-entry). A stale same-branch
+ *  baseline from a prior phase/slice would otherwise be MATCHED by the next GREEN/refactor frozen check rather
+ *  than refused; with no baseline that check blocks (fail toward firing) until this slice's RED records its own.
+ *  Silent no-op when absent (mirrors clearAppLoopBootstrap); throws only when the loop area is unresolvable
+ *  (a planted symlink, CWE-59), matching the writer's fail-loud contract — the caller wraps it best-effort. */
+export function clearBaselineCommit(repoDir: string): void {
+  const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  rmSync(file, { force: true });
+}
+
 /** The recorded phase-commit baseline, or null when unset. Field-local validation (CWE-20): a wrong schema, a
  *  blank/missing branch, or a non-object-id sha reads as unset rather than surfacing a corrupt baseline. One
  *  repo-keyed single-current baseline, overwritten each phase; the key is the git BRANCH the phase loops share

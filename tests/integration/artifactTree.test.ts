@@ -4,6 +4,17 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS, __resetBaseRefState } from '../../src/main/artifactTree';
+import { isUnderAppStateDir } from '../../src/main/appStateDirs';
+import {
+  seedLoopArtifacts,
+  seedAppStateFiles,
+  plantLoopLeafSymlink,
+  plantAppStateParentSymlink,
+  CAN_SYMLINK,
+  LOOP_DIR_REL,
+  type LoopArtifactPaths,
+  type AppStateFilePaths,
+} from '../helpers/loopArtifacts';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -57,6 +68,8 @@ function findFile(nodes: ArtifactNode[], relPath: string): ArtifactNode | undefi
 describe('artifact discovery (§20.1 / D8 — real git)', () => {
   let repo: string;
   let plain: string;
+  let loop: LoopArtifactPaths;
+  let appState: AppStateFilePaths;
 
   beforeEach(() => {
     __resetBaseRefState(); // isolate the process-lifetime base caches explicitly, not by temp-dir luck
@@ -71,8 +84,15 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     git(['commit', '-q', '-m', 'init'], repo);
     writeFileSync(join(repo, 'committed.md'), '# Committed\n\nbody changed');
     writeFileSync(join(repo, 'untracked.txt'), 'scratch');
+    // Residual state from the retired .agent-loop/ engine (#126): must NOT surface or carry the loop tag.
     mkdirSync(join(repo, '.agent-loop'), { recursive: true });
     writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n');
+    // The in-terminal loop engine's working tree (§27) under .agent-terminal/loop/ (a depth-0 run-state
+    // file plus nested artifacts/reports/consolidate) is what the viewer must surface as loop provenance;
+    // the app's own state files directly under .agent-terminal/ must stay hidden. Both come from the
+    // single-source fixtures so the fixture and the code under test resolve the identical paths.
+    loop = seedLoopArtifacts(repo);
+    appState = seedAppStateFiles(repo);
 
     plain = realpathSync(mkdtempSync(join(tmpdir(), 'art-plain-')));
     mkdirSync(join(plain, 'docs'), { recursive: true });
@@ -88,19 +108,65 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     rmSync(plain, { recursive: true, force: true });
   });
 
-  it('curated scope = working-tree changes ∪ agent-loop, excluding unchanged committed files', () => {
+  // AC1 (#126): the in-terminal loop engine's tree under .agent-terminal/loop/ surfaces in curated — the
+  // depth-0 run-state file AND the files nested in artifacts/reports/consolidate (the loop tree "at any depth").
+  it('curated scope surfaces .agent-terminal/loop files (∪ working-tree changes), excluding unchanged committed files', () => {
     const tree = discover(repo, 'curated');
     expect(tree.isRepo).toBe(true);
     expect(tree.root).toBe(repo);
     const files = fileRelPaths(tree.nodes);
-    expect(files).toEqual(expect.arrayContaining(['committed.md', 'untracked.txt', '.agent-loop/plan.md']));
+    expect(files).toEqual(expect.arrayContaining(['committed.md', 'untracked.txt', ...loop.all]));
     expect(files).not.toContain('src/a.ts'); // committed, unchanged → not curated
   });
 
-  it('tags provenance: changed for working-tree edits, loop for .agent-loop files', () => {
+  // AC1 complementary (green pre-change — readArtifact path-confines and reads any in-root file
+  // independent of discovery; the RED evidence is the curated LISTING above, not this readback).
+  it('reads a surfaced loop artifact by its .agent-terminal/loop/ relative path', () => {
+    expect(readArtifact(repo, loop.plan)?.body).toContain('# Loop plan');
+  });
+
+  // AC2 (#126): surfaced loop files carry the loop provenance tag and ONLY that — not `changed` (the loop
+  // tree is itself under the app-state-excluded .agent-terminal/, so it is dropped from `changed`/`pr`).
+  it('tags provenance: changed for working-tree edits, loop (only) for .agent-terminal/loop files', () => {
     const tree = discover(repo, 'curated');
     expect(findFile(tree.nodes, 'committed.md')?.provenance).toContain('changed');
-    expect(findFile(tree.nodes, '.agent-loop/plan.md')?.provenance).toContain('loop');
+    expect(findFile(tree.nodes, loop.plan)?.provenance).toEqual(['loop']);
+    expect(findFile(tree.nodes, loop.runState)?.provenance).toEqual(['loop']);
+  });
+
+  // AC3 (#126): loop provenance no longer depends on the retired .agent-loop/ dir — a residual
+  // .agent-loop/plan.md (seeded in beforeEach) never appears and is never loop-tagged, while the
+  // .agent-terminal/loop tree still surfaces independent of it.
+  it('does not surface or loop-tag residual .agent-loop/ files (loop provenance derives from .agent-terminal/loop)', () => {
+    const tree = discover(repo, 'curated');
+    expect(fileRelPaths(tree.nodes)).not.toContain('.agent-loop/plan.md');
+    expect(findFile(tree.nodes, '.agent-loop/plan.md')).toBeUndefined();
+    expect(findFile(tree.nodes, loop.report)?.provenance).toEqual(['loop']);
+  });
+
+  // AC4 (#126) — untracked-collapse fixture: app state directly under .agent-terminal/ (flow-state.yaml,
+  // todos.json, monitor-events.json, audit-pointer.yaml) never surfaces in EITHER scope, including the
+  // collapsed `?? .agent-terminal/` node git emits for the otherwise-untracked dir. Only the loop subtree
+  // under .agent-terminal/loop/ is allowed through.
+  it('excludes app state under .agent-terminal/ from both scopes (untracked-collapse fixture)', () => {
+    for (const scope of ['curated', 'repo'] as const) {
+      const files = fileRelPaths(discover(repo, scope).nodes);
+      const appStateNonLoop = files.filter((f) => isUnderAppStateDir(f) && !f.startsWith(`${LOOP_DIR_REL}/`));
+      expect(appStateNonLoop).toEqual([]);
+    }
+  });
+
+  // AC4 (#126) — committed-app-state fixture (disjoint from the collapse case: committing un-collapses the
+  // dir): an app-state file committed on the branch over the base enters the `pr` diff, but the filter
+  // drops it before it can surface tagged pr.
+  it('excludes a committed app-state file under .agent-terminal/ from the pr set (absent + untagged)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    git(['add', '-f', appState.flowState], repo);
+    git(['commit', '-q', '-m', 'commit app state'], repo);
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    expect(fileRelPaths(tree.nodes)).not.toContain(appState.flowState);
+    expect(findFile(tree.nodes, appState.flowState)).toBeUndefined();
   });
 
   // §20.1: curated is the SUPERSET — files changed in the working tree (`changed`) ∪ files a branch
@@ -440,5 +506,78 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   it('outside a git repo, code files carry no changed-line info', () => {
     writeFileSync(join(plain, 'free.ts'), 'a\nb\n');
     expect(readArtifact(plain, 'free.ts')?.changedLines).toBeUndefined();
+  });
+});
+
+// #126 (§20.1): the common case — a repo with NO .agent-terminal/loop/ at all. discover() must not
+// throw when the loop dir is absent (nearly every real repo has none); absence stays silent and yields
+// an empty loop set.
+describe('artifact discovery — no .agent-terminal/loop present (§20.1, #126)', () => {
+  let repo: string;
+
+  beforeEach(() => {
+    __resetBaseRefState();
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'art-noloop-')));
+    git(['init', '-q'], repo);
+    git(['config', 'user.email', 't@t'], repo);
+    git(['config', 'user.name', 'T'], repo);
+    writeFileSync(join(repo, 'committed.md'), '# Committed\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'init'], repo);
+    writeFileSync(join(repo, 'committed.md'), '# Committed\n\nchanged');
+    writeFileSync(join(repo, 'untracked.txt'), 'scratch');
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('surfaces working-tree changes and no loop nodes when the loop dir is absent', () => {
+    const tree = discover(repo, 'curated'); // must not throw for a repo with no .agent-terminal/loop/
+    const files = fileRelPaths(tree.nodes);
+    expect(files).toEqual(expect.arrayContaining(['committed.md', 'untracked.txt']));
+    expect(files.some((f) => f.startsWith('.agent-terminal/'))).toBe(false);
+  });
+});
+
+// #126 / CWE-59/22: discovery resolves <repo>/.agent-terminal/loop through the filesystem, so a symlink
+// planted at the loop leaf or its `.agent-terminal` parent must NOT let the walk enumerate an out-of-repo
+// subtree into the viewer tree. The loop dir sits in untrusted working-tree content, so confinement matches
+// how the loop engine itself reads the area (appLoopState.ts: resolveJail + confinedRealPath).
+describe.skipIf(!CAN_SYMLINK)('artifact discovery — loop-dir symlink confinement (CWE-59/22, #126)', () => {
+  let repo: string;
+  let external: string;
+
+  beforeEach(() => {
+    __resetBaseRefState();
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'art-confine-repo-')));
+    git(['init', '-q'], repo);
+    git(['config', 'user.email', 't@t'], repo);
+    git(['config', 'user.name', 'T'], repo);
+    // An out-of-repo tree whose file names must never leak into the viewer as .agent-terminal/loop/* nodes.
+    external = realpathSync(mkdtempSync(join(tmpdir(), 'art-confine-ext-')));
+    mkdirSync(join(external, 'sub'), { recursive: true });
+    writeFileSync(join(external, 'escaped-secret.txt'), 'SECRET\n');
+    writeFileSync(join(external, 'sub', 'deep.txt'), 'DEEP\n');
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  });
+
+  it('refuses a loop LEAF symlinked out-of-repo — external files never surface or carry the loop tag', () => {
+    plantLoopLeafSymlink(repo, external); // .agent-terminal/loop -> external (the final segment IS the link)
+    const files = fileRelPaths(discover(repo, 'curated').nodes);
+    expect(files).not.toContain('.agent-terminal/loop/escaped-secret.txt');
+    expect(files).not.toContain('.agent-terminal/loop/sub/deep.txt');
+    expect(files.some((f) => f.startsWith('.agent-terminal/loop/'))).toBe(false);
+  });
+
+  it('refuses a .agent-terminal PARENT symlinked out-of-repo even with a real loop/ behind it', () => {
+    mkdirSync(join(external, 'loop'), { recursive: true }); // a REAL loop/ inside the external target
+    writeFileSync(join(external, 'loop', 'run-state.yaml'), 'status: running\n');
+    plantAppStateParentSymlink(repo, external); // .agent-terminal -> external (the leaf-only-lstat miss)
+    const files = fileRelPaths(discover(repo, 'curated').nodes);
+    expect(files).not.toContain('.agent-terminal/loop/run-state.yaml');
+    expect(files.some((f) => f.startsWith('.agent-terminal/loop/'))).toBe(false);
   });
 });

@@ -258,6 +258,20 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(composeFeedback).not.toHaveBeenCalled();
   });
 
+  // §28.4.2 — back-to-red is a one-way control (no operator note): like approve/polish it dispatches STRAIGHT to
+  // appGateDecision carrying the step+turn identity, with no composer detour. Its visible label reads "Back to RED".
+  it('renders a §28.4.2 back-to-red control that dispatches straight to appGateDecision (one-way, no composer)', () => {
+    const appGateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], appTurn: { step: 'green', turnKey: 'consolidate-green' } }), 'green');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]');
+    expect(btn).not.toBeNull();
+    expect(btn!.textContent).toBe('Back to RED'); // a readable label, not the raw kebab option
+    btn!.click();
+    expect(appGateDecision).toHaveBeenCalledTimes(1);
+    expect(appGateDecision).toHaveBeenCalledWith('green', 'consolidate-green', 'back-to-red');
+  });
+
   it('renders NO §27 request-changes button when no composer is wired — it is a composer-only affordance (WCAG 4.1.2)', () => {
     // §27 request-changes MUST carry feedback (AC4); a note-less dispatch is dropped by the executor, so a
     // button wired only to appGateDecision would be inert. Without composeFeedback, render no request-changes

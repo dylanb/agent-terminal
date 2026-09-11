@@ -371,7 +371,7 @@ export type SendChannel = keyof ChannelPayloads;
 // ---- Artifact viewer (§20.1/§20.2) ----
 
 /** Per-file provenance tags (D8): tracked-but-changed in the working tree, under the
- *  agent-loop, or part of the current PR. Empty/omitted when none apply. */
+ *  §27 loop tree (`.agent-terminal/loop/`), or part of the current PR. Empty/omitted when none apply. */
 export type ArtifactProvenance = 'changed' | 'loop' | 'pr';
 
 /** One node of the hierarchical artifact tree (§20.1). A directory carries `children`;
@@ -722,7 +722,7 @@ export interface FlowSetTitleMsg {
  *  wire cannot drift on the set. The guard that a step never runs an option its bound def does not declare
  *  is enforced at the operation, validated against the def's declared options — never inferred from this
  *  type (AC9). */
-export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish'] as const;
+export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish', 'back-to-red'] as const;
 export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
 
 /** The §27-only work-turn error route-out (§27.12c): the human recovers a stopped §27 work turn by

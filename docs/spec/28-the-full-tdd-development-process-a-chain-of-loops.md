@@ -12,7 +12,7 @@
 
 - Express a complete **test-driven development process** — epic decomposition, per-ticket planning, deterministic-infrastructure construction, RED→GREEN→refactor slicing, integration, and polish — **on the existing §27 loop engine**, with a `git commit` between each phase and machine-checkable completion for the phases where "the agent says it's done" is not good enough.
 - **In scope:** the new loop chain (§28.2); three additive engine changes — a **`commit` side-effect** (P3), **phase-as-a-loop** (P4), and **machine completion predicates** (P5); five new reviewer charters and their work recipes (§28.6); the epic overlay (§28.7).
-- **Out of scope:** any change to the §27 loop shape, the round report, the consolidator, the gate, or the chaining/bootstrap machinery; the `ExecSideEffect` (§27.8, still unshipped — §28.5.4 explains why this design does not need it); per-verdict review vocabulary (the cousin work of [#102](https://github.com/dylanb/agent-terminal/issues/102), noted in §28.9).
+- **Out of scope:** any change to the §27 loop shape, the round report, the consolidator, the gate, or the chaining/bootstrap machinery — **with one sanctioned exception, the loop-back step primitive of §28.4.1** (the single additive flow-step directive that lets one per-ticket chain run impl-slice×N; it adds a repeatable step, it does not restructure the chaining/bootstrap machinery otherwise); the `ExecSideEffect` (§27.8, still unshipped — §28.5.4 explains why this design does not need it); per-verdict review vocabulary (the cousin work of [#102](https://github.com/dylanb/agent-terminal/issues/102), noted in §28.9).
 - **Thesis (P1a): this is a longer chain, not a new engine.** §27.3's loop is artifact-agnostic by construction. RED, GREEN, and refactor are three more instances of it, chained by §27.10 hand-off; the planning steps collapse into one plan-bundle loop; the epic steps are §27.10 promotion. What is genuinely new is small and bounded, and it is enumerated in §28.10.
 
 ### 28.2 The loop chain (P2)
@@ -40,6 +40,9 @@ flowchart LR
   RED["RED loop<br/>author failing tests"] -->|"commit RED"| GREEN["GREEN loop<br/>implement to pass"]
   GREEN -->|"commit GREEN"| REFAC["refactor loop<br/>review-and-fix cycle"]
   REFAC -->|"commit refactor"| GATE["slice gate<br/>approve to next slice"]
+  REFAC -.->|"loop back to RED: impl-slice xN (§28.4.1)"| RED
+  GATE -.->|"back-to-red: redo this slice (§28.4.2)"| RED
+  linkStyle 3,4 stroke:#c026d3,stroke-width:2px
 ```
 
 **Two levels of "slice", named to avoid collision (P2a).** The word *slice* appears at two granularities; every artifact must keep them distinct:
@@ -66,6 +69,49 @@ RED, GREEN, and refactor are **three separate single-work-turn loops, chained** 
 - This **reuses the §27.3 loop shape verbatim.** Each phase gets its own context boundaries, its own gate, its own `commit` (P3), and its own completion predicate (P5) *for free*, because each is an ordinary loop — rather than inventing "a loop with three work turns", a structure the orchestrator does not have and would need new machinery to run.
 - **Consequence:** a slice-loop is a **sub-chain** (RED-loop → GREEN-loop → refactor-loop), and the per-ticket chain nests one sub-chain per impl-slice. The orchestrator already resumes a chain at the earliest turn whose output is missing (§27.12 auto-resume); nesting adds links, not concepts.
 - **Recommended over** a phase sequence inside one loop, which would require new orchestrator state to track "which phase am I in" that the chain already expresses as "which loop am I in".
+
+#### 28.4.1 The loop-back primitive — impl-slice×N (P4a)
+
+§28.2 nests **one RED→GREEN→refactor sub-chain per impl-slice**, but the flow machine's `advance()` is a static `index+1` with a terminal `done`: it has no repeatable step, so a per-ticket chain delivered exactly **one** impl-slice per run. §28.10-S7 recorded that gap as a deferral — the [S7-deferral note] said true slice-loop×N "needs a loop-back/repeatable flow primitive **this section barred**". This subsection **lifts that specific deferral** by adding one — and only one — additive flow-step primitive; every other clause of §28.1's boundary (the loop shape, the round report, the consolidator, the gate, the bootstrap machinery) is unchanged.
+
+**The primitive.** A step MAY carry a `repeat: { back_to, count_input }` directive. On `advance()` **off** that step, the machine reads the integer value of the `count_input` flow input — the **slice count**, resolved at runtime because the plan decides it, not the flow file — and while the step has looped back fewer than that many times, `index` jumps back to `back_to` (an **earlier** step) instead of advancing to the next; once the count is reached, `advance()` falls through as normal. The iteration count per repeat step is persisted in `flow-state.yaml` (`repeat_counts`), so a relaunch resumes the correct impl-slice rather than restarting the loop, and is cleared by `restart()`/`terminate()`.
+
+**Bounded and fail-safe (CWE-20/770).** The count is UNTRUSTED — it derives from the plan artifact — so it is clamped to `[1, MAX_SLICES]` at the use site: an absent, non-integer, or sub-1 value falls to **1** (a single pass, no loop-back — the safe direction against a runaway loop), and an over-cap value clamps to `MAX_SLICES` (the cap keeps firing rather than being disabled). `back_to` must name an **earlier** step; a forward, unknown, or self target is a **load error** (a repeat is a loop-BACK, never a skip).
+
+**What this delivers, and what still remains.** The primitive is the flow-machine mechanism §28.2's slice-loop×N needs, and the shipped `flow.yaml` now carries `repeat: { back_to: red, count_input: slices }` on its `refactor` step. It is **inert until the count is sourced**: until the plan-bundle phase resolves the `slices` input from the slice-plan, the count defaults to 1 and the chain runs a single slice exactly as before — so nothing ships a half-working multi-slice chain. Running impl-slice×N **end-to-end** additionally requires the orchestrator to give each slice its own **turn/result-artifact identity** (`red-result` → `red-result.slice-N`) and per-slice frozen-baseline identity, so §27.12 auto-resume re-drives slice N's RED instead of matching slice 1's already-present result — the [per-slice-identity TODO] `appLoopState.ts` records. That, plus the slice-count sourcing, is the next slice; this one lands the primitive it rests on.
+
+[S7-deferral note]: §28.10-S7 below.
+[per-slice-identity TODO]: `TODO(dylanb) #123` in `appLoopState.ts`.
+
+#### 28.4.2 The manual back-to-RED control — redo the current slice (P4b)
+
+§28.4.1's loop-back is automatic and forward (advance the N planned slices). §28.4.2 adds the human
+counterpart: at a phase gate, an operator who sees the agent stopped short sends the flow **back to the
+current slice's RED step** to redo the work it missed. It **redoes the current impl-slice — it does not
+consume or add one** — so it composes with the count-driven loop-back rather than fighting it: a mid-slice
+reopen still finishes the plan on the same slice schedule.
+
+**The flow transition.** `flow.reopenSlice()` jumps the flow's current step back to the slice's RED step —
+the `back_to` target of the flow's repeat step (§28.4.1), the single source for "where the slice restarts"
+— re-entering it (its entry actions re-run) while **preserving `repeat_counts` and the resolved inputs**.
+It is a no-op guard, never a throw: inert unless in progress with a repeat step whose target is at or
+before the current step (a reopen is backward-or-self, never a forward skip), so a stale gate click cannot
+crash or skip the flow forward.
+
+**The human control.** A one-way human gate decision, `back-to-red`, declared on **every phase gate**
+(RED / GREEN / refactor / integration-slice), joins the §27.9 gate vocabulary in the
+reopen-without-advancing family (beside `redo`/`polish`): it runs no side-effect and does not advance — it
+invokes `reopenSlice()` and re-enters RED. It rides the existing one-way `flow:appGateDecision` channel
+(no operator note). The gate decision reopens the flow WITHOUT persisting an accept: the executor calls the
+`reopenSlice` port and audits the decision, and the composition root runs `flow.reopenSlice()` inside a §25
+transition so the backward re-entry lands in the run's audit record (a `step.entered` back at RED). A reopen
+carries no distinct §25 `TransitionKind` — its audit diff is the whole observable, so it borrows the
+backward-re-entry identity rather than widening the closed vocabulary with untestable ceremony.
+
+**Scope of the reopen.** Like §28.4.1 this moves the FLOW; whether the re-entered RED work turn **re-runs
+fresh** rather than resuming to its prior `red-result` depends on the same per-slice result-artifact
+identity the [per-slice-identity TODO] tracks. Until that lands, a reopen re-enters RED but the phase
+resumes its prior result.
 
 ### 28.5 Engine change #3 — machine completion predicates for any repo, any framework (P5)
 

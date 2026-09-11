@@ -39,6 +39,16 @@ export interface AppGateDecisionDeps {
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
+  /** §28.4.1 — on an approve, resolve the impl-slice count from the plan-bundle's slice-plan into the `slices`
+   *  flow input the refactor loop-back reads (§28.4.1). Data-driven: the composition root reads the count
+   *  only when `def` declares the plan artifact (the plan-bundle's contract), so a non-plan-bundle approve is a
+   *  no-op and cannot overwrite it; and it resolves the input WITHOUT re-entering the step. Best-effort — a
+   *  failure degrades to the count-1 single-slice default (the caller wraps it, never aborting the advance). */
+  sourceSliceCount(repoDir: string, def: LoopDefV2): void;
+  /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
+   *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
+   *  redo/polish family it is NOT approve — no accept, no advance — the flow jumps back and RED re-runs. */
+  reopenSlice(repoDir: string): void;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
   maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): EpicGateOutcome;
@@ -154,6 +164,22 @@ export async function runAppGateDecision(
     deps.onViewChanged();
     return false;
   }
+  // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
+  // slice's RED step (reopenSlice) so the operator can redo missed work. One-way like polish (no note to lose):
+  // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
+  // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
+  // never crashing the decision path into the one-way void caller as an unhandled rejection.
+  if (option === 'back-to-red') {
+    try {
+      deps.reopenSlice(repoDir);
+      deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      deps.emitError(`could not reopen the slice: ${reason}`);
+    }
+    deps.onViewChanged();
+    return false;
+  }
   // impasse is never executed here.
   if (option !== 'approve') return false;
 
@@ -261,6 +287,13 @@ export async function runAppGateDecision(
     }
   }
 
+  // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
+  // loop-back reads the plan-decided count. Best-effort: a failure degrades to the count-1 default (never aborts).
+  try {
+    deps.sourceSliceCount(repoDir, r.def);
+  } catch (e) {
+    deps.audit(repoDir, gateDecisionAuditCmd('source-slices-failed', option, e instanceof Error ? e.message : String(e)), 1);
+  }
   deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
   deps.advanceFlow(repoDir);
   deps.onViewChanged();
