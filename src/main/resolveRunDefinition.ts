@@ -1,12 +1,17 @@
 // A2 (#133) §18.7.3 — the run-scoped flow-definition resolver, injected as createFlowManager's widened
 // `loadDefinition` seam. The catalog-entry and pointer dependencies are injected domain-concept seams
 // (CLAUDE.md injection-seam rule), so this module imports none of the leaf stores.
-//
-// TODO(#133 slice-1 GREEN): implement the three ordered legs — local flow.yaml (leg 1) → the pointer-named
-// catalog entry (leg 2) → the global fallback (leg 3). This stub resolves local-first only (pointer-blind),
-// so the slice-1 RED fails on the leg-2 pointer case.
 
-import { loadFlowDefinitionLocalFirst, type FlowLoad } from './flow';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import {
+  FLOW_DEF_FILE,
+  flowHomeDir,
+  loadFlowDefinition,
+  loadFlowDefinitionFromFile,
+  loadFlowDefinitionLocalFirst,
+  type FlowLoad,
+} from './flow';
 
 /** §18.7.2 read of the per-worktree active-flow pointer that the resolver's leg 2 consults. */
 export type PointerRead =
@@ -31,6 +36,18 @@ export interface ResolvedRunDefinition {
 
 export type ResolveRunDefinition = (localDir: string, globalDir: string) => ResolvedRunDefinition;
 
-export function createResolveRunDefinition(_deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
-  return (localDir, globalDir) => ({ load: loadFlowDefinitionLocalFirst(localDir, globalDir) });
+export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
+  return (localDir, globalDir) => {
+    // Leg 1 gates on presence, not validity: a present-but-invalid local flow.yaml must surface its own error
+    // rather than fall through to the fallback (loadFlowDefinitionLocalFirst's back-compat precedence).
+    if (existsSync(path.join(flowHomeDir(localDir), FLOW_DEF_FILE))) return { load: loadFlowDefinition(localDir) };
+    const pointer = deps.pointer();
+    if (pointer.kind === 'value') {
+      const entry = deps.catalogEntry(pointer.id);
+      // A catalog entry's flow.yaml sits directly at <flowDir>/flow.yaml (§18.7.6), not in a `.agent-terminal`
+      // subdir, so it loads through the shared file-path validator, not the home-root loadFlowDefinition.
+      if (entry.ok) return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+    }
+    return { load: loadFlowDefinitionLocalFirst(localDir, globalDir) };
+  };
 }

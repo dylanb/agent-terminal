@@ -70,7 +70,8 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
+import { createResolveRunDefinition } from './resolveRunDefinition';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -521,8 +522,18 @@ async function createWindow(): Promise<void> {
       });
     },
   });
+  // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares, so none can
+  // resolve a different flow from another (the shared-semantics / "parallel copies that agree today" rule).
+  // TODO(#133): back pointer/catalogEntry with activeFlowPointer + flowCatalog (A2 slices); both unset today.
+  const resolveActiveDefinition = (repoKey: string): FlowLoad =>
+    createResolveRunDefinition({
+      pointer: () => ({ kind: 'unset' }),
+      catalogEntry: () => ({ ok: false, cause: 'unknown' }),
+    })(repoKey, flowGlobalDir).load;
+
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
+    loadDefinition: (repoKey) => resolveActiveDefinition(repoKey),
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
     // §27.15 — the §27 (app-namespace) loop-view provider: resolve the bound app-def across the operator
     // and app-bundled tiers and produce its whole run-less/failure view. Tier roots are chosen by the
@@ -543,7 +554,7 @@ async function createWindow(): Promise<void> {
     root: auditRootDir(flowGlobalDir),
     now: () => new Date(),
     flowName: (repoKey) => {
-      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      const load = resolveActiveDefinition(repoKey);
       return load.ok ? load.definition.name : null;
     },
   });
@@ -716,7 +727,7 @@ async function createWindow(): Promise<void> {
   // todoTemplate:instantiate (§6/§4.1): add a named template's items to the repo's todo list; a
   // missing flow/template is a no-op returning the unchanged list.
   const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
-    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return todoStore.list(repoKey);
     const md = loadTodoTemplateFile(todoTemplatesDir(load.flowDir), ref);
     if (md === null) return todoStore.list(repoKey);
@@ -790,7 +801,7 @@ async function createWindow(): Promise<void> {
   // to tag a `github-ticket` value as a ticket association (§25.5). Empty when the definition or step
   // can't be resolved, so audit degrades to recording bare `input.resolved` events.
   const inputTypeMap = (repoKey: string): Record<string, string> => {
-    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return {};
     const step = load.definition.steps[flow.state(repoKey).position - 1];
     const map: Record<string, string> = {};
@@ -929,7 +940,7 @@ async function createWindow(): Promise<void> {
   // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
   const runAppGateDecision = createGuardedGateDecision({
     bindingOf: (repoKey, step) => {
-      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      const load = resolveActiveDefinition(repoKey);
       return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
     },
     refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
@@ -1199,7 +1210,7 @@ async function createWindow(): Promise<void> {
       [CH.todoTemplateList]: (_e, m) => {
         if (!isValidTemplateList(m)) return { templates: [] };
         if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
-        const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
+        const load = resolveActiveDefinition(m.repoKey);
         const templates = load.ok ? listTodoTemplates(todoTemplatesDir(load.flowDir)) : [];
         const defaultRef = flow.state(m.repoKey).templateRef;
         return defaultRef ? { templates, defaultRef } : { templates };
@@ -1225,8 +1236,8 @@ async function createWindow(): Promise<void> {
           ),
         })),
       // Install bundled examples (§18.1/§23.4/§27.8): bundles resolve build-aware (packaged resources vs
-      // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
-      // loadFlowDefinitionLocalFirst, and the app loop definitions and commands land in the user-level
+      // the unpackaged app path); the flow lands in the GLOBAL flow home read back as the global fallback by
+      // resolveActiveDefinition, and the app loop definitions and commands land in the user-level
       // Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
       [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),

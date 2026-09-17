@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   createResolveRunDefinition,
   type PointerRead,
   type CatalogResolution,
 } from '../../src/main/resolveRunDefinition';
-import { type FlowLoad } from '../../src/main/flow';
+import { FLOW_DEF_FILE, type FlowLoad } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
@@ -85,5 +87,62 @@ describe('resolveRunDefinition — three-leg flow-definition resolution (§18.7.
 
     expect(definitionName(result.load)).toBe('global-flow');
     expect(result.selectionReason).toBeUndefined(); // unset is the normal default, never a degrade (AC3)
+  });
+
+  it('a value pointer whose catalog entry is unresolvable falls to the global fallback (leg 2 miss → leg 3)', () => {
+    const wt = fx.makeWorktree('leg2-miss'); // no local flow.yaml
+    const globalRoot = seedGlobalFallback();
+
+    // A set pointer naming an id the catalog cannot resolve — the resolve-to-fallback half of the bad-pointer AC
+    // this slice implements (the visible degrade reason is a later slice); the value branch must NOT crash or
+    // return an error load, it must fall through to the fallback.
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'ghost' });
+    const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry });
+    const result = resolve(wt, globalRoot);
+
+    expect(definitionName(result.load)).toBe('global-flow'); // unresolvable value → fallback, never a throw
+  });
+
+  it('leg 1 gates on presence, not validity: a present-but-invalid local surfaces its own error, not a resolvable pointer or the fallback', () => {
+    const wt = fx.makeWorktree('leg1-invalid');
+    fx.writeFlowHome(wt, { name: 'local-broken', stepIds: [] }); // present but §18.1-invalid (no steps)
+    const globalRoot = seedGlobalFallback();
+    const entry = seedCatalogEntry('catalog-flow');
+
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' }); // resolvable + distinct
+    const catalogEntry = (id: string): CatalogResolution =>
+      id === 'catalog-flow' ? entry : { ok: false, cause: 'unknown' };
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry });
+    const result = resolve(wt, globalRoot);
+
+    // A refactor to `if (loadFlowDefinitionLocalFirst(...).ok)` would let this fall through to the resolvable
+    // pointer (or fallback), turning the load ok — the presence-not-validity guard is what keeps it an error.
+    expect(result.load.ok).toBe(false);
+  });
+
+  it('a resolvable catalog entry whose flow.yaml is §18.1-invalid surfaces its own error, never a degrade to the fallback', () => {
+    const wt = fx.makeWorktree('leg2-invalid'); // no local flow.yaml
+    const globalRoot = seedGlobalFallback();
+
+    // A resolvable leg-2 entry whose flow.yaml is present but §18.1-invalid (no steps): overwrite the valid
+    // default addEntry seeds. The ticket rules this outcome in scope for the resolver — "Schema-invalid
+    // definition content is the §18.1 error state, not a degrade" — so the resolver must return THIS entry's
+    // own error, never fall through to the global fallback. A mutation degrading it would make load.ok true
+    // (the fallback's 'global-flow'); the leg2-miss test above covers the distinct unresolvable→fallback case.
+    const catalogDir = catalog.makeCatalogDir();
+    const flowDir = catalog.addEntry(catalogDir, 'catalog-broken');
+    writeFileSync(path.join(flowDir, FLOW_DEF_FILE), 'name: catalog-broken\nsteps: []\n');
+
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-broken' });
+    const catalogEntry = (id: string): CatalogResolution =>
+      id === 'catalog-broken' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry });
+    const result = resolve(wt, globalRoot);
+
+    expect(result.load.ok).toBe(false);
   });
 });

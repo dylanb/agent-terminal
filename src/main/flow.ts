@@ -112,7 +112,13 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
 export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  const file = path.join(worktreeDir, FLOW_REL);
+  return loadFlowDefinitionFromFile(path.join(worktreeDir, FLOW_REL), FLOW_REL);
+}
+
+/** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
+ *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
+ *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording (default: the full path). */
+export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
@@ -120,8 +126,8 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     // AC 4 reason-accuracy: ENOENT is genuinely "no flow.yaml"; any other errno (EISDIR from a directory
     // planted at the path, EACCES on a shared machine, ENOTDIR/ELOOP from a bad symlink) names what actually
     // failed rather than reporting the flow absent while it sits on disk. Both questions answered through errno.ts.
-    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
-    return { ok: false, error: `cannot read ${FLOW_REL}: ${errMsg(e)}` };
+    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
+    return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
 
   let doc: unknown;
