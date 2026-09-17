@@ -45,8 +45,8 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
       case 'unset':
         return { load: fallback() };
       case 'degrade':
-        // A degrade carries the pointer store's own reason (§18.7.6); it flows through verbatim — display
-        // sanitization is the flow view's boundary, not this resolver's.
+        // §18.7.6 / CWE-116/117 — whatever renders this reason must display-strip control/bidi bytes, never
+        // this resolver: one strip at the render boundary, with no second copy here to diverge from it.
         return { load: fallback(), selectionReason: pointer.reason };
       case 'value': {
         const entry = deps.catalogEntry(pointer.id);
