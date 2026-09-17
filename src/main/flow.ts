@@ -88,6 +88,13 @@ export function flowHomeDir(root: string): string {
   return path.join(root, FLOW_HOME_SUBDIR);
 }
 
+/** Whether `root` holds a flow definition at its flow home — the single leg-1 presence gate the local-first
+ *  loader and the §18.7.3 resolver both read, so the "is a flow present here" boundary that decides which flow
+ *  runs cannot desync between them (CLAUDE.md shared-semantics). */
+export function hasFlowDefinition(root: string): boolean {
+  return existsSync(path.join(root, FLOW_REL));
+}
+
 const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
@@ -117,7 +124,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
 
 /** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
  *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
- *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording (default: the full path). */
+ *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
 export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
   let raw: string;
   try {
@@ -211,11 +218,11 @@ export function loadFlowDefinitionFromFile(file: string, relLabel: string = file
  * masked by the global. (Flow STATE, by contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  if (existsSync(path.join(localDir, FLOW_REL))) return loadFlowDefinition(localDir);
+  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
   // exists do we report the local (absent) error, so a bad value is never reported as a missing flow (§B.3).
-  if (existsSync(path.join(globalDir, FLOW_REL))) return loadFlowDefinition(globalDir);
+  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 

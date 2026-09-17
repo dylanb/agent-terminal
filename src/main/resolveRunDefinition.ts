@@ -1,12 +1,11 @@
 // A2 (#133) §18.7.3 — the run-scoped flow-definition resolver, injected as createFlowManager's widened
 // `loadDefinition` seam. The catalog-entry and pointer dependencies are injected domain-concept seams
-// (CLAUDE.md injection-seam rule), so this module imports none of the leaf stores.
+// (CLAUDE.md injection-seam rule).
 
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   FLOW_DEF_FILE,
-  flowHomeDir,
+  hasFlowDefinition,
   loadFlowDefinition,
   loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
@@ -40,7 +39,7 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
   return (localDir, globalDir) => {
     // Leg 1 gates on presence, not validity: a present-but-invalid local flow.yaml must surface its own error
     // rather than fall through to the fallback (loadFlowDefinitionLocalFirst's back-compat precedence).
-    if (existsSync(path.join(flowHomeDir(localDir), FLOW_DEF_FILE))) return { load: loadFlowDefinition(localDir) };
+    if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
     const pointer = deps.pointer();
     if (pointer.kind === 'value') {
       const entry = deps.catalogEntry(pointer.id);
