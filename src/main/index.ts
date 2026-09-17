@@ -525,11 +525,12 @@ async function createWindow(): Promise<void> {
   // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares, so none can
   // resolve a different flow from another (the shared-semantics / "parallel copies that agree today" rule).
   // TODO(#133): back pointer/catalogEntry with activeFlowPointer + flowCatalog (A2 slices); both unset today.
+  const resolveRunDefinition = createResolveRunDefinition({
+    pointer: () => ({ kind: 'unset' }),
+    catalogEntry: () => ({ ok: false, cause: 'unknown' }),
+  });
   const resolveActiveDefinition = (repoKey: string): FlowLoad =>
-    createResolveRunDefinition({
-      pointer: () => ({ kind: 'unset' }),
-      catalogEntry: () => ({ ok: false, cause: 'unknown' }),
-    })(repoKey, flowGlobalDir).load;
+    resolveRunDefinition(repoKey, flowGlobalDir).load;
 
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
