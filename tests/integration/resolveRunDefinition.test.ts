@@ -57,6 +57,7 @@ describe('resolveRunDefinition — three-leg flow-definition resolution (§18.7.
     const result = resolve(wt, globalRoot);
 
     expect(definitionName(result.load)).toBe('catalog-flow'); // the pointer's catalog flow, NOT the fallback
+    expect(result.selectionReason).toBeUndefined(); // a resolved selection is not a degrade — no reason surfaced
   });
 
   it('AC2: a present local flow.yaml wins regardless of a resolvable pointer (leg 1 precedence)', () => {
@@ -73,6 +74,7 @@ describe('resolveRunDefinition — three-leg flow-definition resolution (§18.7.
     const result = resolve(wt, globalRoot);
 
     expect(definitionName(result.load)).toBe('local-flow'); // leg 1 beats a resolvable leg-2 pointer
+    expect(result.selectionReason).toBeUndefined(); // a resolved local flow is not a degrade — no reason surfaced
   });
 
   it('AC3: an unset pointer with no local falls to the silent global fallback (leg 3, no reason)', () => {
