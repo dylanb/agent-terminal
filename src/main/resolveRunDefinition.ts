@@ -1,5 +1,4 @@
-// A2 (#133) §18.7.3 — the run-scoped flow-definition resolver, injected as createFlowManager's widened
-// `loadDefinition` seam. The catalog-entry and pointer dependencies are injected domain-concept seams
+// A2 (#133) §18.7.3 — the run-scoped flow-definition resolver; pointer/catalogEntry are injected seams
 // (CLAUDE.md injection-seam rule).
 
 import path from 'node:path';
@@ -23,6 +22,8 @@ export type CatalogResolution =
   | { ok: true; tier: 'repo' | 'global'; flowDir: string }
   | { ok: false; cause: 'unknown' | 'escapes' | 'unresolvable' };
 
+type CatalogDegradeCause = Extract<CatalogResolution, { ok: false }>['cause'];
+
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
   catalogEntry: (id: string) => CatalogResolution;
@@ -37,16 +38,36 @@ export type ResolveRunDefinition = (localDir: string, globalDir: string) => Reso
 
 export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
   return (localDir, globalDir) => {
-    // Leg 1 gates on presence, not validity: a present-but-invalid local flow.yaml must surface its own error
-    // rather than fall through to the fallback (loadFlowDefinitionLocalFirst's back-compat precedence).
     if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
+    const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);
     const pointer = deps.pointer();
-    if (pointer.kind === 'value') {
-      const entry = deps.catalogEntry(pointer.id);
-      // A catalog entry's flow.yaml sits directly at <flowDir>/flow.yaml (§18.7.6), not in a `.agent-terminal`
-      // subdir, so it loads through the shared file-path validator, not the home-root loadFlowDefinition.
-      if (entry.ok) return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+    switch (pointer.kind) {
+      case 'unset':
+        return { load: fallback() };
+      case 'degrade':
+        // A degrade carries the pointer store's own reason (§18.7.6); it flows through verbatim — display
+        // sanitization is the flow view's boundary, not this resolver's.
+        return { load: fallback(), selectionReason: pointer.reason };
+      case 'value': {
+        const entry = deps.catalogEntry(pointer.id);
+        if (entry.ok) return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+        return { load: fallback(), selectionReason: catalogDegradeReason(pointer.id, entry.cause) };
+      }
+      default: {
+        const unhandled: never = pointer;
+        return unhandled;
+      }
     }
-    return { load: loadFlowDefinitionLocalFirst(localDir, globalDir) };
   };
+}
+
+/** §18.7.6 degrade taxonomy. */
+const CATALOG_DEGRADE_DETAIL: Record<CatalogDegradeCause, string> = {
+  unknown: 'was not found in the catalog',
+  escapes: 'resolves outside its catalog directory',
+  unresolvable: 'could not be read',
+};
+
+function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
+  return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
 }
