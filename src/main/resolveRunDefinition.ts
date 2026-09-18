@@ -73,13 +73,12 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
         return { load: fallback(), selectionReason: pointer.reason };
       case 'value': {
         const entry = deps.catalogEntry(pointer.id);
-        if (entry.ok) return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+        if (entry.ok) return { load: loadCatalogEntryDefinition(entry.flowDir) };
         return { load: fallback(), selectionReason: catalogDegradeReason(pointer.id, entry.cause) };
       }
-      default: {
-        const unhandled: never = pointer;
-        return unhandled;
-      }
+      default:
+        pointer satisfies never;
+        return { load: fallback() };
     }
   };
 }
@@ -95,6 +94,10 @@ function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
   return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
 }
 
+function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
+  return loadFlowDefinitionFromFile(path.join(flowDir, FLOW_DEF_FILE));
+}
+
 function resolveBoundSource(
   disposition: DispositionRead,
   catalogEntry: (id: string) => CatalogResolution,
@@ -108,7 +111,7 @@ function resolveBoundSource(
       // never a silent swap to a different source.
       const entry = catalogEntry(disposition.id);
       if (!entry.ok || entry.tier !== disposition.tier) return { load: lostBindingHold() };
-      return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+      return { load: loadCatalogEntryDefinition(entry.flowDir) };
     }
     case 'non-catalog':
       return { load: loadFlowDefinitionLocalFirst(localDir, globalDir) };
