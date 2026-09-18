@@ -3,6 +3,7 @@ import {
   createResolveRunDefinition,
   type PointerRead,
   type CatalogResolution,
+  type DispositionRead,
 } from '../../src/main/resolveRunDefinition';
 import { type FlowLoad } from '../../src/main/flow';
 import { type StartednessSignal } from '../../src/shared/flowStarted';
@@ -56,7 +57,7 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     const startedness = (): StartednessSignal => 'started';
     // The run-disposition SEAM (its content is the run-scoped source binding): this run was begun on the repo
     // catalog entry `bound-flow`.
-    const readDisposition = () => ({ source: 'catalog', tier: 'repo', id: 'bound-flow' });
+    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'repo', id: 'bound-flow' });
 
     const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
     const result = resolve(wt, globalRoot);
@@ -78,7 +79,7 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir: catalogDir } : { ok: false, cause: 'unknown' };
     const startedness = (): StartednessSignal => 'started';
-    const readDisposition = () => ({ source: 'non-catalog' });
+    const readDisposition = (): DispositionRead => ({ source: 'non-catalog' });
 
     const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
     const result = resolve(wt, globalRoot);
@@ -86,5 +87,42 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     // The unchanged non-catalog source, NOT the pointer's `catalog-flow`: a begun non-catalog run never reads
     // the pointer for the rest of its life (§18.7.3, CWE-841).
     expect(definitionName(result.load)).toBe('global-flow');
+  });
+
+  it('AC9: a begun CATALOG run never swaps to a same-named entry that now wins in a DIFFERENT tier', () => {
+    const wt = fx.makeWorktree('begun-catalog-tier'); // .agent-terminal/ exists, NO local flow.yaml
+    const globalRoot = seedGlobalFallback();
+
+    // Begun bound to id `shadow-flow` in the GLOBAL tier; on restart the merged catalog resolves that id to a
+    // REPO-tier entry (repo wins the §18.1 name clash). AC9 forbids a silent tier swap: the bound source is no
+    // longer in the tier it was bound to, so resolution surfaces the §18.1 error — it never opens the repo entry.
+    const repoShadow = catalog.addEntry(catalog.makeCatalogDir(), 'shadow-flow');
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'shadow-flow' });
+    const catalogEntry = (id: string): CatalogResolution =>
+      id === 'shadow-flow' ? { ok: true, tier: 'repo', flowDir: repoShadow } : { ok: false, cause: 'unknown' };
+    const startedness = (): StartednessSignal => 'started';
+    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'global', id: 'shadow-flow' });
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const result = resolve(wt, globalRoot);
+
+    expect(result.load.ok).toBe(false);
+  });
+
+  it('AC9: a begun CATALOG run whose bound entry is gone surfaces the §18.1 error, never the fallback', () => {
+    const wt = fx.makeWorktree('begun-catalog-lost'); // .agent-terminal/ exists, NO local flow.yaml
+    const globalRoot = seedGlobalFallback();
+
+    // The bound catalog entry no longer resolves. AC9: loss of the bound source is the §18.1 error state — never
+    // a silent live swap to the local↔global fallback (`global-flow` here).
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'whatever' });
+    const catalogEntry = (_id: string): CatalogResolution => ({ ok: false, cause: 'unknown' });
+    const startedness = (): StartednessSignal => 'started';
+    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'repo', id: 'gone' });
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const result = resolve(wt, globalRoot);
+
+    expect(result.load.ok).toBe(false);
   });
 });

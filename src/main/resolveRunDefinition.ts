@@ -18,17 +18,28 @@ export type PointerRead =
   | { kind: 'value'; id: string }
   | { kind: 'degrade'; reason: string };
 
+/** §18.7.6 the two catalog tiers a pointer-named id can resolve within (per-repo untrusted, or app-owned global). */
+export type CatalogTier = 'repo' | 'global';
+
 /** §18.7.6 per-tier resolution of a pointer-named catalog id to its on-disk entry directory. */
 export type CatalogResolution =
-  | { ok: true; tier: 'repo' | 'global'; flowDir: string }
+  | { ok: true; tier: CatalogTier; flowDir: string }
   | { ok: false; cause: 'unknown' | 'escapes' | 'unresolvable' };
 
 type CatalogDegradeCause = Extract<CatalogResolution, { ok: false }>['cause'];
+
+/** §18.7.3 — the run-scoped source binding a begun run resolves instead of the live pointer. A validated closed
+ *  disposition (its field-local validation is the read boundary's): a catalog run carries the tier it was bound
+ *  to plus its id; a non-catalog run carries neither and keeps the live local↔global chain. */
+export type DispositionRead =
+  | { source: 'catalog'; tier: CatalogTier; id: string }
+  | { source: 'non-catalog' };
 
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
   catalogEntry: (id: string) => CatalogResolution;
   startedness?: () => StartednessSignal;
+  readDisposition?: () => DispositionRead;
 }
 
 export interface ResolvedRunDefinition {
@@ -43,7 +54,13 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
     // §18.7.4 / CWE-841 — refuse before every leg, not only the pointer: an unverifiable progression may be a
     // begun catalog run, and re-resolving (to the pointer, or to a mid-run-added local flow.yaml) would swap
     // its bound source out from under it.
-    if (deps.startedness?.() === 'indeterminate') return { load: indeterminateHold() };
+    const started = deps.startedness?.();
+    if (started === 'indeterminate') return { load: indeterminateHold() };
+    // §18.7.3 / CWE-841 — a begun run is source-sticky: it resolves the disposition recorded at flow:start,
+    // never the current pointer.
+    if (started === 'started' && deps.readDisposition) {
+      return resolveBoundSource(deps.readDisposition(), deps.catalogEntry, localDir, globalDir);
+    }
     if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
     const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);
     const pointer = deps.pointer();
@@ -78,6 +95,35 @@ function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
   return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
 }
 
+function resolveBoundSource(
+  disposition: DispositionRead,
+  catalogEntry: (id: string) => CatalogResolution,
+  localDir: string,
+  globalDir: string,
+): ResolvedRunDefinition {
+  switch (disposition.source) {
+    case 'catalog': {
+      // §18.7.3 / CWE-841 — re-resolve the bound id and require it to land in the SAME tier it was bound to; a
+      // tier mismatch (a same-named entry now winning in another tier) or a lost entry is the §18.1 error state,
+      // never a silent swap to a different source.
+      const entry = catalogEntry(disposition.id);
+      if (!entry.ok || entry.tier !== disposition.tier) return { load: lostBindingHold() };
+      return { load: loadFlowDefinitionFromFile(path.join(entry.flowDir, FLOW_DEF_FILE)) };
+    }
+    case 'non-catalog':
+      return { load: loadFlowDefinitionLocalFirst(localDir, globalDir) };
+    default:
+      // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
+      // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.
+      disposition satisfies never;
+      return { load: lostBindingHold() };
+  }
+}
+
 function indeterminateHold(): FlowLoad {
   return { ok: false, error: "the run's progression state could not be verified" };
+}
+
+function lostBindingHold(): FlowLoad {
+  return { ok: false, error: "the run's recorded flow source could not be resolved" };
 }
