@@ -106,4 +106,32 @@ describe('resolveRunDefinition — bad-pointer degrade surfaces a visible reason
     expect(definitionName(result.load)).toBe('global-flow');
     expect(result.selectionReason).toBeTruthy();
   });
+
+  it('AC4/AC5: the GENERATED degrade reason names the selected flow AND reads differently per failure cause', () => {
+    const { wt, globalRoot } = seedFallbackOnlyWorktree('reason-content');
+
+    // The prior cases assert only that a reason is PRESENT — but the resolver's own catalogDegradeReason
+    // interpolates the selected id and maps a 3-cause taxonomy (unknown/escapes/unresolvable) to distinct
+    // detail, and that operator-facing content is otherwise untested: dropping the `"${id}"` (the operator no
+    // longer sees which flow was rejected) or collapsing the taxonomy to one string (they no longer see why)
+    // keeps every presence-only assertion green. Holding the id fixed and varying only the cause isolates both:
+    // `toContain(id)` fails if the id is dropped; the 3-element Set fails if the taxonomy is collapsed.
+    const id = 'my-flow';
+    const reasonFor = (miss: Extract<CatalogResolution, { ok: false }>): string => {
+      const pointer: () => PointerRead = () => ({ kind: 'value', id });
+      const catalogEntry = (): CatalogResolution => miss;
+      const reason = createResolveRunDefinition({ pointer, catalogEntry })(wt, globalRoot).selectionReason;
+      expect(reason).toBeDefined();
+      return reason as string;
+    };
+
+    const reasons = [
+      reasonFor({ ok: false, cause: 'unknown' }),
+      reasonFor({ ok: false, cause: 'escapes' }),
+      reasonFor({ ok: false, cause: 'unresolvable' }),
+    ];
+
+    for (const reason of reasons) expect(reason).toContain(id); // names the flow — dropping "${id}" fails here
+    expect(new Set(reasons).size).toBe(3); // distinguishes the cause — collapsing the taxonomy fails here
+  });
 });

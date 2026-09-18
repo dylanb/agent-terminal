@@ -524,7 +524,9 @@ async function createWindow(): Promise<void> {
   });
   // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares, so none can
   // resolve a different flow from another (the shared-semantics / "parallel copies that agree today" rule).
-  // TODO(#133): back pointer/catalogEntry with activeFlowPointer + flowCatalog (A2 slices); both unset today.
+  // TODO(#133): later A2 slices back pointer/catalogEntry with activeFlowPointer + flowCatalog and supply the
+  // started-ness accessor over the flow-state store; until then pointer/catalogEntry resolve unset/unknown and
+  // startedness is unwired, so the §18.7.4/CWE-841 indeterminate hold is inert here.
   const resolveRunDefinition = createResolveRunDefinition({
     pointer: () => ({ kind: 'unset' }),
     catalogEntry: () => ({ ok: false, cause: 'unknown' }),

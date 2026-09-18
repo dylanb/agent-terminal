@@ -10,6 +10,7 @@ import {
   loadFlowDefinitionLocalFirst,
   type FlowLoad,
 } from './flow';
+import { type StartednessSignal } from '../shared/flowStarted';
 
 /** §18.7.2 read of the per-worktree active-flow pointer that the resolver's leg 2 consults. */
 export type PointerRead =
@@ -27,6 +28,7 @@ type CatalogDegradeCause = Extract<CatalogResolution, { ok: false }>['cause'];
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
   catalogEntry: (id: string) => CatalogResolution;
+  startedness?: () => StartednessSignal;
 }
 
 export interface ResolvedRunDefinition {
@@ -38,6 +40,10 @@ export type ResolveRunDefinition = (localDir: string, globalDir: string) => Reso
 
 export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
   return (localDir, globalDir) => {
+    // §18.7.4 / CWE-841 — refuse before every leg, not only the pointer: an unverifiable progression may be a
+    // begun catalog run, and re-resolving (to the pointer, or to a mid-run-added local flow.yaml) would swap
+    // its bound source out from under it.
+    if (deps.startedness?.() === 'indeterminate') return { load: indeterminateHold() };
     if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
     const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);
     const pointer = deps.pointer();
@@ -70,4 +76,8 @@ const CATALOG_DEGRADE_DETAIL: Record<CatalogDegradeCause, string> = {
 
 function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
   return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
+}
+
+function indeterminateHold(): FlowLoad {
+  return { ok: false, error: "the run's progression state could not be verified" };
 }
