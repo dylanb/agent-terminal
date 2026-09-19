@@ -38,6 +38,10 @@ function confinedPointerFile(worktreeDir: string): string | null {
 }
 
 const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
+/** Every read failure that is not a genuine ENOENT (unset) and not a well-formed-but-unsafe id converges here:
+ *  an unresolvable path, an over-cap file, a non-ENOENT errno, and an unparseable/non-scalar node all degrade
+ *  with the one generic reason. The lone value-specific reason is `invalidIdReason`. */
+const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
 const invalidIdReason = (value: string): string =>
   `Selected flow "${value}" is not a valid flow id; running the default flow instead.`;
 
@@ -70,23 +74,23 @@ export function clearActiveFlow(worktreeDir: string): void {
  *  operator's selection, and never opens a redirect target). */
 export function readActiveFlow(worktreeDir: string): PointerRead {
   const file = confinedPointerFile(worktreeDir);
-  if (file === null) return { kind: 'degrade', reason: UNREADABLE_REASON };
+  if (file === null) return UNREADABLE;
   let text: string;
   try {
     // §18.7.6 / CWE-400
-    if (statSync(file).size > MAX_POINTER_FILE_BYTES) return { kind: 'degrade', reason: UNREADABLE_REASON };
+    if (statSync(file).size > MAX_POINTER_FILE_BYTES) return UNREADABLE;
     text = readFileSync(file, 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { kind: 'unset' };
-    return { kind: 'degrade', reason: UNREADABLE_REASON };
+    return UNREADABLE;
   }
   let doc: unknown;
   try {
     doc = yaml.load(text);
   } catch {
-    return { kind: 'degrade', reason: UNREADABLE_REASON };
+    return UNREADABLE;
   }
-  if (typeof doc !== 'string') return { kind: 'degrade', reason: UNREADABLE_REASON };
+  if (typeof doc !== 'string') return UNREADABLE;
   if (!isSafeCatalogId(doc)) return { kind: 'degrade', reason: invalidIdReason(doc) };
   return { kind: 'value', id: doc };
 }
