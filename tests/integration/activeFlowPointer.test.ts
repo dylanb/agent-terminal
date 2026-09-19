@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import {
+  ACTIVE_FLOW_FILE,
   activeFlowPointerFile,
   clearActiveFlow,
+  MAX_POINTER_FILE_BYTES,
   readActiveFlow,
   writeActiveFlow,
 } from '../../src/main/activeFlowPointer';
@@ -22,11 +24,6 @@ import {
 describe('activeFlowPointer — first-run persistence & non-clobber (§18.7.2 AC10/AC8)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
-
-  // TODO(#133 slice-5 GREEN): the confined write/read must REFUSE a pointer path reached through an escaping
-  // `.agent-terminal` symlink (resolveJail + confinedRealPath, mirroring appLoopState.ts — CWE-22/59). It is
-  // pinned RED in GREEN with fx.plantAgentTerminalDirEscape: the assertion needs the real write, so against
-  // this no-op stub it passes vacuously — an inauthentic RED — and belongs where the confinement wiring lands.
 
   it('AC10: a first write on a worktree with no .agent-terminal creates the full path, reads back the id, and writes no .gitignore', () => {
     const wt = fx.makeFirstRunWorktree('a2-pointer-firstrun');
@@ -90,6 +87,27 @@ describe('activeFlowPointer — first-run persistence & non-clobber (§18.7.2 AC
     // …while leaving the disjoint progression file byte-for-byte unchanged (§18.7.2 own-file; AC8 clear leg).
     expect(readFileSync(stateFile)).toEqual(progressionBefore);
   });
+
+  it('clearActiveFlow does not throw when a non-file sits at the pointer path (best-effort contract)', () => {
+    const wt = fx.makeWorktree('a2-pointer-clear-nonfile');
+    // A directory planted at the pointer path makes rmSync throw EISDIR — `force` covers only ENOENT and does
+    // not recurse. clearActiveFlow's documented best-effort contract ("never crash") requires this swallowed.
+    mkdirSync(activeFlowPointerFile(wt), { recursive: true });
+    expect(() => clearActiveFlow(wt)).not.toThrow();
+  });
+
+  it('AC8: a progression write leaves the pointer file byte-for-byte unchanged (reverse non-clobber)', () => {
+    const wt = fx.makeWorktree('a2-pointer-reverse-nonclobber');
+    writeActiveFlow(wt, 'feature-dev');
+    const pointerBefore = readFileSync(activeFlowPointerFile(wt));
+
+    // §18.7.2 own-file: the pointer is disjoint from flow-state.yaml, so a progression write cannot touch it.
+    // The wholesale Terminate/Restart write is pinned in the slice that owns that path.
+    fx.writeFlowState(wt, { step: 'plan', status: 'in_progress' });
+
+    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(pointerBefore);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'feature-dev' });
+  });
 });
 
 describe('activeFlowPointer — readActiveFlow field-validates the pointer value (§18.7.6 degrade taxonomy)', () => {
@@ -104,10 +122,6 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
   // gated by src/shared/pathSegment.ts's safe-catalog-ID contract. Adversarial values are planted off the
   // store's OWN path resolver (activeFlowPointerFile), the same writer↔reader single-source; no second
   // serializer lives here.
-  //
-  // TODO(#133 slice-5 GREEN): the byte-cap (over-cap → degrade) and non-ENOENT-errno (→ total) read-boundary
-  // branches are pinned in GREEN's own boundary fixtures, where the byte-cap constant and a permission seam
-  // exist; they are not provokable against the no-op stub without inventing that unchosen threshold.
 
   const plantPointer = (wt: string, contents: string): void => {
     const file = activeFlowPointerFile(wt);
@@ -146,5 +160,42 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     const wt = fx.makeWorktree('a2-pointer-unsafe');
     plantPointer(wt, '../../etc/passwd');
     expectDegradeWithReason(wt);
+  });
+
+  it('degrades an over-cap pointer FILE before parse (byte bound, CWE-400) even when its value would be valid', () => {
+    const wt = fx.makeWorktree('a2-pointer-overcap');
+    // A valid id whose FILE is padded past the byte cap with a YAML comment: without the cap the parser would
+    // ignore the comment and yield the valid id; the cap must refuse it on size alone.
+    plantPointer(wt, `feature-dev\n# ${'x'.repeat(MAX_POINTER_FILE_BYTES)}\n`);
+    expectDegradeWithReason(wt);
+  });
+
+  it('degrades (never unset) when the pointer path is an unreadable non-file — a non-ENOENT read error', () => {
+    const wt = fx.makeWorktree('a2-pointer-eisdir');
+    // A directory planted at the pointer path makes the read throw EISDIR (non-ENOENT): it must degrade
+    // visibly, not collapse to the silent unset default (AC3 vs AC4).
+    mkdirSync(activeFlowPointerFile(wt), { recursive: true });
+    expectDegradeWithReason(wt);
+  });
+});
+
+describe('activeFlowPointer — refuses a pointer path escaping the worktree via a planted symlink (§18.7.6, CWE-22/59)', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+
+  it('write throws and read degrades without following an escaping `.agent-terminal` symlink', () => {
+    const wt = fx.makeFirstRunWorktree('a2-pointer-escape');
+    const outside = fx.outsideDir('a2-pointer-escape-target');
+    // A valid pointer planted at the redirect target proves the read never reaches it.
+    writeFileSync(join(outside, ACTIVE_FLOW_FILE), 'sneaky-flow\n');
+    fx.plantAgentTerminalDirEscape(wt, outside);
+
+    expect(() => writeActiveFlow(wt, 'feature-dev')).toThrow();
+    const read = readActiveFlow(wt);
+    expect(read.kind).toBe('degrade');
+    if (read.kind === 'degrade') expect(read.reason).toBeTruthy();
+    expect(read).not.toEqual({ kind: 'value', id: 'sneaky-flow' });
+    // clear is a no-op on an unresolvable path — it neither throws nor deletes through the symlink.
+    expect(() => clearActiveFlow(wt)).not.toThrow();
   });
 });

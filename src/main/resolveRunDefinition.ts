@@ -35,11 +35,19 @@ export type DispositionRead =
   | { source: 'catalog'; tier: CatalogTier; id: string }
   | { source: 'non-catalog' };
 
+/** §18.7.3/§18.7.4 — the run's binding state, folded so that a begun run ALWAYS carries the source it is bound
+ *  to: "started without a disposition" is unrepresentable, so no consumer can wire started-ness half-way and
+ *  silently fall through to a live pointer re-read (CWE-841). Discriminated union over the two independent
+ *  accessors it replaces (CLAUDE.md injection-seam rule; the `BundleLocation` precedent). Omitted entirely by a
+ *  consumer that does not yet consult started-ness — resolution is then the live three-leg chain. */
+export type RunBinding =
+  | { started: Exclude<StartednessSignal, 'started'> }
+  | { started: Extract<StartednessSignal, 'started'>; disposition: DispositionRead };
+
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
   catalogEntry: (id: string) => CatalogResolution;
-  startedness?: () => StartednessSignal;
-  readDisposition?: () => DispositionRead;
+  runBinding?: () => RunBinding;
 }
 
 export interface ResolvedRunDefinition {
@@ -51,15 +59,22 @@ export type ResolveRunDefinition = (localDir: string, globalDir: string) => Reso
 
 export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
   return (localDir, globalDir) => {
-    // §18.7.4 / CWE-841 — refuse before every leg, not only the pointer: an unverifiable progression may be a
-    // begun catalog run, and re-resolving (to the pointer, or to a mid-run-added local flow.yaml) would swap
-    // its bound source out from under it.
-    const started = deps.startedness?.();
-    if (started === 'indeterminate') return { load: indeterminateHold() };
-    // §18.7.3 / CWE-841 — a begun run is source-sticky: it resolves the disposition recorded at flow:start,
-    // never the current pointer.
-    if (started === 'started' && deps.readDisposition) {
-      return resolveBoundSource(deps.readDisposition(), deps.catalogEntry, localDir, globalDir);
+    // §18.7.4 / §18.7.3 / CWE-841 — a begun run's source is decided before every leg, not only the pointer: an
+    // unverifiable progression may be a begun catalog run, and re-resolving (to the pointer, or to a
+    // mid-run-added local flow.yaml) would swap its bound source out from under it. The binding carries its
+    // disposition with the 'started' signal, so a begun run can never fall through to live re-resolution.
+    const binding = deps.runBinding?.();
+    if (binding) {
+      switch (binding.started) {
+        case 'indeterminate':
+          return { load: indeterminateHold() };
+        case 'started':
+          return resolveBoundSource(binding.disposition, deps.catalogEntry, localDir, globalDir);
+        case 'never-started':
+          break;
+        default:
+          binding satisfies never;
+      }
     }
     if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
     const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);

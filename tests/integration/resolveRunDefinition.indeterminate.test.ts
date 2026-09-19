@@ -3,9 +3,9 @@ import {
   createResolveRunDefinition,
   type PointerRead,
   type CatalogResolution,
+  type RunBinding,
 } from '../../src/main/resolveRunDefinition';
 import { type FlowLoad } from '../../src/main/flow';
-import { type StartednessSignal } from '../../src/shared/flowStarted';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
@@ -49,9 +49,9 @@ describe('resolveRunDefinition — refuses on indeterminate started-ness (§18.7
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'catalog-flow' ? entry : { ok: false, cause: 'unknown' };
-    const startedness = (): 'never-started' | 'started' | 'indeterminate' => 'indeterminate';
+    const runBinding = (): RunBinding => ({ started: 'indeterminate' });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const result = resolve(wt, globalRoot);
 
     const load: FlowLoad = result.load;
@@ -70,9 +70,9 @@ describe('resolveRunDefinition — refuses on indeterminate started-ness (§18.7
     // presence check would run 'local-flow' (load.ok === true) and fail this pin.
     const pointer: () => PointerRead = () => ({ kind: 'unset' });
     const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });
-    const startedness = (): StartednessSignal => 'indeterminate';
+    const runBinding = (): RunBinding => ({ started: 'indeterminate' });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const load: FlowLoad = resolve(wt, globalRoot).load;
 
     expect(load.ok).toBe(false); // §18.1 error hold — NOT the present local flow
@@ -109,9 +109,9 @@ describe('resolveRunDefinition — proceeds on a present non-indeterminate start
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
-    const startedness = (): StartednessSignal => 'never-started';
+    const runBinding = (): RunBinding => ({ started: 'never-started' });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const load: FlowLoad = resolve(wt, globalRoot).load;
 
     // A never-started worktree runs the three legs, so leg 2 resolves the pointer's catalog flow specifically
@@ -126,16 +126,16 @@ describe('resolveRunDefinition — proceeds on a present non-indeterminate start
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
-    const startedness = (): StartednessSignal => 'started';
+    // A begun run always carries the source it is bound to (the run-binding union makes 'started' without a
+    // disposition unrepresentable); a non-catalog binding resolves the live local↔global chain.
+    const runBinding = (): RunBinding => ({ started: 'started', disposition: { source: 'non-catalog' } });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const load: FlowLoad = resolve(wt, globalRoot).load;
 
-    // Only the over-hold is pinned for 'started': it must NOT hold at the §18.1 error. WHICH source a begun run
-    // resolves is the run-scoped disposition's job (resolveRunDefinition.sourceSticky.test.ts), not the live
-    // pointer — a production 'started' run always carries a readDisposition and is source-sticky. Pinning the
-    // pointer's flow here would bind this test to the "started with no readDisposition falls through to the
-    // pointer" seam artifact, a configuration production never produces.
+    // Only the over-hold is pinned here: a begun run must NOT hold at the §18.1 error. WHICH source a begun run
+    // resolves is the disposition's job (resolveRunDefinition.sourceSticky.test.ts); a non-catalog binding
+    // resolves the live source, so load.ok — the point is simply that 'started' escapes the indeterminate hold.
     expect(load.ok).toBe(true);
   });
 });

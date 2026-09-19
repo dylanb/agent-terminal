@@ -72,6 +72,7 @@ import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
 import { createResolveRunDefinition } from './resolveRunDefinition';
+import { readActiveFlow } from './activeFlowPointer';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -522,17 +523,20 @@ async function createWindow(): Promise<void> {
       });
     },
   });
-  // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares, so none can
-  // resolve a different flow from another (the shared-semantics / "parallel copies that agree today" rule).
-  // TODO(#133): later A2 slices back pointer/catalogEntry with activeFlowPointer + flowCatalog and supply the
-  // started-ness accessor over the flow-state store; until then pointer/catalogEntry resolve unset/unknown and
-  // startedness is unwired, so the §18.7.4/CWE-841 indeterminate hold is inert here.
-  const resolveRunDefinition = createResolveRunDefinition({
-    pointer: () => ({ kind: 'unset' }),
-    catalogEntry: () => ({ ok: false, cause: 'unknown' }),
-  });
+  // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares (via
+  // resolveActiveDefinition), so none can resolve a different flow from another (the shared-semantics /
+  // "parallel copies that agree today" rule). The per-worktree pointer read backs leg 2.
+  // TODO(#133): later A2 slices back catalogEntry with flowCatalog, supply the started-ness accessor over the
+  // flow-state store, and add the §18.1-view seam that carries selectionReason to the picker (A3). Until then
+  // catalogEntry resolves unknown and this `.load` drops selectionReason, so every pointer state
+  // (unset/degrade/value) yields the same fallback load: the leg-2 read is wired but observationally inert, and
+  // the e2e that would pin it (a set pointer surfacing a visible degrade reason on the flow view) is owed by
+  // that reason-carrying slice. Startedness is likewise unwired, so the §18.7.4/CWE-841 hold is inert here.
   const resolveActiveDefinition = (repoKey: string): FlowLoad =>
-    resolveRunDefinition(repoKey, flowGlobalDir).load;
+    createResolveRunDefinition({
+      pointer: () => readActiveFlow(repoKey),
+      catalogEntry: () => ({ ok: false, cause: 'unknown' }),
+    })(repoKey, flowGlobalDir).load;
 
   const flow = createFlowManager({
     globalDir: flowGlobalDir,

@@ -75,7 +75,7 @@ export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
   | { ok: false; error: string };
 
-const FLOW_HOME_SUBDIR = '.agent-terminal';
+export const FLOW_HOME_SUBDIR = '.agent-terminal';
 
 /** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
  *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is below). */

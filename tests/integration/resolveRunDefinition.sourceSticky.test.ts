@@ -3,10 +3,9 @@ import {
   createResolveRunDefinition,
   type PointerRead,
   type CatalogResolution,
-  type DispositionRead,
+  type RunBinding,
 } from '../../src/main/resolveRunDefinition';
 import { type FlowLoad } from '../../src/main/flow';
-import { type StartednessSignal } from '../../src/shared/flowStarted';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
@@ -54,12 +53,14 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
       if (id === 'pointer-flow') return { ok: true, tier: 'repo', flowDir: pointerDir };
       return { ok: false, cause: 'unknown' };
     };
-    const startedness = (): StartednessSignal => 'started';
-    // The run-disposition SEAM (its content is the run-scoped source binding): this run was begun on the repo
+    // The run-binding SEAM (its content is the run-scoped source binding): this run was begun on the repo
     // catalog entry `bound-flow`.
-    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'repo', id: 'bound-flow' });
+    const runBinding = (): RunBinding => ({
+      started: 'started',
+      disposition: { source: 'catalog', tier: 'repo', id: 'bound-flow' },
+    });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const result = resolve(wt, globalRoot);
 
     // The recorded source, NOT the pointer's `pointer-flow`: a begun catalog run is source-sticky across a
@@ -78,10 +79,9 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir: catalogDir } : { ok: false, cause: 'unknown' };
-    const startedness = (): StartednessSignal => 'started';
-    const readDisposition = (): DispositionRead => ({ source: 'non-catalog' });
+    const runBinding = (): RunBinding => ({ started: 'started', disposition: { source: 'non-catalog' } });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const result = resolve(wt, globalRoot);
 
     // The unchanged non-catalog source, NOT the pointer's `catalog-flow`: a begun non-catalog run never reads
@@ -100,10 +100,12 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'shadow-flow' });
     const catalogEntry = (id: string): CatalogResolution =>
       id === 'shadow-flow' ? { ok: true, tier: 'repo', flowDir: repoShadow } : { ok: false, cause: 'unknown' };
-    const startedness = (): StartednessSignal => 'started';
-    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'global', id: 'shadow-flow' });
+    const runBinding = (): RunBinding => ({
+      started: 'started',
+      disposition: { source: 'catalog', tier: 'global', id: 'shadow-flow' },
+    });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const result = resolve(wt, globalRoot);
 
     expect(result.load.ok).toBe(false);
@@ -117,12 +119,29 @@ describe('resolveRunDefinition — a begun run resolves its recorded source, nev
     // a silent live swap to the local↔global fallback (`global-flow` here).
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'whatever' });
     const catalogEntry = (_id: string): CatalogResolution => ({ ok: false, cause: 'unknown' });
-    const startedness = (): StartednessSignal => 'started';
-    const readDisposition = (): DispositionRead => ({ source: 'catalog', tier: 'repo', id: 'gone' });
+    const runBinding = (): RunBinding => ({
+      started: 'started',
+      disposition: { source: 'catalog', tier: 'repo', id: 'gone' },
+    });
 
-    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness, readDisposition });
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const result = resolve(wt, globalRoot);
 
     expect(result.load.ok).toBe(false);
+  });
+
+  // §18.7.3 / CWE-841 seam robustness (CLAUDE.md injection-seam / BundleLocation discriminated-union rule): a
+  // begun run is ALWAYS source-sticky, so the run-binding seam must make "started without a disposition"
+  // unrepresentable. Were it a flat record of independently-optional started-ness + disposition, a consumer
+  // could wire started-ness alone and silently fall through to a live pointer re-read (the mid-run source-swap
+  // AC9 forbids), with neither the compiler nor any test to catch it. The @ts-expect-error below is the
+  // load-bearing assertion: if the illegal shape ever type-checks, it becomes an unused directive and `tsc`
+  // fails the build. tsconfig.node.json compiles tests/integration, so this is enforced by `pnpm run build`.
+  it("the run-binding seam makes a begun run without a disposition a compile error (unrepresentable)", () => {
+    // @ts-expect-error a 'started' run-binding must carry the `disposition` it is bound to.
+    const illegal: RunBinding = { started: 'started' };
+    const bound: RunBinding = { started: 'started', disposition: { source: 'non-catalog' } };
+    expect(illegal.started).toBe('started');
+    expect(bound.started).toBe('started');
   });
 });
