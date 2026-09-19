@@ -79,10 +79,9 @@ describe('resolveRunDefinition — refuses on indeterminate started-ness (§18.7
   });
 });
 
-// The negative complement of the hold above: the started-ness branch has two outcomes, and only the
-// 'indeterminate' hold is pinned there. A PRESENT non-indeterminate signal ('started' → AC8's begun run,
-// 'never-started' → AC3's fresh worktree) must fall through to normal resolution and resolve the pointed-to
-// catalog flow — so an over-hold that fired on a valid signal (bricking every begun run) fails a test here.
+// The negative complement of the hold above: the started-ness branch has three outcomes and only the
+// 'indeterminate' one holds at the §18.1 error. A PRESENT non-indeterminate signal must NOT trigger that hold —
+// an over-hold on a valid signal would brick resolution — so each present signal is pinned here.
 describe('resolveRunDefinition — proceeds on a present non-indeterminate started-ness (§18.7.4)', () => {
   const fx = createWorktreeFixture();
   const catalog = createCatalogFixture();
@@ -96,26 +95,47 @@ describe('resolveRunDefinition — proceeds on a present non-indeterminate start
     return load.definition.name;
   };
 
-  it.each<StartednessSignal>(['started', 'never-started'])(
-    "a present '%s' started-ness resolves the pointed-to catalog flow, never holding at the error",
-    (signal) => {
-      const wt = fx.makeWorktree('present'); // .agent-terminal/ exists, but NO local flow.yaml
-      const globalRoot = fx.makeWorktree('global');
-      fx.writeFlowHome(globalRoot, { name: 'global-flow', stepIds: ['global-step'] });
-      const flowDir = catalog.addEntry(catalog.makeCatalogDir(), 'catalog-flow');
+  const seedPresentWorktree = (): { wt: string; globalRoot: string; flowDir: string } => {
+    const wt = fx.makeWorktree('present'); // .agent-terminal/ exists, but NO local flow.yaml
+    const globalRoot = fx.makeWorktree('global');
+    fx.writeFlowHome(globalRoot, { name: 'global-flow', stepIds: ['global-step'] });
+    const flowDir = catalog.addEntry(catalog.makeCatalogDir(), 'catalog-flow');
+    return { wt, globalRoot, flowDir };
+  };
 
-      const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
-      const catalogEntry = (id: string): CatalogResolution =>
-        id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
-      const startedness = (): StartednessSignal => signal;
+  it("a present 'never-started' started-ness runs the three legs and resolves the pointed-to catalog flow, never holding at the error", () => {
+    const { wt, globalRoot, flowDir } = seedPresentWorktree();
 
-      const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
-      const load: FlowLoad = resolve(wt, globalRoot).load;
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
+    const catalogEntry = (id: string): CatalogResolution =>
+      id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
+    const startedness = (): StartednessSignal => 'never-started';
 
-      // Asserts the pointed-to catalog flow specifically (not merely load.ok): an over-hold on a valid signal
-      // fails here, AND a regression that skipped leg 2 to the global fallback ('global-flow') — which is also
-      // ok:true — is caught by pinning the resolved definition, matching this case's title.
-      expect(definitionName(load)).toBe('catalog-flow');
-    },
-  );
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const load: FlowLoad = resolve(wt, globalRoot).load;
+
+    // A never-started worktree runs the three legs, so leg 2 resolves the pointer's catalog flow specifically
+    // (not merely load.ok): an over-hold fails here, AND a regression that skipped leg 2 to the global fallback
+    // ('global-flow', also ok:true) is caught by pinning the resolved definition.
+    expect(definitionName(load)).toBe('catalog-flow');
+  });
+
+  it("a present 'started' started-ness does not trigger the indeterminate hold", () => {
+    const { wt, globalRoot, flowDir } = seedPresentWorktree();
+
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'catalog-flow' });
+    const catalogEntry = (id: string): CatalogResolution =>
+      id === 'catalog-flow' ? { ok: true, tier: 'repo', flowDir } : { ok: false, cause: 'unknown' };
+    const startedness = (): StartednessSignal => 'started';
+
+    const resolve = createResolveRunDefinition({ pointer, catalogEntry, startedness });
+    const load: FlowLoad = resolve(wt, globalRoot).load;
+
+    // Only the over-hold is pinned for 'started': it must NOT hold at the §18.1 error. WHICH source a begun run
+    // resolves is the run-scoped disposition's job (resolveRunDefinition.sourceSticky.test.ts), not the live
+    // pointer — a production 'started' run always carries a readDisposition and is source-sticky. Pinning the
+    // pointer's flow here would bind this test to the "started with no readDisposition falls through to the
+    // pointer" seam artifact, a configuration production never produces.
+    expect(load.ok).toBe(true);
+  });
 });
