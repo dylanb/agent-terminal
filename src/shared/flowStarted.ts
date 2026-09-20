@@ -5,8 +5,8 @@ export type StartednessSignal = 'never-started' | 'started' | 'indeterminate';
 
 // §18.7.4 AC7 — the one predicate the main-side pointer-write gate and A3's picker-enable classify the raw
 // signal through, so "is a new selection locked" has a single definition both processes import and cannot drift.
-// TODO(#133 write-gate GREEN): fail CLOSED — 'started' AND 'indeterminate' lock a new selection; only
-// 'never-started' permits one. This stub locks only the obvious begun case, so the RED fails on 'indeterminate'.
+// Fails CLOSED: 'started' AND 'indeterminate' both lock a new selection — an attacker who corrupts the
+// progression to 'indeterminate' must not thereby unlock the gate (CWE-841); only 'never-started' permits one.
 export function isSelectionLocked(signal: StartednessSignal): boolean {
-  return signal === 'started';
+  return signal !== 'never-started';
 }

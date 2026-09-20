@@ -35,11 +35,11 @@ export type DispositionRead =
   | { source: 'catalog'; tier: CatalogTier; id: string }
   | { source: 'non-catalog' };
 
-/** §18.7.3/§18.7.4 — the run's binding state, folded so that a begun run ALWAYS carries the source it is bound
- *  to: "started without a disposition" is unrepresentable, so no consumer can wire started-ness half-way and
- *  silently fall through to a live pointer re-read (CWE-841). Discriminated union over the two independent
- *  accessors it replaces (CLAUDE.md injection-seam rule; the `BundleLocation` precedent). Omitted entirely by a
- *  consumer that does not yet consult started-ness — resolution is then the live three-leg chain. */
+/** §18.7.3/§18.7.4 — the run's binding state, folded so a begun run that IS bound carries its source: the
+ *  'started' variant requires a disposition, so a supplied binding cannot wire started-ness half-way and fall
+ *  through to a live pointer re-read (CWE-841). Discriminated union over the two independent accessors it
+ *  replaces (CLAUDE.md injection-seam rule; the `BundleLocation` precedent). The CWE-841 no-swap guarantee binds
+ *  only once a disposition is supplied — a consumer may instead defer (see `runBinding`). */
 export type RunBinding =
   | { started: Exclude<StartednessSignal, 'started'> }
   | { started: Extract<StartednessSignal, 'started'>; disposition: DispositionRead };
@@ -47,7 +47,10 @@ export type RunBinding =
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
   catalogEntry: (id: string) => CatalogResolution;
-  runBinding?: () => RunBinding;
+  /** A per-call `undefined` return means "no binding opinion" — identical to omitting the seam (live three-leg
+   *  chain), so a consumer can consult started-ness yet defer a signal it cannot yet bind (a begun run whose
+   *  recorded disposition source is owed by a later slice) to that chain. */
+  runBinding?: () => RunBinding | undefined;
 }
 
 export interface ResolvedRunDefinition {

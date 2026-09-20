@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
+import { confinedRealPathResult, resolveJail } from './confinedPath';
+import { isErrno } from './errno';
 import type { FlowStatus } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
@@ -39,9 +41,18 @@ export interface FlowStateStore {
   writeTitle(title: string | null): void;
 }
 
-const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
+const AGENT_DIR = '.agent-terminal';
+const STATE_LEAF = 'flow-state.yaml';
+const STATE_REL = path.join(AGENT_DIR, STATE_LEAF);
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
 const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title', 'repeat_counts']);
+
+/** The legality gate for a persisted progression's `status`: the one vocabulary the store's `decode` and the
+ *  `worktreeStartedness` safety accessor both classify against, so a status one reader rejects the other cannot
+ *  silently treat as a different category (§18.7.4, writer↔reader rule). */
+export function isPersistableStatus(value: unknown): value is FlowStatus {
+  return typeof value === 'string' && PERSISTABLE.has(value as FlowStatus);
+}
 
 const isStringValue = (v: unknown): v is string => typeof v === 'string';
 
@@ -75,33 +86,47 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** The three-case outcome of loading a worktree's flow-state document: genuinely absent (`missing`), present
+ *  but unreadable/unparseable/escaping its jail (`invalid`), or a decoded YAML mapping (`record`). */
+export type FlowStateLoad =
+  | { kind: 'missing' }
+  | { kind: 'invalid'; reason: string }
+  | { kind: 'record'; doc: Record<string, unknown> };
+
+/** Load `<worktreeDir>/.agent-terminal/flow-state.yaml` through the confined path (§18.7.4/CWE-59): the file is
+ *  jailed under the worktree's `.agent-terminal`, so a symlink planted at the leaf — or at `.agent-terminal`
+ *  itself — resolves to `invalid` and never opens the redirect. Only a genuine ENOENT on the confined path is
+ *  `missing`; a confinement escape/unresolvable and any non-ENOENT read errno fold into `invalid`, never
+ *  `missing`, so the safety-gate reader fails closed instead of reading an escaping doc as absent. The one
+ *  reader `createFlowStateStore` and `worktreeStartedness` share, so the two cannot drift (writer↔reader rule). */
+export function loadFlowStateDoc(worktreeDir: string): FlowStateLoad {
+  const jail = resolveJail(worktreeDir, AGENT_DIR);
+  if (jail === null) return { kind: 'invalid', reason: `${STATE_REL} is unresolvable` };
+  const confined = confinedRealPathResult(jail, path.join(jail, STATE_LEAF));
+  if (!confined.ok) return { kind: 'invalid', reason: `${STATE_REL} ${confined.cause} the worktree` };
+  let raw: string;
+  try {
+    raw = readFileSync(confined.path, 'utf8');
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return { kind: 'missing' };
+    const reason = e instanceof Error ? e.message : String(e);
+    return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${reason}` };
+  }
+  try {
+    const doc: unknown = yaml.load(raw);
+    return isRecord(doc)
+      ? { kind: 'record', doc }
+      : { kind: 'invalid', reason: `${STATE_REL} is not a mapping` };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return { kind: 'invalid', reason: `cannot parse ${STATE_REL}: ${reason}` };
+  }
+}
+
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const file = path.join(worktreeDir, STATE_REL);
 
-  type LoadResult =
-    | { kind: 'missing' }
-    | { kind: 'invalid'; reason: string }
-    | { kind: 'record'; doc: Record<string, unknown> };
-
-  const loadDoc = (): LoadResult => {
-    let raw: string;
-    try {
-      raw = readFileSync(file, 'utf8');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
-      const reason = e instanceof Error ? e.message : String(e);
-      return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${reason}` };
-    }
-    try {
-      const doc: unknown = yaml.load(raw);
-      return isRecord(doc)
-        ? { kind: 'record', doc }
-        : { kind: 'invalid', reason: `${STATE_REL} is not a mapping` };
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      return { kind: 'invalid', reason: `cannot parse ${STATE_REL}: ${reason}` };
-    }
-  };
+  const loadDoc = (): FlowStateLoad => loadFlowStateDoc(worktreeDir);
 
   // CWE-59.
   const persist = (doc: Record<string, unknown>): void => {
@@ -112,7 +137,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
 
   const decode = (doc: Record<string, unknown>): PersistedFlowState | null => {
     if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
-    if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
+    if (!isPersistableStatus(doc.status)) return null;
     const inputs = readInputs(doc.inputs);
     const startedAt = readStartedAt(doc.started_at);
     const title = normalizeTitle(doc.title);

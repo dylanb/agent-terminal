@@ -59,6 +59,31 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
+  it("reports 'indeterminate' (fail-closed) for a present record whose status is outside the persistable vocabulary, never 'never-started' (§18.7.4/CWE-841)", () => {
+    // A valid YAML mapping whose `status` the store's own decode rejects is a schema-invalid progression, and
+    // §18.7.4 AC7 ("refused while begun-ness is indeterminate — a corrupt … progression") makes it fail CLOSED
+    // exactly like an unparseable one. `status: error` is a FlowStatus the persistability gate excludes (a
+    // truncated write such as `status: in_progre` is the same class); reading it 'never-started' would let a
+    // begun-but-corrupt run take the live source chain mid-run and unlock a new pointer selection — the CWE-841
+    // fail-open the accessor exists to prevent. This also pins co-parser agreement: worktreeStartedness and
+    // flowState.decode gate legality on the one shared persistable-status predicate, so neither can silently
+    // treat a status the other rejects as a different category.
+    const wt = fx.makeWorktree('a2-startedness-bad-status');
+    fx.writeFlowStateRaw(wt, 'step: plan\nstatus: error\n');
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
+  it("reports 'indeterminate' (fail-closed) for a worktree whose root does not resolve, never 'never-started' (§18.7.4/CWE-841)", () => {
+    // §18.7.4 — begun-ness is read through the confined flow-state path, which jails the leaf under the
+    // worktree's `.agent-terminal`. When the worktree ROOT itself does not resolve (resolveJail → null) the
+    // progression cannot be verified at all, so it must fail CLOSED exactly like the unparseable and
+    // escaping-leaf cases; a reader that treated an unresolvable anchor as absent would fall OPEN to
+    // 'never-started' and unlock a new selection (CWE-841). Distinct code path from the planted-symlink escape
+    // below — that one fails confinement AFTER the anchor resolves — so neither test subsumes the other.
+    const wt = fx.nonexistentWorktree('a2-startedness-absent-anchor');
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
   it("reports 'indeterminate' (fail-closed) for a flow-state path that escapes the worktree jail, never 'never-started' (§18.7.4/CWE-59)", () => {
     // §18.7.4 — the flow-state path is confined before the accessor reads it; a repo-planted symlink at it must
     // not redirect this safety-gate read. The redirect target is a REAL, valid not_started record outside the

@@ -1967,6 +1967,7 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
     return dir;
   };
   const reason = () => page.locator('#flow-strip .flow-selection-reason');
+  const flowError = () => page.locator('#flow-strip .flow-error');
 
   // A real GLOBAL fallback (leg 3, §18.1) so a degrade has a flow to fall back to — APP_HOME_DIR relocates it.
   const home = seedRepo('agent-term-e2e-a2-home-');
@@ -1998,6 +1999,15 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   symlinkSync(join(outside, 'sentinel.yaml'), join(flowCatalogDir(repoEscape), 'evil', FLOW_DEF_FILE));
   writeActiveFlow(repoEscape, 'evil');
 
+  // AC7/§18.7.4 — an indeterminate (unparseable) flow-state progression WITH a present local flow.yaml: the
+  // started-ness gate holds the run at the §18.1 error BEFORE leg 1, so the local flow is never run and a
+  // begun/corrupt run's source cannot be swapped mid-run (CWE-841). This is the observable consequence of the
+  // index.ts runBinding wiring; drop that wiring and leg 1 runs corrupt-local-step instead of holding.
+  const repoCorrupt = seedRepo('agent-term-e2e-a2-corrupt-');
+  mkdirSync(flowHomeDir(repoCorrupt), { recursive: true });
+  writeFileSync(join(flowHomeDir(repoCorrupt), FLOW_DEF_FILE), flowYaml('local-only', 'corrupt-local-step'));
+  writeFileSync(join(flowHomeDir(repoCorrupt), 'flow-state.yaml'), '[unterminated flow sequence');
+
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_HOME_DIR: home },
@@ -2027,6 +2037,12 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
   await expect(reason()).toBeVisible();
   expect(await page.locator('#flow-strip').innerText()).not.toContain('SENTINEL-LEAK-STEP');
+
+  // AC7 — the indeterminate progression HOLDS at the §18.1 error; the present local flow.yaml is not run.
+  await typeCommand(`cd "${repoCorrupt}"`);
+  await expect(flowError()).toBeVisible({ timeout: 10_000 });
+  await expect(flowError()).toContainText('could not be verified');
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('corrupt-local-step');
 
   for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
 });

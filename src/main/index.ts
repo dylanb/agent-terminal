@@ -74,6 +74,7 @@ import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
 import { createResolveRunDefinition, type ResolvedRunDefinition } from './resolveRunDefinition';
 import { readActiveFlow } from './activeFlowPointer';
 import { resolveCatalogEntry } from './flowCatalog';
+import { worktreeStartedness } from './startedness';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -530,14 +531,17 @@ async function createWindow(): Promise<void> {
   // entry (repo tier first, then global) → leg 3 the global fallback, with a display-sanitized degrade reason
   // when leg 2 fails. NOTE(#133): a BEGUN run must resolve its recorded run-source binding
   // (`RunBinding`/`DispositionRead`), NOT the live pointer — no consumer may read the pointer directly (that
-  // reintroduces the §18.7.4/CWE-841 mid-run
-  // source-swap). The started-ness gate + run-disposition binding that make that hold are owed by the write-gate
-  // slice (§18.7.4); until they land `runBinding` is omitted, so resolution is the live three-leg chain and the
-  // pointer write primitive is not yet exposed over IPC (no ungated write path ships).
+  // reintroduces the §18.7.4/CWE-841 mid-run source-swap). The 'started' arm's recorded run-disposition binding
+  // (and the gated pointer-write path over IPC) are owed by later write-gate slices (§18.7.4), so a begun run
+  // defers to the live chain (`undefined`) until then.
   const resolveRun = (repoKey: string): ResolvedRunDefinition =>
     createResolveRunDefinition({
       pointer: () => readActiveFlow(repoKey),
       catalogEntry: (id) => resolveCatalogEntry({ worktreeDir: repoKey, globalRoot: flowGlobalDir }, id),
+      runBinding: () => {
+        const started = worktreeStartedness(repoKey);
+        return started === 'started' ? undefined : { started };
+      },
     })(repoKey, flowGlobalDir);
   const resolveActiveDefinition = (repoKey: string): FlowLoad => resolveRun(repoKey).load;
 

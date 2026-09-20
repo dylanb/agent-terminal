@@ -52,6 +52,9 @@ export interface WorktreeFixture {
   makeWorktree(prefix: string): string;
   /** A worktree root WITHOUT `.agent-terminal/` — the first-run-writer case (AC10 / the first-run lock pin). */
   makeFirstRunWorktree(prefix: string): string;
+  /** A worktree path whose ROOT does not resolve — the anchor-unresolvable leg (resolveJail → null). The parent
+   *  is tracked for cleanup; the worktree dir itself is never created, so `realpathSync` on it throws. */
+  nonexistentWorktree(prefix: string): string;
   /** Remove an existing worktree's `.agent-terminal/` (the AC10 "rmSync the root first" variant). */
   removeAgentTerminalDir(dir: string): void;
   /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-1 local, or leg-3 global fallback on a global root). */
@@ -101,6 +104,11 @@ export function createWorktreeFixture(): WorktreeFixture {
       const dir = mkdtempSync(join(tmpdir(), `${prefix}-`));
       tracked.push(dir);
       return dir;
+    },
+    nonexistentWorktree(prefix) {
+      const base = mkdtempSync(join(tmpdir(), `${prefix}-`));
+      tracked.push(base);
+      return join(base, 'absent-worktree');
     },
     removeAgentTerminalDir(dir) {
       rmSync(flowHomeDir(dir), { recursive: true, force: true });
