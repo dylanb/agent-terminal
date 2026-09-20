@@ -20,6 +20,8 @@ import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
+import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -1941,6 +1943,93 @@ function seedFlowRepoWithEntry(
   writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), `name: ${stepId}-flow\nsteps:\n${step}`);
   return dir;
 }
+
+// A2 (#133) §18.7.3/§18.7.6 — the per-worktree active-flow pointer resolved END-TO-END on a real PTY: the
+// pointer (set through A2's own write primitive `writeActiveFlow`) selects which catalog flow a worktree runs;
+// a present local flow.yaml still wins (leg 1); and a pointer that fails selection degrades to the global
+// fallback with a VISIBLE, display-sanitized reason and never opens a tier-escaping redirect target (CWE-59,
+// the sentinel step never surfaces). @ownapp: launches its own Electron with APP_HOME_DIR at a seeded global
+// fallback so the degrade legs (leg 3) are deterministic.
+test('the active-flow pointer selects the catalog flow, local wins, and a bad pointer degrades with a visible reason (§18.7.3/§18.7.6)', { tag: '@ownapp' }, async () => {
+  const a2Dirs: string[] = [];
+  const flowYaml = (name: string, ...steps: string[]): string =>
+    `name: ${name}\nsteps:\n` + steps.map((s) => `  - id: ${s}\n    kind: manual\n`).join('');
+  const seedRepo = (prefix: string): string => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    a2Dirs.push(dir);
+    mkdirSync(join(dir, '.git'), { recursive: true }); // a git root ⇒ its own repo key (§16.3)
+    return dir;
+  };
+  const seedCatalogEntry = (root: string, id: string, name: string, ...steps: string[]): string => {
+    const dir = join(flowCatalogDir(root), id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, FLOW_DEF_FILE), flowYaml(name, ...steps));
+    return dir;
+  };
+  const reason = () => page.locator('#flow-strip .flow-selection-reason');
+
+  // A real GLOBAL fallback (leg 3, §18.1) so a degrade has a flow to fall back to — APP_HOME_DIR relocates it.
+  const home = seedRepo('agent-term-e2e-a2-home-');
+  mkdirSync(flowHomeDir(home), { recursive: true });
+  writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), flowYaml('global-fallback', 'global-fallback-step'));
+
+  // AC1: a repo-local catalog entry the pointer selects, NO local flow.yaml → leg 2 runs the catalog flow.
+  const repoCat = seedRepo('agent-term-e2e-a2-cat-');
+  seedCatalogEntry(repoCat, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
+  writeActiveFlow(repoCat, 'cat-flow');
+
+  // AC2: the same pointer, but a present local flow.yaml wins (leg 1, back-compat), pointer ignored.
+  const repoLocal = seedRepo('agent-term-e2e-a2-local-');
+  seedCatalogEntry(repoLocal, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
+  mkdirSync(flowHomeDir(repoLocal), { recursive: true });
+  writeFileSync(join(flowHomeDir(repoLocal), FLOW_DEF_FILE), flowYaml('local-only', 'local-step'));
+  writeActiveFlow(repoLocal, 'cat-flow');
+
+  // AC4: a pointer naming a catalog id absent from every tier → degrade to the fallback + a visible reason.
+  const repoBad = seedRepo('agent-term-e2e-a2-bad-');
+  writeActiveFlow(repoBad, 'missing-flow');
+
+  // AC5: a catalog entry whose flow.yaml is a symlink escaping the tier jail → degrade, and the redirected
+  // sentinel flow's step NEVER surfaces in the resolved definition (CWE-59).
+  const outside = seedRepo('agent-term-e2e-a2-outside-');
+  writeFileSync(join(outside, 'sentinel.yaml'), flowYaml('sentinel', 'SENTINEL-LEAK-STEP'));
+  const repoEscape = seedRepo('agent-term-e2e-a2-escape-');
+  mkdirSync(join(flowCatalogDir(repoEscape), 'evil'), { recursive: true });
+  symlinkSync(join(outside, 'sentinel.yaml'), join(flowCatalogDir(repoEscape), 'evil', FLOW_DEF_FILE));
+  writeActiveFlow(repoEscape, 'evil');
+
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_HOME_DIR: home },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // AC1 — the pointer selects the catalog flow.
+  await typeCommand(`cd "${repoCat}"`);
+  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
+  await expect(flowStation(2).locator('.nm')).toHaveText('cat-plan');
+  await expect(reason()).toHaveCount(0); // a successful selection surfaces no reason
+
+  // AC2 — a present local flow.yaml wins regardless of the pointer.
+  await typeCommand(`cd "${repoLocal}"`);
+  await expect(flowStepName()).toHaveText('local-step', { timeout: 10_000 });
+  await expect(reason()).toHaveCount(0);
+
+  // AC4 — an unknown pointer degrades to the global fallback WITH a visible reason.
+  await typeCommand(`cd "${repoBad}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(reason()).toBeVisible();
+  await expect(reason()).toContainText('missing-flow');
+
+  // AC5 — a tier-escaping symlinked entry degrades, and the redirect target's step never surfaces.
+  await typeCommand(`cd "${repoEscape}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(reason()).toBeVisible();
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('SENTINEL-LEAK-STEP');
+
+  for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
+});
 
 test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', { tag: '@ownapp' }, async () => {
   // bash spawns in $HOME (§5); the flow follows the terminal cwd like todos (§16.3).
