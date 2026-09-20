@@ -38,9 +38,6 @@ function confinedPointerFile(worktreeDir: string): string | null {
 }
 
 const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
-/** Every read failure that is not a genuine ENOENT (unset) and not a well-formed-but-unsafe id converges here:
- *  an unresolvable path, an over-cap file, a non-ENOENT errno, and an unparseable/non-scalar node all degrade
- *  with the one generic reason. The lone value-specific reason is `invalidIdReason`. */
 const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
 const invalidIdReason = (value: string): string =>
   `Selected flow "${value}" is not a valid flow id; running the default flow instead.`;
