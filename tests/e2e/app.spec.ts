@@ -5128,30 +5128,32 @@ test('a §27 loop step shows a Loop read-out that expands a docked panel reflect
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', { tag: '@ownapp' }, async () => {
-  // persist() throws when the write cannot land; the name-save path surfaces that, and so must a
-  // Start/Advance — a transition that silently no-ops leaves the user clicking into the void.
-  // `.agent-terminal` is a symlink: the flow.yaml behind it LOADS (readFileSync follows the link), but
-  // atomicWriteFileSync REFUSES a symlinked container, so Start's persist() throws.
-  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-'));
+test('a symlinked .agent-terminal degrades the flow to a blocking error and never runs the redirected definition (§18.7.4/CWE-59)', { tag: '@ownapp' }, async () => {
+  // §18.7.4/CWE-59 — a cloned or hosted repo can ship `<repo>/.agent-terminal` as a symlink to attacker-chosen
+  // ground (the same shape todoStore/activeFlowPointer/artifactTree already refuse). The §18.7.4 started-ness
+  // gate reads flow-state through the confined path, which does NOT follow a symlinked `.agent-terminal` anchor,
+  // so begun-ness is unverifiable → the run HOLDS at the §18.1 error and the redirected flow.yaml is never
+  // loaded or run. This supersedes §19.1's earlier use of a symlinked `.agent-terminal` as the "write cannot
+  // land" device: that transition-write surfacing + retryability is covered at the unit boundary
+  // (flowStrip.test.ts injects a throwing start()), and no real write-fail device is reachable in the
+  // rootless-Podman e2e without tripping this same read gate (container-root bypasses chmod; any read
+  // perturbation of flow-state trips the gate first). See changelog v2.150.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
-  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-real-'));
-  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: groom\n    kind: manual\n');
+  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-real-'));
+  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: REDIRECTED-SENTINEL-STEP\n    kind: manual\n');
   symlinkSync(real, join(repo, '.agent-terminal'));
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → persist() throws (symlinked container)
-
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 10_000 });
-  await expect(errorDialog).toContainText('Flow action failed');
-  await errorDialog.locator('.dismiss').click();
-  await expect(flowControl()).toBeEnabled(); // retryable, not stuck
+  const flowError = page.locator('#flow-strip .flow-error');
+  await expect(flowError).toBeVisible({ timeout: 10_000 });
+  await expect(flowError).toContainText('could not be verified');
+  // the redirected definition behind the symlink is never loaded or run into the view
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('REDIRECTED-SENTINEL-STEP');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
