@@ -7,7 +7,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import type { FlowStatus } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
@@ -109,8 +109,7 @@ export function loadFlowStateDoc(worktreeDir: string): FlowStateLoad {
     raw = readFileSync(confined.path, 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return { kind: 'missing' };
-    const reason = e instanceof Error ? e.message : String(e);
-    return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${reason}` };
+    return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${errMsg(e)}` };
   }
   try {
     const doc: unknown = yaml.load(raw);
@@ -118,8 +117,7 @@ export function loadFlowStateDoc(worktreeDir: string): FlowStateLoad {
       ? { kind: 'record', doc }
       : { kind: 'invalid', reason: `${STATE_REL} is not a mapping` };
   } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
-    return { kind: 'invalid', reason: `cannot parse ${STATE_REL}: ${reason}` };
+    return { kind: 'invalid', reason: `cannot parse ${STATE_REL}: ${errMsg(e)}` };
   }
 }
 
