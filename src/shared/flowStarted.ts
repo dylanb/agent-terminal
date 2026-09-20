@@ -2,3 +2,11 @@
 // loopStatus.ts precedent): the main-side write gate, definition resolution, and A3's renderer
 // picker-enable all classify this one signal, so it has a single definition and cannot drift.
 export type StartednessSignal = 'never-started' | 'started' | 'indeterminate';
+
+// §18.7.4 AC7 — the one predicate the main-side pointer-write gate and A3's picker-enable classify the raw
+// signal through, so "is a new selection locked" has a single definition both processes import and cannot drift.
+// TODO(#133 write-gate GREEN): fail CLOSED — 'started' AND 'indeterminate' lock a new selection; only
+// 'never-started' permits one. This stub locks only the obvious begun case, so the RED fails on 'indeterminate'.
+export function isSelectionLocked(signal: StartednessSignal): boolean {
+  return signal === 'started';
+}

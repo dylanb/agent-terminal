@@ -10,7 +10,8 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
 // A2 (#133) impl-slice 4 — AC9 begun-run source binding, sticky across restart (§18.7.3 / CWE-841). Once a run
-// has begun, its definition source is FIXED to the FlowDisposition the resolver recorded at flow:start — a
+// has begun, its definition source is FIXED to the disposition (`DispositionRead`) the resolver recorded at
+// flow:start — a
 // catalog run re-resolves its bound tier+id, a non-catalog run keeps the live local↔global chain — and the
 // resolver NEVER re-reads the pointer to re-derive the source (a mid-run pointer change must have no effect, the
 // silent source-swap AC9 forbids). The observable behavior is WHICH FlowLoad.definition a 'started' run resolves

@@ -528,8 +528,9 @@ async function createWindow(): Promise<void> {
   // resolveActiveDefinition), so none can resolve a different flow from another (the shared-semantics /
   // "parallel copies that agree today" rule): leg 1 local flow.yaml → leg 2 the per-worktree pointer's catalog
   // entry (repo tier first, then global) → leg 3 the global fallback, with a display-sanitized degrade reason
-  // when leg 2 fails. NOTE(#133): a BEGUN run must resolve its recorded FlowDisposition source, NOT the live
-  // pointer — no consumer may read the pointer directly (that reintroduces the §18.7.4/CWE-841 mid-run
+  // when leg 2 fails. NOTE(#133): a BEGUN run must resolve its recorded run-source binding
+  // (`RunBinding`/`DispositionRead`), NOT the live pointer — no consumer may read the pointer directly (that
+  // reintroduces the §18.7.4/CWE-841 mid-run
   // source-swap). The started-ness gate + run-disposition binding that make that hold are owed by the write-gate
   // slice (§18.7.4); until they land `runBinding` is omitted, so resolution is the live three-leg chain and the
   // pointer write primitive is not yet exposed over IPC (no ungated write path ships).
