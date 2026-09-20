@@ -83,8 +83,9 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
       case 'unset':
         return { load: fallback() };
       case 'degrade':
-        // §18.7.6 / CWE-116/117 — whatever renders this reason must display-strip control/bidi bytes, never
-        // this resolver: one strip at the render boundary, with no second copy here to diverge from it.
+        // §18.7.6 / CWE-116/117 — the reason is display-sanitized at its source (the pointer read strips and
+        // bounds the echoed rejected value), so the resolver forwards it as-is: one strip at the source, with
+        // no second copy here to diverge from it.
         return { load: fallback(), selectionReason: pointer.reason };
       case 'value': {
         const entry = deps.catalogEntry(pointer.id);

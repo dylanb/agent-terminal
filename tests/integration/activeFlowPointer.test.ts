@@ -162,6 +162,34 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     expectDegradeWithReason(wt);
   });
 
+  // §18.7.6 / CWE-116/117/1007 — the rejected value is echoed into the degrade reason that reaches the flow
+  // view; a value that fails the safe-id gate may carry control/bidi/zero-width/BOM/joiner bytes (all pass
+  // `typeof === 'string'`), so the echoed value must be display-sanitized before it crosses IPC. A YAML
+  // double-quoted scalar decodes the \uXXXX escapes into the real bytes: U+202E (RTL override), U+200D (ZWJ)
+  // and U+0007 (C0) here.
+  const DISPLAY_UNSAFE_OR_JOINER = new RegExp(
+    '[\\p{Cc}\\u061C\\u200B-\\u200F\\u2028\\u2029\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\uFEFF\\u200C\\u200D]',
+    'u',
+  );
+
+  it('display-sanitizes the echoed rejected value in the degrade reason (no control/bidi/zero-width/joiner bytes)', () => {
+    const wt = fx.makeWorktree('a2-pointer-unsafe-bytes');
+    plantPointer(wt, '"a\\u202Eb\\u200Dc\\u0007"\n');
+    const read = readActiveFlow(wt);
+    expect(read.kind).toBe('degrade');
+    if (read.kind === 'degrade') expect(read.reason).not.toMatch(DISPLAY_UNSAFE_OR_JOINER);
+  });
+
+  it('length-bounds the echoed rejected value in the degrade reason (CWE-400)', () => {
+    const wt = fx.makeWorktree('a2-pointer-unsafe-overlong');
+    // Uppercase → fails the charset gate (not only the length bound), so the value is echoed into the reason.
+    // The whole ~600-char value must not be pasted verbatim into a UI-bound string.
+    plantPointer(wt, `${'A'.repeat(600)}\n`);
+    const read = readActiveFlow(wt);
+    expect(read.kind).toBe('degrade');
+    if (read.kind === 'degrade') expect(read.reason.length).toBeLessThan(200);
+  });
+
   it('degrades an over-cap pointer FILE before parse (byte bound, CWE-400) even when its value would be valid', () => {
     const wt = fx.makeWorktree('a2-pointer-overcap');
     // A valid id whose FILE is padded past the byte cap with a YAML comment: without the cap the parser would

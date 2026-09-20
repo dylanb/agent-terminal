@@ -1731,4 +1731,17 @@ describe('flow selection-reason (§18.7.6 degrade)', () => {
       'Selected flow degraded; running the default flow instead.',
     );
   });
+
+  it('updates the reason on a passive re-pull when it CHANGES over the same fallback definition', async () => {
+    // selectionReason is part of structuralSig, so a changed reason over an otherwise-identical view forces a
+    // render rather than the value-only patch path (patchInPlace never touches .flow-selection-reason). Without
+    // that sig line the stale reason would linger — this pins the repaint-on-change half of the behavior.
+    let reason = 'Selected flow "a" was not found; running the default flow instead.';
+    const strip = createFlowStrip(host, { ...fakeFlow(), state: vi.fn(async () => reasonView(reason)) });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')?.textContent).toBe(reason));
+    reason = 'Selected flow "b" was not found; running the default flow instead.';
+    await strip.refresh();
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(reason);
+  });
 });
