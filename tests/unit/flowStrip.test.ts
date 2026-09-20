@@ -1685,3 +1685,50 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     });
   });
 });
+
+// A2 (#133) §18.7.6 — the display-sanitized degrade reason (a pointer selection that fell back to the default)
+// renders as a PERSISTENT element on the running flow view. It is NOT the load `error` (a degrade keeps the
+// fallback running, so status is not `error`) and NOT the one-shot `notice` (which clears on the next
+// transition) — so it must survive a passive re-pull.
+describe('flow selection-reason (§18.7.6 degrade)', () => {
+  const reasonView = (selectionReason?: string): FlowStateView => ({
+    stepName: 'fallback-step',
+    steps: ['fallback-step'],
+    position: 1,
+    total: 1,
+    status: 'not_started',
+    ...(selectionReason ? { selectionReason } : {}),
+  });
+
+  it('paints a persistent selection-reason element on a non-error running view', async () => {
+    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView('Selected flow "x" was not found; running the default flow instead.')) };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
+      'Selected flow "x" was not found; running the default flow instead.',
+    );
+    // The station rail still renders — a degrade runs the fallback flow, it does not error out.
+    expect(host.querySelector('.flow.vert')).not.toBeNull();
+    expect(host.querySelector('.flow-error')).toBeNull();
+  });
+
+  it('renders no selection-reason element when the view carries none', async () => {
+    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView(undefined)) };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow.vert')).not.toBeNull());
+    expect(host.querySelector('.flow-selection-reason')).toBeNull();
+  });
+
+  it('keeps the reason across a passive re-pull (persistent, unlike the one-shot notice)', async () => {
+    const strip = createFlowStrip(host, {
+      ...fakeFlow(),
+      state: vi.fn(async () => reasonView('Selected flow degraded; running the default flow instead.')),
+    });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
+    await strip.refresh();
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
+      'Selected flow degraded; running the default flow instead.',
+    );
+  });
+});

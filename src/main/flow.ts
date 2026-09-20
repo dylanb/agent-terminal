@@ -95,13 +95,21 @@ export function hasFlowDefinition(root: string): boolean {
   return existsSync(path.join(root, FLOW_REL));
 }
 
-const FLOWS_CATALOG_SUBDIR = 'flows';
+export const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
  *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
  *  enumerated location cannot drift (CLAUDE.md writer↔reader rule). */
 export function flowCatalogDir(root: string): string {
   return path.join(flowHomeDir(root), FLOWS_CATALOG_SUBDIR);
+}
+
+/** A catalog entry's definition file `<root>/.agent-terminal/flows/<id>/flow.yaml` — the one location the
+ *  A1 install seeds and A2's §18.7.6 resolver probes, so the write target and the read source derive from the
+ *  same resolver and cannot drift (CLAUDE.md writer↔reader rule). `id` is a raw path segment; the caller gates
+ *  it through the shared safe-catalog-id predicate before this is walked. */
+export function catalogEntryDefFile(root: string, id: string): string {
+  return path.join(flowCatalogDir(root), id, FLOW_DEF_FILE);
 }
 
 /** Validate a step's `inputs:` (§18.4); `required` defaults to false. Absent → []; a malformed entry
@@ -626,10 +634,18 @@ export interface FlowManager {
   setTitle(repoKey: string, text: string): FlowStateView;
 }
 
+/** What the definition seam returns: the §18.1 load PLUS the §18.7.6 display-sanitized degrade reason, present
+ *  only when a pointer selection degraded to the fallback. A structural subset of resolveRunDefinition's return,
+ *  so flow.ts references no resolver leaf type and stays A2-unaware beyond this seam. */
+export interface ResolvedDefinition {
+  load: FlowLoad;
+  selectionReason?: string;
+}
+
 export interface FlowManagerDeps {
   /** Global fallback dir for the DEFINITION only (§18.1); STATE is never global. */
   globalDir: string;
-  loadDefinition?: (localDir: string, globalDir: string) => FlowLoad;
+  loadDefinition?: (localDir: string, globalDir: string) => ResolvedDefinition;
   makeStore?: (repoKey: string) => FlowStateStore;
   /** Run a step's entry action (§18.6/§19.3). Todo templates instantiate on demand, not here. */
   onEnterStep?: FlowEnterStep;
@@ -640,41 +656,52 @@ export interface FlowManagerDeps {
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
-  const loadDef = deps.loadDefinition ?? loadFlowDefinitionLocalFirst;
+  const loadDef: (localDir: string, globalDir: string) => ResolvedDefinition =
+    deps.loadDefinition ?? ((localDir, globalDir) => ({ load: loadFlowDefinitionLocalFirst(localDir, globalDir) }));
   const makeStore = deps.makeStore ?? createFlowStateStore;
   // Cache the machine AND a signature of the definition it was built from. The DEFINITION (flow.yaml)
   // is re-read on every access — like the §19.1 state re-read — and the machine is rebuilt only when
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  const machineFor = (repoKey: string): FlowMachine => {
-    const load = loadDef(repoKey, deps.globalDir);
-    const sig = JSON.stringify(load);
+  // The signature keys on load.load (the DEFINITION), not the whole resolved object, so a §18.7.6
+  // selectionReason change with an unchanged definition reuses the cached machine — the reason is spliced
+  // fresh onto each view below, never frozen in the cached view() closures (§18.7.4/CWE-841).
+  const machineFor = (repoKey: string): { machine: FlowMachine; selectionReason?: string } => {
+    const resolved = loadDef(repoKey, deps.globalDir);
+    const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
-    if (cached && cached.sig === sig) return cached.machine;
+    if (cached && cached.sig === sig) return { machine: cached.machine, selectionReason: resolved.selectionReason };
     // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
     // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
     const machine = createFlowMachine(
-      load,
+      resolved.load,
       makeStore(repoKey),
       deps.onEnterStep,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
-    return machine;
+    return { machine, selectionReason: resolved.selectionReason };
+  };
+  // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
+  // call at the FlowManager boundary (the machine stays A2-unaware).
+  const decorate = (k: string, op: (m: FlowMachine) => FlowStateView): FlowStateView => {
+    const { machine, selectionReason } = machineFor(k);
+    const view = op(machine);
+    return selectionReason === undefined ? view : { ...view, selectionReason };
   };
   return {
-    state: (k) => machineFor(k).state(),
-    start: (k) => machineFor(k).start(),
-    advance: (k) => machineFor(k).advance(),
-    restart: (k) => machineFor(k).restart(),
-    undo: (k) => machineFor(k).undo(),
-    reopenSlice: (k) => machineFor(k).reopenSlice(),
-    currentSlice: (k) => machineFor(k).currentSlice(),
-    revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
-    terminate: (k) => machineFor(k).terminate(),
-    provideInput: (k, values) => machineFor(k).provideInput(values),
-    resolveInputs: (k, values) => machineFor(k).resolveInputs(values),
-    setTitle: (k, text) => machineFor(k).setTitle(text),
+    state: (k) => decorate(k, (m) => m.state()),
+    start: (k) => decorate(k, (m) => m.start()),
+    advance: (k) => decorate(k, (m) => m.advance()),
+    restart: (k) => decorate(k, (m) => m.restart()),
+    undo: (k) => decorate(k, (m) => m.undo()),
+    reopenSlice: (k) => decorate(k, (m) => m.reopenSlice()),
+    currentSlice: (k) => machineFor(k).machine.currentSlice(),
+    revertStep: (k, fromStepId) => decorate(k, (m) => m.revertStep(fromStepId)),
+    terminate: (k) => decorate(k, (m) => m.terminate()),
+    provideInput: (k, values) => decorate(k, (m) => m.provideInput(values)),
+    resolveInputs: (k, values) => decorate(k, (m) => m.resolveInputs(values)),
+    setTitle: (k, text) => decorate(k, (m) => m.setTitle(text)),
   };
 }

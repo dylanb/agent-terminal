@@ -604,6 +604,12 @@ export interface FlowStateView {
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
    *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
+  /** §18.7.6 — the display-sanitized reason a per-worktree active-flow pointer selection DEGRADED to the
+   *  global fallback (an unknown/unsafe/unreadable pointer, or an entry escaping its catalog tier). Present
+   *  while the degraded selection runs (the strip paints it persistently, distinct from the one-shot
+   *  `notice`); absent when selection succeeded or the pointer is unset. Never carries the load `error`
+   *  reason — a degrade keeps the fallback running, so `status` is NOT `error`. */
+  selectionReason?: string;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
