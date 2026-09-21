@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { symlinkSync } from 'node:fs';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { worktreeStartedness } from '../../src/main/startedness';
+import { runDispositionFile } from '../../src/main/runDisposition';
 
 // A2 (#133) §18.7.4 AC7 — worktreeStartedness is the semantic started-ness accessor the pointer-write gate,
 // definition resolution, and A3's picker-enable read (the "raw durable started-ness" contract). It classifies a
@@ -137,9 +139,22 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
+  it("reports 'indeterminate' (fail-closed) when the run-disposition marker is unverifiable over an otherwise never-started flow-state, never 'never-started' (§18.7.4/CWE-841)", () => {
+    // §18.7.4 — the durable disposition marker is consulted before, and overrides, the display status, so an
+    // unverifiable marker must fail CLOSED. The flow-state here is a VALID not_started record ('never-started' on
+    // its own), so this drives the marker-origin indeterminate branch specifically — distinct from every case
+    // above, which fails closed on the flow-state load before the marker is even read. A jail-escaping symlink at
+    // the marker leaf makes readDisposition 'indeterminate'; a composition that fell open here would unlock a new
+    // selection on a run whose begun-ness cannot be verified — the CWE-841 fail-open the accessor exists to prevent.
+    const wt = fx.makeWorktree('a2-startedness-disp-indeterminate');
+    fx.writeFlowState(wt, { step: 'plan', status: 'not_started' });
+    symlinkSync(fx.outsideDir('a2-startedness-disp-indeterminate-target'), runDispositionFile(wt));
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
   // §18.7.4 AC7 revertStep-stays-locked, accessor half — a begun run whose first step is rolled back still reads
   // 'started' — is authored this turn over the real start()->revertStep() lifecycle in startednessRevertLocked.test.ts;
-  // it fails by assertion because the durable has-started marker is not composed yet (the startedness.ts TODO), the
+  // it fails by assertion because the durable has-started marker is not composed yet, the
   // branch a naive `status !== 'not_started'` classifier slips through (CWE-841).
   //
   // Deferred (declared, not silent — the slice-1 red-result pattern): two acceptance-level REDs are authored

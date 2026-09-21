@@ -51,6 +51,7 @@ export const CH = {
   flowTerminate: 'flow:terminate',
   flowProvideInput: 'flow:provideInput',
   flowSetTitle: 'flow:setTitle',
+  flowSetActiveFlow: 'flow:setActiveFlow',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -722,6 +723,19 @@ export interface FlowSetTitleMsg {
   title: string;
 }
 
+/** flow:setActiveFlow request (§18.7.2/§18.7.4): the catalog `id` the operator picked for `repoKey`'s
+ *  worktree. Applied only while the run has never started (AC7). */
+export interface FlowSetActiveFlowMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  id: string;
+}
+
+/** flow:setActiveFlow result (§18.7.4 AC7): the pointer was written, or the write was refused with a
+ *  human-readable `reason` — the run has begun, begun-ness is indeterminate (fail-closed), or the write
+ *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
+export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
+
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
  *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
  *  source (`GATE_DECISION_OPTIONS`) drives both the type and the §6 validator, so main, renderer, and the
@@ -1050,6 +1064,10 @@ export interface FlowApi {
    *  other flow:* calls, an unsafe or unregistered-repo target REJECTS rather than resolving to a benign
    *  error view (§22.3.1). */
   setTitle(repoKey: string, title: string): Promise<FlowStateView>;
+  /** Select the worktree's active flow (§18.7.2/§18.7.4). Permitted only while the run has never started;
+   *  once it has begun — or while begun-ness cannot be verified — the write is refused with a reason (AC7).
+   *  A3's picker mirrors this in its enable state, but this is the authoritative main-side gate. */
+  setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

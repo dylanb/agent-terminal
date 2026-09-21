@@ -10,6 +10,8 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { clearDisposition, recordDisposition } from './runDisposition';
+import type { DispositionRead } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
@@ -634,12 +636,13 @@ export interface FlowManager {
   setTitle(repoKey: string, text: string): FlowStateView;
 }
 
-/** What the definition seam returns: the §18.1 load PLUS the §18.7.6 display-sanitized degrade reason, present
- *  only when a pointer selection degraded to the fallback. A structural subset of resolveRunDefinition's return,
- *  so flow.ts references no resolver leaf type and stays A2-unaware beyond this seam. */
+/** What the definition seam returns: the §18.1 load, the §18.7.6 display-sanitized degrade reason (present only
+ *  when a pointer selection degraded to the fallback), and the §18.7.3 AC9 source binding this resolution used
+ *  (present on the never-started live legs). A structural subset of resolveRunDefinition's return. */
 export interface ResolvedDefinition {
   load: FlowLoad;
   selectionReason?: string;
+  binding?: DispositionRead;
 }
 
 export interface FlowManagerDeps {
@@ -667,11 +670,15 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // The signature keys on load.load (the DEFINITION), not the whole resolved object, so a §18.7.6
   // selectionReason change with an unchanged definition reuses the cached machine — the reason is spliced
   // fresh onto each view below, never frozen in the cached view() closures (§18.7.4/CWE-841).
-  const machineFor = (repoKey: string): { machine: FlowMachine; selectionReason?: string } => {
+  const machineFor = (
+    repoKey: string,
+  ): { machine: FlowMachine; selectionReason?: string; binding?: DispositionRead } => {
     const resolved = loadDef(repoKey, deps.globalDir);
     const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
-    if (cached && cached.sig === sig) return { machine: cached.machine, selectionReason: resolved.selectionReason };
+    if (cached && cached.sig === sig) {
+      return { machine: cached.machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+    }
     // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
     // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
     const machine = createFlowMachine(
@@ -681,7 +688,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
-    return { machine, selectionReason: resolved.selectionReason };
+    return { machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
   };
   // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
   // call at the FlowManager boundary (the machine stays A2-unaware).
@@ -692,14 +699,42 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   };
   return {
     state: (k) => decorate(k, (m) => m.state()),
-    start: (k) => decorate(k, (m) => m.start()),
+    start: (k) => {
+      // §18.7.3 AC9 — capture the source binding from the pre-transition (still not_started) resolve: that is
+      // the live-legs source this run commits to. Reading it after start() commits in_progress would instead hit
+      // the already-begun bound path (no live-legs binding), so the source must be read BEFORE the transition.
+      const binding = machineFor(k).binding ?? { source: 'non-catalog' };
+      const view = decorate(k, (m) => m.start());
+      // §18.7.4 AC7 / §18.7.3 AC9 — record the durable run-begun marker AND its source binding on the in_progress
+      // transition, so a first-step revertStep (which rolls the display status back to not_started) keeps a new
+      // selection locked (CWE-841) and a begun run re-resolves the SAME source rather than the live pointer.
+      if (view.status === 'in_progress') {
+        try {
+          recordDisposition(k, binding);
+        } catch {
+          // Best-effort: the transition already committed, so a marker-write fault must not abort start() — a
+          // throw would also drop the caller's §25 'start' audit entry, which is recorded only after start()
+          // returns. Accepted best-effort limit: a physical fault that leaves no marker (a full/RO disk) reads
+          // back 'absent', so the gate degrades to the in_progress display status — which locks the selection
+          // during the run but NOT across a first-step revertStep, the exact case the durable marker exists to
+          // cover. (A jail-escaping leaf reads 'indeterminate' instead — fail-closed.)
+        }
+      }
+      return view;
+    },
     advance: (k) => decorate(k, (m) => m.advance()),
     restart: (k) => decorate(k, (m) => m.restart()),
     undo: (k) => decorate(k, (m) => m.undo()),
     reopenSlice: (k) => decorate(k, (m) => m.reopenSlice()),
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
     revertStep: (k, fromStepId) => decorate(k, (m) => m.revertStep(fromStepId)),
-    terminate: (k) => decorate(k, (m) => m.terminate()),
+    terminate: (k) => {
+      const view = decorate(k, (m) => m.terminate());
+      // §18.7.2 AC6 — Terminate is the one action that re-enables a new selection, so it clears the durable
+      // run-begun marker (best-effort). revertStep/Restart/undo leave it in place.
+      clearDisposition(k);
+      return view;
+    },
     provideInput: (k, values) => decorate(k, (m) => m.provideInput(values)),
     resolveInputs: (k, values) => decorate(k, (m) => m.resolveInputs(values)),
     setTitle: (k, text) => decorate(k, (m) => m.setTitle(text)),

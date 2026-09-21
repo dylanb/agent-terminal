@@ -1,5 +1,4 @@
 // Artifact discovery (§20.1 / D8): the session's cwd as the viewer's file tree.
-// TODO(agent-loop bridge, §24.2): LoopDef `artifacts:` declarations.
 
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';

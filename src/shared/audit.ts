@@ -391,8 +391,6 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
   }
 }
 
-// TODO(dylan): Preserve each unresolved chained input's tri-state in the shared audit vocabulary.
-// TODO(dylan): Bind chained inputs to run-scoped upstream artifact provenance.
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {
   const carried = `§27 chained transition into ${step}: ${artifactIds.length > 0 ? artifactIds.join(', ') : '(none)'}`;
   return unresolvedIds.length > 0 ? `${carried} (declared but unresolved: ${unresolvedIds.join(', ')})` : carried;

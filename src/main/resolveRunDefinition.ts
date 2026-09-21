@@ -56,6 +56,10 @@ export interface ResolveRunDefinitionDeps {
 export interface ResolvedRunDefinition {
   load: FlowLoad;
   selectionReason?: string;
+  /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
+   *  re-resolves the SAME source rather than the live pointer. Set on the never-started live legs (the only path
+   *  a fresh run takes to in_progress); the already-bound path leaves it undefined (the binding is persisted). */
+  binding?: DispositionRead;
 }
 
 export type ResolveRunDefinition = (localDir: string, globalDir: string) => ResolvedRunDefinition;
@@ -79,27 +83,43 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
           binding satisfies never;
       }
     }
-    if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir) };
+    if (hasFlowDefinition(localDir)) {
+      return { load: loadFlowDefinition(localDir), binding: { source: 'non-catalog' } };
+    }
     const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);
     const pointer = deps.pointer();
     switch (pointer.kind) {
       case 'unset':
-        return { load: fallback() };
+        return { load: fallback(), binding: { source: 'non-catalog' } };
       case 'degrade':
         // §18.7.6 / CWE-116/117 — the reason is display-sanitized at its source (the pointer read strips and
         // bounds the echoed rejected value), so the resolver forwards it as-is: one strip at the source, with
         // no second copy here to diverge from it.
-        return { load: fallback(), selectionReason: pointer.reason };
+        return withDegradeReason(fallback(), pointer.reason);
       case 'value': {
         const entry = deps.catalogEntry(pointer.id);
-        if (entry.ok) return { load: loadCatalogEntryDefinition(entry.flowDir) };
-        return { load: fallback(), selectionReason: catalogDegradeReason(pointer.id, entry.cause) };
+        if (entry.ok) {
+          return {
+            load: loadCatalogEntryDefinition(entry.flowDir),
+            binding: { source: 'catalog', tier: entry.tier, id: pointer.id },
+          };
+        }
+        return withDegradeReason(fallback(), catalogDegradeReason(pointer.id, entry.cause));
       }
       default:
         pointer satisfies never;
-        return { load: fallback() };
+        return { load: fallback(), binding: { source: 'non-catalog' } };
     }
   };
+}
+
+/** §18.7.6 — a degrade reason rides only a RUNNING fallback: when the fallback itself fails to load, the degrade
+ *  is subsumed by the §18.1 load error, so the reason is dropped. Upholds the `FlowStateView.selectionReason`
+ *  invariant (ipc.ts) — never carried with `status: 'error'` — that the renderer's error branch relies on. */
+function withDegradeReason(load: FlowLoad, reason: string): ResolvedRunDefinition {
+  // A degrade always ran a non-catalog fallback (leg 1 local or leg 3 global), so a begun run binds non-catalog.
+  const binding: DispositionRead = { source: 'non-catalog' };
+  return load.ok ? { load, selectionReason: reason, binding } : { load, binding };
 }
 
 /** §18.7.6 degrade taxonomy. */

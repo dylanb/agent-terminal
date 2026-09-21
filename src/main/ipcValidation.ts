@@ -5,6 +5,7 @@ import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
+import { MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -26,6 +27,7 @@ import {
   type FlowRequestMsg,
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
+  type FlowSetActiveFlowMsg,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -176,6 +178,20 @@ export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
     isSafeRepoKey(m.repoKey) &&
     typeof m.title === 'string' &&
     m.title.length <= TITLE_MAX
+  );
+}
+
+/** flow:setActiveFlow — the catalog id the operator picked (§18.7.2/§18.7.4). Shape + bound only here
+ *  (`id` a non-empty string within the shared catalog-id length bound, CWE-1284); the started-ness gate and
+ *  the safe-catalog-ID resolve-time check live behind the write, in setActiveFlowGated / readActiveFlow. */
+export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.id === 'string' &&
+    m.id.length > 0 &&
+    m.id.length <= MAX_CATALOG_ID_LENGTH
   );
 }
 

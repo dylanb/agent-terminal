@@ -143,8 +143,6 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
 
   // Debounced resize: a drag-resize during an output burst can otherwise leave the PTY, renderer, and
   // shadow wrapping at different widths (§7.1/§14).
-  // TODO(dylan): the Send→reveal→focus loop through the real pane is verified in the §F e2e
-  // (recorded gap — xterm focus needs a real layout, not jsdom); the listener teardown is unit-tested.
   const sendResize = (): void => {
     fit.fit();
     window.term.resize({ cols: term.cols, rows: term.rows });

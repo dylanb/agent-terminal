@@ -2,11 +2,6 @@
 // is the resolver's leg-2 `catalogEntry()` producer: it probes the repo tier (untrusted ground) first, then
 // the global tier (app-owned ground), so a per-repo entry wins a name clash (§18.1 merged-library precedence).
 // The confined RESOLVED path is what the caller opens (never a re-resolution of the raw id, CWE-367/22/59).
-//
-// TODO(A3/#134): this single-ID resolver must be SUBSUMED BY A3's one shared ID→entry map (the picker and the
-// resolver read one enumeration, §18.7.6 "one enumeration, not two") — never PARALLELED by a second repo-wins
-// reimplementation. A3 also owns the canonical-ID-≠-entry-name indirection for unsafe-named per-repo entries;
-// A2 resolves only the canonical-ID==entry-name case (every A1-installed and safe-named entry).
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';

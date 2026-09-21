@@ -316,10 +316,14 @@ annotates**. Exactly two kinds qualify:
   pinning test); comment only the residue no abstraction can hold, and state **what breaks if the coupling
   is violated**, never how the code currently works.
 
-Everything else goes. Prefer a precise name, a named test, or a `§n` citation over any sentence. `//
-TODO(owner): …` tags and recorded §12-style gaps are always allowed. When in doubt, delete: a missing
-comment costs a code read; a wrong one costs a misled change. Three corollaries close the loopholes this
-rule has actually leaked through:
+Everything else goes. Prefer a precise name, a named test, or a `§n` citation over any sentence. Code
+`TODO`/`FIXME` comments are **forbidden** — deferred work and recorded §12-style gaps go to a tracked GitHub
+issue (optionally pointed at from the site by a plain marker-free comment, e.g. `// untestable; tracked in
+#NNN`), never a code marker; the `local/no-todo-comments` ESLint rule (`eslint.config.mjs`) enforces this in
+the husky pre-commit hook and the CI `pnpm lint` step. The rule is case-sensitive on the uppercase marker, so
+the `todo`/`Todo` domain word (the Todo pane) and identifiers like `TODO_UNDO_MS` are unaffected. When in
+doubt, delete: a missing comment costs a code read; a wrong one costs a misled change. Three corollaries close
+the loopholes this rule has actually leaked through:
 
 - **A comment that asserts an invariant is evidence of a missing check — enforce it, then delete the
   comment.** Before writing a sentence stating that some condition always holds, make it hold by

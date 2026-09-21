@@ -17,6 +17,7 @@ import {
   type FlowAppBootstrapConflictMsg,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
+  type ActiveFlowWriteResult,
   type GithubRef,
   type MonitorApi,
   type ViewerApi,
@@ -129,6 +130,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, step, values }) as Promise<FlowStateView>,
   setTitle: (repoKey, title) =>
     ipcRenderer.invoke(CH.flowSetTitle, { sessionId: SESSION_ID, repoKey, title }) as Promise<FlowStateView>,
+  setActiveFlow: (repoKey, id) =>
+    ipcRenderer.invoke(CH.flowSetActiveFlow, { sessionId: SESSION_ID, repoKey, id }) as Promise<ActiveFlowWriteResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);

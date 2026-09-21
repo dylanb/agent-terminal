@@ -21,7 +21,7 @@ import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
-import { writeActiveFlow } from '../../src/main/activeFlowPointer';
+import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2044,6 +2044,25 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   await expect(flowError()).toContainText('could not be verified');
   expect(await page.locator('#flow-strip').innerText()).not.toContain('corrupt-local-step');
 
+  // AC7 write gate (§18.7.4) — the operator's selection over the REAL flow:setActiveFlow seam (A2's fireable
+  // boundary; the picker is A3): permitted while never-started (pointer written, strip re-renders the picked
+  // flow), then REFUSED once the run has begun, with the pointer left byte-for-byte unchanged (AC8).
+  const repoWrite = seedRepo('agent-term-e2e-a2-write-');
+  seedCatalogEntry(repoWrite, 'flow-a', 'flow-a', 'a-step');
+  seedCatalogEntry(repoWrite, 'flow-b', 'flow-b', 'b-groom', 'b-plan');
+  await typeCommand(`cd "${repoWrite}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset → leg 3
+  const permit = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
+  expect(permit).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 }); // the write re-rendered the strip
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
+
+  await flowControl().click(); // Start → in_progress: the run has begun
+  await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+  const refuse = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite);
+  expect(refuse.ok).toBe(false);
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' }); // unchanged — the write was refused
+
   for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
 });
 
@@ -2365,11 +2384,6 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
-
-// TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
-// RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
-// grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
-// failing in Podman against the single-destination installer. Recorded gap.
 
 const installExamplesBtn = () => page.locator('#install-examples-view .kprofile button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');

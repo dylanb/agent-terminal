@@ -10,7 +10,7 @@ import { worktreeStartedness } from '../../src/main/startedness';
 // Terminate returns the worktree to a state where a new selection may be written (§18.7.2/§18.7.4). A
 // classifier that keys on the on-disk display status alone reads the reverted record 'never-started' and
 // unlocks the gate mid-run — the CWE-841 fail-open this accessor exists to prevent, and the exact branch the
-// slice-5 GREEN deferred behind `startedness.ts`'s durable-marker TODO.
+// slice-5 GREEN deferred behind `startedness.ts`'s durable-marker composition.
 //
 // Observable behavior over the REAL production wiring (no mocks): a real FlowManager drives the real
 // start()→revertStep() lifecycle against the worktree's real flow-state store, and the shared

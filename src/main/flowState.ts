@@ -54,6 +54,13 @@ export function isPersistableStatus(value: unknown): value is FlowStatus {
   return typeof value === 'string' && PERSISTABLE.has(value as FlowStatus);
 }
 
+/** The legality gate for a persisted progression's `step`: the one predicate the store's `decode` and the
+ *  `worktreeStartedness` safety accessor both classify against, so a step one reader rejects the other cannot
+ *  silently treat as a different category (§18.7.4, writer↔reader rule — the `isPersistableStatus` sibling). */
+export function isPersistedStep(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
 const isStringValue = (v: unknown): v is string => typeof v === 'string';
 
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
@@ -134,7 +141,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   };
 
   const decode = (doc: Record<string, unknown>): PersistedFlowState | null => {
-    if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+    if (!isPersistedStep(doc.step)) return null;
     if (!isPersistableStatus(doc.status)) return null;
     const inputs = readInputs(doc.inputs);
     const startedAt = readStartedAt(doc.started_at);

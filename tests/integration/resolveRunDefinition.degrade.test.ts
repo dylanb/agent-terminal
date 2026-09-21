@@ -107,6 +107,41 @@ describe('resolveRunDefinition — bad-pointer degrade surfaces a visible reason
     expect(result.selectionReason).toBeTruthy();
   });
 
+  // §18.7.6 — the double-failure edge: a degrade whose SILENT fallback *also* fails to load. Every case above
+  // seeds a valid global-flow so `fallback()` succeeds; none pins what the resolver does when no local flow.yaml
+  // AND no global fallback exists, so the degrade is subsumed by the §18.1 load error. The FlowStateView
+  // .selectionReason contract (ipc.ts) asserts the reason is NEVER carried with `status: 'error'` — "a degrade
+  // keeps the fallback running, so status is NOT error" — and the renderer's error branch (flowStrip) drops any
+  // reason it is handed, so a reason emitted here would be an unrenderable payload literally stating "running the
+  // default flow instead" when NO default ran. The producer must uphold the invariant: no reason on an error load.
+  const seedNoFallbackWorktree = (prefix: string): { wt: string; globalRoot: string } => {
+    const wt = fx.makeWorktree(prefix); // .agent-terminal/ but no local flow.yaml
+    const globalRoot = fx.makeWorktree(`${prefix}-global`); // exists but holds NO flow.yaml → fallback() errors
+    return { wt, globalRoot };
+  };
+
+  it('a `degrade` pointer whose fallback ALSO fails yields an error load with selectionReason undefined (ipc.ts invariant)', () => {
+    const { wt, globalRoot } = seedNoFallbackWorktree('degrade-no-fallback');
+    const pointer: () => PointerRead = () => ({ kind: 'degrade', reason: 'active-flow.yaml is malformed [sentinel]' });
+    const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });
+
+    const result = createResolveRunDefinition({ pointer, catalogEntry })(wt, globalRoot);
+
+    expect(result.load.ok).toBe(false); // no local, no global → the §18.1 error state
+    expect(result.selectionReason).toBeUndefined(); // subsumed by the error, never carried alongside status:error
+  });
+
+  it('a value pointer naming an unresolvable id whose fallback ALSO fails yields an error load with selectionReason undefined', () => {
+    const { wt, globalRoot } = seedNoFallbackWorktree('value-no-fallback');
+    const pointer: () => PointerRead = () => ({ kind: 'value', id: 'ghost' });
+    const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });
+
+    const result = createResolveRunDefinition({ pointer, catalogEntry })(wt, globalRoot);
+
+    expect(result.load.ok).toBe(false);
+    expect(result.selectionReason).toBeUndefined();
+  });
+
   it('AC4/AC5: the GENERATED degrade reason names the selected flow AND reads differently per failure cause', () => {
     const { wt, globalRoot } = seedFallbackOnlyWorktree('reason-content');
 

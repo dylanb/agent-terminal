@@ -10,19 +10,6 @@
 // FLOW_DEF_FILE, and .agent-terminal (where flow-state.yaml is its sibling) from that same flowHomeDir. The
 // flow-state leaf is re-spelled here because flowState.ts keeps STATE_REL private — the same acknowledged
 // re-spelling loopArtifacts.ts makes for the identical file.
-//
-// TODO(A2/#133): scope deferred to the slice where each dependency exists, NOT built here —
-//   * pointer (active-flow.yaml) fixtures: the valid-shape cases are produced by activeFlowPointer.write()
-//     (writer↔reader single-source — no second serializer here) and the adversarial planters keyed off its
-//     exported path resolver, both introduced in impl-slice 2 where that module lands;
-//   * catalog-tier fixtures (flows/<id>/flow.yaml, repo + global) reuse/extend A1's tests/helpers/catalogFixture.ts
-//     and flowCatalogDir, available in impl-slice 1 after this branch rebases onto A1 (#132) — before that rebase
-//     those symbols are absent and hand-composing their paths would violate the single-source rule;
-//   * the injection-seam fakes (pointer()/catalogEntry()/startedness()/withWorktreeLock()/holderLiveness()) name
-//     domain concepts the production modules own (CLAUDE.md injection-seam rule), so each lands with its type in
-//     the slice that introduces it;
-//   * the worktree-lock test infrastructure (a guaranteed-non-live PID helper, the reclaim interleaving seam)
-//     is shaped by worktreeLock.ts's holder-identity representation and is built with it in impl-slice 3.
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
