@@ -73,6 +73,47 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
+  it("reports 'indeterminate' (fail-closed) for a present record with a persisted step but an ABSENT status key, never 'never-started' (§18.7.4 case ii / CWE-841)", () => {
+    // §18.7.4 case (i) is discriminated by "no persisted step", NOT "no status": a document that HAS a persisted
+    // step but is missing its status key is a schema-decode-invalid progression (case ii, `flowState.decode`
+    // rejects it identically to `status: error`), so it must fail CLOSED to 'indeterminate'. A truncated write
+    // that lost its `status:` line is exactly this class; reading it 'never-started' would let a begun-but-corrupt
+    // run take the live source chain mid-run and unlock a new pointer selection — the CWE-841 fail-open the
+    // accessor exists to prevent. Sibling of the `status: error` case above, on the status-absent axis.
+    const wt = fx.makeWorktree('a2-startedness-step-no-status');
+    fx.writeFlowStateRaw(wt, 'step: plan\n');
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
+  it("reports 'indeterminate' (fail-closed) for a present record with a begun status but an ABSENT step key, never 'never-started' (§18.7.4 case ii / CWE-841)", () => {
+    // Case (i) fail-open is scoped to a genuinely-never-begun doc — absent, or title-only (NEITHER step nor status).
+    // A doc that kept a begun `status` but lost its `step` to a truncated write is schema-decode-invalid (case ii,
+    // `flowState.decode` rejects it), NOT title-only — §18.7.4 line 167: "the store collapses a document that
+    // corrupts AFTER persisting in_progress the same way as one never written." Reading it 'never-started' would
+    // unlock a new pointer selection on a begun-but-corrupt run — the CWE-841 fail-open the accessor exists to
+    // prevent. Sibling of the step-no-status case above, on the begun-status / step-absent axis.
+    const begun = fx.makeWorktree('a2-startedness-status-no-step');
+    fx.writeFlowStateRaw(begun, 'status: in_progress\n');
+    expect(worktreeStartedness(begun)).toBe('indeterminate');
+
+    const finished = fx.makeWorktree('a2-startedness-done-no-step');
+    fx.writeFlowStateRaw(finished, 'status: done\n');
+    expect(worktreeStartedness(finished)).toBe('indeterminate');
+  });
+
+  it("reports 'indeterminate' (fail-closed) for a present record with an EMPTY step string, never 'never-started' (§18.7.4 case ii / CWE-841)", () => {
+    // An empty `step` is schema-decode-invalid exactly as a missing one — `flowState.decode` rejects it on
+    // `doc.step.length === 0` — so it is a case (ii) progression that must fail CLOSED to 'indeterminate'. The
+    // status is a persistable `not_started`, so step legality is the ONLY thing separating this record from a
+    // legitimately never-started one: a classifier that gates on status alone reads it 'never-started' and unlocks
+    // a new pointer selection on a begun-but-corrupt run — the CWE-841 fail-open the accessor exists to prevent.
+    // This pins the empty-step edge where the accessor's own step-legality guard and flowState.decode's must
+    // agree, the drift no type or name catches. Sibling of the step-no-status / status-no-step cases above.
+    const wt = fx.makeWorktree('a2-startedness-empty-step');
+    fx.writeFlowStateRaw(wt, 'step: ""\nstatus: not_started\n');
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
   it("reports 'indeterminate' (fail-closed) for a worktree whose root does not resolve, never 'never-started' (§18.7.4/CWE-841)", () => {
     // §18.7.4 — begun-ness is read through the confined flow-state path, which jails the leaf under the
     // worktree's `.agent-terminal`. When the worktree ROOT itself does not resolve (resolveJail → null) the
@@ -96,14 +137,18 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
-  // Deferred within this RED turn (declared, not silent — the slice-1 red-result pattern): two impl-slice-3
-  // acceptance-level REDs are authored RED-first WITHIN the write-gate GREEN, each blocked on a GREEN deliverable
-  // that must exist first for the RED to fail by an assertion rather than a missing-symbol error:
-  //   * §18.7.4 AC7 revertStep-stays-locked — a not_started record carrying the durable has-started marker reads
-  //     'started', and a real first-step `revertStep` then the real `flow:setActiveFlow` handler is refused with
-  //     `active-flow.yaml` byte-for-byte unchanged. Blocked on `recordDisposition` (the run-disposition own-file
-  //     whose presence IS the marker; its on-disk representation is a GREEN decision) and the gated handler. This
-  //     is the branch a naive `status !== 'not_started'` classifier slips through (CWE-841).
+  // §18.7.4 AC7 revertStep-stays-locked, accessor half — a begun run whose first step is rolled back still reads
+  // 'started' — is authored this turn over the real start()->revertStep() lifecycle in startednessRevertLocked.test.ts;
+  // it fails by assertion because the durable has-started marker is not composed yet (the startedness.ts TODO), the
+  // branch a naive `status !== 'not_started'` classifier slips through (CWE-841).
+  //
+  // Deferred (declared, not silent — the slice-1 red-result pattern): two acceptance-level REDs are authored
+  // RED-first WITHIN the write-gate GREEN, each blocked on a GREEN deliverable that must exist first for the RED to
+  // fail by an assertion rather than a missing-symbol error:
+  //   * §18.7.4 AC7 revertStep-stays-locked, composed half — a real first-step `revertStep` then the real
+  //     `flow:setActiveFlow` handler refused with `active-flow.yaml` byte-for-byte unchanged. Blocked on
+  //     `recordDisposition` (the run-disposition own-file whose presence IS the marker; its on-disk representation
+  //     is a GREEN decision) and the gated handler.
   //   * §18.7.4 AC7 composed write-gate refusal — `flow:setActiveFlow` refused under 'started'/'indeterminate',
   //     permitted only under 'never-started', serialized under the cross-process worktree lock. Blocked on the
   //     gated handler and `worktreeLock.ts`. `worktreeStartedness` and `isSelectionLocked` are pinned in isolation

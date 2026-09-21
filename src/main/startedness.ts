@@ -20,11 +20,18 @@ export function worktreeStartedness(worktreeDir: string): StartednessSignal {
   // corrupted flow-state cannot masquerade as never-started and unlock a new selection (§18.7.4/CWE-841).
   if (loaded.kind === 'invalid') return 'indeterminate';
   if (loaded.kind === 'missing') return 'never-started';
-  const { status } = loaded.doc;
-  // An absent `status` is the legitimate never-named/title-only worktree; a status present but outside the
-  // persistable vocabulary (which flowState.decode rejects identically) is a schema-invalid progression that
-  // fails CLOSED to 'indeterminate', never 'never-started' (§18.7.4/CWE-841).
-  if (status === undefined) return 'never-started';
-  if (!isPersistableStatus(status)) return 'indeterminate';
-  return BEGUN.has(status) ? 'started' : 'never-started';
+  const { step, status } = loaded.doc;
+  // §18.7.4 rule 166's three cases. Case (iii): a valid decoded progression — a persisted step AND a persistable
+  // status, the pair `flowState.decode` accepts — reads its status. Case (i) fail-open is scoped to a
+  // genuinely-never-begun doc: absent (above) or title-only, carrying NEITHER a step nor a status. Every other
+  // present-but-decode-invalid progression is case (ii) and fails CLOSED to 'indeterminate' — a step without a
+  // status, a status outside the persistable vocabulary, AND a doc that kept a begun `status` but lost its `step`
+  // to a truncated write (§18.7.4 line 167: the store collapses a post-`in_progress` corruption the same way as a
+  // never-written doc). Falling open on a begun-status/step-absent doc would unlock a new pointer selection on a
+  // begun-but-corrupt run — the CWE-841 fail-open this accessor exists to prevent.
+  if (typeof step === 'string' && step.length > 0 && isPersistableStatus(status)) {
+    return BEGUN.has(status) ? 'started' : 'never-started';
+  }
+  if (step === undefined && status === undefined) return 'never-started';
+  return 'indeterminate';
 }
