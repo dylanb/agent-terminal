@@ -45,6 +45,8 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   teardownView(into); // disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
+  // untestable: the trailing catch's import()-reject degrade path can't be forced (markdown-it/mermaid are
+  // import()-ed with no seam) — §12 gap tracked in #153.
   void (async () => {
     const md = await getMarkdownIt();
     if (token !== tokenOf(into)) return;
@@ -88,6 +90,8 @@ export function renderCodeInto(
   teardownView(into); // §20.2
   into.classList.remove('md');
   into.textContent = '…';
+  // untestable: the CodeMirror chunk-load catch's degrade path can't be forced (no import() seam) — see
+  // renderMarkdownInto; §12 gap tracked in #153.
   let editor: EditorViewT | null = null;
   let EV: typeof EditorViewT | null = null;
   let pending: number | null = null;

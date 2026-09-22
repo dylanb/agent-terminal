@@ -134,6 +134,7 @@ async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
+  // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
   applyDockIcon(app.dock, process.platform, iconLoc);
   const win = new BrowserWindow({
     width: 1280,
@@ -186,6 +187,7 @@ async function createWindow(): Promise<void> {
   // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
   // hidden native selection. Off darwin a minimal menu (keyboard zoom + fullscreen) is installed
   // instead — replacing Electron's default menu so its ⌘0 "Reset Zoom" can't preempt openSettings (§7.7).
+  // untestable off macOS (the menu-accelerator→IPC dispatch has no Linux e2e) — §12 gap tracked in #153.
   applyApplicationMenu(buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action })), Menu);
 
   // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
@@ -222,6 +224,8 @@ async function createWindow(): Promise<void> {
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
+  // untestable outside the §F e2e (the OSC-7 → cwd:changed → repo-list-swap loop needs real node-pty + bash)
+  // — §12 gap tracked in #153.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
@@ -235,6 +239,7 @@ async function createWindow(): Promise<void> {
   // off-thread here and re-pulls the viewer when it differs. Warm on each watch burst too — a `git
   // checkout` produces no cwd change, so its working-tree writes are the only signal a branch switched;
   // warmBaseRef is deduped per (root, branch) so repeat bursts never re-spawn gh.
+  // untestable in CI (the gh-driven base refresh is unprovokable with no live PR) — §12 gap tracked in #153.
   const warmBase = createBaseWarmer({
     root: () => gitRootOf(viewerCwd()),
     warm: (root) => warmBaseRef(root),
@@ -251,6 +256,8 @@ async function createWindow(): Promise<void> {
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
+  // untestable outside the §F e2e (watermark/selfInjectWindowMs are tuned against real agent echo + reply)
+  // — §12 gap tracked in #153.
   const suppressor = createInjectionSuppressor({
     cursorRow: () => shadow.reader.cursor().y,
     addMarker: (r) => shadow.addMarker(r),
@@ -547,6 +554,9 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // Security limitation (§27.12), tracked in #155: this map is runtime-seeded only, so after a relaunch
+  // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
+  // naive re-seed from the repo-scoped persisted bootstrap could retarget a destructive `gh pr ready`.
   const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {

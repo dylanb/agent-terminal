@@ -147,6 +147,8 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     fit.fit();
     window.term.resize({ cols: term.cols, rows: term.rows });
   };
+  // untestable under jsdom: the Send→reveal→focus loop needs a real layout (xterm focus) — verified in the
+  // §F e2e; §12 gap tracked in #153.
   const unwire = wireTerminalPaneListeners({ focusView: () => term.focus(), resize: sendResize });
   const unwireDrop = wireTerminalDrop(container, {
     pathForFile: (file) => window.term.pathForFile(file),

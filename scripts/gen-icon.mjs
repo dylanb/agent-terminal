@@ -25,6 +25,8 @@ export function generateIcon({ svgPath, pngPath, hashPath, render }) {
   return { regenerated: true, fingerprint: fp };
 }
 
+// untestable in CI: the @resvg render below runs only at package, and build/icon.png is guarded by hash +
+// dimensions, not byte-equality to the render (resvg output is non-deterministic) — §12 gap tracked in #153.
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   const { Resvg } = await import('@resvg/resvg-js');

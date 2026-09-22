@@ -2385,6 +2385,8 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
+// recorded gap: the install-examples cases below landed green-first (#40) so their RED can't be reconstructed
+// (every #41 assertion was added RED-first, observed failing in Podman) — tracked in #153.
 const installExamplesBtn = () => page.locator('#install-examples-view .kprofile button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');
 const installExamplesPrompt = () => page.locator('#install-examples-view .flow-modal');

@@ -4,4 +4,6 @@
 
 import scriptPath from './assets/shell-integration.bash?asset&asarUnpack';
 
+// untestable outside a packaged electron-builder artifact (the asarUnpack on-disk source path is reachable
+// only there) — manual spot-check only; §12 gap tracked in #153.
 export const SHELL_INTEGRATION_SCRIPT: string = scriptPath;
