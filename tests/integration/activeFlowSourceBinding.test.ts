@@ -5,7 +5,7 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { recordDisposition } from '../../src/main/runDisposition';
+import { recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 
 // A2 (#133) §18.7.3 AC9 — a begun run resolves its RECORDED source, never the live pointer: it never silently
 // switches which tier/entry supplies its definition, a lost bound source surfaces the §18.1 error rather than a
@@ -70,5 +70,35 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
 
     writeActiveFlow(wt, 'flow-x'); // a pointer is set AFTER the run began
     expect(runName(resolve(wt).load)).toBe('local-only'); // non-catalog run never reads the pointer
+  });
+
+  it('a begun run with NO recorded disposition marker resolves its live source (leg 1 local flow.yaml), never the §18.1 error', () => {
+    // A run whose display status is in_progress but whose durable run-disposition marker is ABSENT — a pre-AC9
+    // run, an externally-seeded §27 loop state, or the accepted write-fault degrade (flow.ts start()'s
+    // best-effort recordDisposition). worktreeStartedness reads 'started' from the display status, but no binding
+    // was ever recorded. An absent binding is not a corrupt one (§18.7.4 leaves this to the live legs, as the
+    // write gate itself degrades to the display status), so the run must resolve its live source rather than fail
+    // closed. Failing closed here erased the whole §27 loop view (the human-needed status-alert never rendered).
+    const wt = fx.makeWorktree('a2-begun-no-marker');
+    const globalDir = fx.makeWorktree('a2-begun-no-marker-global');
+    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] }); // leg 1 local flow.yaml
+    fx.writeFlowState(wt, { step: 'build', status: 'in_progress' }); // begun via display status; recordDisposition never called
+    const resolve = createRunResolver(globalDir);
+
+    expect(runName(resolve(wt).load)).toBe('local-only');
+  });
+
+  it('a begun run whose PRESENT disposition marker is corrupt still holds at the §18.1 error, never deferring to the live legs (CWE-841)', () => {
+    // The boundary the absent-marker defer must not cross: a marker that EXISTS but whose binding cannot be read
+    // is a recorded-but-untrustworthy source, not an absent one — it fails closed, exactly as before. A leg-1
+    // local flow.yaml is present so a wrongful defer would resolve it (load.ok), making the hold observable.
+    const wt = fx.makeWorktree('a2-corrupt-marker');
+    const globalDir = fx.makeWorktree('a2-corrupt-marker-global');
+    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
+    fx.writeFlowState(wt, { step: 'build', status: 'in_progress' }); // started via the display status
+    writeFileSync(runDispositionFile(wt), 'source: totally-bogus\n'); // marker PRESENT, its binding unreadable
+    const resolve = createRunResolver(globalDir);
+
+    expect(resolve(wt).load.ok).toBe(false);
   });
 });

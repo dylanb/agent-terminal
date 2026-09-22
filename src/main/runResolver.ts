@@ -6,7 +6,7 @@ import { createResolveRunDefinition, type ResolvedRunDefinition } from './resolv
 import { readActiveFlow } from './activeFlowPointer';
 import { resolveCatalogEntry } from './flowCatalog';
 import { worktreeStartedness } from './startedness';
-import { readRunBinding } from './runDisposition';
+import { readDisposition, readRunBinding } from './runDisposition';
 
 /** The authoritative resolver: leg 1 local flow.yaml → leg 2 the pointer's catalog entry (repo tier, then
  *  global) → leg 3 the global fallback, with a display-sanitized degrade reason when leg 2 fails. A BEGUN run
@@ -20,6 +20,12 @@ export function createRunResolver(globalDir: string): (repoKey: string) => Resol
       runBinding: () => {
         const started = worktreeStartedness(repoKey);
         if (started !== 'started') return { started };
+        // A run reads 'started' from the display status even when the durable marker is ABSENT — a pre-AC9 run,
+        // an externally-seeded loop state, or the write-fault degrade flow.ts start() accepts. An absent marker
+        // recorded no binding, so there is no bound source to protect: defer to the live legs (undefined), the
+        // same degrade the write gate already makes. Only a PRESENT-but-unreadable marker is the CWE-841
+        // corrupt-binding case that must hold at the §18.1 error.
+        if (readDisposition(repoKey) === 'absent') return undefined;
         const binding = readRunBinding(repoKey);
         return binding === null ? { started: 'indeterminate' } : { started, disposition: binding };
       },
