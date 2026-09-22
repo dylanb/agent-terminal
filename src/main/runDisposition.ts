@@ -14,6 +14,7 @@ import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import { isErrno } from './errno';
+import { isRecord } from './yamlRecord';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import type { CatalogTier, DispositionRead } from './resolveRunDefinition';
 
@@ -30,7 +31,11 @@ export const RUN_DISPOSITION_SCHEMA = 1;
  *  attacker-sized document. */
 export const MAX_DISPOSITION_FILE_BYTES = 4096;
 
-const CATALOG_TIERS: ReadonlySet<string> = new Set<CatalogTier>(['repo', 'global']);
+const CATALOG_TIERS: ReadonlySet<CatalogTier> = new Set(['repo', 'global']);
+
+function isCatalogTier(v: unknown): v is CatalogTier {
+  return typeof v === 'string' && (CATALOG_TIERS as ReadonlySet<string>).has(v);
+}
 
 /** The disposition own-file path — the one resolver the writer and reader both derive the location from, so the
  *  write target and the read source cannot drift (CLAUDE.md writer↔reader single-source). */
@@ -115,14 +120,18 @@ export function readRunBinding(worktreeDir: string): DispositionRead | null {
   } catch {
     return null;
   }
-  if (typeof doc !== 'object' || doc === null) return null;
-  const rec = doc as Record<string, unknown>;
-  if (rec.source === 'non-catalog') return { source: 'non-catalog' };
-  // §18.7.6/CWE-20 — a catalog binding is trusted only when BOTH its tier is in the closed set AND its id passes
-  // the shared safe-catalog-ID gate; any other shape (unknown source, missing/typed-wrong fields) fails closed.
-  if (rec.source === 'catalog' && typeof rec.tier === 'string' && CATALOG_TIERS.has(rec.tier)) {
-    const { id } = rec;
-    if (typeof id === 'string' && isSafeCatalogId(id)) return { source: 'catalog', tier: rec.tier as CatalogTier, id };
+  return parseRunBinding(doc);
+}
+
+/** §18.7.6/CWE-20/CWE-1321 — validate the attacker-supplied disposition document into the closed FlowDisposition
+ *  union by explicit known-key extraction (never iterating attacker keys): a catalog binding is trusted only when
+ *  BOTH its tier is in the closed set AND its id passes the shared safe-catalog-ID gate; any other shape (unknown
+ *  source, missing/typed-wrong fields) fails closed to null. */
+function parseRunBinding(doc: unknown): DispositionRead | null {
+  if (!isRecord(doc)) return null;
+  if (doc.source === 'non-catalog') return { source: 'non-catalog' };
+  if (doc.source === 'catalog' && isCatalogTier(doc.tier) && typeof doc.id === 'string' && isSafeCatalogId(doc.id)) {
+    return { source: 'catalog', tier: doc.tier, id: doc.id };
   }
   return null;
 }
