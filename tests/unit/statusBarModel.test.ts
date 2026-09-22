@@ -8,7 +8,7 @@ import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 // any future producer cannot drift on it (CLAUDE.md shared-semantics; sibling of loopStatus/occurrence).
 
 const view = (over: Partial<FlowStateView> = {}): FlowStateView => ({
-  stepName: 'implement',
+  stepName: 'implement', runStarted: 'never-started' as const,
   steps: ['implement'],
   position: 1,
   total: 1,

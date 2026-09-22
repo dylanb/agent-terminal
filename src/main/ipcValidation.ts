@@ -28,6 +28,7 @@ import {
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
   type FlowSetActiveFlowMsg,
+  type FlowClearActiveFlowMsg,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -182,8 +183,8 @@ export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
 }
 
 /** flow:setActiveFlow — the catalog id the operator picked (§18.7.2/§18.7.4). Shape + bound only here
- *  (`id` a non-empty string within the shared catalog-id length bound, CWE-1284); the started-ness gate and
- *  the safe-catalog-ID resolve-time check live behind the write, in setActiveFlowGated / readActiveFlow. */
+ *  (CWE-1284); the started-ness gate and the safe-catalog-ID check live behind the write (activeFlowGate,
+ *  readActiveFlow). */
 export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg {
   return (
     isRecord(m) &&
@@ -193,6 +194,11 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
     m.id.length > 0 &&
     m.id.length <= MAX_CATALOG_ID_LENGTH
   );
+}
+
+/** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
+export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlowMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 /** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;

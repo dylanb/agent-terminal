@@ -5,6 +5,7 @@ import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
+import type { StartednessSignal } from './flowStarted';
 
 export type SessionId = string;
 
@@ -52,6 +53,7 @@ export const CH = {
   flowProvideInput: 'flow:provideInput',
   flowSetTitle: 'flow:setTitle',
   flowSetActiveFlow: 'flow:setActiveFlow',
+  flowClearActiveFlow: 'flow:clearActiveFlow',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -611,6 +613,10 @@ export interface FlowStateView {
    *  `notice`); absent when selection succeeded or the pointer is unset. Never carries the load `error`
    *  reason — a degrade keeps the fallback running, so `status` is NOT `error`. */
   selectionReason?: string;
+  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a
+   *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
+   *  through `isSelectionLocked` (shared/flowStarted.ts). */
+  runStarted: StartednessSignal;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
@@ -729,6 +735,13 @@ export interface FlowSetActiveFlowMsg {
   sessionId: SessionId;
   repoKey: string;
   id: string;
+}
+
+/** flow:clearActiveFlow request (§18.7.2/§18.7.4): return `repoKey`'s worktree to the unset default. Gated like
+ *  flow:setActiveFlow. */
+export interface FlowClearActiveFlowMsg {
+  sessionId: SessionId;
+  repoKey: string;
 }
 
 /** flow:setActiveFlow result (§18.7.4 AC7): the pointer was written, or the write was refused with a
@@ -1068,6 +1081,8 @@ export interface FlowApi {
    *  once it has begun — or while begun-ness cannot be verified — the write is refused with a reason (AC7).
    *  A3's picker mirrors this in its enable state, but this is the authoritative main-side gate. */
   setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
+  /** Return the worktree to the unset default flow; gated exactly like `setActiveFlow`. */
+  clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

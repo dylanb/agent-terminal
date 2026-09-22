@@ -3,7 +3,7 @@
  *  and silently convert a handled failure into an escaping one. Widen it when a caller genuinely needs a new
  *  code — an unused member is a claim about the code that is not true.
  *  https://man7.org/linux/man-pages/man3/errno.3.html */
-export type ErrnoCode = 'ENOENT' | 'EEXIST' | 'ELOOP';
+export type ErrnoCode = 'ENOENT' | 'EEXIST' | 'ELOOP' | 'ESRCH' | 'EPERM';
 
 /** True when the caught value is an errno error carrying exactly `code`. Narrows `unknown` rather than
  *  casting it, so a thrown non-Error fails closed (CLAUDE.md: a caught value is `unknown`, never an `Error`). */

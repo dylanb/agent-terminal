@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { createFlowManager } from '../../src/main/flow';
-import { setActiveFlowGated } from '../../src/main/activeFlowGate';
+import { createActiveFlowGate } from '../../src/main/activeFlowGate';
+import { createWorktreeLock } from '../../src/main/worktreeLock';
 import {
   ACTIVE_FLOW_FILE,
   activeFlowPointerFile,
@@ -281,11 +282,12 @@ describe('activeFlowPointer — AC6/AC8: the selection survives a real Terminate
 
   it('only a Terminate re-enables a new selection — the gate refuses while begun, permits after Terminate (AC6)', () => {
     const { wt, mgr } = withLocalFlowRun('a2-pointer-reenable');
-    expect(setActiveFlowGated(wt, 'feature-dev').ok).toBe(true);
+    const gate = createActiveFlowGate(createWorktreeLock({ lockRoot: join(fx.outsideDir('a2-pointer-locks'), 'locks') }));
+    expect(gate.set(wt, 'feature-dev').ok).toBe(true);
     mgr.start(wt);
-    expect(setActiveFlowGated(wt, 'other').ok).toBe(false); // begun → locked
+    expect(gate.set(wt, 'other').ok).toBe(false); // begun → locked
     mgr.terminate(wt);
-    expect(setActiveFlowGated(wt, 'other').ok).toBe(true); // Terminate re-enables selection
+    expect(gate.set(wt, 'other').ok).toBe(true); // Terminate re-enables selection
     expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'other' });
   });
 });

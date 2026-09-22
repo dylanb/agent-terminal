@@ -82,6 +82,7 @@ export type FlowStripDeps = Omit<
   | 'armInterrupt'
   | 'setTitle'
   | 'setActiveFlow'
+  | 'clearActiveFlow'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id

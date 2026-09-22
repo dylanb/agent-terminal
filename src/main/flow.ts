@@ -11,6 +11,7 @@ import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, recordDisposition } from './runDisposition';
+import { worktreeStartedness } from './startedness';
 import type { DispositionRead } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
@@ -236,50 +237,53 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
+/** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
+export type MachineView = Omit<FlowStateView, 'runStarted'>;
+
 export interface FlowMachine {
-  state(): FlowStateView;
+  state(): MachineView;
   /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
    *  re-entered RED writes fresh instead of resuming the prior slice. 1 for a flow with no repeat step. */
   currentSlice(): number;
   /** not_started → in_progress; throws on any other current status (inert in the error state). */
-  start(): FlowStateView;
+  start(): MachineView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
-  advance(): FlowStateView;
+  advance(): MachineView;
   /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
    *  ones are re-requested, and re-runs entry actions. Throws on any other status (inert on error). */
-  restart(): FlowStateView;
+  restart(): MachineView;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
-  undo(): FlowStateView;
+  undo(): MachineView;
   /** Roll a half-entered bootstrap step back one step when its async bootstrap failed (§27): in_progress
    *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
    *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
    *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
    *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
    *  or is not in_progress) returns the current view untouched rather than raising. */
-  revertStep(fromStepId: string): FlowStateView;
+  revertStep(fromStepId: string): MachineView;
   /** §28.4.2 in_progress → in_progress at the slice's RED step (the repeat step's `backTo`), re-running its
    *  entry actions and PRESERVING the slice count (`repeat_counts`) and resolved inputs — the human
    *  "back to RED" move that redoes the current impl-slice without consuming or adding one. A NO-OP GUARD,
    *  never a throw: inert unless in_progress with a repeat step whose target is at or before the current
    *  step, so a stale gate click cannot crash or jump the flow forward. */
-  reopenSlice(): FlowStateView;
+  reopenSlice(): MachineView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
-  terminate(): FlowStateView;
+  terminate(): MachineView;
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
-  provideInput(values: Record<string, string>): FlowStateView;
+  provideInput(values: Record<string, string>): MachineView;
   /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
    *  (unlike provideInput, which answers a step-entry prompt and re-enters). The plan-bundle approve gate uses
    *  it to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering plan-bundle would
    *  restart its loop. Legal only while a step is in_progress. */
-  resolveInputs(values: Record<string, string>): FlowStateView;
+  resolveInputs(values: Record<string, string>): MachineView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
-  setTitle(text: string): FlowStateView;
+  setTitle(text: string): MachineView;
 }
 
 /** Run a step's entry actions, given the flow's resolved typed inputs (§18.4). Returns a one-shot
@@ -303,7 +307,7 @@ export function createFlowMachine(
   readAppLoopView?: FlowReadAppLoopView,
 ): FlowMachine {
   if (!load.ok) {
-    const view = (): FlowStateView => {
+    const view = (): MachineView => {
       const named = store?.readTitle() ?? null;
       return {
         stepName: '',
@@ -313,7 +317,7 @@ export function createFlowMachine(
         status: 'error',
         // CWE-117/CWE-1007 (§16.3): the load-error message interpolates repo-authored content (a step id, a
         // kind:, a js-yaml snippet), so strip display-unsafe control chars ONCE over the whole composed
-        // message at the single place FlowStateView.error is populated (§B.3).
+        // message at the single place MachineView.error is populated (§B.3).
         error: stripDisplayControlChars(load.error),
         ...(named !== null ? { userTitle: named } : {}),
       };
@@ -415,9 +419,9 @@ export function createFlowMachine(
     return hasFlowRefs(refs) ? refs : undefined;
   };
 
-  const view = (): FlowStateView => {
+  const view = (): MachineView => {
     const step = current();
-    const base: FlowStateView = {
+    const base: MachineView = {
       stepName: step.id,
       steps: names,
       position: index + 1,
@@ -482,7 +486,7 @@ export function createFlowMachine(
 
   // Entry actions fire AFTER state is committed, on EVERY entry into a step (§24.2.3 T3); the notice
   // merges onto the transition view only. Completing the flow (`done`) enters no step.
-  const enter = (v: FlowStateView): FlowStateView => {
+  const enter = (v: MachineView): MachineView => {
     const r = onEnter?.(current(), inputs);
     if (!r) return v;
     return {
@@ -692,13 +696,16 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   };
   // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
   // call at the FlowManager boundary (the machine stays A2-unaware).
-  const decorate = (k: string, op: (m: FlowMachine) => FlowStateView): FlowStateView => {
+  const decorate = (k: string, op: (m: FlowMachine) => MachineView): MachineView => {
     const { machine, selectionReason } = machineFor(k);
     const view = op(machine);
     return selectionReason === undefined ? view : { ...view, selectionReason };
   };
+  // §18.7.4 — read AFTER the operation's own marker write/clear, so the view reports the started-ness it left.
+  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({ ...view, runStarted: worktreeStartedness(k) });
+  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, decorate(k, op));
   return {
-    state: (k) => decorate(k, (m) => m.state()),
+    state: (k) => viewOf(k, (m) => m.state()),
     start: (k) => {
       // §18.7.3 AC9 — capture the source binding from the pre-transition (still not_started) resolve: that is
       // the live-legs source this run commits to. Reading it after start() commits in_progress would instead hit
@@ -720,23 +727,23 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
           // cover. (A jail-escaping leaf reads 'indeterminate' instead — fail-closed.)
         }
       }
-      return view;
+      return withRunStarted(k, view);
     },
-    advance: (k) => decorate(k, (m) => m.advance()),
-    restart: (k) => decorate(k, (m) => m.restart()),
-    undo: (k) => decorate(k, (m) => m.undo()),
-    reopenSlice: (k) => decorate(k, (m) => m.reopenSlice()),
+    advance: (k) => viewOf(k, (m) => m.advance()),
+    restart: (k) => viewOf(k, (m) => m.restart()),
+    undo: (k) => viewOf(k, (m) => m.undo()),
+    reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
-    revertStep: (k, fromStepId) => decorate(k, (m) => m.revertStep(fromStepId)),
+    revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
     terminate: (k) => {
       const view = decorate(k, (m) => m.terminate());
       // §18.7.2 AC6 — Terminate is the one action that re-enables a new selection, so it clears the durable
       // run-begun marker (best-effort). revertStep/Restart/undo leave it in place.
       clearDisposition(k);
-      return view;
+      return withRunStarted(k, view);
     },
-    provideInput: (k, values) => decorate(k, (m) => m.provideInput(values)),
-    resolveInputs: (k, values) => decorate(k, (m) => m.resolveInputs(values)),
-    setTitle: (k, text) => decorate(k, (m) => m.setTitle(text)),
+    provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
+    resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
+    setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }

@@ -4,7 +4,8 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { load } from 'js-yaml';
@@ -22,6 +23,7 @@ import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
+import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2062,8 +2064,107 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   const refuse = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite);
   expect(refuse.ok).toBe(false);
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' }); // unchanged — the write was refused
+  // §18.7.4 — the raw durable started-ness rides the flow view (what A3's picker-enable classifies).
+  expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('started');
+
+  // AC6 — Terminate preserves the pointer (the same catalog flow still resolves) and re-enables a new selection.
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
+  await expect(flowStepName()).toHaveText('b-groom');
+  expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('never-started');
+  expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('a-step', { timeout: 10_000 });
+
+  // AC8 — clearing the selection returns the worktree to the silent global fallback.
+  expect(await page.evaluate((rk) => window.flow.clearActiveFlow(rk), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
+  await expect(reason()).toHaveCount(0);
+
+  // AC11 — a live peer (this test runner: alive, identity matching) holds the worktree lock: the pointer write
+  // and flow:start are both refused with a visible reason, and the pointer file is left untouched.
+  const lockFile = worktreeLockFile(worktreeLockRoot(home), repoWrite);
+  mkdirSync(dirname(lockFile), { recursive: true });
+  writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
+  const held = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
+  expect(held.ok).toBe(false);
+  if (!held.ok) expect(held.reason).toContain('Another Agent Terminal window');
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
+  await flowControl().click(); // Start, while the peer holds the lock
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('Another Agent Terminal window', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Start');
+
+  // …and a lock left behind by a DEAD holder is reclaimed, so the worktree is never bricked.
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const deadPid = child.pid!;
+  child.kill('SIGKILL');
+  await once(child, 'exit');
+  writeFileSync(lockFile, serializeLockHolder({ pid: deadPid, startTime: 'long-gone' }));
+  expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 });
 
   for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
+});
+
+// A2 (#133) §18.7.3 AC9 — a begun catalog run is source-sticky across an app restart: after a relaunch it still
+// resolves the catalog entry it began on (a pointer tampered on disk mid-run is ignored), and when that entry is
+// later removed the run surfaces the §18.1 error state rather than swapping to the fallback. @ownapp: it
+// relaunches its own Electron to re-read the on-disk run state.
+test('a begun catalog run keeps its source across a relaunch, and a lost source is the §18.1 error (§18.7.3 AC9)', { tag: '@ownapp' }, async () => {
+  const dirs: string[] = [];
+  const mk = (prefix: string): string => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    dirs.push(dir);
+    return dir;
+  };
+  const flowYaml = (name: string, ...steps: string[]): string =>
+    `name: ${name}\nsteps:\n` + steps.map((st) => `  - id: ${st}\n    kind: manual\n`).join('');
+  const seedEntry = (root: string, id: string, ...steps: string[]): void => {
+    mkdirSync(join(flowCatalogDir(root), id), { recursive: true });
+    writeFileSync(join(flowCatalogDir(root), id, FLOW_DEF_FILE), flowYaml(id, ...steps));
+  };
+  const home = mk('agent-term-e2e-a2-sticky-home-');
+  mkdirSync(flowHomeDir(home), { recursive: true });
+  writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), flowYaml('global-fallback', 'global-fallback-step'));
+  const repo = mk('agent-term-e2e-a2-sticky-');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  seedEntry(repo, 'sticky', 'sticky-one', 'sticky-two');
+  seedEntry(repo, 'other', 'other-step');
+  writeActiveFlow(repo, 'sticky');
+  const launch = async (): Promise<void> => {
+    app = await electron.launch({
+      args: launchArgs(),
+      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_HOME_DIR: home },
+    });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await typeCommand(`cd "${repo}"`);
+  };
+
+  await launch();
+  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await flowControl().click(); // Start → the run begins on the catalog entry
+  await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+  await app.close();
+
+  writeActiveFlow(repo, 'other'); // the pointer changes on disk while the run is begun
+  await launch();
+  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Advance');
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('other-step');
+  await app.close();
+
+  rmSync(join(flowCatalogDir(repo), 'sticky'), { recursive: true, force: true }); // the bound source is lost
+  await launch();
+  await expect(page.locator('#flow-strip .flow-error')).toBeVisible({ timeout: 10_000 });
+  const strip = await page.locator('#flow-strip').innerText();
+  expect(strip).not.toContain('global-fallback-step');
+  expect(strip).not.toContain('other-step');
+
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
 test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', { tag: '@ownapp' }, async () => {

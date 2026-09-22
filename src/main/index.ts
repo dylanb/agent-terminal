@@ -36,6 +36,7 @@ import {
   isValidFlowProvideInput,
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
+  isValidFlowClearActiveFlow,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -73,7 +74,8 @@ import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
 import { createRunResolver } from './runResolver';
-import { setActiveFlowGated } from './activeFlowGate';
+import { createActiveFlowGate } from './activeFlowGate';
+import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -178,6 +180,7 @@ async function createWindow(): Promise<void> {
     total: 0,
     status: 'error',
     error: 'invalid flow request',
+    runStarted: 'indeterminate',
   });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
@@ -525,6 +528,9 @@ async function createWindow(): Promise<void> {
   // the one factory the integration tests drive too.
   const resolveRun = createRunResolver(flowGlobalDir);
   const resolveActiveDefinition = (repoKey: string): FlowLoad => resolveRun(repoKey).load;
+  // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
+  const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
+  const activeFlowGate = createActiveFlowGate(worktreeLock);
 
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
@@ -1124,9 +1130,14 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        return withoutTrustedBootstrap(m.repoKey, () =>
-          recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
+        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
+        const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
+          withoutTrustedBootstrap(m.repoKey, () =>
+            recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
+          ),
         );
+        if (started.ok) return started.value;
+        return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
       },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
@@ -1184,14 +1195,21 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
-      // §18.7.4 AC7 — the authoritative main-side write gate: setActiveFlowGated refuses a selection once the
-      // run has begun, and (fail-closed) while begun-ness is indeterminate. A permitted write changes which
-      // flow leg-2 resolves, so re-pull the strip to render it (§24.2.2).
+      // §18.7.4 AC7/AC11 — the authoritative main-side write gate. A permitted write changes which flow leg 2
+      // resolves, so re-pull the strip to render it (§24.2.2).
       [CH.flowSetActiveFlow]: (_e, m) => {
         if (!isValidFlowSetActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:setActiveFlow request' };
         }
-        const result = setActiveFlowGated(m.repoKey, m.id);
+        const result = activeFlowGate.set(m.repoKey, m.id);
+        if (result.ok) pushFlowChanged();
+        return result;
+      },
+      [CH.flowClearActiveFlow]: (_e, m) => {
+        if (!isValidFlowClearActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
+          return { ok: false, reason: 'invalid flow:clearActiveFlow request' };
+        }
+        const result = activeFlowGate.clear(m.repoKey);
         if (result.ok) pushFlowChanged();
         return result;
       },

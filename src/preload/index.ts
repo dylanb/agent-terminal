@@ -132,6 +132,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowSetTitle, { sessionId: SESSION_ID, repoKey, title }) as Promise<FlowStateView>,
   setActiveFlow: (repoKey, id) =>
     ipcRenderer.invoke(CH.flowSetActiveFlow, { sessionId: SESSION_ID, repoKey, id }) as Promise<ActiveFlowWriteResult>,
+  clearActiveFlow: (repoKey) =>
+    ipcRenderer.invoke(CH.flowClearActiveFlow, { sessionId: SESSION_ID, repoKey }) as Promise<ActiveFlowWriteResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
