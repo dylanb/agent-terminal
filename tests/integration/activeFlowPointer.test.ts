@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
+import { createFlowManager } from '../../src/main/flow';
+import { setActiveFlowGated } from '../../src/main/activeFlowGate';
 import {
   ACTIVE_FLOW_FILE,
   activeFlowPointerFile,
@@ -102,7 +104,6 @@ describe('activeFlowPointer — first-run persistence & non-clobber (§18.7.2 AC
     const pointerBefore = readFileSync(activeFlowPointerFile(wt));
 
     // §18.7.2 own-file: the pointer is disjoint from flow-state.yaml, so a progression write cannot touch it.
-    // The wholesale Terminate/Restart write is pinned in the slice that owns that path.
     fx.writeFlowState(wt, { step: 'plan', status: 'in_progress' });
 
     expect(readFileSync(activeFlowPointerFile(wt))).toEqual(pointerBefore);
@@ -225,5 +226,66 @@ describe('activeFlowPointer — refuses a pointer path escaping the worktree via
     expect(read).not.toEqual({ kind: 'value', id: 'sneaky-flow' });
     // clear is a no-op on an unresolvable path — it neither throws nor deletes through the symlink.
     expect(() => clearActiveFlow(wt)).not.toThrow();
+  });
+});
+
+// A real FlowManager lifecycle rewrites flow-state.yaml wholesale (Terminate/Restart/undo) and clears the run
+// disposition; AC6 requires the pointer's own disjoint file to survive all of it, and the reverse clause of AC8
+// requires that wholesale write to leave the pointer byte-for-byte unchanged. The bare writeFlowState pin above
+// cannot exercise that path (Terminate also clears the disposition, todos, and capture), so these drive the
+// production manager through start/advance/undo/restart/terminate and re-read the pointer.
+describe('activeFlowPointer — AC6/AC8: the selection survives a real Terminate/Restart/undo (§18.7.2)', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+
+  const withLocalFlowRun = (name: string): { wt: string; mgr: ReturnType<typeof createFlowManager> } => {
+    const wt = fx.makeWorktree(name);
+    const globalDir = fx.makeWorktree(`${name}-global`);
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
+    return { wt, mgr: createFlowManager({ globalDir }) };
+  };
+
+  it('a Terminate leaves the pointer file byte-for-byte unchanged and its value readable (AC6/AC8)', () => {
+    const { wt, mgr } = withLocalFlowRun('a2-pointer-terminate');
+    writeActiveFlow(wt, 'feature-dev');
+    const before = readFileSync(activeFlowPointerFile(wt));
+    mgr.start(wt);
+    mgr.terminate(wt);
+    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'feature-dev' });
+  });
+
+  it('a Restart (after the run reaches done) preserves the pointer value (AC6)', () => {
+    const { wt, mgr } = withLocalFlowRun('a2-pointer-restart');
+    writeActiveFlow(wt, 'feature-dev');
+    const before = readFileSync(activeFlowPointerFile(wt));
+    mgr.start(wt);
+    mgr.advance(wt); // red -> green
+    mgr.advance(wt); // green -> done
+    mgr.restart(wt);
+    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'feature-dev' });
+  });
+
+  it('an undo (of a completed run) preserves the pointer value (AC6)', () => {
+    const { wt, mgr } = withLocalFlowRun('a2-pointer-undo');
+    writeActiveFlow(wt, 'feature-dev');
+    const before = readFileSync(activeFlowPointerFile(wt));
+    mgr.start(wt);
+    mgr.advance(wt); // red -> green
+    mgr.advance(wt); // green -> done
+    mgr.undo(wt); // done -> in_progress (undoes the completion)
+    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'feature-dev' });
+  });
+
+  it('only a Terminate re-enables a new selection — the gate refuses while begun, permits after Terminate (AC6)', () => {
+    const { wt, mgr } = withLocalFlowRun('a2-pointer-reenable');
+    expect(setActiveFlowGated(wt, 'feature-dev').ok).toBe(true);
+    mgr.start(wt);
+    expect(setActiveFlowGated(wt, 'other').ok).toBe(false); // begun → locked
+    mgr.terminate(wt);
+    expect(setActiveFlowGated(wt, 'other').ok).toBe(true); // Terminate re-enables selection
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'other' });
   });
 });
