@@ -41,4 +41,33 @@ describe('local/no-todo-comments — forbids code TODO/FIXME deferral comments (
   it('does NOT flag a TODO_-prefixed identifier (code, not a comment)', async () => {
     expect(await markerErrors('export const TODO_UNDO_MS = 60000;\n')).toBe(0);
   });
+
+  // The rule must never exclude documentation of a legitimate external invariant/contract — one of the two
+  // comment kinds CODE-STANDARDS sanctions. Such a comment cites a spec clause or protocol and carries no
+  // deferral marker, so it passes clean; these pin that guarantee against a future over-broadening of MARKER.
+  it('does NOT flag a marker-free external-invariant comment (a §n citation + tracked-issue pointer)', async () => {
+    expect(
+      await markerErrors(
+        '// §27.12 — after a relaunch the bootstrap map is empty, so verifyBootstrap skips the PR-identity check;\n' +
+          '// a naive re-seed is unsafe (repo-scoped, could retarget the ready command). Tracked in #999.\n' +
+          'export const a = 1;\n',
+      ),
+    ).toBe(0);
+  });
+
+  it('does NOT flag a marker-free untestability site pointer', async () => {
+    expect(
+      await markerErrors('// untestable without a real terminal; verified in the §F e2e — tracked in #153\nexport const a = 1;\n'),
+    ).toBe(0);
+  });
+
+  it('allows a legitimate external-contract reference to the literal marker via an explicit eslint-disable', async () => {
+    // The rare residue: a comment whose SUBJECT is the marker token as an external contract (git's rebase
+    // instruction sheet). An explicit, auditable per-line disable permits it without weakening the ban.
+    const code =
+      '// eslint-disable-next-line local/no-todo-comments\n' +
+      "// git writes its rebase instruction sheet with a leading TODO keyword this parser must match.\n" +
+      'export const a = 1;\n';
+    expect(await markerErrors(code)).toBe(0);
+  });
 });

@@ -321,7 +321,13 @@ Everything else goes. Prefer a precise name, a named test, or a `§n` citation o
 issue (optionally pointed at from the site by a plain marker-free comment, e.g. `// untestable; tracked in
 #NNN`), never a code marker; the `local/no-todo-comments` ESLint rule (`eslint.config.mjs`) enforces this in
 the husky pre-commit hook and the CI `pnpm lint` step. The rule is case-sensitive on the uppercase marker, so
-the `todo`/`Todo` domain word (the Todo pane) and identifiers like `TODO_UNDO_MS` are unaffected. When in
+the `todo`/`Todo` domain word (the Todo pane) and identifiers like `TODO_UNDO_MS` are unaffected. **The ban
+never excludes documentation of a legitimate external invariant or contract** — the two comment kinds this
+section sanctions above: the rule scans comment tokens for the uppercase deferral marker only, so a marker-free
+`§n`/protocol citation, a cross-module-coupling note, or a `// untestable; tracked in #NNN` pointer passes
+clean; and on the rare occasion the cited external contract *is* the literal token, an explicit
+`// eslint-disable-next-line local/no-todo-comments` permits that one comment (all three shapes are pinned in
+`tests/unit/noTodoCommentsLint.test.ts`). When in
 doubt, delete: a missing comment costs a code read; a wrong one costs a misled change. Three corollaries close
 the loopholes this rule has actually leaked through:
 
