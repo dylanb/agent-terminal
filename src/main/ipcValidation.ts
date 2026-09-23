@@ -183,8 +183,8 @@ export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
 }
 
 /** flow:setActiveFlow — the catalog id the operator picked (§18.7.2/§18.7.4). Shape + bound only here
- *  (CWE-1284); the started-ness gate and the safe-catalog-ID check live behind the write (activeFlowGate,
- *  readActiveFlow). */
+ *  (CWE-1284); the started-ness gate (activeFlowGate) and the safe-catalog-ID check (writeActiveFlow) live
+ *  behind the write. */
 export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg {
   return (
     isRecord(m) &&

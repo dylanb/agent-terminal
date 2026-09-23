@@ -133,7 +133,7 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
 
   // stub → { kind: 'unset' }, so `.kind` fails RED for the intended reason. Each degrade case must also carry
   // a non-empty reason (AC4 "visible reason"): the resolver passes pointer.reason through verbatim
-  // (resolveRunDefinition.ts:73), so a GREEN returning reason:'' would run the fallback with nothing surfaced.
+  // (resolveRunDefinition.ts), so a GREEN returning reason:'' would run the fallback with nothing surfaced.
   const expectDegradeWithReason = (wt: string): void => {
     const read = readActiveFlow(wt);
     expect(read.kind).toBe('degrade');

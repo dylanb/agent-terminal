@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { symlinkSync } from 'node:fs';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { worktreeStartedness } from '../../src/main/startedness';
+import { MAX_FLOW_STATE_BYTES } from '../../src/main/flowState';
 import { runDispositionFile } from '../../src/main/runDisposition';
 
 // A2 (#133) §18.7.4 AC7 — worktreeStartedness is the semantic started-ness accessor the pointer-write gate,
@@ -53,11 +54,14 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
   it("reports 'indeterminate' (fail-closed) for a present but unparseable progression, never 'never-started'", () => {
     const wt = fx.makeWorktree('a2-startedness-corrupt');
     // §18.7.4 / CWE-841 — a present-but-unverifiable flow-state must fail CLOSED: an attacker who corrupts the
-    // progression must not unlock the gate by making a begun run read back as never-started. A byte-cap variant
-    // (over-cap valid record -> 'indeterminate') is authored RED-first in GREEN alongside flowState's bounded
-    // reader, since that cap constant is a GREEN deliverable; this cap-independent parse-failure case pins the
-    // fail-closed classification now.
+    // progression must not unlock the gate by making a begun run read back as never-started.
     fx.writeFlowStateRaw(wt, '[unterminated flow sequence');
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
+  it("reports 'indeterminate' (fail-closed) for an over-cap progression, never parsing it (§18.7.6/CWE-400)", () => {
+    const wt = fx.makeWorktree('a2-startedness-overcap');
+    fx.writeFlowStateOversized(wt, MAX_FLOW_STATE_BYTES + 1, { step: 'plan', status: 'not_started' });
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
@@ -152,20 +156,6 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
-  // §18.7.4 AC7 revertStep-stays-locked, accessor half — a begun run whose first step is rolled back still reads
-  // 'started' — is authored this turn over the real start()->revertStep() lifecycle in startednessRevertLocked.test.ts;
-  // it fails by assertion because the durable has-started marker is not composed yet, the
-  // branch a naive `status !== 'not_started'` classifier slips through (CWE-841).
-  //
-  // Deferred (declared, not silent — the slice-1 red-result pattern): two acceptance-level REDs are authored
-  // RED-first WITHIN the write-gate GREEN, each blocked on a GREEN deliverable that must exist first for the RED to
-  // fail by an assertion rather than a missing-symbol error:
-  //   * §18.7.4 AC7 revertStep-stays-locked, composed half — a real first-step `revertStep` then the real
-  //     `flow:setActiveFlow` handler refused with `active-flow.yaml` byte-for-byte unchanged. Blocked on
-  //     `recordDisposition` (the run-disposition own-file whose presence IS the marker; its on-disk representation
-  //     is a GREEN decision) and the gated handler.
-  //   * §18.7.4 AC7 composed write-gate refusal — `flow:setActiveFlow` refused under 'started'/'indeterminate',
-  //     permitted only under 'never-started', serialized under the cross-process worktree lock. Blocked on the
-  //     gated handler and `worktreeLock.ts`. `worktreeStartedness` and `isSelectionLocked` are pinned in isolation
-  //     here; composing them at the write boundary is glue that gets its own RED in GREEN ("glue is code").
+  // The composed AC7 pins — revertStep-stays-locked and the gated write refusal — live in
+  // startednessRevertLocked.test.ts and activeFlowGate.test.ts.
 });

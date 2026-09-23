@@ -31,6 +31,8 @@ export interface WorktreeLockDeps {
   holderLiveness?: (holder: LockHolder) => HolderLiveness;
   /** Runs after a lock is judged stale and before it is reclaimed — the point two reclaimers can interleave. */
   beforeReclaim?: () => void;
+  /** Creates `file` holding `content`, failing with EEXIST when it already exists. */
+  writeNewFile?: (file: string, content: string) => void;
 }
 
 export interface WorktreeLock {
@@ -39,6 +41,9 @@ export interface WorktreeLock {
    *  `fn`) when the lock cannot be acquired. */
   withWorktreeLock<T>(worktreeDir: string, fn: () => T): LockedResult<T>;
 }
+
+/** Bounds a macOS `ps` start-time probe, which runs synchronously on the main process. */
+export const PROCESS_START_TIME_TIMEOUT_MS = 2_000;
 
 /** Bounds the acquire ↔ reclaim retry by attempt count, never by elapsed time. */
 const MAX_ACQUIRE_ATTEMPTS = 4;
@@ -97,6 +102,8 @@ export function processStartTime(pid: number): string | null {
         encoding: 'utf8',
         env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
         stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: PROCESS_START_TIME_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
       }).trim();
       return out.length > 0 ? out : null;
     }
@@ -141,12 +148,16 @@ function tryUnlink(file: string): void {
   } catch {}
 }
 
+function writeNewPrivateFile(file: string, content: string): void {
+  writeFileSync(file, content, { mode: 0o600, flag: 'wx' });
+}
+
 /** Exclusive create with its content already in place: the holder is written to a private temp and hard-linked
  *  into place, which fails with EEXIST when the lock exists — so no peer ever reads a half-written holder. */
-function tryCreate(file: string, content: string): boolean {
+function tryCreate(file: string, content: string, writeNewFile: (file: string, content: string) => void): boolean {
   const tmp = `${file}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, content, { mode: 0o600, flag: 'wx' });
   try {
+    writeNewFile(tmp, content);
     linkSync(tmp, file);
     return true;
   } catch (e) {
@@ -159,6 +170,7 @@ function tryCreate(file: string, content: string): boolean {
 
 export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   const liveness = deps.holderLiveness ?? realHolderLiveness;
+  const writeNewFile = deps.writeNewFile ?? writeNewPrivateFile;
 
   const isStale = (text: string): boolean | 'unknown' => {
     const holder = parseLockHolder(text);
@@ -173,7 +185,7 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
    *  winner's live lock instead of deleting it. */
   const reclaim = (file: string, staleText: string, self: string): void => {
     const guard = `${file}.reclaim`;
-    if (!tryCreate(guard, self)) {
+    if (!tryCreate(guard, self, writeNewFile)) {
       const guardText = readText(guard);
       if (guardText !== null && isStale(guardText) === true) tryUnlink(guard);
       return;
@@ -198,7 +210,7 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
       if (!isRealContainer(path.dirname(file))) return refuse('the lock directory is not a real directory');
       mkdirSync(path.dirname(file), { recursive: true });
       for (let attempt = 0; attempt < MAX_ACQUIRE_ATTEMPTS; attempt++) {
-        if (tryCreate(file, self)) {
+        if (tryCreate(file, self, writeNewFile)) {
           return {
             ok: true,
             release: () => {

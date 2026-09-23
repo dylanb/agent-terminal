@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowManager } from '../../src/main/flow';
@@ -31,6 +31,39 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
     const res = gateFor().set(wt, 'cat-flow');
     expect(res.ok).toBe(true);
     expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'cat-flow' });
+  });
+
+  it('refuses an id the pointer reader would reject, leaving the prior selection in place (§18.7.6)', () => {
+    const wt = fx.makeWorktree('a2-gate-unsafe-id');
+    const gate = gateFor();
+    gate.set(wt, 'first');
+    const before = readFileSync(activeFlowPointerFile(wt));
+
+    const res = gate.set(wt, 'Feature-Dev');
+
+    expect(res.ok).toBe(false);
+    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+  });
+
+  it('AC10: a gated first selection on a worktree with no .agent-terminal creates the path and writes no .gitignore', () => {
+    const wt = fx.makeFirstRunWorktree('a2-gate-first-run');
+    expect(gateFor().set(wt, 'cat-flow')).toEqual({ ok: true });
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'cat-flow' });
+    expect(existsSync(join(wt, '.gitignore'))).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('surfaces a reason, never a throw, when the permitted write faults', () => {
+    const wt = fx.makeWorktree('a2-gate-write-fault');
+    mkdirSync(dirname(activeFlowPointerFile(wt)), { recursive: true });
+    chmodSync(dirname(activeFlowPointerFile(wt)), 0o555);
+    try {
+      const res = gateFor().set(wt, 'cat-flow');
+      expect(res.ok).toBe(false);
+      expect(res.ok ? '' : res.reason).toMatch(/could not be saved/);
+    } finally {
+      chmodSync(dirname(activeFlowPointerFile(wt)), 0o755);
+    }
+    expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
   });
 
   it('refuses a selection once the run has begun, leaving the pointer byte-for-byte unchanged', () => {

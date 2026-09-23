@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowManager, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
@@ -47,11 +47,22 @@ describe('runDisposition — the durable run-begun marker (§18.7.4)', () => {
     expect(readDisposition(wt)).toBe('indeterminate');
   });
 
-  it('recordDisposition throws when the marker path is unresolvable — a symlink escaping the worktree (CWE-22/59)', () => {
+  it('recordDisposition replaces a symlink planted at the marker leaf, never writing through it (CWE-22/59)', () => {
     const wt = fx.makeWorktree('a2-disp-record-escape');
     const outside = fx.outsideDir('a2-disp-record-target');
     symlinkSync(outside, runDispositionFile(wt));
+    recordDisposition(wt, NON_CATALOG);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(lstatSync(runDispositionFile(wt)).isFile()).toBe(true);
+  });
+
+  it('recordDisposition throws when the flow home itself is a symlink escaping the worktree (CWE-22/59)', () => {
+    const wt = fx.makeWorktree('a2-disp-record-home-escape');
+    const outside = fx.outsideDir('a2-disp-record-home-target');
+    rmSync(flowHomeDir(wt), { recursive: true, force: true });
+    symlinkSync(outside, flowHomeDir(wt));
     expect(() => recordDisposition(wt, NON_CATALOG)).toThrow();
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it('clearDisposition removes a non-file marker planted in the worktree, so the Terminate that clears it re-enables selection (§18.7.2 AC6/CWE-703)', () => {
@@ -99,21 +110,40 @@ describe('runDisposition lifecycle over the real FlowManager (§18.7.2/§18.7.4)
     expect(readDisposition(wt)).toBe('absent');
   });
 
-  it('start() does not abort when the marker write fails after the run has already committed in_progress (CWE-703/754)', () => {
+  const asRoot = process.getuid?.() === 0; // root ignores the 0o555 fault these pins inject
+
+  it.skipIf(asRoot)('a marker that cannot be written refuses the start with a reason, leaving the run not_started (§18.7.3 AC9)', () => {
     const wt = fx.makeWorktree('a2-disp-start-marker-fail');
     const globalDir = fx.makeWorktree('a2-disp-start-marker-fail-global');
-    const outside = fx.outsideDir('a2-disp-start-marker-target');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
-    // recordDisposition will throw on this unresolvable leaf — but only AFTER decorate() has committed
-    // in_progress to flow-state.yaml. The commit must stand; the marker-write fault must not abort start().
-    symlinkSync(outside, runDispositionFile(wt));
     const mgr = createFlowManager({ globalDir });
+    chmodSync(flowHomeDir(wt), 0o555);
+    try {
+      const view = mgr.start(wt);
+      expect(view.status).toBe('not_started');
+      expect(view.notice).toMatch(/could not be started/);
+    } finally {
+      chmodSync(flowHomeDir(wt), 0o755);
+    }
+    expect(mgr.state(wt).status).toBe('not_started');
+  });
 
-    let view: ReturnType<typeof mgr.start> | undefined;
-    expect(() => {
-      view = mgr.start(wt);
-    }).not.toThrow();
-    expect(view?.status).toBe('in_progress');
+  it.skipIf(asRoot)('a marker that cannot be cleared refuses the Terminate with a reason, and a retry after the fault clears unlocks (§18.7.2 AC6)', () => {
+    const wt = fx.makeWorktree('a2-disp-terminate-fault');
+    const globalDir = fx.makeWorktree('a2-disp-terminate-fault-global');
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
+    const mgr = createFlowManager({ globalDir });
+    mgr.start(wt);
+    chmodSync(flowHomeDir(wt), 0o555);
+    try {
+      const refused = mgr.terminate(wt);
+      expect(refused.view.status).toBe('in_progress');
+      expect(refused.view.notice).toMatch(/could not be terminated/);
+    } finally {
+      chmodSync(flowHomeDir(wt), 0o755);
+    }
+    expect(mgr.terminate(wt).view.status).toBe('not_started');
+    expect(worktreeStartedness(wt)).toBe('never-started');
   });
 
   it("records no marker for a start that never reaches in_progress — the guard's false side", () => {

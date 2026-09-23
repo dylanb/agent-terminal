@@ -294,6 +294,15 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     return button;
   }
 
+  function appendHeldNotices(): void {
+    for (const text of heldNotices) {
+      const notice = doc.createElement('div');
+      notice.className = 'flow-notice';
+      notice.textContent = text;
+      host.append(notice);
+    }
+  }
+
   function terminateButton(): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = 'flow-terminate pill';
@@ -336,6 +345,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       err.className = 'flow-error';
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
+      // §18.7.2 AC6 — a begun run held at the load error still has Terminate as its route back to not_started.
+      if (deps.onTerminate && state.runStarted !== 'never-started') host.append(terminateButton());
+      appendHeldNotices();
       deps.onPanelState?.(null, ''); // no step → the docked panel clears + closes
       return;
     }
@@ -415,12 +427,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // asynchronous producer (the coordinator's §19.3 refusal) has one pending; the strip holds it across
     // passive re-pulls and clears it at the next transition. Each held notice renders its own line so a
     // migration notice and a later busy-refusal both show (neither drops the other).
-    for (const text of heldNotices) {
-      const notice = doc.createElement('div');
-      notice.className = 'flow-notice';
-      notice.textContent = text;
-      host.append(notice);
-    }
+    appendHeldNotices();
 
     // WCAG 2.4.3
     if (hadFocus && !host.contains(doc.activeElement)) {

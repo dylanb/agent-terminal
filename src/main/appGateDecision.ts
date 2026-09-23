@@ -262,7 +262,7 @@ export async function runAppGateDecision(
           // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
           // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
           // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-          // same-branch baseline from a prior phase is NOT yet refused, so recovery there is a phase re-run, not
+          // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
           // an automatic block. Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
           try {
             deps.recordBaseline(repoDir, result.branch, result.sha);

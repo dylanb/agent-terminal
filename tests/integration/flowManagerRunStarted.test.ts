@@ -23,7 +23,7 @@ describe('FlowStateView.runStarted — raw durable started-ness on the flow view
     expect(reverted.runStarted).toBe('started');
     expect(mgr.state(wt).runStarted).toBe('started');
     mgr.start(wt);
-    expect(mgr.terminate(wt).runStarted).toBe('never-started');
+    expect(mgr.terminate(wt).view.runStarted).toBe('never-started');
     expect(mgr.state(wt).runStarted).toBe('never-started');
   });
 

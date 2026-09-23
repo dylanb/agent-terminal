@@ -95,9 +95,8 @@ describe('resolveRunDefinition — three-leg flow-definition resolution (§18.7.
     const wt = fx.makeWorktree('leg2-miss'); // no local flow.yaml
     const globalRoot = seedGlobalFallback();
 
-    // A set pointer naming an id the catalog cannot resolve — the resolve-to-fallback half of the bad-pointer AC
-    // this slice implements (the visible degrade reason is a later slice); the value branch must NOT crash or
-    // return an error load, it must fall through to the fallback.
+    // A set pointer naming an id the catalog cannot resolve: the value branch must NOT crash or return an error
+    // load, it must fall through to the fallback.
     const pointer: () => PointerRead = () => ({ kind: 'value', id: 'ghost' });
     const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });
 

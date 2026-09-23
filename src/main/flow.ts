@@ -10,10 +10,11 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import { clearDisposition, recordDisposition } from './runDisposition';
+import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
-import type { DispositionRead } from './resolveRunDefinition';
+import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
+import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
@@ -78,18 +79,12 @@ export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
   | { ok: false; error: string };
 
-export const FLOW_HOME_SUBDIR = '.agent-terminal';
+export { FLOW_HOME_SUBDIR, flowHomeDir };
 
 /** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
- *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is below). */
+ *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is in flowHome.ts). */
 export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
-
-/** Where a root keeps its flow definition (§18.1/§23.4) — the resolver the install action writes through,
- *  so the seeded location and the location read back here cannot drift (CLAUDE.md writer↔reader rule). */
-export function flowHomeDir(root: string): string {
-  return path.join(root, FLOW_HOME_SUBDIR);
-}
 
 /** Whether `root` holds a flow definition at its flow home — the single leg-1 presence gate the local-first
  *  loader and the §18.7.3 resolver both read, so the "is a flow present here" boundary that decides which flow
@@ -302,7 +297,7 @@ export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
   load: FlowLoad,
-  store?: FlowStateStore,
+  store?: Omit<FlowStateStore, 'clearProgression'>,
   onEnter?: FlowEnterStep,
   readAppLoopView?: FlowReadAppLoopView,
 ): FlowMachine {
@@ -631,7 +626,7 @@ export interface FlowManager {
   currentSlice(repoKey: string): number;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
-  terminate(repoKey: string): FlowStateView;
+  terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
   /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
    *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
@@ -640,14 +635,11 @@ export interface FlowManager {
   setTitle(repoKey: string, text: string): FlowStateView;
 }
 
-/** What the definition seam returns: the §18.1 load, the §18.7.6 display-sanitized degrade reason (present only
- *  when a pointer selection degraded to the fallback), and the §18.7.3 AC9 source binding this resolution used
- *  (present on the never-started live legs). A structural subset of resolveRunDefinition's return. */
-export interface ResolvedDefinition {
-  load: FlowLoad;
-  selectionReason?: string;
-  binding?: DispositionRead;
-}
+/** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
+export type TerminateResult = { outcome: 'reset' | 'refused'; view: FlowStateView };
+
+/** What the definition seam returns (§18.1 load, §18.7.6 degrade reason, §18.7.3 AC9 binding). */
+export type ResolvedDefinition = ResolvedRunDefinition;
 
 export interface FlowManagerDeps {
   /** Global fallback dir for the DEFINITION only (§18.1); STATE is never global. */
@@ -664,7 +656,11 @@ export interface FlowManagerDeps {
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const loadDef: (localDir: string, globalDir: string) => ResolvedDefinition =
-    deps.loadDefinition ?? ((localDir, globalDir) => ({ load: loadFlowDefinitionLocalFirst(localDir, globalDir) }));
+    deps.loadDefinition ??
+    ((localDir, globalDir) => ({
+      load: loadFlowDefinitionLocalFirst(localDir, globalDir),
+      binding: { source: 'non-catalog' },
+    }));
   const makeStore = deps.makeStore ?? createFlowStateStore;
   // Cache the machine AND a signature of the definition it was built from. The DEFINITION (flow.yaml)
   // is re-read on every access — like the §19.1 state re-read — and the machine is rebuilt only when
@@ -707,24 +703,25 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   return {
     state: (k) => viewOf(k, (m) => m.state()),
     start: (k) => {
-      // §18.7.3 AC9 — capture the source binding from the pre-transition (still not_started) resolve: that is
-      // the live-legs source this run commits to. Reading it after start() commits in_progress would instead hit
-      // the already-begun bound path (no live-legs binding), so the source must be read BEFORE the transition.
-      const binding = machineFor(k).binding ?? { source: 'non-catalog' };
-      const view = decorate(k, (m) => m.start());
-      // §18.7.4 AC7 / §18.7.3 AC9 — record the durable run-begun marker AND its source binding on the in_progress
-      // transition, so a first-step revertStep (which rolls the display status back to not_started) keeps a new
-      // selection locked (CWE-841) and a begun run re-resolves the SAME source rather than the live pointer.
-      if (view.status === 'in_progress') {
+      // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
+      // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
+      // the start with a visible reason, leaving the run not_started.
+      const { machine, binding } = machineFor(k);
+      const begins = binding !== undefined && machine.state().status === 'not_started';
+      const hadMarker = readDisposition(k) === 'present';
+      if (begins) {
         try {
           recordDisposition(k, binding);
+        } catch (e) {
+          return withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
+        }
+      }
+      const view = decorate(k, (m) => m.start());
+      if (begins && !hadMarker && view.status !== 'in_progress') {
+        try {
+          clearDisposition(k);
         } catch {
-          // Best-effort: the transition already committed, so a marker-write fault must not abort start() — a
-          // throw would also drop the caller's §25 'start' audit entry, which is recorded only after start()
-          // returns. Accepted best-effort limit: a physical fault that leaves no marker (a full/RO disk) reads
-          // back 'absent', so the gate degrades to the in_progress display status — which locks the selection
-          // during the run but NOT across a first-step revertStep, the exact case the durable marker exists to
-          // cover. (A jail-escaping leaf reads 'indeterminate' instead — fail-closed.)
+          // Fail-closed: a surviving marker keeps the selection locked, never unlocked.
         }
       }
       return withRunStarted(k, view);
@@ -736,11 +733,29 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
     revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
     terminate: (k) => {
-      const view = decorate(k, (m) => m.terminate());
-      // §18.7.2 AC6 — Terminate is the one action that re-enables a new selection, so it clears the durable
-      // run-begun marker (best-effort). revertStep/Restart/undo leave it in place.
-      clearDisposition(k);
-      return withRunStarted(k, view);
+      // §18.7.2 AC6 — progression is reset BEFORE the begun marker is cleared: with the marker still present the
+      // run resolves its recorded source, and a run held at the §18.1 error (its source unverifiable) is reset
+      // through the store, so every begun run has a route back to not_started.
+      const { machine } = machineFor(k);
+      const status = machine.state().status;
+      try {
+        if (status === 'in_progress' || status === 'done') machine.terminate();
+        else if (status === 'error' && worktreeStartedness(k) !== 'never-started') makeStore(k).clearProgression();
+        else return { outcome: 'refused', view: viewOf(k, (m) => m.state()) };
+      } catch (e) {
+        return {
+          outcome: 'refused',
+          view: withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
+        };
+      }
+      let notice: string | undefined;
+      try {
+        clearDisposition(k);
+      } catch (e) {
+        notice = `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`;
+      }
+      const view = viewOf(k, (m) => m.state());
+      return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };
     },
     provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
     resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),

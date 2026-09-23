@@ -1,12 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import {
   createWorktreeLock,
   currentLockHolder,
+  processStartTime,
+  PROCESS_START_TIME_TIMEOUT_MS,
   serializeLockHolder,
   worktreeLockFile,
   type LockHolder,
@@ -150,4 +152,41 @@ describe('worktree lock (§18.7.4 AC11)', () => {
     expect(second).toBeDefined();
     expect([first.ok, second!.ok].filter(Boolean)).toHaveLength(1);
   });
+  it('a lock write that faults after the file is created refuses and leaves nothing behind in the lock directory', () => {
+    const { lockRoot, wt } = setup();
+    const diskFull = (file: string): void => {
+      writeFileSync(file, '', { flag: 'wx' });
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    };
+
+    const got = createWorktreeLock({ lockRoot, writeNewFile: diskFull }).acquire(wt);
+
+    expect(got.ok).toBe(false);
+    if (!got.ok) expect(got.reason).toMatch(/no space left/);
+    expect(readdirSync(lockRoot)).toEqual([]);
+    expect(createWorktreeLock({ lockRoot }).acquire(wt).ok).toBe(true);
+  });
+
+  it.skipIf(process.platform !== 'darwin')(
+    'a hung start-time probe is abandoned within its timeout and reads as unknown',
+    () => {
+      const bin = fx.outsideDir('a2-lock-hung-ps');
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexec sleep 30\n');
+      chmodSync(join(bin, 'ps'), 0o755);
+      const savedPath = process.env.PATH;
+      process.env.PATH = `${bin}:${savedPath ?? ''}`;
+      try {
+        const began = Date.now();
+        const startTime = processStartTime(process.pid);
+        const elapsed = Date.now() - began;
+
+        expect(startTime).toBeNull();
+        expect(elapsed).toBeLessThan(PROCESS_START_TIME_TIMEOUT_MS + 5_000);
+      } finally {
+        process.env.PATH = savedPath;
+      }
+    },
+    45_000,
+  );
 });

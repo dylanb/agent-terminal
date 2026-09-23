@@ -4,12 +4,11 @@
 // it and vice-versa (§18.7.2 own-file; the AC8 non-clobber invariant).
 
 import path from 'node:path';
-import { readFileSync, rmSync, statSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
-import { confinedRealPath, resolveJail } from './confinedPath';
-import { isErrno } from './errno';
-import { FLOW_HOME_SUBDIR, flowHomeDir } from './flow';
+import { readBoundedNoFollow } from './boundedRead';
+import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { stripDisplayControlChars } from '../shared/controlChars';
 import { type PointerRead } from './resolveRunDefinition';
@@ -28,15 +27,7 @@ export function activeFlowPointerFile(worktreeDir: string): string {
   return path.join(flowHomeDir(worktreeDir), ACTIVE_FLOW_FILE);
 }
 
-/** §18.7.2 — the confined absolute pointer-file path, or null when the flow home cannot be reduced to a
- *  symlink-free real path under the worktree (a link planted at `.agent-terminal` or the pointer leaf never
- *  adopts its target, CWE-22/59). Confined through resolveJail because the flow home sits inside the untrusted
- *  worktree. */
-function confinedPointerFile(worktreeDir: string): string | null {
-  const jail = resolveJail(worktreeDir, FLOW_HOME_SUBDIR);
-  if (jail === null) return null;
-  return confinedRealPath(jail, activeFlowPointerFile(worktreeDir));
-}
+const confinedPointerFile = (worktreeDir: string): string | null => flowHomeLeaf(worktreeDir, ACTIVE_FLOW_FILE);
 
 const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
 const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
@@ -56,9 +47,11 @@ const invalidIdReason = (value: string): string =>
   `Selected flow "${displaySafeId(value)}" is not a valid flow id; running the default flow instead.`;
 
 /** Persist `id` as the worktree's active-flow selection, written as a structured value never
- *  string-concatenated (CWE-78). Throws when the pointer path is unresolvable — a symlink escaping the
- *  worktree (CWE-22/59) or a container that is not a real directory. */
+ *  string-concatenated (CWE-78). Throws when `id` fails the gate readActiveFlow applies, or when the pointer
+ *  path is unresolvable — a symlink escaping the worktree (CWE-22/59) or a container that is not a real
+ *  directory. */
 export function writeActiveFlow(worktreeDir: string, id: string): void {
+  if (!isSafeCatalogId(id)) throw new Error(`"${displaySafeId(id)}" is not a valid flow id`);
   const file = confinedPointerFile(worktreeDir);
   if (file === null) throw new Error('active-flow pointer path is unresolvable');
   if (!atomicWriteFileSync(file, yaml.dump(id))) {
@@ -85,18 +78,11 @@ export function clearActiveFlow(worktreeDir: string): void {
 export function readActiveFlow(worktreeDir: string): PointerRead {
   const file = confinedPointerFile(worktreeDir);
   if (file === null) return UNREADABLE;
-  let text: string;
-  try {
-    // §18.7.6 / CWE-400
-    if (statSync(file).size > MAX_POINTER_FILE_BYTES) return UNREADABLE;
-    text = readFileSync(file, 'utf8');
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return { kind: 'unset' };
-    return UNREADABLE;
-  }
+  const read = readBoundedNoFollow(file, MAX_POINTER_FILE_BYTES);
+  if (!read.ok) return read.cause === 'absent' ? { kind: 'unset' } : UNREADABLE;
   let doc: unknown;
   try {
-    doc = yaml.load(text);
+    doc = yaml.load(read.text);
   } catch {
     return UNREADABLE;
   }

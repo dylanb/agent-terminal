@@ -23,6 +23,7 @@ import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
+import { recordDisposition } from '../../src/main/runDisposition';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 
 
@@ -5702,6 +5703,28 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   rmSync(home, { recursive: true, force: true });
 });
 
+test('a begun run with no run record is held at the load error, and Terminate from that view returns it to Not started (§18.7.2 AC6)', { tag: '@ownapp' }, async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-held-', 'groom');
+  writeFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), 'step: groom\nstatus: in_progress\ntitle: Held run\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-held-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toBeVisible({ timeout: 10_000 });
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+
+  await expect(flowControl()).toHaveText('Start');
+  expect(load(readFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), 'utf8'))).toEqual({ title: 'Held run' });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-zero-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
@@ -6948,6 +6971,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   // Already ENTERED at plan-bundle (in_progress), so no Start click is needed — hence no pickup runs and no
   // trusted bootstrap is installed; the epic issue ref stays unresolvable.
   writeFileSync(join(at, 'flow-state.yaml'), 'step: plan-bundle\nstatus: in_progress\n');
+  recordDisposition(dir, { source: 'non-catalog' });
   writeFileSync(
     join(at, 'loop', 'run-state.yaml'),
     `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-bundle-loop\nstep: plan-bundle\nturn_key: consolidate-plan-bundle\nstatus: complete\nverdict: clean\nround: 1\n`,

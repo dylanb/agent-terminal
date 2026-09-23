@@ -2,12 +2,13 @@
 // (no-gitignore-writes rule); a user who does not want flow-state.yaml committed ignores
 // .agent-terminal/ themselves.
 
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
+import { readBoundedNoFollow } from './boundedRead';
+import { FLOW_HOME_SUBDIR } from './flowHome';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
-import { errMsg, isErrno } from './errno';
+import { errMsg } from './errno';
 import type { FlowStatus } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
@@ -39,9 +40,12 @@ export interface FlowStateStore {
   readTitle(): string | null;
   /** Name the worktree, leaving any progression on disk untouched. Throws if the write cannot land. */
   writeTitle(title: string | null): void;
+  /** Discard any progression, keeping a readable title — the never-started document. Throws if the write
+   *  cannot land. */
+  clearProgression(): void;
 }
 
-const AGENT_DIR = '.agent-terminal';
+const AGENT_DIR = FLOW_HOME_SUBDIR;
 const STATE_LEAF = 'flow-state.yaml';
 const STATE_REL = path.join(AGENT_DIR, STATE_LEAF);
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
@@ -93,6 +97,9 @@ function readRepeatCounts(raw: unknown): Record<string, number> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+/** §18.7.6 (CWE-400) — the progression read is byte-bounded like the pointer's. */
+export const MAX_FLOW_STATE_BYTES = 65536;
+
 /** The three-case outcome of loading a worktree's flow-state document: genuinely absent (`missing`), present
  *  but unreadable/unparseable/escaping its jail (`invalid`), or a decoded YAML mapping (`record`). */
 export type FlowStateLoad =
@@ -111,15 +118,14 @@ export function loadFlowStateDoc(worktreeDir: string): FlowStateLoad {
   if (jail === null) return { kind: 'invalid', reason: `${STATE_REL} is unresolvable` };
   const confined = confinedRealPathResult(jail, path.join(jail, STATE_LEAF));
   if (!confined.ok) return { kind: 'invalid', reason: `${STATE_REL} ${confined.cause} the worktree` };
-  let raw: string;
-  try {
-    raw = readFileSync(confined.path, 'utf8');
-  } catch (e) {
-    if (isErrno(e, 'ENOENT')) return { kind: 'missing' };
-    return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${errMsg(e)}` };
+  const read = readBoundedNoFollow(confined.path, MAX_FLOW_STATE_BYTES);
+  if (!read.ok) {
+    if (read.cause === 'absent') return { kind: 'missing' };
+    if (read.cause === 'over-cap') return { kind: 'invalid', reason: `${STATE_REL} exceeds ${MAX_FLOW_STATE_BYTES} bytes` };
+    return { kind: 'invalid', reason: `cannot read ${STATE_REL}${read.error === undefined ? '' : `: ${errMsg(read.error)}`}` };
   }
   try {
-    const doc: unknown = yaml.load(raw);
+    const doc: unknown = yaml.load(read.text);
     return isRecord(doc)
       ? { kind: 'record', doc }
       : { kind: 'invalid', reason: `${STATE_REL} is not a mapping` };
@@ -215,5 +221,11 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       return loaded.kind === 'record' ? normalizeTitle(loaded.doc.title) : null;
     },
     writeTitle,
+    clearProgression: () => {
+      const loaded = loadDoc();
+      if (loaded.kind === 'missing') return;
+      const title = loaded.kind === 'record' ? normalizeTitle(loaded.doc.title) : null;
+      persist(title !== null ? { title } : {});
+    },
   };
 }

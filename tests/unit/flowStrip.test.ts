@@ -1413,7 +1413,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(terminate()).toBeNull();
     });
 
-    it('is absent in the load-error state (AC2)', async () => {
+    it('is absent in the load-error state of a never-started worktree (AC2)', async () => {
       const deps = {
         state: vi.fn(
           async (): Promise<FlowStateView> => ({
@@ -1438,6 +1438,59 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
       expect(terminate()).toBeNull();
+    });
+
+    const heldRun = (runStarted: 'started' | 'indeterminate') => {
+      let held = true;
+      const view = (): FlowStateView =>
+        held
+          ? { stepName: '', runStarted, steps: [], position: 0, total: 0, status: 'error', error: "the run's progression state could not be verified" }
+          : { stepName: 'red', runStarted: 'never-started', steps: ['red'], position: 1, total: 1, status: 'not_started' };
+      return {
+        state: vi.fn(async () => view()),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(async () => {
+          held = false;
+          return view();
+        }),
+        provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
+        onStateChanged: noopSub,
+        onTerminate: vi.fn((_repoKey: string, confirm: () => void) => confirm()),
+      };
+    };
+
+    it.each(['started', 'indeterminate'] as const)(
+      'is offered on the load-error view of a begun run (runStarted %s), and confirming repaints to not_started',
+      async (runStarted) => {
+        const deps = heldRun(runStarted);
+        createFlowStrip(host, deps).onRepoChanged('/repo');
+        await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
+        expect(terminate()).not.toBeNull();
+
+        terminate()!.click();
+
+        await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+        await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      },
+    );
+
+    it('a refused Terminate on the load-error view shows its reason and keeps Terminate offered', async () => {
+      const deps = heldRun('started');
+      deps.terminate = vi.fn(async () => ({
+        ...(await deps.state()),
+        notice: 'The run could not be terminated: EACCES',
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+
+      terminate()!.click();
+
+      await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toBe('The run could not be terminated: EACCES'));
+      expect(terminate()).not.toBeNull();
     });
 
     it('routes activation to the confirmation seam with the current repo, before any terminate (AC3 staging)', async () => {

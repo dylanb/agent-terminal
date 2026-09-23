@@ -38,27 +38,23 @@ export type DispositionRead =
 /** §18.7.3/§18.7.4 — the run's binding state, folded so a begun run that IS bound carries its source: the
  *  'started' variant requires a disposition, so a supplied binding cannot wire started-ness half-way and fall
  *  through to a live pointer re-read (CWE-841). Discriminated union over the two independent accessors it
- *  replaces (CLAUDE.md injection-seam rule; the `BundleLocation` precedent). The CWE-841 no-swap guarantee binds
- *  only once a disposition is supplied — a consumer may instead defer (see `runBinding`). */
+ *  replaces (CLAUDE.md injection-seam rule; the `BundleLocation` precedent). */
 export type RunBinding =
   | { started: Exclude<StartednessSignal, 'started'> }
   | { started: Extract<StartednessSignal, 'started'>; disposition: DispositionRead };
 
 export interface ResolveRunDefinitionDeps {
   pointer: () => PointerRead;
-  catalogEntry: (id: string) => CatalogResolution;
-  /** A per-call `undefined` return means "no binding opinion" — identical to omitting the seam (live three-leg
-   *  chain), so a consumer can consult started-ness yet defer a signal it cannot yet bind (a begun run whose
-   *  recorded disposition source is owed by a later slice) to that chain. */
-  runBinding?: () => RunBinding | undefined;
+  /** Resolve `id` across the tiers in precedence order, or within `tier` only when one is given. */
+  catalogEntry: (id: string, tier?: CatalogTier) => CatalogResolution;
+  runBinding?: () => RunBinding;
 }
 
 export interface ResolvedRunDefinition {
   load: FlowLoad;
   selectionReason?: string;
   /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
-   *  re-resolves the SAME source rather than the live pointer. Set on the never-started live legs (the only path
-   *  a fresh run takes to in_progress); the already-bound path leaves it undefined (the binding is persisted). */
+   *  re-resolves the SAME source rather than the live pointer. Absent only on a hold (load not ok). */
   binding?: DispositionRead;
 }
 
@@ -139,21 +135,20 @@ function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
 
 function resolveBoundSource(
   disposition: DispositionRead,
-  catalogEntry: (id: string) => CatalogResolution,
+  catalogEntry: (id: string, tier?: CatalogTier) => CatalogResolution,
   localDir: string,
   globalDir: string,
 ): ResolvedRunDefinition {
   switch (disposition.source) {
     case 'catalog': {
-      // §18.7.3 / CWE-841 — re-resolve the bound id and require it to land in the SAME tier it was bound to; a
-      // tier mismatch (a same-named entry now winning in another tier) or a lost entry is the §18.1 error state,
-      // never a silent swap to a different source.
-      const entry = catalogEntry(disposition.id);
+      // §18.7.3 / CWE-841 — re-resolve the bound id within its exact stored tier; an entry absent there is the
+      // §18.1 error state, never a silent swap to a different source.
+      const entry = catalogEntry(disposition.id, disposition.tier);
       if (!entry.ok || entry.tier !== disposition.tier) return { load: lostBindingHold() };
-      return { load: loadCatalogEntryDefinition(entry.flowDir) };
+      return { load: loadCatalogEntryDefinition(entry.flowDir), binding: disposition };
     }
     case 'non-catalog':
-      return { load: loadFlowDefinitionLocalFirst(localDir, globalDir) };
+      return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: disposition };
     default:
       // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
       // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.
