@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { createFlowManager, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { createFlowManager, flowHomeDir, loadFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
 import { worktreeStartedness } from '../../src/main/startedness';
 import {
   readDisposition,
@@ -181,5 +181,44 @@ describe('runDisposition lifecycle over the real FlowManager (§18.7.2/§18.7.4)
     mgr.restart(wt); // re-begins the run; unlike terminate() it must NOT clear the marker
     expect(readDisposition(wt)).toBe('present');
     expect(worktreeStartedness(wt)).toBe('started');
+  });
+
+  it('a start whose definition stops loading after the marker is recorded rolls the marker back, leaving the worktree never-started', () => {
+    const wt = fx.makeWorktree('a2-disp-start-rollback');
+    const globalDir = fx.makeWorktree('a2-disp-start-rollback-global');
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
+    const load = loadFlowDefinition(wt);
+    let calls = 0;
+    const mgr = createFlowManager({
+      globalDir,
+      loadDefinition: () =>
+        calls++ === 0 ? { load, binding: NON_CATALOG } : { load: { ok: false, error: 'flow.yaml vanished' } },
+    });
+
+    expect(mgr.start(wt).status).toBe('error');
+    expect(readDisposition(wt)).toBe('absent');
+    expect(worktreeStartedness(wt)).toBe('never-started');
+  });
+
+  it.skipIf(asRoot)('a Terminate that resets the run but cannot remove its run record says so and keeps selection locked (fail-closed)', () => {
+    const wt = fx.makeWorktree('a2-disp-terminate-record-stuck');
+    const globalDir = fx.makeWorktree('a2-disp-terminate-record-stuck-global');
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
+    const mgr = createFlowManager({ globalDir });
+    mgr.start(wt);
+    const marker = runDispositionFile(wt);
+    rmSync(marker);
+    mkdirSync(join(marker, 'locked'), { recursive: true });
+    writeFileSync(join(marker, 'locked', 'entry'), '');
+    chmodSync(join(marker, 'locked'), 0o555);
+    try {
+      const after = mgr.terminate(wt);
+      expect(after.outcome).toBe('reset');
+      expect(after.view.status).toBe('not_started');
+      expect(after.view.notice).toMatch(/cannot be selected until its run record is removed/);
+      expect(after.view.runStarted).toBe('started');
+    } finally {
+      chmodSync(join(marker, 'locked'), 0o755);
+    }
   });
 });
