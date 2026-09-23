@@ -744,8 +744,8 @@ export interface FlowClearActiveFlowMsg {
   repoKey: string;
 }
 
-/** flow:setActiveFlow result (§18.7.4 AC7): the pointer was written, or the write was refused with a
- *  human-readable `reason` — the run has begun, begun-ness is indeterminate (fail-closed), or the write
+/** flow:setActiveFlow / flow:clearActiveFlow result (§18.7.4 AC7): the pointer was written or cleared, or the
+ *  write was refused with a human-readable `reason` — the run has begun, begun-ness is indeterminate (fail-closed), or the write
  *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
 export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
 

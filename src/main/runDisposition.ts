@@ -5,8 +5,7 @@
 // switches which tier/entry supplies its definition (CWE-841). Recorded when a run transitions to in_progress
 // and cleared only by a Terminate, so it survives a first-step revertStep that rolls the display status back to
 // not_started. Disjoint from flow-state.yaml (own-file) so a wholesale progression write can neither clobber
-// nor resurrect it (§18.7.2, the AC8 non-clobber invariant); mirrors activeFlowPointer.ts's own-file shape and
-// confinement.
+// nor resurrect it (§18.7.2, the AC8 non-clobber invariant).
 
 import path from 'node:path';
 import { lstatSync, rmSync } from 'node:fs';

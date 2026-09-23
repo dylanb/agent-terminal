@@ -12,6 +12,7 @@ import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
+import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
@@ -740,7 +741,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       const status = machine.state().status;
       try {
         if (status === 'in_progress' || status === 'done') machine.terminate();
-        else if (status === 'error' && worktreeStartedness(k) !== 'never-started') makeStore(k).clearProgression();
+        else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
         else return { outcome: 'refused', view: viewOf(k, (m) => m.state()) };
       } catch (e) {
         return {

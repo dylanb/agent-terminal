@@ -7,6 +7,7 @@
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
+import { isSelectionLocked } from '../../shared/flowStarted';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 
@@ -346,7 +347,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
       // §18.7.2 AC6 — a begun run held at the load error still has Terminate as its route back to not_started.
-      if (deps.onTerminate && state.runStarted !== 'never-started') host.append(terminateButton());
+      if (deps.onTerminate && isSelectionLocked(state.runStarted)) host.append(terminateButton());
       appendHeldNotices();
       deps.onPanelState?.(null, ''); // no step → the docked panel clears + closes
       return;

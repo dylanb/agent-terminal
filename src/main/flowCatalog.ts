@@ -58,7 +58,6 @@ export function resolveCatalogEntry(roots: CatalogRoots, id: string, tier?: Cata
     if (tier === 'repo') return { ok: false, cause: 'unknown' };
   }
 
-  // The repo tier has no such member → the global tier (app-owned ground → resolveOwnedDirJail).
   const glob = probeTier(
     resolveOwnedDirJail(flowCatalogDir(roots.globalRoot)),
     id,
