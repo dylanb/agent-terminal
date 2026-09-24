@@ -54,6 +54,7 @@ export const CH = {
   flowSetTitle: 'flow:setTitle',
   flowSetActiveFlow: 'flow:setActiveFlow',
   flowClearActiveFlow: 'flow:clearActiveFlow',
+  flowListCatalog: 'flow:listCatalog',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -749,6 +750,30 @@ export interface FlowClearActiveFlowMsg {
  *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
 export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
 
+/** flow:listCatalog request (§18.7.6): the catalog listing for `repoKey`'s worktree. */
+export interface FlowListCatalogMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+export type CatalogOrigin = 'repo' | 'global';
+
+export type FlowCatalogEntry =
+  | { available: true; id: string; origin: CatalogOrigin }
+  | { available: false; label: string; origin: CatalogOrigin; reason: string };
+
+/** §18.1 / §18.7.6 — the merged catalog library of one worktree. */
+export interface FlowCatalogListing {
+  entries: FlowCatalogEntry[];
+  tierNotices: { origin: CatalogOrigin; notice: string }[];
+  selectedId?: string;
+  hasLocalFlow: boolean;
+  hasGlobalFallback: boolean;
+  resumable: { origin: CatalogOrigin; id: string }[];
+}
+
+export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | { ok: false; reason: string };
+
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
  *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
  *  source (`GATE_DECISION_OPTIONS`) drives both the type and the §6 validator, so main, renderer, and the
@@ -1083,6 +1108,8 @@ export interface FlowApi {
   setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   /** Return the worktree to the unset default flow; gated exactly like `setActiveFlow`. */
   clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
+  /** The catalog listing of `repoKey`'s worktree (§18.7.6). */
+  listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

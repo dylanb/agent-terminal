@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  catalogRefusalReason,
   createResolveRunDefinition,
   type PointerRead,
   type CatalogResolution,
@@ -168,5 +169,20 @@ describe('resolveRunDefinition — bad-pointer degrade surfaces a visible reason
 
     for (const reason of reasons) expect(reason).toContain(id); // names the flow — dropping "${id}" fails here
     expect(new Set(reasons).size).toBe(3); // distinguishes the cause — collapsing the taxonomy fails here
+  });
+
+  it("A3 T3: the picker's refusal reason for an escaping or unreadable entry is the wording the degrade reason uses", () => {
+    const { wt, globalRoot } = seedFallbackOnlyWorktree('refusal-wording');
+    const degradeReason = (cause: 'escapes' | 'unresolvable'): string | undefined =>
+      createResolveRunDefinition({
+        pointer: () => ({ kind: 'value', id: 'my-flow' }),
+        catalogEntry: () => ({ ok: false, cause }),
+      })(wt, globalRoot).selectionReason;
+
+    for (const cause of ['escapes', 'unresolvable'] as const) {
+      expect(catalogRefusalReason(cause), cause).not.toBe('');
+      expect(degradeReason(cause), cause).toContain(catalogRefusalReason(cause));
+    }
+    expect(catalogRefusalReason('escapes')).not.toBe(catalogRefusalReason('unresolvable'));
   });
 });

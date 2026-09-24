@@ -125,6 +125,10 @@ const CATALOG_DEGRADE_DETAIL: Record<CatalogDegradeCause, string> = {
   unresolvable: 'could not be read',
 };
 
+export function catalogRefusalReason(_cause: Exclude<CatalogDegradeCause, 'unknown'>): string {
+  return '';
+}
+
 function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
   return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
 }

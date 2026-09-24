@@ -84,12 +84,15 @@ export type FlowStripDeps = Omit<
   | 'setTitle'
   | 'setActiveFlow'
   | 'clearActiveFlow'
+  | 'listCatalog'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
+  /** Every view the strip receives, and `(null, null)` when it goes idle. */
+  onView?: (repoKey: string | null, view: FlowStateView | null) => void;
   /** Required status-bar handoff on structural and passive state updates (§22.3.1 / §24.2.2 S5). */
   onStatusBar(model: StatusBarModel, repoKey: string | null): void;
   /** Visible transition failure seam (§19.1). */

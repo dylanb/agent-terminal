@@ -29,6 +29,7 @@ import {
   type FlowSetTitleMsg,
   type FlowSetActiveFlowMsg,
   type FlowClearActiveFlowMsg,
+  type FlowListCatalogMsg,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -199,6 +200,10 @@ export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg 
 /** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
 export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlowMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+export function isValidFlowListCatalog(_m: unknown): _m is FlowListCatalogMsg {
+  return false;
 }
 
 /** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;
