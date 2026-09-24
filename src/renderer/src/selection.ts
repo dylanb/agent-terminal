@@ -1,6 +1,6 @@
 // Selection subsystem wiring (§7): gesture sourced from xterm, but the selection state is app-owned.
 
-import type { IDecoration, IMarker, Terminal } from '@xterm/xterm';
+import type { IMarker, Terminal } from '@xterm/xterm';
 import type { BufferType, SelectionRange } from '../../shared/ipc';
 import { stripPasteBreakout } from '../../shared/paste';
 import type { MonitorApi } from '../../shared/ipc';
@@ -42,8 +42,7 @@ export async function captureToTodo(
   }
 }
 
-// >=3:1 against the #1e1e1e background (WCAG 1.4.11). Shared with the terminal's native selection
-// theme (§7.1) so the live drag highlight and the persistent app-owned decoration read as one.
+// >=3:1 against the #1e1e1e background (WCAG 1.4.11). §7.1
 export const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
 // Cross-highlight reveal (§16.8) — amber, distinct from the blue selection so a revealed
 // capture span reads differently from a user selection.
@@ -53,13 +52,7 @@ export function wireSelection(
   term: Terminal,
   getKeymap: () => Keymap = () => resolveKeymap(window.term.platform === 'darwin' ? 'mac' : 'pc'),
 ): TerminalClipboard {
-  let decorations: IDecoration[] = [];
-  const model = createSelectionModel(() => renderSelection());
-
-  function clearDecorations(): void {
-    for (const d of decorations) d.dispose();
-    decorations = [];
-  }
+  const model = createSelectionModel();
 
   function markerAtRow(absRow: number) {
     const buf = term.buffer.active;
@@ -67,30 +60,13 @@ export function wireSelection(
     return term.registerMarker(absRow - cursorAbs);
   }
 
-  function renderSelection(): void {
-    clearDecorations();
-    const s = model.get();
-    if (!s.active || !s.start || !s.end) return;
-
-    for (let row = s.start.y; row <= s.end.y; row++) {
-      const x = row === s.start.y ? s.start.x : 0;
-      const xEnd = row === s.end.y ? s.end.x : term.cols;
-      const width = Math.max(1, xEnd - x);
-
-      const marker = markerAtRow(row);
-      if (!marker) continue; // off-buffer / trimmed
-      // One height-1 decoration per line — multi-row backgrounds render
-      // incorrectly (xterm.js #4855); translucency must go on the element (§7.4).
-      const deco = term.registerDecoration({ marker, x, width, height: 1 });
-      if (!deco) continue; // undefined on the alt buffer (§7.4)
-      deco.onRender((el) => {
-        el.style.backgroundColor = SEL_COLOR;
-      });
-      decorations.push(deco);
-    }
-  }
-
+  // xterm clears its own selection on typing, a click, and a buffer switch; the model follows so
+  // Escape and Copy never act on a selection the user can no longer see (§7.5.1).
   term.onSelectionChange(() => {
+    if (!term.hasSelection()) {
+      model.clear();
+      return;
+    }
     let range, text: string;
     try {
       range = term.getSelectionPosition();
@@ -105,8 +81,6 @@ export function wireSelection(
       bufferType: term.buffer.active.type as BufferType,
     });
   });
-
-  term.onScroll(() => renderSelection());
 
   function clearSelection(): void {
     model.clear();
@@ -173,13 +147,13 @@ export function wireSelection(
     true,
   );
 
-  // Capture → terminal reveal: a separate decoration set from the selection's, so a clear of one
-  // never wipes the other.
-  let revealDecorations: IDecoration[] = [];
+  // Capture → terminal reveal (§16.8). A decoration's dispose leaves its marker registered with the
+  // buffer, taxing every later line of output; disposing the marker takes its decoration with it.
+  let revealMarkers: IMarker[] = [];
   let revealTimer: ReturnType<typeof setTimeout> | null = null;
   function clearReveal(): void {
-    for (const d of revealDecorations) d.dispose();
-    revealDecorations = [];
+    for (const marker of revealMarkers) marker.dispose();
+    revealMarkers = [];
   }
   window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => {
     const { id } = (e as CustomEvent<{ id: string }>).detail;
@@ -193,13 +167,13 @@ export function wireSelection(
     for (let row = startLine; row <= endLine; row++) {
       const marker = markerAtRow(row);
       if (!marker) continue; // off-buffer / trimmed
+      revealMarkers.push(marker);
       const deco = term.registerDecoration({ marker, x: 0, width: term.cols, height: 1 });
       if (!deco) continue; // undefined on the alt buffer (§7.4)
       deco.onRender((el) => {
         el.style.backgroundColor = REVEAL_COLOR;
         el.classList.add('reveal-highlight');
       });
-      revealDecorations.push(deco);
     }
     revealTimer = setTimeout(clearReveal, REVEAL_HIGHLIGHT_MS);
   });
