@@ -10,34 +10,36 @@ import type { CatalogOrigin, FlowCatalogEntry, FlowCatalogListing, FlowCatalogLi
 
 const TIERS: readonly CatalogOrigin[] = ['repo', 'global'];
 
-function tierMembers(roots: CatalogRoots, tier: CatalogOrigin): string[] {
+interface TierMember {
+  tier: CatalogOrigin;
+  id: string;
+  resolvesInTier: boolean;
+}
+
+function tierMembers(roots: CatalogRoots, tier: CatalogOrigin): TierMember[] {
   const jail = catalogTierJail(roots, tier);
   if (jail === null) return [];
-  return readDirEntries(jail)
-    .map((e) => e.name)
-    .filter((name) => {
-      if (!isSafeCatalogId(name)) return false;
-      const res = resolveCatalogEntry(roots, name, tier);
-      return res.ok || res.cause !== 'unknown';
-    });
+  return readDirEntries(jail).flatMap(({ name }) => {
+    if (!isSafeCatalogId(name)) return [];
+    const res = resolveCatalogEntry(roots, name, tier);
+    return res.ok || res.cause !== 'unknown' ? [{ tier, id: name, resolvesInTier: res.ok }] : [];
+  });
 }
 
 export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
-  const membersByTier = new Map(TIERS.map((tier) => [tier, tierMembers(roots, tier)] as const));
-  const ids = [...new Set(TIERS.flatMap((tier) => membersByTier.get(tier)!))].sort((a, b) => a.localeCompare(b));
+  const members = TIERS.flatMap((tier) => tierMembers(roots, tier));
+  const ids = [...new Set(members.map((m) => m.id))].sort((a, b) => a.localeCompare(b));
 
   const entries: FlowCatalogEntry[] = ids.map((id) => {
     // §18.7.6 / §18.7.3 leg 2
     const verdict = resolveCatalogEntry(roots, id);
     if (verdict.ok) return { available: true, id, origin: verdict.tier };
-    const origin = TIERS.find((tier) => membersByTier.get(tier)!.includes(id))!;
-    const reason = verdict.cause === 'unknown' ? catalogRefusalReason('unresolvable') : catalogRefusalReason(verdict.cause);
+    const origin = members.find((m) => m.id === id)!.tier;
+    const reason = catalogRefusalReason(verdict.cause === 'unknown' ? 'unresolvable' : verdict.cause);
     return { available: false, label: id, origin, reason };
   });
 
-  const resumable = TIERS.flatMap((tier) =>
-    membersByTier.get(tier)!.filter((id) => resolveCatalogEntry(roots, id, tier).ok).map((id) => ({ origin: tier, id })),
-  );
+  const resumable = members.filter((m) => m.resolvesInTier).map(({ tier, id }) => ({ origin: tier, id }));
 
   const pointer = readActiveFlow(roots.worktreeDir);
   return {

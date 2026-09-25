@@ -18,6 +18,10 @@ export interface FlowPicker {
   dispose(): void;
 }
 
+type CatalogEntry = FlowCatalogListing['entries'][number];
+
+const entryKey = (entry: CatalogEntry): string => (entry.available ? entry.id : entry.label);
+
 type Catalog =
   | { kind: 'loading' }
   | { kind: 'listed'; listing: FlowCatalogListing }
@@ -78,26 +82,23 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     );
   }
 
+  function switchTo(key: string | null): void {
+    repoKey = key;
+    catalog = { kind: 'loading' };
+    selectedId = undefined;
+    alertText = '';
+    open = false;
+    render();
+  }
+
   function onView(...[key]: FlowViewArgs): void {
     if (disposed) return;
     if (key === null) {
-      repoKey = null;
       ++generation;
-      catalog = { kind: 'loading' };
-      selectedId = undefined;
-      alertText = '';
-      open = false;
-      render();
+      switchTo(null);
       return;
     }
-    if (key !== repoKey) {
-      repoKey = key;
-      catalog = { kind: 'loading' };
-      selectedId = undefined;
-      alertText = '';
-      open = false;
-      render();
-    }
+    if (key !== repoKey) switchTo(key);
     pull(key);
   }
 
@@ -137,10 +138,14 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const allOptions = (): HTMLElement[] => [...host.querySelectorAll<HTMLElement>('[role="option"]')];
   const optionFor = (flowKey: string): HTMLElement | undefined => allOptions().find((o) => o.dataset.flowKey === flowKey);
 
-  function close(): void {
-    if (!open) return;
+  function collapse(): void {
     open = false;
     render();
+  }
+
+  function close(): void {
+    if (!open) return;
+    collapse();
     trigger()?.focus();
   }
 
@@ -161,30 +166,26 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   function onOutsidePointer(e: Event): void {
-    if (open && !host.contains(e.target as Node)) {
-      open = false;
-      render();
-    }
+    if (open && !host.contains(e.target as Node)) collapse();
   }
 
   function onFocusOut(e: FocusEvent): void {
     if (rendering || !open) return;
     if (e.relatedTarget instanceof Node && host.contains(e.relatedTarget)) return;
-    open = false;
-    render();
+    collapse();
   }
 
-  function option(entry: FlowCatalogListing['entries'][number], index: number): HTMLElement {
+  function option(entry: CatalogEntry, index: number): HTMLElement {
     const li = doc.createElement('li');
     li.setAttribute('role', 'option');
     li.id = `${uid}-opt-${index}`;
     li.className = 'flow-picker-option';
     li.tabIndex = -1;
-    li.dataset.flowKey = entry.available ? entry.id : entry.label;
+    li.dataset.flowKey = entryKey(entry);
     const name = doc.createElement('span');
     name.id = `${uid}-name-${index}`;
     name.className = 'flow-picker-name';
-    name.textContent = entry.available ? entry.id : entry.label;
+    name.textContent = entryKey(entry);
     const origin = doc.createElement('span');
     origin.id = `${uid}-origin-${index}`;
     origin.className = 'flow-picker-origin';
@@ -219,6 +220,44 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return `Flow: ${selectedId ?? 'default'}`;
   }
 
+  function triggerButton(describedByAlert: boolean): HTMLButtonElement {
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.className = 'flow-picker-trigger pill';
+    button.setAttribute('aria-haspopup', 'listbox');
+    button.setAttribute('aria-expanded', String(open));
+    if (describedByAlert) button.setAttribute('aria-describedby', alert.id);
+    button.textContent = triggerLabel();
+    if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
+    button.addEventListener('click', () => {
+      if (catalog.kind !== 'listed') return;
+      open = !open;
+      render();
+      if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0])?.focus();
+    });
+    return button;
+  }
+
+  function retryButton(): HTMLButtonElement {
+    const again = doc.createElement('button');
+    again.type = 'button';
+    again.className = 'flow-picker-retry pill';
+    again.textContent = 'Retry';
+    again.setAttribute('aria-describedby', alert.id);
+    again.addEventListener('click', retry);
+    return again;
+  }
+
+  function listbox(listing: FlowCatalogListing): HTMLUListElement {
+    const list = doc.createElement('ul');
+    list.id = `${uid}-list`;
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', 'Flows');
+    list.className = 'flow-picker-list';
+    list.append(...listing.entries.map(option));
+    return list;
+  }
+
   function render(): void {
     if (disposed) return;
     const focused = doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement) ? doc.activeElement : null;
@@ -231,39 +270,11 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       if (alert.textContent !== shown) alert.textContent = shown;
       if (repoKey === null) return;
 
-      const button = doc.createElement('button');
-      button.type = 'button';
-      button.className = 'flow-picker-trigger pill';
-      button.setAttribute('aria-haspopup', 'listbox');
-      button.setAttribute('aria-expanded', String(open));
-      if (shown !== '') button.setAttribute('aria-describedby', alert.id);
-      button.textContent = triggerLabel();
-      if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
-      button.addEventListener('click', () => {
-        if (catalog.kind !== 'listed') return;
-        open = !open;
-        render();
-        if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0])?.focus();
-      });
+      const button = triggerButton(shown !== '');
       host.insertBefore(button, alert);
-
-      if (catalog.kind === 'failed') {
-        const again = doc.createElement('button');
-        again.type = 'button';
-        again.className = 'flow-picker-retry pill';
-        again.textContent = 'Retry';
-        again.setAttribute('aria-describedby', alert.id);
-        again.addEventListener('click', retry);
-        host.insertBefore(again, alert);
-      }
-
+      if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (open && catalog.kind === 'listed') {
-        const list = doc.createElement('ul');
-        list.id = `${uid}-list`;
-        list.setAttribute('role', 'listbox');
-        list.setAttribute('aria-label', 'Flows');
-        list.className = 'flow-picker-list';
-        list.append(...catalog.listing.entries.map(option));
+        const list = listbox(catalog.listing);
         button.setAttribute('aria-controls', list.id);
         host.insertBefore(list, alert);
       }
