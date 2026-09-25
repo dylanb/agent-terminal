@@ -608,12 +608,6 @@ export interface FlowStateView {
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
    *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
-  /** §18.7.6 — the display-sanitized reason a per-worktree active-flow pointer selection DEGRADED to the
-   *  global fallback (an unknown/unsafe/unreadable pointer, or an entry escaping its catalog tier). Present
-   *  while the degraded selection runs (the strip paints it persistently, distinct from the one-shot
-   *  `notice`); absent when selection succeeded or the pointer is unset. Never carries the load `error`
-   *  reason — a degrade keeps the fallback running, so `status` is NOT `error`. */
-  selectionReason?: string;
   /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a
    *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
    *  through `isSelectionLocked` (shared/flowStarted.ts). */

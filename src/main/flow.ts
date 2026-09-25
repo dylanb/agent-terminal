@@ -87,8 +87,8 @@ export { FLOW_HOME_SUBDIR, flowHomeDir };
 export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
-/** Whether `root` holds a flow definition at its flow home — the single leg-1 presence gate the local-first
- *  loader and the §18.7.3 resolver both read, so the "is a flow present here" boundary that decides which flow
+/** Whether `root` holds a flow definition at its flow home — the single presence gate the local-first loader
+ *  and the §18.7.6 catalog listing both read, so the "is a flow present here" boundary that decides which flow
  *  runs cannot desync between them (CLAUDE.md shared-semantics). */
 export function hasFlowDefinition(root: string): boolean {
   return existsSync(path.join(root, FLOW_REL));
@@ -639,7 +639,7 @@ export interface FlowManager {
 /** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
 export type TerminateResult = { outcome: 'reset' | 'refused'; view: FlowStateView };
 
-/** What the definition seam returns (§18.1 load, §18.7.6 degrade reason, §18.7.3 AC9 binding). */
+/** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
 export interface FlowManagerDeps {
@@ -668,17 +668,12 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  // The signature keys on load.load (the DEFINITION), not the whole resolved object, so a §18.7.6
-  // selectionReason change with an unchanged definition reuses the cached machine — the reason is spliced
-  // fresh onto each view below, never frozen in the cached view() closures (§18.7.4/CWE-841).
-  const machineFor = (
-    repoKey: string,
-  ): { machine: FlowMachine; selectionReason?: string; binding?: DispositionRead } => {
+  const machineFor = (repoKey: string): { machine: FlowMachine; binding?: DispositionRead } => {
     const resolved = loadDef(repoKey, deps.globalDir);
     const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
     if (cached && cached.sig === sig) {
-      return { machine: cached.machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+      return { machine: cached.machine, binding: resolved.binding };
     }
     // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
     // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
@@ -689,18 +684,12 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
-    return { machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+    return { machine, binding: resolved.binding };
   };
-  // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
-  // call at the FlowManager boundary (the machine stays A2-unaware).
-  const decorate = (k: string, op: (m: FlowMachine) => MachineView): MachineView => {
-    const { machine, selectionReason } = machineFor(k);
-    const view = op(machine);
-    return selectionReason === undefined ? view : { ...view, selectionReason };
-  };
+  const machineView = (k: string, op: (m: FlowMachine) => MachineView): MachineView => op(machineFor(k).machine);
   // §18.7.4 — read AFTER the operation's own marker write/clear, so the view reports the started-ness it left.
   const withRunStarted = (k: string, view: MachineView): FlowStateView => ({ ...view, runStarted: worktreeStartedness(k) });
-  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, decorate(k, op));
+  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, machineView(k, op));
   return {
     state: (k) => viewOf(k, (m) => m.state()),
     start: (k) => {
@@ -714,10 +703,10 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
         try {
           recordDisposition(k, binding);
         } catch (e) {
-          return withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
+          return withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
         }
       }
-      const view = decorate(k, (m) => m.start());
+      const view = machineView(k, (m) => m.start());
       if (begins && !hadMarker && view.status !== 'in_progress') {
         try {
           clearDisposition(k);
@@ -746,7 +735,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       } catch (e) {
         return {
           outcome: 'refused',
-          view: withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
+          view: withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
         };
       }
       let notice: string | undefined;

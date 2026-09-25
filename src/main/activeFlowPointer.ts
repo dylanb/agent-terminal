@@ -1,5 +1,5 @@
 // A2 (#133) §18.7.2 — the per-worktree active-flow pointer's own disjoint file
-// (<worktree>/.agent-terminal/active-flow.yaml), the store the resolver's leg-2 pointer() seam reads and
+// (<worktree>/.agent-terminal/active-flow.yaml), the store the resolver's pointer() seam reads and
 // writeActiveFlow persists. Disjoint from flow-state.yaml so a wholesale progression write can never clobber
 // it and vice-versa (§18.7.2 own-file; the AC8 non-clobber invariant).
 
@@ -30,7 +30,7 @@ export function activeFlowPointerFile(worktreeDir: string): string {
 const confinedPointerFile = (worktreeDir: string): string | null => flowHomeLeaf(worktreeDir, ACTIVE_FLOW_FILE);
 
 const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
-const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
+const UNREADABLE: PointerRead = { kind: 'invalid', reason: UNREADABLE_REASON };
 
 const displaySafeId = (value: string): string => displaySafeEcho(value, MAX_CATALOG_ID_LENGTH);
 
@@ -62,10 +62,10 @@ export function clearActiveFlow(worktreeDir: string): void {
   }
 }
 
-/** §18.7.6 — read the pointer as the resolver's leg-2 producer. Only a genuine ENOENT is `unset`; a
+/** §18.7.6 — read the pointer as the resolver's pointer() producer. Only a genuine ENOENT is `unset`; a
  *  confinement escape of the pointer's own path, a non-ENOENT errno, an unparseable/non-scalar node, or a
- *  value failing the shared safe-catalog-ID gate degrades VISIBLY with a reason (never silently swaps the
- *  operator's selection, and never opens a redirect target). */
+ *  value failing the shared safe-catalog-ID gate is `invalid` with a reason, which refuses the run (never
+ *  silently swaps the operator's selection, and never opens a redirect target). */
 export function readActiveFlow(worktreeDir: string): PointerRead {
   const file = confinedPointerFile(worktreeDir);
   if (file === null) return UNREADABLE;
@@ -78,6 +78,6 @@ export function readActiveFlow(worktreeDir: string): PointerRead {
     return UNREADABLE;
   }
   if (typeof doc !== 'string') return UNREADABLE;
-  if (!isSafeCatalogId(doc)) return { kind: 'degrade', reason: invalidIdReason(doc) };
+  if (!isSafeCatalogId(doc)) return { kind: 'invalid', reason: invalidIdReason(doc) };
   return { kind: 'value', id: doc };
 }

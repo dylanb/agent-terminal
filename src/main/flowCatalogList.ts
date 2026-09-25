@@ -29,7 +29,7 @@ export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
   const ids = [...new Set(members.map((m) => m.id))].sort((a, b) => a.localeCompare(b));
 
   const entries: FlowCatalogEntry[] = ids.map((id) => {
-    // §18.7.6 / §18.7.3 leg 2
+    // §18.7.6 / §18.7.3
     const verdict = resolveCatalogEntry(roots, id);
     if (verdict.ok) return { available: true, id, origin: verdict.tier };
     const origin = members.find((m) => m.id === id)!.tier;

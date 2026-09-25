@@ -1194,7 +1194,7 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
-      // §18.7.4 AC7/AC11 — the authoritative main-side write gate. A permitted write changes which flow leg 2
+      // §18.7.4 AC7/AC11 — the authoritative main-side write gate. A permitted write changes which flow
       // resolves, so re-pull the strip to render it (§24.2.2).
       [CH.flowSetActiveFlow]: (_e, m) => {
         if (!isValidFlowSetActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {

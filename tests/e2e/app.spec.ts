@@ -1954,12 +1954,12 @@ function seedFlowRepoWithEntry(
 }
 
 // A2 (#133) §18.7.3/§18.7.6 — the per-worktree active-flow pointer resolved END-TO-END on a real PTY: the
-// pointer (set through A2's own write primitive `writeActiveFlow`) selects which catalog flow a worktree runs;
-// a present local flow.yaml still wins (leg 1); and a pointer that fails selection degrades to the global
-// fallback with a VISIBLE, display-sanitized reason and never opens a tier-escaping redirect target (CWE-59,
-// the sentinel step never surfaces). @ownapp: launches its own Electron with APP_HOME_DIR at a seeded global
-// fallback so the degrade legs (leg 3) are deterministic.
-test('the active-flow pointer selects the catalog flow, local wins, and a bad pointer degrades with a visible reason (§18.7.3/§18.7.6)', { tag: '@ownapp' }, async () => {
+// pointer (set through A2's own write primitive `writeActiveFlow`) selects which catalog flow a worktree runs,
+// even over a present local flow.yaml; and a pointer that fails selection refuses to run, showing the §18.1
+// error with a display-sanitized reason, never running the local or global flow and never opening a
+// tier-escaping redirect target (CWE-59, the sentinel step never surfaces). @ownapp: launches its own Electron
+// with APP_HOME_DIR at a seeded global fallback, so a wrong fall-through to it would be observable.
+test("the active-flow pointer selects the catalog flow over a local flow.yaml, and a bad pointer refuses to run with a reason (§18.7.3/§18.7.6)", { tag: '@ownapp' }, async () => {
   const a2Dirs: string[] = [];
   const flowYaml = (name: string, ...steps: string[]): string =>
     `name: ${name}\nsteps:\n` + steps.map((s) => `  - id: ${s}\n    kind: manual\n`).join('');
@@ -1975,31 +1975,32 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
     writeFileSync(join(dir, FLOW_DEF_FILE), flowYaml(name, ...steps));
     return dir;
   };
-  const reason = () => page.locator('#flow-strip .flow-selection-reason');
   const flowError = () => page.locator('#flow-strip .flow-error');
 
-  // A real GLOBAL fallback (leg 3, §18.1) so a degrade has a flow to fall back to — APP_HOME_DIR relocates it.
+  // A real GLOBAL fallback (§18.1) so a wrong fall-through to it would run — APP_HOME_DIR relocates it.
   const home = seedRepo('agent-term-e2e-a2-home-');
   mkdirSync(flowHomeDir(home), { recursive: true });
   writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), flowYaml('global-fallback', 'global-fallback-step'));
 
-  // AC1: a repo-local catalog entry the pointer selects, NO local flow.yaml → leg 2 runs the catalog flow.
+  // AC1: a repo-local catalog entry the pointer selects, NO local flow.yaml → the catalog flow runs.
   const repoCat = seedRepo('agent-term-e2e-a2-cat-');
   seedCatalogEntry(repoCat, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
   writeActiveFlow(repoCat, 'cat-flow');
 
-  // AC2: the same pointer, but a present local flow.yaml wins (leg 1, back-compat), pointer ignored.
+  // AC2: the same pointer with a present local flow.yaml → the pick still wins.
   const repoLocal = seedRepo('agent-term-e2e-a2-local-');
   seedCatalogEntry(repoLocal, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
   mkdirSync(flowHomeDir(repoLocal), { recursive: true });
   writeFileSync(join(flowHomeDir(repoLocal), FLOW_DEF_FILE), flowYaml('local-only', 'local-step'));
   writeActiveFlow(repoLocal, 'cat-flow');
 
-  // AC4: a pointer naming a catalog id absent from every tier → degrade to the fallback + a visible reason.
+  // AC4: a pointer naming a catalog id absent from every tier → refuses to run, even with a local flow.yaml.
   const repoBad = seedRepo('agent-term-e2e-a2-bad-');
+  mkdirSync(flowHomeDir(repoBad), { recursive: true });
+  writeFileSync(join(flowHomeDir(repoBad), FLOW_DEF_FILE), flowYaml('local-only', 'bad-local-step'));
   writeActiveFlow(repoBad, 'missing-flow');
 
-  // AC5: a catalog entry whose flow.yaml is a symlink escaping the tier jail → degrade, and the redirected
+  // AC5: a catalog entry whose flow.yaml is a symlink escaping the tier jail → refuses to run, and the redirected
   // sentinel flow's step NEVER surfaces in the resolved definition (CWE-59).
   const outside = seedRepo('agent-term-e2e-a2-outside-');
   writeFileSync(join(outside, 'sentinel.yaml'), flowYaml('sentinel', 'SENTINEL-LEAK-STEP'));
@@ -2009,9 +2010,9 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   writeActiveFlow(repoEscape, 'evil');
 
   // AC7/§18.7.4 — an indeterminate (unparseable) flow-state progression WITH a present local flow.yaml: the
-  // started-ness gate holds the run at the §18.1 error BEFORE leg 1, so the local flow is never run and a
+  // started-ness gate holds the run at the §18.1 error before any source is consulted, so the local flow is never run and a
   // begun/corrupt run's source cannot be swapped mid-run (CWE-841). This is the observable consequence of the
-  // index.ts runBinding wiring; drop that wiring and leg 1 runs corrupt-local-step instead of holding.
+  // index.ts runBinding wiring; drop that wiring and the local flow runs corrupt-local-step instead of holding.
   const repoCorrupt = seedRepo('agent-term-e2e-a2-corrupt-');
   mkdirSync(flowHomeDir(repoCorrupt), { recursive: true });
   writeFileSync(join(flowHomeDir(repoCorrupt), FLOW_DEF_FILE), flowYaml('local-only', 'corrupt-local-step'));
@@ -2028,23 +2029,25 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   await typeCommand(`cd "${repoCat}"`);
   await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('cat-plan');
-  await expect(reason()).toHaveCount(0); // a successful selection surfaces no reason
+  await expect(flowError()).toHaveCount(0);
 
-  // AC2 — a present local flow.yaml wins regardless of the pointer.
+  // AC2 — the pick wins over a present local flow.yaml.
   await typeCommand(`cd "${repoLocal}"`);
-  await expect(flowStepName()).toHaveText('local-step', { timeout: 10_000 });
-  await expect(reason()).toHaveCount(0);
+  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('local-step');
 
-  // AC4 — an unknown pointer degrades to the global fallback WITH a visible reason.
+  // AC4 — an unknown pointer refuses to run: the §18.1 error names the pick; neither the local nor the global flow runs.
   await typeCommand(`cd "${repoBad}"`);
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
-  await expect(reason()).toBeVisible();
-  await expect(reason()).toContainText('missing-flow');
+  await expect(flowError()).toBeVisible({ timeout: 10_000 });
+  await expect(flowError()).toContainText('missing-flow');
+  const badStrip = await page.locator('#flow-strip').innerText();
+  expect(badStrip).not.toContain('bad-local-step');
+  expect(badStrip).not.toContain('global-fallback-step');
 
-  // AC5 — a tier-escaping symlinked entry degrades, and the redirect target's step never surfaces.
+  // AC5 — a tier-escaping symlinked entry refuses to run, and the redirect target's step never surfaces.
   await typeCommand(`cd "${repoEscape}"`);
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
-  await expect(reason()).toBeVisible();
+  await expect(flowError()).toBeVisible({ timeout: 10_000 });
+  await expect(flowError()).toContainText('evil');
   expect(await page.locator('#flow-strip').innerText()).not.toContain('SENTINEL-LEAK-STEP');
 
   // AC7 — the indeterminate progression HOLDS at the §18.1 error; the present local flow.yaml is not run.
@@ -2060,7 +2063,7 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   seedCatalogEntry(repoWrite, 'flow-a', 'flow-a', 'a-step');
   seedCatalogEntry(repoWrite, 'flow-b', 'flow-b', 'b-groom', 'b-plan');
   await typeCommand(`cd "${repoWrite}"`);
-  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset → leg 3
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset, no local → global fallback
   const permit = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
   expect(permit).toEqual({ ok: true });
   await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 }); // the write re-rendered the strip
@@ -2089,7 +2092,7 @@ test('the active-flow pointer selects the catalog flow, local wins, and a bad po
   expect(await page.evaluate((rk) => window.flow.clearActiveFlow(rk), repoWrite)).toEqual({ ok: true });
   await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
   expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
-  await expect(reason()).toHaveCount(0);
+  await expect(flowError()).toHaveCount(0);
 
   // AC11 — a live peer (this test runner: alive, identity matching) holds the worktree lock: the pointer write
   // and flow:start are both refused with a visible reason, and the pointer file is left untouched.

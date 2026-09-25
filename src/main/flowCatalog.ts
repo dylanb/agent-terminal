@@ -1,5 +1,5 @@
 // A2 (#133) §18.7.6 — per-tier resolution of a pointer-named catalog id to its on-disk entry directory. This
-// is the resolver's leg-2 `catalogEntry()` producer: it probes the repo tier (untrusted ground) first, then
+// is the resolver's `catalogEntry()` producer: it probes the repo tier (untrusted ground) first, then
 // the global tier (app-owned ground), so a per-repo entry wins a name clash (§18.1 merged-library precedence).
 // The confined RESOLVED path is what the caller opens (never a re-resolution of the raw id, CWE-367/22/59).
 

@@ -198,18 +198,18 @@ describe('worktree fixture — run-record and pointer devices (A3 #134)', () => 
     expect(file).toBe(activeFlowPointerFile(wt));
     expect(statSync(file).isDirectory()).toBe(true);
     expect(readdirSync(file).length).toBeGreaterThan(0);
-    expect(readActiveFlow(wt).kind).toBe('degrade');
+    expect(readActiveFlow(wt).kind).toBe('invalid');
     expect(() => writeActiveFlow(wt, 'flow-b')).toThrow();
     expect(statSync(file).isDirectory()).toBe(true);
   });
 
-  it('writePointer plants exactly the given text, which the production reader degrades when it is not a safe id', () => {
+  it('writePointer plants exactly the given text, which the production reader rejects when it is not a safe id', () => {
     const wt = fx.makeWorktree('a3-pointer-raw');
     const hostile = `"evil\u202e\u200b\u0007${'x'.repeat(100)}"\n`;
     const file = fx.writePointer(wt, hostile);
     expect(file).toBe(activeFlowPointerFile(wt));
     expect(readFileSync(file, 'utf8')).toBe(hostile);
-    expect(readActiveFlow(wt).kind).toBe('degrade');
+    expect(readActiveFlow(wt).kind).toBe('invalid');
   });
 
   it('writePointer with a safe id reads back as that selection', () => {

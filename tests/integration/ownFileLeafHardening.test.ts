@@ -74,7 +74,7 @@ describe('own-file leaves under .agent-terminal resist planted links and FIFOs (
     execFileSync('mkfifo', [activeFlowPointerFile(wt)]);
     execFileSync('mkfifo', [runDispositionFile(wt)]);
 
-    expect(readActiveFlow(wt).kind).toBe('degrade');
+    expect(readActiveFlow(wt).kind).toBe('invalid');
     expect(readRunBinding(wt)).toBeNull();
     expect(worktreeStartedness(wt)).not.toBe('never-started');
   });

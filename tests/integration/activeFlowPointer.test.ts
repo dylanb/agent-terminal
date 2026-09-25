@@ -112,15 +112,15 @@ describe('activeFlowPointer — first-run persistence & non-clobber (§18.7.2 AC
   });
 });
 
-describe('activeFlowPointer — readActiveFlow field-validates the pointer value (§18.7.6 degrade taxonomy)', () => {
+describe('activeFlowPointer — readActiveFlow field-validates the pointer value (§18.7.6)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
 
-  // readActiveFlow IS the resolver's leg-2 pointer() producer. resolveRunDefinition.degrade.test.ts pins the
-  // resolver's carry-through of a `degrade` through an injected FAKE pointer() and defers the REAL parser's
+  // readActiveFlow IS the resolver's pointer() producer. resolveRunDefinition.refusal.test.ts pins the
+  // resolver's refusal on an `invalid` through an injected FAKE pointer() and defers the REAL parser's
   // value validation "to their own fixtures as those modules land in this slice's GREEN" — these are those
   // fixtures. A malformed / non-scalar / over-length / unsafe pointer value must read back as
-  // { kind: 'degrade' } — a state distinct from the unset default (AC3) so the resolver surfaces a reason —
+  // { kind: 'invalid' } — a state distinct from the unset default (AC3) so the resolver surfaces a reason —
   // gated by src/shared/pathSegment.ts's safe-catalog-ID contract. Adversarial values are planted off the
   // store's OWN path resolver (activeFlowPointerFile), the same writer↔reader single-source; no second
   // serializer lives here.
@@ -131,40 +131,40 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     writeFileSync(file, contents);
   };
 
-  // stub → { kind: 'unset' }, so `.kind` fails RED for the intended reason. Each degrade case must also carry
+  // stub → { kind: 'unset' }, so `.kind` fails RED for the intended reason. Each invalid case must also carry
   // a non-empty reason (AC4 "visible reason"): the resolver passes pointer.reason through verbatim
   // (resolveRunDefinition.ts), so a GREEN returning reason:'' would run the fallback with nothing surfaced.
   const expectDegradeWithReason = (wt: string): void => {
     const read = readActiveFlow(wt);
-    expect(read.kind).toBe('degrade');
-    if (read.kind === 'degrade') expect(read.reason).toBeTruthy();
+    expect(read.kind).toBe('invalid');
+    if (read.kind === 'invalid') expect(read.reason).toBeTruthy();
   };
 
-  it('degrades a malformed (unparseable) pointer value', () => {
+  it('rejects a malformed (unparseable) pointer value', () => {
     const wt = fx.makeWorktree('a2-pointer-malformed');
     plantPointer(wt, '[unterminated flow sequence');
     expectDegradeWithReason(wt);
   });
 
-  it('degrades a non-scalar pointer value (a mapping, not a single id)', () => {
+  it('rejects a non-scalar pointer value (a mapping, not a single id)', () => {
     const wt = fx.makeWorktree('a2-pointer-nonscalar');
     plantPointer(wt, 'step: plan\nstatus: in_progress\n');
     expectDegradeWithReason(wt);
   });
 
-  it('degrades an over-length pointer value (beyond the shared catalog-ID bound)', () => {
+  it('rejects an over-length pointer value (beyond the shared catalog-ID bound)', () => {
     const wt = fx.makeWorktree('a2-pointer-overlength');
     plantPointer(wt, 'a'.repeat(MAX_CATALOG_ID_LENGTH + 1));
     expectDegradeWithReason(wt);
   });
 
-  it('degrades an unsafe pointer value (fails the safe-path-segment charset)', () => {
+  it('rejects an unsafe pointer value (fails the safe-path-segment charset)', () => {
     const wt = fx.makeWorktree('a2-pointer-unsafe');
     plantPointer(wt, '../../etc/passwd');
     expectDegradeWithReason(wt);
   });
 
-  // §18.7.6 / CWE-116/117/1007 — the rejected value is echoed into the degrade reason that reaches the flow
+  // §18.7.6 / CWE-116/117/1007 — the rejected value is echoed into the rejection reason that reaches the flow
   // view; a value that fails the safe-id gate may carry control/bidi/zero-width/BOM/joiner bytes (all pass
   // `typeof === 'string'`), so the echoed value must be display-sanitized before it crosses IPC. A YAML
   // double-quoted scalar decodes the \uXXXX escapes into the real bytes: U+202E (RTL override), U+200D (ZWJ)
@@ -174,25 +174,25 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     'u',
   );
 
-  it('display-sanitizes the echoed rejected value in the degrade reason (no control/bidi/zero-width/joiner bytes)', () => {
+  it('display-sanitizes the echoed rejected value in the rejection reason (no control/bidi/zero-width/joiner bytes)', () => {
     const wt = fx.makeWorktree('a2-pointer-unsafe-bytes');
     plantPointer(wt, '"a\\u202Eb\\u200Dc\\u0007"\n');
     const read = readActiveFlow(wt);
-    expect(read.kind).toBe('degrade');
-    if (read.kind === 'degrade') expect(read.reason).not.toMatch(DISPLAY_UNSAFE_OR_JOINER);
+    expect(read.kind).toBe('invalid');
+    if (read.kind === 'invalid') expect(read.reason).not.toMatch(DISPLAY_UNSAFE_OR_JOINER);
   });
 
-  it('length-bounds the echoed rejected value in the degrade reason (CWE-400)', () => {
+  it('length-bounds the echoed rejected value in the rejection reason (CWE-400)', () => {
     const wt = fx.makeWorktree('a2-pointer-unsafe-overlong');
     // Uppercase → fails the charset gate (not only the length bound), so the value is echoed into the reason.
     // The whole ~600-char value must not be pasted verbatim into a UI-bound string.
     plantPointer(wt, `${'A'.repeat(600)}\n`);
     const read = readActiveFlow(wt);
-    expect(read.kind).toBe('degrade');
-    if (read.kind === 'degrade') expect(read.reason.length).toBeLessThan(200);
+    expect(read.kind).toBe('invalid');
+    if (read.kind === 'invalid') expect(read.reason.length).toBeLessThan(200);
   });
 
-  it('degrades an over-cap pointer FILE before parse (byte bound, CWE-400) even when its value would be valid', () => {
+  it('rejects an over-cap pointer FILE before parse (byte bound, CWE-400) even when its value would be valid', () => {
     const wt = fx.makeWorktree('a2-pointer-overcap');
     // A valid id whose FILE is padded past the byte cap with a YAML comment: without the cap the parser would
     // ignore the comment and yield the valid id; the cap must refuse it on size alone.
@@ -200,9 +200,9 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     expectDegradeWithReason(wt);
   });
 
-  it('degrades (never unset) when the pointer path is an unreadable non-file — a non-ENOENT read error', () => {
+  it('rejects (never unset) when the pointer path is an unreadable non-file — a non-ENOENT read error', () => {
     const wt = fx.makeWorktree('a2-pointer-eisdir');
-    // A directory planted at the pointer path makes the read throw EISDIR (non-ENOENT): it must degrade
+    // A directory planted at the pointer path makes the read throw EISDIR (non-ENOENT): it must be rejected
     // visibly, not collapse to the silent unset default (AC3 vs AC4).
     mkdirSync(activeFlowPointerFile(wt), { recursive: true });
     expectDegradeWithReason(wt);
@@ -213,7 +213,7 @@ describe('activeFlowPointer — refuses a pointer path escaping the worktree via
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
 
-  it('write throws and read degrades without following an escaping `.agent-terminal` symlink', () => {
+  it('write throws and read rejects without following an escaping `.agent-terminal` symlink', () => {
     const wt = fx.makeFirstRunWorktree('a2-pointer-escape');
     const outside = fx.outsideDir('a2-pointer-escape-target');
     // A valid pointer planted at the redirect target proves the read never reaches it.
@@ -222,8 +222,8 @@ describe('activeFlowPointer — refuses a pointer path escaping the worktree via
 
     expect(() => writeActiveFlow(wt, 'feature-dev')).toThrow();
     const read = readActiveFlow(wt);
-    expect(read.kind).toBe('degrade');
-    if (read.kind === 'degrade') expect(read.reason).toBeTruthy();
+    expect(read.kind).toBe('invalid');
+    if (read.kind === 'invalid') expect(read.reason).toBeTruthy();
     expect(read).not.toEqual({ kind: 'value', id: 'sneaky-flow' });
     // clear is a no-op on an unresolvable path — it neither throws nor deletes through the symlink.
     expect(() => clearActiveFlow(wt)).not.toThrow();

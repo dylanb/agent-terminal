@@ -134,9 +134,6 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
   return JSON.stringify([
     state.status,
     state.status === 'error' ? state.error ?? '' : '',
-    // §18.7.6 — the persistent degrade reason is structural, so a change to it forces a repaint and an
-    // unchanged one across a passive re-pull leaves the node in place (not re-announced into role=status).
-    state.selectionReason ?? '',
     state.steps,
     state.position,
     !!state.loop,
@@ -394,16 +391,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
     });
     host.append(rail);
-
-    // §18.7.6 — the active-flow pointer selection degraded to the default flow: a PERSISTENT reason on the
-    // running view (status is NOT `error` — the fallback runs), distinct from the one-shot `notice` below. The
-    // reason is display-sanitized by main before it crosses IPC, so it is set as textContent verbatim.
-    if (state.selectionReason) {
-      const reason = doc.createElement('div');
-      reason.className = 'flow-selection-reason';
-      reason.textContent = state.selectionReason;
-      host.append(reason);
-    }
 
     // §24.2.3 T2/T7: the loop read-out (loop steps) else the refs read-out (a ticket/PR on any step).
     if (state.loop) {

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
@@ -59,24 +59,35 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     expect(mgr.state(wt).steps).toEqual(['x-step', 'x-next']);
   });
 
-  it.each([
-    ['unset', (_wt: string): void => {}],
-    ['degraded', (wt: string): void => writeActiveFlow(wt, 'missing-flow')],
-  ])('a run begun on the global fallback (pointer %s) never consults a pointer set later', (_label, seedPointer) => {
+  it('a run begun on the global fallback never consults a pointer set later', () => {
     const wt = fx.makeWorktree('a2-begun-fallback');
     const globalDir = fx.makeWorktree('a2-begun-fallback-global');
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
-    seedPointer(wt);
     const resolve = createRunResolver(globalDir);
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
     mgr.revertStep(wt, 'g-step');
-    rmSync(join(flowHomeDir(wt), 'active-flow.yaml'), { force: true });
     writeActiveFlow(wt, 'flow-x');
 
     expect(mgr.state(wt).steps).toEqual(['g-step']);
+  });
+
+  it('an unusable pick cannot be started on the local flow or the global fallback', () => {
+    const wt = fx.makeWorktree('a2-refused-pick');
+    const globalDir = fx.makeWorktree('a2-refused-pick-global');
+    fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
+    writeActiveFlow(wt, 'missing-flow');
+    const resolve = createRunResolver(globalDir);
+    const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
+
+    const view = mgr.start(wt);
+
+    expect(view.status).toBe('error');
+    expect(view.error).toContain('missing-flow');
+    expect(mgr.state(wt).runStarted).toBe('never-started');
   });
 
   it('a begun GLOBAL-tier catalog run keeps resolving its global entry after a same-named repo entry appears (§18.7.3)', () => {
