@@ -52,7 +52,7 @@ export interface ResolveRunDefinitionDeps {
 export interface ResolvedRunDefinition {
   load: FlowLoad;
   /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
-   *  re-resolves the SAME source rather than the live pointer. Absent when the load is not ok. */
+   *  re-resolves the SAME source rather than the live pointer. Absent on a refused pick or a held begun run. */
   binding?: DispositionRead;
 }
 

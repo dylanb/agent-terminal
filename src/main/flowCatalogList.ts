@@ -43,7 +43,7 @@ export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
   return {
     entries,
     tierNotices: [],
-    ...(pointer.kind === 'value' ? { selectedId: pointer.id } : {}),
+    selection: pointer.kind === 'value' ? { kind: 'value', id: pointer.id } : { kind: pointer.kind },
     hasLocalFlow: hasFlowDefinition(roots.worktreeDir),
     hasGlobalFallback: hasFlowDefinition(roots.globalRoot),
     resumable,

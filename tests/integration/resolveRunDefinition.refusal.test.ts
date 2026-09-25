@@ -50,6 +50,8 @@ describe('resolveRunDefinition — an unusable pick refuses to run (§18.7.3, §
       const load = resolveWith({ kind: 'value', id: 'my-flow' }, { ok: false, cause }, `pick-${cause}`);
 
       expect(loadError(load)).toContain('my-flow');
+      expect(loadError(load)).not.toMatch(/running the default/i);
+      expect(loadError(load)).toMatch(/pick another flow or use the default/i);
     },
   );
 

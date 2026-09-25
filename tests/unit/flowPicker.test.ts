@@ -8,7 +8,7 @@ import { createFlowPicker, type FlowPickerDeps } from '../../src/renderer/src/fl
 import { createFlowStrip, type FlowStripDeps } from '../../src/renderer/src/flowStrip';
 import { createShell } from '../../src/renderer/src/shell';
 import type { FlowViewArgs } from '../../src/renderer/src/flowView';
-import type { ActiveFlowWriteResult, FlowCatalogListResult, FlowStateView } from '../../src/shared/ipc';
+import type { ActiveFlowWriteResult, FlowCatalogListResult, FlowCatalogSelection, FlowStateView } from '../../src/shared/ipc';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker organism in select mode. It follows the worktree of each view
@@ -23,7 +23,7 @@ const neverStarted = (steps: string[]): FlowStateView => ({
   runStarted: 'never-started',
 });
 
-const listingOf = (ids: string[], selectedId?: string): FlowCatalogListResult => ({
+const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): FlowCatalogListResult => ({
   ok: true,
   listing: {
     entries: ids.map((id) => ({ available: true as const, id, origin: 'global' as const })),
@@ -31,7 +31,8 @@ const listingOf = (ids: string[], selectedId?: string): FlowCatalogListResult =>
     hasLocalFlow: false,
     hasGlobalFallback: false,
     resumable: ids.map((id) => ({ origin: 'global' as const, id })),
-    ...(selectedId === undefined ? {} : { selectedId }),
+    selection:
+      selected === undefined ? { kind: 'unset' } : typeof selected === 'string' ? { kind: 'value', id: selected } : selected,
   },
 });
 
@@ -52,13 +53,12 @@ function createCatalog() {
     },
     select(repoKey: string, id: string): void {
       const current = listings.get(repoKey);
-      if (current?.ok) listings.set(repoKey, { ok: true, listing: { ...current.listing, selectedId: id } });
+      if (current?.ok) listings.set(repoKey, { ok: true, listing: { ...current.listing, selection: { kind: 'value', id } } });
     },
     clear(repoKey: string): void {
       const current = listings.get(repoKey);
       if (!current?.ok) return;
-      const { selectedId: _dropped, ...listing } = current.listing;
-      listings.set(repoKey, { ok: true, listing });
+      listings.set(repoKey, { ok: true, listing: { ...current.listing, selection: { kind: 'unset' } } });
     },
     listCatalog(repoKey: string): Promise<FlowCatalogListResult> {
       pulls.push(repoKey);
@@ -178,6 +178,7 @@ describe('flow picker — select mode (AC1)', () => {
           { available: false, label: 'flow-x', origin: 'global', reason: 'escapes its tier' },
         ],
         tierNotices: [],
+        selection: { kind: 'unset' },
         hasLocalFlow: false,
         hasGlobalFallback: false,
         resumable: [{ origin: 'repo', id: 'flow-a' }],
@@ -199,7 +200,31 @@ describe('flow picker — select mode (AC1)', () => {
     picker.dispose();
   });
 
-  it("highlights the listing's selectedId without writing anything", async () => {
+  it('an unusable saved pick never reads as the default, and "use the default" clears it (§18.7.3 leg 1 refusal)', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], { kind: 'invalid' }));
+    r.clearSelection.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+
+    expect(trigger(r.host).textContent).not.toMatch(/default/i);
+    expect(trigger(r.host).textContent).toMatch(/unusable/i);
+    expect(trigger(r.host).disabled).toBe(false);
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
+
+    useDefaultControl(r.host)!.click();
+    await settle();
+
+    expect(r.clearSelection.calls()).toEqual([['/repo-a']]);
+    expect(trigger(r.host).textContent).toBe('Flow: default');
+    picker.dispose();
+  });
+
+  it("highlights the listing's selected entry without writing anything", async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
     const picker = createFlowPicker(r.host, r.deps);

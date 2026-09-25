@@ -1,6 +1,6 @@
 // A2 (#133) §18.7.6 — resolveCatalogEntry over REAL on-disk catalog tiers. The resolver walks the confined
 // resolved path (never a re-resolution of the raw id, CWE-367), repo tier first, so this pins tier precedence
-// and the degrade taxonomy (escapes / unresolvable / unknown) at the observable return value, over real dirs
+// and the refusal taxonomy (escapes / unresolvable / unknown) at the observable return value, over real dirs
 // and real symlinks — no mocks (CLAUDE.md).
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -78,7 +78,7 @@ describe('resolveCatalogEntry (§18.7.6 per-tier catalog resolution)', () => {
     });
   });
 
-  it('degrades "escapes" when the resolved entry is a symlink escaping the tier jail (CWE-59), never the target', () => {
+  it('refuses "escapes" when the resolved entry is a symlink escaping the tier jail (CWE-59), never the target', () => {
     const wt = worktrees.makeWorktree('flowcat-repo');
     const global = worktrees.makeWorktree('flowcat-global');
     installCatalogEntry(wt, 'evil');
@@ -90,13 +90,13 @@ describe('resolveCatalogEntry (§18.7.6 per-tier catalog resolution)', () => {
     });
   });
 
-  it('degrades "unresolvable" when the repo-tier entry cannot be reduced to a real path, never falling through to global (§18.7.6 precedence-inversion)', () => {
+  it('refuses "unresolvable" when the repo-tier entry cannot be reduced to a real path, never falling through to global (§18.7.6 precedence-inversion)', () => {
     const wt = worktrees.makeWorktree('flowcat-repo');
     const global = worktrees.makeWorktree('flowcat-global');
     installCatalogEntry(wt, 'feature-dev');
     catalogs.danglingEntryFlowYaml(flowCatalogDir(wt), 'feature-dev');
     // The SAME id also lives in the global tier: an unreadable repo tier read as empty would silently swap the
-    // source to the global entry. The guard degrades with the distinct "could not be read" cause instead.
+    // source to the global entry. The guard refuses with the distinct "could not be read" cause instead.
     installCatalogEntry(global, 'feature-dev');
 
     expect(resolveCatalogEntry({ worktreeDir: wt, globalRoot: global }, 'feature-dev')).toEqual({
@@ -105,7 +105,7 @@ describe('resolveCatalogEntry (§18.7.6 per-tier catalog resolution)', () => {
     });
   });
 
-  it('degrades "escapes" on a GLOBAL-tier symlinked entry (repo absent), never following the redirected target', () => {
+  it('refuses "escapes" on a GLOBAL-tier symlinked entry (repo absent), never following the redirected target', () => {
     const wt = worktrees.makeWorktree('flowcat-repo');
     const global = worktrees.makeWorktree('flowcat-global');
     installCatalogEntry(global, 'evil');
@@ -119,7 +119,7 @@ describe('resolveCatalogEntry (§18.7.6 per-tier catalog resolution)', () => {
     });
   });
 
-  it('degrades "unresolvable" on a GLOBAL-tier dangling entry (repo absent)', () => {
+  it('refuses "unresolvable" on a GLOBAL-tier dangling entry (repo absent)', () => {
     const wt = worktrees.makeWorktree('flowcat-repo');
     const global = worktrees.makeWorktree('flowcat-global');
     installCatalogEntry(global, 'flaky');

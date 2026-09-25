@@ -24,7 +24,7 @@ describe('worktreeStartedness — a begun run stays started across a first-step 
   it("reads 'started' after start() then a first-step revertStep() rolls the on-disk status back to not_started", () => {
     const wt = fx.makeWorktree('a2-revert-locked');
     const globalDir = fx.makeWorktree('a2-revert-global');
-    // A leg-1 local flow.yaml so the run resolves without a catalog; `red` is the first step revertStep targets.
+    // An unset pointer's local flow.yaml (leg 2) so the run resolves without a catalog; `red` is the first step revertStep targets.
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
 
     const mgr = createFlowManager({ globalDir });

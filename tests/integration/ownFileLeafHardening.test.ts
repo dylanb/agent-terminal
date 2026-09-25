@@ -68,6 +68,17 @@ describe('own-file leaves under .agent-terminal resist planted links and FIFOs (
     expect(existsSync(flowStateFile(wt))).toBe(true);
   });
 
+  it('clearing the pointer through active-flow.yaml linked to the flow home never empties the flow home', () => {
+    const wt = fx.makeWorktree('own-leaf-pointer-rm-home');
+    fx.writeFlowState(wt, { step: 'red', status: 'not_started' });
+    symlinkSync('.', activeFlowPointerFile(wt));
+
+    clearActiveFlow(wt);
+
+    expect(existsSync(flowStateFile(wt))).toBe(true);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
+  });
+
   it('a FIFO planted at the pointer or the marker never blocks the read', () => {
     const wt = fx.makeWorktree('own-leaf-fifo');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red'] });

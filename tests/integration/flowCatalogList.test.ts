@@ -139,44 +139,53 @@ describe('listCatalog — per named worktree (AC2)', () => {
 });
 
 describe('listCatalog — listing flags', () => {
-  it("carries the worktree's pointer id as selectedId when it reads as a value, and omits it when unset", () => {
+  it("carries the worktree's pointer as a value selection when it reads as a value, and as unset when absent", () => {
     const w = world();
     const repo = w.repo('a3-list-selected');
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'first', ['f1']);
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'second', ['s1']);
     const roots = { worktreeDir: repo, globalRoot: w.home };
 
-    expect(listCatalog(roots).selectedId).toBeUndefined();
+    expect(listCatalog(roots).selection).toEqual({ kind: 'unset' });
     writeActiveFlow(repo, 'second');
-    expect(listCatalog(roots).selectedId).toBe('second');
+    expect(listCatalog(roots).selection).toEqual({ kind: 'value', id: 'second' });
   });
 
-  it('carries a safe pointer id that matches no row as selectedId', () => {
+  it('carries a safe pointer id that matches no row as the value selection', () => {
     const w = world();
     const repo = w.repo('a3-list-unknown-sel');
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'first', ['f1']);
     writeActiveFlow(repo, 'no-such-flow');
 
-    expect(listCatalog({ worktreeDir: repo, globalRoot: w.home }).selectedId).toBe('no-such-flow');
+    expect(listCatalog({ worktreeDir: repo, globalRoot: w.home }).selection).toEqual({ kind: 'value', id: 'no-such-flow' });
   });
 
   it.each([
     ['an escaping id', '../escape'],
     ['bidi and zero-width text', 'fir\u202Est\u200B'],
     ['an over-long id', 'x'.repeat(MAX_CATALOG_ID_LENGTH + 1)],
-  ])('drops selectedId when the pointer holds %s (an invalid pointer, never the raw text)', (_label, raw) => {
+  ])('reports an invalid selection, never unset and never the raw text, when the pointer holds %s (§18.7.3 leg 1 refuses it)', (_label, raw) => {
     const w = world();
     const repo = w.repo('a3-list-invalid-sel');
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'first', ['f1']);
     const roots = { worktreeDir: repo, globalRoot: w.home };
     writeActiveFlow(repo, 'first');
-    expect(listCatalog(roots).selectedId).toBe('first');
+    expect(listCatalog(roots).selection).toEqual({ kind: 'value', id: 'first' });
 
     const pointer = activeFlowPointerFile(repo);
     mkdirSync(dirname(pointer), { recursive: true });
     writeFileSync(pointer, yaml.dump(raw));
 
-    expect(listCatalog(roots).selectedId).toBeUndefined();
+    expect(listCatalog(roots).selection).toEqual({ kind: 'invalid' });
+  });
+
+  it('reports an invalid selection when a non-file sits at the pointer path', () => {
+    const w = world();
+    const repo = w.repo('a3-list-nonfile-sel');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'first', ['f1']);
+    mkdirSync(activeFlowPointerFile(repo), { recursive: true });
+
+    expect(listCatalog({ worktreeDir: repo, globalRoot: w.home }).selection).toEqual({ kind: 'invalid' });
   });
 
   it("reports hasLocalFlow and hasGlobalFallback from the worktree's flow.yaml and the global fallback file", () => {
@@ -221,7 +230,7 @@ describe('listCatalog — an entry that exists but cannot be selected (§18.7.6)
 
 describe('catalogListResult — the flow:listCatalog answer (§18.7.6)', () => {
   it('wraps a listing as ok', () => {
-    const listing: FlowCatalogListing = { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [] };
+    const listing: FlowCatalogListing = { entries: [], tierNotices: [], selection: { kind: 'unset' }, hasLocalFlow: false, hasGlobalFallback: false, resumable: [] };
     expect(catalogListResult(() => listing)).toEqual({ ok: true, listing });
   });
 

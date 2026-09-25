@@ -50,15 +50,16 @@ export function writeActiveFlow(worktreeDir: string, id: string): void {
   }
 }
 
-/** Return the worktree to the unset default — best-effort; an absent file is already the cleared state. */
+/** Return the worktree to the unset default — best-effort; an absent file is already the cleared state. A
+ *  non-file at the pointer path is removed too, or a refused pick would have no route out (operator decision
+ *  2026-09-25, #134); the gate's read-back reports a removal that did not land. */
 export function clearActiveFlow(worktreeDir: string): void {
   const file = confinedPointerFile(worktreeDir);
   if (file === null) return;
   try {
-    rmSync(file, { force: true });
+    rmSync(file, { recursive: true, force: true });
   } catch {
-    // `force` covers ENOENT; a non-file (EISDIR) or locked container (EPERM) at the path must not throw into
-    // the caller — an unset selection is already the recovered state (CLAUDE.md best-effort; cf. clearTurnDone).
+    // A partial removal must not throw into the caller; activeFlowGate's read-back surfaces it.
   }
 }
 

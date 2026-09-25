@@ -74,6 +74,27 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     expect(mgr.state(wt).steps).toEqual(['g-step']);
   });
 
+  it("AC18: a pick over a present local flow.yaml is what Start runs and binds, and it survives a relaunch", () => {
+    const wt = fx.makeWorktree('a3-pick-over-local');
+    const globalDir = fx.makeWorktree('a3-pick-over-local-global');
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
+    seedEntry(globalDir, 'flow-g', 'flow-g', 'g-step', 'g-next');
+    writeActiveFlow(wt, 'flow-g');
+    const resolve = createRunResolver(globalDir);
+    const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
+
+    const started = mgr.start(wt);
+
+    expect(started.status).toBe('in_progress');
+    expect(started.steps).toEqual(['g-step', 'g-next']);
+    expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'flow-g' });
+
+    const relaunchedResolve = createRunResolver(globalDir);
+    const relaunched = createFlowManager({ globalDir, loadDefinition: (repoKey) => relaunchedResolve(repoKey) });
+    expect(relaunched.state(wt).steps).toEqual(['g-step', 'g-next']);
+    expect(relaunched.state(wt).status).toBe('in_progress');
+  });
+
   it('an unusable pick cannot be started on the local flow or the global fallback', () => {
     const wt = fx.makeWorktree('a2-refused-pick');
     const globalDir = fx.makeWorktree('a2-refused-pick-global');

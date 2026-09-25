@@ -91,12 +91,13 @@ describe('activeFlowPointer — first-run persistence & non-clobber (§18.7.2 AC
     expect(readFileSync(stateFile)).toEqual(progressionBefore);
   });
 
-  it('clearActiveFlow does not throw when a non-file sits at the pointer path (best-effort contract)', () => {
+  it('clearActiveFlow removes a non-file planted at the pointer path, leaving the pointer unset (#134)', () => {
     const wt = fx.makeWorktree('a2-pointer-clear-nonfile');
-    // A directory planted at the pointer path makes rmSync throw EISDIR — `force` covers only ENOENT and does
-    // not recurse. clearActiveFlow's documented best-effort contract ("never crash") requires this swallowed.
-    mkdirSync(activeFlowPointerFile(wt), { recursive: true });
-    expect(() => clearActiveFlow(wt)).not.toThrow();
+    fx.plantPointerDirectory(wt);
+
+    clearActiveFlow(wt);
+
+    expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
   });
 
   it('AC8: a progression write leaves the pointer file byte-for-byte unchanged (reverse non-clobber)', () => {

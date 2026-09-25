@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowManager } from '../../src/main/flow';
@@ -182,13 +182,38 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
     expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
   });
 
-  it('reports a clear that could not remove the selection instead of claiming success', () => {
-    const wt = fx.makeWorktree('a2-gate-clear-fault');
-    // A directory planted at the pointer path cannot be removed by the file-clear.
-    mkdirSync(join(activeFlowPointerFile(wt), 'nested'), { recursive: true });
+  it('"use the default" removes a non-file planted at the pointer path, returning the worktree to unset (#134)', () => {
+    const wt = fx.makeWorktree('a3-gate-clear-nonfile');
+    const outside = fx.outsideDir('a3-gate-clear-outside');
+    const sentinel = join(outside, 'keep.txt');
+    writeFileSync(sentinel, 'outside the worktree\n');
+    const planted = fx.plantPointerDirectory(wt);
+    symlinkSync(outside, join(planted, 'escape'));
 
     const res = gateFor().clear(wt);
 
-    expect(res.ok).toBe(false);
+    expect(res).toEqual({ ok: true });
+    expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
+    expect(existsSync(activeFlowPointerFile(wt))).toBe(false);
+    expect(readFileSync(sentinel, 'utf8')).toBe('outside the worktree\n');
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'reports a clear that could not remove the selection instead of claiming success',
+    () => {
+      const wt = fx.makeWorktree('a2-gate-clear-fault');
+      const stuck = join(fx.plantPointerDirectory(wt), 'stuck');
+      mkdirSync(stuck);
+      writeFileSync(join(stuck, 'occupant'), 'x\n');
+      chmodSync(stuck, 0o500);
+      try {
+        const res = gateFor().clear(wt);
+
+        expect(res.ok).toBe(false);
+        expect(existsSync(activeFlowPointerFile(wt))).toBe(true);
+      } finally {
+        chmodSync(stuck, 0o700);
+      }
+    },
+  );
 });

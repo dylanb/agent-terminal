@@ -101,7 +101,7 @@ async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker; s
       { available: false, label: 'flow-x', origin: 'repo', reason: 'escapes its tier' },
     ],
     tierNotices: [],
-    selectedId: 'flow-a',
+    selection: { kind: 'value', id: 'flow-a' },
     hasLocalFlow: false,
     hasGlobalFallback: false,
     resumable: [],

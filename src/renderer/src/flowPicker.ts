@@ -1,6 +1,6 @@
 // §18.7.4 / §18.7.6
 
-import type { ActiveFlowWriteResult, FlowCatalogListing, FlowCatalogListResult } from '../../shared/ipc';
+import type { ActiveFlowWriteResult, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { captureSubtreeFocus } from './dom';
@@ -29,7 +29,11 @@ type Catalog =
   | { kind: 'failed'; reason: string };
 
 const sameRows = (a: FlowCatalogListing, b: FlowCatalogListing): boolean =>
-  JSON.stringify({ ...a, selectedId: undefined }) === JSON.stringify({ ...b, selectedId: undefined });
+  JSON.stringify({ ...a, selection: undefined }) === JSON.stringify({ ...b, selection: undefined });
+
+const UNSET: FlowCatalogSelection = { kind: 'unset' };
+
+const sameSelection = (a: FlowCatalogSelection, b: FlowCatalogSelection): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 const LOCK_REASON = 'Locked until you Terminate the run';
 
@@ -43,8 +47,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const uid = `flow-picker-${++instances}`;
   let repoKey: string | null = null;
   let catalog: Catalog = { kind: 'loading' };
-  let selectedId: string | undefined;
-  let confirmedId: string | undefined;
+  let selected: FlowCatalogSelection = UNSET;
+  let confirmed: FlowCatalogSelection = UNSET;
   let alertText = '';
   let open = false;
   let locked = false;
@@ -70,11 +74,11 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
         if (result.ok) {
           const unchanged =
             catalog.kind === 'listed' &&
-            selectedId === result.listing.selectedId &&
+            sameSelection(selected, result.listing.selection) &&
             sameRows(catalog.listing, result.listing);
           catalog = { kind: 'listed', listing: result.listing };
-          selectedId = result.listing.selectedId;
-          confirmedId = selectedId;
+          selected = result.listing.selection;
+          confirmed = selected;
           if (unchanged) return;
         } else {
           catalog = { kind: 'failed', reason: result.reason };
@@ -94,8 +98,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   function switchTo(key: string | null): void {
     repoKey = key;
     catalog = { kind: 'loading' };
-    selectedId = undefined;
-    confirmedId = undefined;
+    selected = UNSET;
+    confirmed = UNSET;
     alertText = '';
     open = false;
     render();
@@ -127,34 +131,34 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
   const canPick = (): boolean => repoKey !== null && catalog.kind === 'listed' && !locked;
 
-  function write(next: string | undefined, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
+  function write(next: FlowCatalogSelection, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
     const key = repoKey;
     if (key === null || !canPick()) return;
     const token = ++pickGeneration;
     ++generation;
-    selectedId = next;
+    selected = next;
     alertText = '';
     open = false;
     render();
     trigger()?.focus();
     const revert = (reason: string): void => {
       if (disposed || repoKey !== key || token !== pickGeneration) return;
-      selectedId = confirmedId;
+      selected = confirmed;
       alertText = reason;
       render();
     };
     save(key).then(
       (result) => {
         if (result.ok) {
-          if (!disposed && repoKey === key) confirmedId = next;
+          if (!disposed && repoKey === key) confirmed = next;
         } else revert(result.reason);
       },
       (e: unknown) => revert(reasonOf(e, 'Could not save the selection')),
     );
   }
 
-  const pick = (id: string): void => write(id, (key) => deps.select(key, id));
-  const useDefault = (): void => write(undefined, (key) => deps.clearSelection(key));
+  const pick = (id: string): void => write({ kind: 'value', id }, (key) => deps.select(key, id));
+  const useDefault = (): void => write(UNSET, (key) => deps.clearSelection(key));
 
   const trigger = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-trigger');
   const allOptions = (): HTMLElement[] => [...host.querySelectorAll<HTMLElement>('[role="option"]')];
@@ -225,7 +229,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       return li;
     }
     const id = entry.id;
-    li.setAttribute('aria-selected', String(id === selectedId));
+    li.setAttribute('aria-selected', String(selected.kind === 'value' && id === selected.id));
     li.addEventListener('click', () => pick(id));
     li.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -239,7 +243,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   function triggerLabel(): string {
     if (catalog.kind === 'loading') return 'Flow: loading…';
     if (catalog.kind === 'failed') return 'Flow: unavailable';
-    return `Flow: ${selectedId ?? 'default'}`;
+    if (selected.kind === 'invalid') return 'Flow: selection unusable';
+    return `Flow: ${selected.kind === 'value' ? selected.id : 'default'}`;
   }
 
   function triggerButton(describedByAlert: boolean): HTMLButtonElement {

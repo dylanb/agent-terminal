@@ -757,11 +757,15 @@ export type FlowCatalogEntry =
   | { available: true; id: string; origin: CatalogOrigin }
   | { available: false; label: string; origin: CatalogOrigin; reason: string };
 
+/** §18.7.2/§18.7.3 — the worktree's active-flow pointer as the picker reflects it: no pick, a pick, or a set pick
+ *  that cannot be used (which refuses the run, so it is never shown as the default). */
+export type FlowCatalogSelection = { kind: 'unset' } | { kind: 'value'; id: string } | { kind: 'invalid' };
+
 /** §18.1 / §18.7.6 */
 export interface FlowCatalogListing {
   entries: FlowCatalogEntry[];
   tierNotices: { origin: CatalogOrigin; notice: string }[];
-  selectedId?: string;
+  selection: FlowCatalogSelection;
   hasLocalFlow: boolean;
   hasGlobalFallback: boolean;
   resumable: { origin: CatalogOrigin; id: string }[];
