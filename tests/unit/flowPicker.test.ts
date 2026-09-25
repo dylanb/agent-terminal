@@ -6,6 +6,7 @@ import { createFeed, createScriptedAsync, deferred, type Deferred } from '../hel
 import { assertRendersFromHostDocument } from './relocatable';
 import { createFlowPicker, type FlowPickerDeps } from '../../src/renderer/src/flowPicker';
 import { createFlowStrip, type FlowStripDeps } from '../../src/renderer/src/flowStrip';
+import { createShell } from '../../src/renderer/src/shell';
 import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 import type { ActiveFlowWriteResult, FlowCatalogListResult, FlowStateView } from '../../src/shared/ipc';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
@@ -231,6 +232,111 @@ describe('flow picker — select mode (AC1)', () => {
     picker.dispose();
   });
 
+  it('a slow earlier pick refused after a later pick succeeded leaves the later pick selected and announces nothing', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    const slow = r.select.respondLater();
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
+    await settle();
+    slow.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
+    await settle();
+
+    expect(r.select.calls()).toEqual([
+      ['/repo-a', 'flow-b'],
+      ['/repo-a', 'flow-c'],
+    ]);
+    expect(trigger(r.host).textContent).toBe('Flow: flow-c');
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-c').getAttribute('aria-selected')).toBe('true');
+    picker.dispose();
+  });
+
+  it('two quick picks refused in order restore the selection from before either attempt', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    const first = r.select.respondLater();
+    const second = r.select.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
+    await settle();
+    first.resolve({ ok: false, reason: 'Could not save the selection: read-only' });
+    await settle();
+    second.resolve({ ok: false, reason: 'Could not save the selection: read-only' });
+    await settle();
+
+    expect(trigger(r.host).textContent).toBe('Flow: flow-a');
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('read-only');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
+    picker.dispose();
+  });
+
+  it('a later pick refused after an earlier pick succeeded restores the earlier, written pick', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    const first = r.select.respondLater();
+    const second = r.select.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
+    await settle();
+    first.resolve({ ok: true });
+    await settle();
+    second.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
+    await settle();
+
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    picker.dispose();
+  });
+
+  it("a written pick after a refused one clears the refused pick's alert", async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    r.select.respond({ ok: false, reason: 'Could not save the selection: disk full' });
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('disk full');
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('');
+    expect(trigger(r.host).textContent).toBe('Flow: flow-c');
+    picker.dispose();
+  });
+
   it('a pick whose write rejects outright announces a reason and restores the prior selection', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
@@ -362,9 +468,38 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
     fail(pending);
     await settle();
 
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('');
     await ensureOpen(r.host);
     expect(option(r.host, 'only-in-b').getAttribute('aria-selected')).toBe('true');
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
+    picker.dispose();
+  });
+
+  it('a pick written on the first worktree after the view moved is never what a refused pick on the new worktree restores', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.catalog.serve('/repo-b', listingOf(['flow-b', 'only-in-b', 'other-b'], 'only-in-b'));
+    const slowOk = r.select.respondLater();
+    r.select.respond({ ok: false, reason: 'Could not save the selection: read-only' });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    r.views.fire('/repo-b', neverStarted(['b1']));
+    await settle();
+    slowOk.resolve({ ok: true });
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'other-b').click();
+    await settle();
+
+    expect(trigger(r.host).textContent).toBe('Flow: only-in-b');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'only-in-b').getAttribute('aria-selected')).toBe('true');
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
     picker.dispose();
   });
 
@@ -393,7 +528,10 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
     picker.dispose();
   });
 
-  it("a late listing for the previous worktree never repaints the current worktree's rows", async () => {
+  it.each([
+    ['listed', (d: Deferred<FlowCatalogListResult>) => d.resolve(listingOf(['only-in-a']))],
+    ['rejected', (d: Deferred<FlowCatalogListResult>) => d.reject(new Error('Could not list flows: only-in-a gone'))],
+  ])("a late %s listing for the previous worktree never repaints the current worktree's rows", async (_label, land) => {
     const r = rig();
     const lateA = r.catalog.hold('/repo-a');
     r.catalog.serve('/repo-b', listingOf(['only-in-b']));
@@ -403,12 +541,60 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
     await settle();
     r.views.fire('/repo-b', neverStarted(['b1']));
     await settle();
-    lateA.resolve(listingOf(['only-in-a']));
+    land(lateA);
     await settle();
     await ensureOpen(r.host);
 
     expect(options(r.host).map((o) => (o.textContent ?? '').includes('only-in-b'))).toEqual([true]);
     expect(r.host.textContent).not.toContain('only-in-a');
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('');
+    picker.dispose();
+  });
+
+  it('a re-pull whose rows are unchanged but whose selection moved shows the new selection', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    expect(trigger(r.host).textContent).toBe('Flow: flow-a');
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
+    picker.dispose();
+  });
+
+  it.each([
+    ['refused', (d: Deferred<FlowCatalogListResult>) => d.resolve({ ok: false, reason: 'Could not list flows: boom' })],
+    ['rejected', (d: Deferred<FlowCatalogListResult>) => d.reject(new Error('Could not list flows: boom'))],
+  ])('a %s re-pull while the list is open collapses it, and a Retry that lists does not reopen it (WCAG 4.1.2)', async (_label, fail) => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b']));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(options(r.host)).not.toEqual([]);
+    const repull = r.catalog.hold('/repo-a');
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    fail(repull);
+    await settle();
+
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    const retry = [...r.host.querySelectorAll('button')].find((b) => /retry/i.test(b.textContent ?? ''));
+    retry!.click();
+    await settle();
+    expect(trigger(r.host).textContent).toBe('Flow: default');
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
     picker.dispose();
   });
 
@@ -841,6 +1027,30 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     picker.dispose();
   });
 
+  it('the arrow keys stop at either end of the list, and Space picks the option reached', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c']));
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(active()?.textContent).toContain('flow-a');
+
+    key(active()!, 'ArrowUp');
+    expect(active()?.textContent).toContain('flow-a');
+    for (let i = 0; i < 3; i++) key(active()!, 'ArrowDown');
+    expect(active()?.textContent).toContain('flow-c');
+    key(active()!, 'ArrowUp');
+    expect(active()?.textContent).toContain('flow-b');
+    key(active()!, ' ');
+    await settle();
+
+    expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
+    expect(active()).toBe(trigger(r.host));
+    picker.dispose();
+  });
+
   it('Escape, a mousedown outside, and focus leaving the picker each close the list', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a']));
@@ -863,6 +1073,83 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     active()!.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: outside }));
     expect(options(r.host)).toEqual([]);
     expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    picker.dispose();
+  });
+
+  it('Escape in the open list closes the list, not the docked loop panel behind it (WCAG 2.4.3)', async () => {
+    const app = document.body.appendChild(document.createElement('div'));
+    app.innerHTML =
+      '<aside class="rail"><span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span></aside>' +
+      '<aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside><main class="main"></main>';
+    const shell = createShell(app);
+    shell.openLoopPanel();
+    const r = rig();
+    app.querySelector('.rail')!.append(r.host);
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    await ensureOpen(r.host);
+    key(active()!, 'Escape');
+
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    expect(active()).toBe(trigger(r.host));
+    expect(shell.isLoopPanelOpen()).toBe(true);
+
+    key(active()!, 'Escape');
+    expect(shell.isLoopPanelOpen()).toBe(false);
+    picker.dispose();
+    shell.dispose();
+    app.remove();
+  });
+
+  it('Escape on the trigger of the open list closes the list, not the docked loop panel behind it', async () => {
+    const app = document.body.appendChild(document.createElement('div'));
+    app.innerHTML =
+      '<aside class="rail"></aside><aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>' +
+      '<main class="main"></main>';
+    const shell = createShell(app);
+    shell.openLoopPanel();
+    const r = rig();
+    app.querySelector('.rail')!.append(r.host);
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    await ensureOpen(r.host);
+    trigger(r.host).focus();
+    expect(options(r.host)).not.toEqual([]);
+    key(active()!, 'Escape');
+
+    expect(options(r.host)).toEqual([]);
+    expect(shell.isLoopPanelOpen()).toBe(true);
+    picker.dispose();
+    shell.dispose();
+    app.remove();
+  });
+
+  it('a listing that only confirms the pick just made leaves the focused trigger in place', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    const focusedTrigger = active();
+    expect(focusedTrigger).toBe(trigger(r.host));
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+
+    expect(r.catalog.pulls().filter((k) => k === '/repo-a').length).toBe(2);
+    expect(active()).toBe(focusedTrigger);
+    expect(focusedTrigger?.isConnected).toBe(true);
     picker.dispose();
   });
 

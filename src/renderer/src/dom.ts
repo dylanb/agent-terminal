@@ -14,6 +14,12 @@ export function captureFocusReturn(el: HTMLElement): () => void {
   };
 }
 
+/** WCAG 2.4.3. A popup is recognised only by these ARIA attributes: one that omits them has its Escape
+ *  taken by the shell, which closes the loop panel or exits full screen behind the still-open popup. */
+export function focusedPopupOwnsEscape(doc: Document): boolean {
+  return doc.activeElement?.closest('[role="listbox"], [aria-haspopup="listbox"][aria-expanded="true"]') != null;
+}
+
 /** Capture whether focus is inside `container`, and return a restorer to run after its subtree is
  *  rebuilt: it focuses the element `resolve()` yields (resolved at restore time, so it may be freshly
  *  built) only if focus was inside at capture and has not since moved away (WCAG 2.4.3). */

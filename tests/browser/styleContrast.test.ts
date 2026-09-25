@@ -4,12 +4,19 @@ import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
 import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
-import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import type {
+  ActiveFlowWriteResult,
+  DestRelativePath,
+  FlowCatalogListing,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+} from '../../src/shared/ipc';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
 import { createConfirmDialog } from '../../src/renderer/src/confirmDialog';
 import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstrapConflict';
-import { createFlowPicker } from '../../src/renderer/src/flowPicker';
+import { createFlowPicker, type FlowPicker } from '../../src/renderer/src/flowPicker';
+import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -81,6 +88,43 @@ async function tabToProbe(el: HTMLElement): Promise<void> {
   if (document.activeElement !== el) throw new Error('probe did not take keyboard focus');
   if (!el.matches(':focus-visible')) throw new Error('probe focused but :focus-visible did not match');
 }
+
+/** The real picker in the rail, showing a never-started worktree whose listing has the selected flow, a second
+ *  available flow, and one unavailable entry, and whose pointer writes are all refused. */
+async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker }> {
+  const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
+  let show: ((...args: FlowViewArgs) => void) | undefined;
+  const listing: FlowCatalogListing = {
+    entries: [
+      { available: true, id: 'flow-a', origin: 'repo' },
+      { available: true, id: 'flow-b', origin: 'global' },
+      { available: false, label: 'flow-x', origin: 'repo', reason: 'escapes its tier' },
+    ],
+    tierNotices: [],
+    selectedId: 'flow-a',
+    hasLocalFlow: false,
+    hasGlobalFallback: false,
+    resumable: [],
+  };
+  const refused = async (): Promise<ActiveFlowWriteResult> => ({ ok: false, reason: 'Could not save the selection' });
+  const picker = createFlowPicker(host, {
+    onView: (cb) => {
+      show = cb;
+      return () => {};
+    },
+    listCatalog: async () => ({ ok: true, listing }),
+    select: refused,
+    clearSelection: refused,
+  });
+  show!('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'not_started', runStarted: 'never-started' });
+  await vi.waitFor(() => expect(host.querySelector('.flow-picker-trigger')?.textContent).toBe('Flow: flow-a'));
+  return { host, picker };
+}
+const optionNamed = (host: HTMLElement, name: string): HTMLElement => {
+  const opt = [...host.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.dataset.flowKey === name);
+  if (!opt) throw new Error(`no option for ${name}`);
+  return opt;
+};
 
 for (const theme of ['light', 'dark'] as const) {
   describe(`${theme} theme`, () => {
@@ -255,6 +299,55 @@ for (const theme of ['light', 'dark'] as const) {
         await tabToProbe(box);
         expect(contrast(focusRing(box), paintedBgBehindRing(box))).toBeGreaterThanOrEqual(3);
       });
+    });
+
+    // §18.7.4 picker option: its ring is inset (negative offset), so it paints on the option's OWN fill,
+    // which the pointer darkens on hover while a keyboard user may still be standing on it.
+    describe('flow picker option ring and selected marker contrast (WCAG 2.1 SC 1.4.11 / 2.4.7)', () => {
+      for (const hovered of [false, true]) {
+        it(`the focused, selected option's ring and marker clear 3:1${hovered ? ' while hovered' : ''}`, async () => {
+          const { host, picker } = await mountPicker();
+          await tabToProbe(host.querySelector<HTMLElement>('.flow-picker-trigger')!);
+          await userEvent.keyboard('{Enter}');
+          const el = await vi.waitFor(() => {
+            const opt = host.querySelector<HTMLElement>('[role="option"][aria-selected="true"]');
+            if (!opt || document.activeElement !== opt) throw new Error('the selected option did not take focus');
+            return opt;
+          });
+          expect(el.matches(':focus-visible')).toBe(true);
+          if (hovered) await userEvent.hover(el);
+          const cs = getComputedStyle(el);
+          expect(parseFloat(cs.outlineOffset)).toBeLessThan(0);
+          const fill = paintedBg(el);
+          expect(contrast(ringOver(cs.outlineColor, paintedAlpha(el), fill), fill)).toBeGreaterThanOrEqual(3);
+          expect(contrast(parse(cs.borderLeftColor), fill)).toBeGreaterThanOrEqual(3);
+          picker.dispose();
+        });
+      }
+    });
+
+    describe('flow picker text contrast (WCAG 1.4.3 AA)', () => {
+      for (const hovered of [false, true]) {
+        it(`the origin label, unavailable reason and alert clear 4.5:1${hovered ? ' on a hovered row' : ''}`, async () => {
+          const { host, picker } = await mountPicker();
+          const trigger = host.querySelector<HTMLElement>('.flow-picker-trigger')!;
+          trigger.click();
+          (await vi.waitFor(() => optionNamed(host, 'flow-b'))).click();
+          await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).not.toBe(''));
+          host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+          const row = await vi.waitFor(() => optionNamed(host, 'flow-x'));
+          if (hovered) await userEvent.hover(row);
+          for (const el of [
+            row.querySelector('.flow-picker-origin')!,
+            row.querySelector('.flow-picker-reason')!,
+            host.querySelector('[role="alert"]')!,
+          ]) {
+            expect(el, 'the picker renders this text').not.toBeNull();
+            expect(contrast(fg(el), paintedBg(el)), el.className).toBeGreaterThanOrEqual(4.5);
+          }
+          picker.dispose();
+        });
+      }
     });
 
     // §20.2 code viewer: the editor paints onto --bg (the board), and a changed line adds --changed-wash

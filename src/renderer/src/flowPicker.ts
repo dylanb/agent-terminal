@@ -27,6 +27,9 @@ type Catalog =
   | { kind: 'listed'; listing: FlowCatalogListing }
   | { kind: 'failed'; reason: string };
 
+const sameRows = (a: FlowCatalogListing, b: FlowCatalogListing): boolean =>
+  JSON.stringify({ ...a, selectedId: undefined }) === JSON.stringify({ ...b, selectedId: undefined });
+
 const reasonOf = (e: unknown, prefix: string): string =>
   displaySafeEcho(`${prefix}: ${e instanceof Error ? e.message : String(e)}`, MAX_ECHOED_REASON_LENGTH);
 
@@ -38,6 +41,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let repoKey: string | null = null;
   let catalog: Catalog = { kind: 'loading' };
   let selectedId: string | undefined;
+  let confirmedId: string | undefined;
   let alertText = '';
   let open = false;
   let generation = 0;
@@ -63,9 +67,10 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
           const unchanged =
             catalog.kind === 'listed' &&
             selectedId === result.listing.selectedId &&
-            JSON.stringify(catalog.listing) === JSON.stringify(result.listing);
+            sameRows(catalog.listing, result.listing);
           catalog = { kind: 'listed', listing: result.listing };
           selectedId = result.listing.selectedId;
+          confirmedId = selectedId;
           if (unchanged) return;
         } else {
           catalog = { kind: 'failed', reason: result.reason };
@@ -86,6 +91,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     repoKey = key;
     catalog = { kind: 'loading' };
     selectedId = undefined;
+    confirmedId = undefined;
     alertText = '';
     open = false;
     render();
@@ -112,7 +118,6 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   function pick(id: string): void {
     if (repoKey === null || catalog.kind !== 'listed') return;
     const key = repoKey;
-    const prior = selectedId;
     const token = ++pickGeneration;
     ++generation;
     selectedId = id;
@@ -122,13 +127,15 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     trigger()?.focus();
     const revert = (reason: string): void => {
       if (disposed || repoKey !== key || token !== pickGeneration) return;
-      selectedId = prior;
+      selectedId = confirmedId;
       alertText = reason;
       render();
     };
     deps.select(key, id).then(
       (result) => {
-        if (!result.ok) revert(result.reason);
+        if (result.ok) {
+          if (!disposed && repoKey === key) confirmedId = id;
+        } else revert(result.reason);
       },
       (e: unknown) => revert(reasonOf(e, 'Could not save the selection')),
     );

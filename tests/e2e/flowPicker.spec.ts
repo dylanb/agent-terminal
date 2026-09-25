@@ -131,6 +131,7 @@ test('a worktree change while the picker holds keyboard focus lands focus in the
   await page.keyboard.press('Enter');
   await pickerTrigger(page).focus();
   await expect(pickerTrigger(page)).toBeFocused();
+  await expect(harness.stepName(1)).toHaveText('a-only-first');
 
   await expect(harness.stepName(1)).toHaveText('b-only-first', { timeout: 10_000 });
   expect(await page.evaluate(() => document.activeElement === null || document.activeElement === document.body)).toBe(false);

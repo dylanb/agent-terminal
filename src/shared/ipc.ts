@@ -756,7 +756,8 @@ export interface FlowListCatalogMsg {
   repoKey: string;
 }
 
-export type CatalogOrigin = 'repo' | 'global';
+export const CATALOG_ORIGINS = ['repo', 'global'] as const;
+export type CatalogOrigin = (typeof CATALOG_ORIGINS)[number];
 
 export type FlowCatalogEntry =
   | { available: true; id: string; origin: CatalogOrigin }

@@ -6,9 +6,7 @@ import { catalogRefusalReason } from './resolveRunDefinition';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { errMsg } from './errno';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
-import type { CatalogOrigin, FlowCatalogEntry, FlowCatalogListing, FlowCatalogListResult } from '../shared/ipc';
-
-const TIERS: readonly CatalogOrigin[] = ['repo', 'global'];
+import { CATALOG_ORIGINS, type CatalogOrigin, type FlowCatalogEntry, type FlowCatalogListing, type FlowCatalogListResult } from '../shared/ipc';
 
 interface TierMember {
   tier: CatalogOrigin;
@@ -27,7 +25,7 @@ function tierMembers(roots: CatalogRoots, tier: CatalogOrigin): TierMember[] {
 }
 
 export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
-  const members = TIERS.flatMap((tier) => tierMembers(roots, tier));
+  const members = CATALOG_ORIGINS.flatMap((tier) => tierMembers(roots, tier));
   const ids = [...new Set(members.map((m) => m.id))].sort((a, b) => a.localeCompare(b));
 
   const entries: FlowCatalogEntry[] = ids.map((id) => {

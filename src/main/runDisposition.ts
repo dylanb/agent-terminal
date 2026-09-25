@@ -16,6 +16,7 @@ import { isErrno } from './errno';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isRecord } from './yamlRecord';
 import { isSafeCatalogId } from '../shared/pathSegment';
+import { CATALOG_ORIGINS } from '../shared/ipc';
 import type { CatalogTier, DispositionRead } from './resolveRunDefinition';
 
 export const RUN_DISPOSITION_FILE = 'run-disposition.yaml';
@@ -26,7 +27,7 @@ export const RUN_DISPOSITION_SCHEMA = 1;
  *  attacker-sized document. */
 export const MAX_DISPOSITION_FILE_BYTES = 4096;
 
-const CATALOG_TIERS: ReadonlySet<CatalogTier> = new Set(['repo', 'global']);
+const CATALOG_TIERS: ReadonlySet<CatalogTier> = new Set(CATALOG_ORIGINS);
 
 function isCatalogTier(v: unknown): v is CatalogTier {
   return typeof v === 'string' && (CATALOG_TIERS as ReadonlySet<string>).has(v);
