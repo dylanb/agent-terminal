@@ -113,6 +113,35 @@ describe('roundReportWellFormed — per-issue elements (AC6)', () => {
     const block = '* issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed: fixed it\n';
     expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
   });
+
+  // Where a value sits is layout, not contract (§27.5 minimal-not-rigid): a value written as a nested list or a
+  // wrapped paragraph indented under its label is still that field's value.
+  it('accepts a FIXED issue whose what-changed is a nested list indented under the label', () => {
+    const block =
+      '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n' +
+      '    - `dom.ts` adds the shared predicate.\n    - `shell.ts` consults it.\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
+
+  it('accepts a reason wrapped onto indented lines under its label', () => {
+    const block = '- issue: a real defect\n  disposition: dismissed — invalid\n  reason:\n    the plan assigns it elsewhere\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
+
+  it('is still malformed when a FIXED issue labels what-changed but nothing is indented beneath it', () => {
+    const block = '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n\n  more prose\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('is still malformed when the only lines indented under what-changed are whitespace', () => {
+    const block = '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n      \n      \n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('never borrows the next field as a value: an empty reason followed by what-changed stays empty', () => {
+    const block = '- issue: a real defect\n  disposition: dismissed — invalid\n  reason:\n  what-changed: nothing\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
 });
 
 describe('roundReportWellFormed — disposition membership is exact, never normalized (AC6)', () => {

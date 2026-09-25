@@ -21,7 +21,7 @@ import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type Tur
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
@@ -550,64 +550,81 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.onViewChanged();
   };
 
-  const completionSatisfied = (): boolean => {
-    if (!active) return false;
+  /** The phase-result clause (§28.5.3): the result is present, well-formed, and classifies `want`. The echoed
+   *  outcome is a member of the closed PhaseOutcome set (only a well-formed result yields one), never file text. */
+  const resultShortfall = (rel: string, content: string | null, want: PhaseOutcome): string | null => {
+    if (content === null) return `the phase result ${rel} is missing`;
+    const outcome = deps.completionPredicates.resultOutcome(content);
+    if (outcome === null) return `the phase result ${rel} is not well-formed`;
+    return outcome === want ? null : `the phase result ${rel} reports ${outcome}, not ${want}`;
+  };
+
+  const UNRESOLVED_SHORTFALL = 'the loop definition no longer resolves';
+
+  const completionShortfall = (): string | null => {
+    if (!active) return 'no turn is active';
     if (active.phase === 'consolidate') {
       // §27.6/AC3 — the consolidator advances only on a well-formed verdict (a value from the closed set and,
       // for `another round`, a non-empty roster ⊆ catalog). An `unresolved` consolidate turn reads nothing.
-      if (active.completion.kind === 'unresolved') return false;
+      if (active.completion.kind === 'unresolved') return UNRESOLVED_SHORTFALL;
       const content = deps.readArtifact(active.outputPath);
-      return content !== null && consolidatorOutputWellFormed(content, active.catalog);
+      if (content === null) return `the consolidator verdict ${active.outputRel} is missing`;
+      return consolidatorOutputWellFormed(content, active.catalog) ? null : `the consolidator verdict ${active.outputRel} is not well-formed`;
     }
     if (active.phase === 'review') {
       // §27.12b — the review turn completes only on a well-formed round report: def-declared sections, full
       // roster accounting, per-issue elements. An `unresolved` review turn (resume lost the def) reads no
       // report — Accept cannot fabricate a pass, and the OVERRIDE path in routeOut is the human backstop.
-      if (active.completion.kind === 'unresolved') return false;
+      if (active.completion.kind === 'unresolved') return UNRESOLVED_SHORTFALL;
       const content = deps.readArtifact(active.reportPath);
-      if (content === null || !roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) })) return false;
+      if (content === null) return `the round report ${active.reportRel} is missing`;
+      if (!roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) })) {
+        return `the round report ${active.reportRel} is not well-formed`;
+      }
       if (active.completion.kind === 'refactor-report') {
         // §28.5.3 — a REFACTOR round's SYNC clause: {result shape-valid ∧ outcome == passed}, softer than GREEN
         // (no build). The exit-direction is the async refactorAsyncGate (§28.5.3:124); the frozen check is a
         // non-blocking side probe, NOT part of this gate (§28.8.3).
-        const result = deps.readArtifact(active.completion.resultPath);
-        if (result === null) return false;
-        return deps.completionPredicates.resultOutcome(result) === REFACTOR_COMPLETING_OUTCOME;
+        const { resultRel, resultPath } = active.completion;
+        return resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME);
       }
-      return true;
+      return null;
     }
     switch (active.completion.kind) {
       case 'commits':
-        return true; // the done-signal alone completes it
+        return null; // the done-signal alone completes it
       case 'unresolved':
-        return false; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
-      case 'file':
-        return artifactWellFormed(deps.readArtifact(active.completion.path), active.completion.marker);
-      case 'red': {
+        return UNRESOLVED_SHORTFALL; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
+      case 'file': {
+        const { artifactRel, path, marker } = active.completion;
+        const content = deps.readArtifact(path);
+        if (content === null) return `the turn artifact ${artifactRel} is missing`;
+        return artifactWellFormed(content, marker) ? null : `the turn artifact ${artifactRel} does not carry its completion marker`;
+      }
+      case 'red':
         // §28.5.3 — the SYNCHRONOUS RED clause: the result file is shape-valid AND classifies `failed-assertion`
         // (via the injected resultOutcome, which returns the outcome only for a well-formed result — AC3). The
         // async "a test file was added" + exit-direction clauses are the engine's redAsyncGate; BOTH completion
         // routes AND it in — the done-signal via the runner's PrecomputedGate (§28 Option C), the human-accept
         // via routeOut computing the same gate — so AC2 holds on both paths (§28.5.6 keeps "a test was added"
         // machine-authoritative, not a human-override target).
-        const content = deps.readArtifact(active.completion.resultPath);
-        if (content === null) return false;
-        return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
-      }
+        return resultShortfall(active.completion.resultRel, deps.readArtifact(active.completion.resultPath), RED_COMPLETING_OUTCOME);
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
         // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
         // result). The async clauses (baseline present+branch-matched, the exit-direction, and the NON-blocking
         // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
-        const content = deps.readArtifact(active.completion.resultPath);
-        if (content === null) return false;
-        return (
-          deps.completionPredicates.resultOutcome(content) === GREEN_COMPLETING_OUTCOME &&
-          deps.completionPredicates.resultBuildOutcome(content) === GREEN_COMPLETING_BUILD_OUTCOME
-        );
+        const { resultRel, resultPath } = active.completion;
+        const content = deps.readArtifact(resultPath);
+        const outcome = resultShortfall(resultRel, content, GREEN_COMPLETING_OUTCOME);
+        if (outcome !== null || content === null) return outcome;
+        const build = deps.completionPredicates.resultBuildOutcome(content);
+        return build === GREEN_COMPLETING_BUILD_OUTCOME ? null : `the phase result ${resultRel} reports build ${build ?? 'unclassified'}, not ${GREEN_COMPLETING_BUILD_OUTCOME}`;
       }
     }
   };
+
+  const completionSatisfied = (): boolean => completionShortfall() === null;
 
   // §28.5.4/CWE-117 — map the closed capabilities-load `cause` enum to a STATIC operator reason, NEVER embedding
   // the load failure's `.reason` (whose malformed arm can carry untrusted repo yaml text).
@@ -628,7 +645,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   /** §28.5.3 / §28 Option C — the RED turn's ASYNC machine ground truth (git + best-effort exit code), computed
    *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
-   *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
+   *  a distinct reason so the operator surface never mislabels it as a completion shortfall. Never
    *  rejects — an unexpected throw is a fail-toward-firing gate. */
   const redAsyncGate = async (a: ActiveAppTurn): Promise<PrecomputedGate> => {
     try {
@@ -831,7 +848,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.inject(prompt);
     },
     hostedAgent: () => deps.hostedAgent(),
-    artifactPresent: completionSatisfied,
+    completionShortfall,
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {

@@ -1236,6 +1236,29 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining(state!.errorReason!), 1);
   });
 
+  it('the error names the round report as present-but-malformed, never as missing', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] }));
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    const reason = readAppLoopState(repo)?.errorReason ?? '';
+    expect(reason).toContain(roundReportRel(1));
+    expect(reason).toContain('not well-formed');
+    expect(reason).not.toContain('missing');
+    expect(emitError).toHaveBeenCalledWith(reason);
+  });
+
+  it('the error names the round report as missing when none was written', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    const reason = readAppLoopState(repo)?.errorReason ?? '';
+    expect(reason).toContain(roundReportRel(1));
+    expect(reason).toContain('missing');
+  });
+
   it('a report that does not parse against the declared structure is malformed → error (AC4)', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
@@ -2223,7 +2246,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('no test file was added'));
   });
 
-  it('IT-ENGINE-4b: absent loop-capabilities surfaces a DISTINCT reason, not the generic missing-artifact text', async () => {
+  it('IT-ENGINE-4b: absent loop-capabilities surfaces a DISTINCT reason, not a completion-shortfall text', async () => {
     const engine = makeEngine(
       undefined,
       redFake({ workingTreeTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }),
@@ -2235,7 +2258,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     engine.onDoneSignal();
     await flushRedGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
-    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('done-signal received but'));
   });
 
   it('IT-ENGINE-5: a malformed result file drives retry-then-error', async () => {
@@ -2550,7 +2573,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     await flushGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline')); // names the baseline commit, not "the repository"
-    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('done-signal received but'));
   });
 
   it('IT-GREEN-recordfail: a throwing recordChangedTests NEVER aborts the advance (best-effort wrap)', async () => {
