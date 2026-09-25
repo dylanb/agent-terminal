@@ -153,7 +153,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   }
   lines.push(
     '',
-    doneSignalInstruction(req.turnKey, req.resultRel ?? req.reportRel, req.doneRelPath),
+    doneSignalInstruction(req.turnKey, req.resultRel ? `${req.reportRel} and ${req.resultRel}` : req.reportRel, req.doneRelPath),
     '',
     'A well-formed example:',
     '',

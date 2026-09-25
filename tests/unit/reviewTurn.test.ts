@@ -261,10 +261,11 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     for (const b of BUILD_OUTCOMES) expect(p).not.toContain(b);
   });
 
-  it('verifies the RESULT file on disk before the done-signal (the new, more-likely-forgotten artifact)', () => {
+  it('verifies BOTH the round report and the result on disk before the done-signal — the round gate reads both', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
-    expect(p).toContain(`re-read ${RESULT_REL}`); // the done-signal verify targets the result rel
-    expect(p).toContain('turn-done:review-plan');
+    const verify = p.slice(p.indexOf('FIRST confirm'), p.indexOf('turn-done:review-plan'));
+    expect(verify).toContain(RESULT_REL);
+    expect(verify).toContain('.agent-terminal/loop/reports/1.md');
   });
 
   it('adds NO phase-result block when resultRel is absent (RED/GREEN loops\' review rounds are unchanged)', () => {

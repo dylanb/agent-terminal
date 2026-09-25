@@ -46,6 +46,7 @@ describe('hostedAgentPresent (§27.2 — present iff no bare idle prompt)', () =
 describe('loop turn runner (§27.12/D47a, D48)', () => {
   let hosted: 'idle' | 'busy' | 'absent';
   let artifact: boolean;
+  let shortfall: string;
   let compose: Mock<(turnKey: string) => string | null>;
   let deps: TurnRunnerDeps;
   let inject: Mock<(prompt: string) => void>;
@@ -58,6 +59,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
   beforeEach(() => {
     hosted = 'idle';
     artifact = true;
+    shortfall = 'the turn artifact is missing';
     inject = vi.fn();
     armTimer = vi.fn();
     cancelTimer = vi.fn();
@@ -69,7 +71,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
       compose,
       inject,
       hostedAgent: () => hosted,
-      artifactPresent: () => artifact,
+      completionShortfall: () => (artifact ? null : shortfall),
       armTimer,
       cancelTimer,
       writeError,
@@ -203,20 +205,20 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
       r.onDoneSignal({ ok: false, reason }); // attempt 2 -> error
       expect(inject).toHaveBeenCalledTimes(2);
       expect(writeError).toHaveBeenCalledTimes(1);
-      expect(writeError.mock.calls[0][0]).toBe(reason); // the caller's reason, not the generic missing-artifact text
+      expect(writeError.mock.calls[0][0]).toBe(reason); // the caller's reason, not the completion shortfall's
       expect(r.state()).toBe('error');
     });
 
-    // IT-RUNNER-5 — a PASSING gate with the artifact absent errors with the generic missing-artifact text, not a
+    // IT-RUNNER-5 — a PASSING gate with the artifact absent errors with the completion shortfall's text, not a
     // gate reason: the two failure causes never mislabel each other.
-    it('a passing gate with a missing artifact errors with the missing-artifact text', () => {
+    it('a passing gate with a missing artifact errors with the completion shortfall text', () => {
       artifact = false;
       const r = createTurnRunner(deps);
       r.requestTurn('work-plan');
       r.onDoneSignal({ ok: true }); // attempt 1 -> retry
       r.onDoneSignal({ ok: true }); // attempt 2 -> error
       expect(writeError).toHaveBeenCalledTimes(1);
-      expect(writeError.mock.calls[0][0]).toContain('artifact is missing');
+      expect(writeError.mock.calls[0][0]).toBe(`done-signal received but ${shortfall}`);
     });
   });
 
@@ -305,6 +307,23 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(writeError).toHaveBeenCalledTimes(1);
     expect(r.state()).toBe('error');
     expect(cancelTimer).toHaveBeenCalled();
+  });
+
+  it('the error names what fell short, on both the done-signal and the manual mark-complete', () => {
+    artifact = false;
+    shortfall = 'the round report .agent-terminal/loop/reports/3.md is not well-formed';
+    const signalled = createTurnRunner(deps);
+    signalled.requestTurn('review-refactor');
+    signalled.onDoneSignal();
+    signalled.onDoneSignal();
+    const marked = createTurnRunner(deps);
+    marked.requestTurn('review-refactor');
+    marked.markComplete();
+
+    expect(writeError.mock.calls.map(([reason]) => reason)).toEqual([
+      `done-signal received but ${shortfall}`,
+      `marked complete but ${shortfall}`,
+    ]);
   });
 
   // A done-signal is the AGENT's claim; a missing artifact means it lied or crashed, so one retry is right.

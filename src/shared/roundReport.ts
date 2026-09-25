@@ -2,7 +2,7 @@
 // readers (this slice's completion validator, N4's consolidator). One definition in the shared layer so the
 // prompt composer (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
 
-import { fieldValue } from './markdownFields';
+import { fieldBlock, fieldValue } from './markdownFields';
 
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
@@ -92,19 +92,20 @@ export function roundReportWellFormed(report: string, spec: RoundReportSpec): bo
       currentPersona = null;
       continue;
     }
-    const issue = fieldValue(lines[i], g.issueLabel);
+    const issue = fieldBlock(lines, i, g.issueLabel);
     if (issue !== null) {
-      const block: IssueBlock = { hasPersona: currentPersona !== null, issue, disposition: null, reason: null, whatChanged: null };
-      let j = i + 1;
-      for (; j < lines.length; j++) {
+      const block: IssueBlock = { hasPersona: currentPersona !== null, issue: issue.value, disposition: null, reason: null, whatChanged: null };
+      let j = issue.end;
+      while (j < lines.length) {
         if (fieldValue(lines[j], g.issueLabel) !== null) break;
         if (isHeading(lines[j], g.personaPrefix) !== null || isHeading(lines[j], g.sectionPrefix) !== null) break;
-        const d = fieldValue(lines[j], g.dispositionLabel);
-        if (d !== null) block.disposition = d;
-        const r = fieldValue(lines[j], g.reasonLabel);
-        if (r !== null) block.reason = r;
-        const w = fieldValue(lines[j], g.whatChangedLabel);
-        if (w !== null) block.whatChanged = w;
+        const d = fieldBlock(lines, j, g.dispositionLabel);
+        const r = fieldBlock(lines, j, g.reasonLabel);
+        const w = fieldBlock(lines, j, g.whatChangedLabel);
+        if (d !== null) block.disposition = d.value;
+        if (r !== null) block.reason = r.value;
+        if (w !== null) block.whatChanged = w.value;
+        j = (d ?? r ?? w)?.end ?? j + 1;
       }
       if (!issueWellFormed(block)) return false;
       i = j - 1;

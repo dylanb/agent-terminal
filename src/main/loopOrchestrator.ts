@@ -44,9 +44,9 @@ export interface TurnRunnerDeps {
   /** The hosted instance's injection-readiness (§27.2) — see `HostedAgentState`. `absent` is the guard that
    *  keeps a prompt from ever leaking into a bare shell: it errors rather than injecting or deferring. */
   hostedAgent(): HostedAgentState;
-  /** True iff the turn's expected artifact exists and parses (§27.12); artifact-less turns pass a
-   *  turn-appropriate check here. */
-  artifactPresent(): boolean;
+  /** Null when the turn's completion condition holds (§27.12); otherwise the operator-facing clause it falls
+   *  short on, phrased to follow "done-signal received but …". */
+  completionShortfall(): string | null;
   /** Arm (or re-arm) the stall watchdog; the host calls `onStall()` when it elapses with no intervening
    *  `noteActivity()`. Not a completion deadline — a working turn keeps it reset via visible activity. */
   armTimer(): void;
@@ -64,8 +64,8 @@ export interface TurnRunnerDeps {
 
 /** A completion condition a caller evaluated ahead of the done-signal (the engine's async machine ground truth
  *  for a RED/GREEN turn, §28 Option C). A discriminated union so a failing gate MUST carry the `reason` that
- *  becomes the error-surface text and a passing gate carries none — a reasonless failure (which would mislabel
- *  as the generic missing-artifact text) is unconstructable. */
+ *  becomes the error-surface text and a passing gate carries none — a reasonless failure (which would be
+ *  misreported as a completion shortfall) is unconstructable. */
 export type PrecomputedGate = { ok: true } | { ok: false; reason: string };
 
 export interface TurnRunner {
@@ -173,10 +173,11 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     const g = gate ?? { ok: true };
     // Runs while state is still 'in-flight', so a not-satisfied result routes through the existing fail() ->
     // retry-then-error with NO new runner state — the whole reason the gate is a threaded value, not an await in
-    // the runner (§28 Option C). A false gate carries ITS OWN reason; an absent artifact under a passing gate
-    // gets the generic text — so the two failure causes never mislabel each other.
-    if (deps.artifactPresent() && g.ok) succeed();
-    else fail(g.ok ? 'done-signal received but the turn artifact is missing' : g.reason);
+    // the runner (§28 Option C). A false gate carries ITS OWN reason; under a passing gate the completion
+    // shortfall's own text is reported — so the two failure causes never mislabel each other.
+    const shortfall = deps.completionShortfall();
+    if (shortfall === null && g.ok) succeed();
+    else fail(g.ok ? `done-signal received but ${shortfall}` : g.reason);
   };
 
   return {
@@ -230,13 +231,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       // Unlike a done-signal (the agent's claim, worth one retry), this is the operator's. Re-injecting
       // the prompt would re-run the turn they asked to move past, so a missing artifact stops in `error`
       // (§27.12) — visible, and recoverable through Retry.
-      if (deps.artifactPresent()) {
+      const shortfall = deps.completionShortfall();
+      if (shortfall === null) {
         succeed();
         return;
       }
       deps.cancelTimer();
       state = 'error';
-      deps.writeError('marked complete but the turn artifact is missing');
+      deps.writeError(`marked complete but ${shortfall}`);
     },
     state() {
       return state;
