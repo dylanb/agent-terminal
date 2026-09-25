@@ -133,8 +133,8 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
 
   // stub → { kind: 'unset' }, so `.kind` fails RED for the intended reason. Each invalid case must also carry
   // a non-empty reason (AC4 "visible reason"): the resolver passes pointer.reason through verbatim
-  // (resolveRunDefinition.ts), so a GREEN returning reason:'' would run the fallback with nothing surfaced.
-  const expectDegradeWithReason = (wt: string): void => {
+  // (resolveRunDefinition.ts), so a GREEN returning reason:'' would refuse the run with nothing surfaced.
+  const expectInvalidWithReason = (wt: string): void => {
     const read = readActiveFlow(wt);
     expect(read.kind).toBe('invalid');
     if (read.kind === 'invalid') expect(read.reason).toBeTruthy();
@@ -143,25 +143,25 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
   it('rejects a malformed (unparseable) pointer value', () => {
     const wt = fx.makeWorktree('a2-pointer-malformed');
     plantPointer(wt, '[unterminated flow sequence');
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 
   it('rejects a non-scalar pointer value (a mapping, not a single id)', () => {
     const wt = fx.makeWorktree('a2-pointer-nonscalar');
     plantPointer(wt, 'step: plan\nstatus: in_progress\n');
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 
   it('rejects an over-length pointer value (beyond the shared catalog-ID bound)', () => {
     const wt = fx.makeWorktree('a2-pointer-overlength');
     plantPointer(wt, 'a'.repeat(MAX_CATALOG_ID_LENGTH + 1));
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 
   it('rejects an unsafe pointer value (fails the safe-path-segment charset)', () => {
     const wt = fx.makeWorktree('a2-pointer-unsafe');
     plantPointer(wt, '../../etc/passwd');
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 
   // §18.7.6 / CWE-116/117/1007 — the rejected value is echoed into the rejection reason that reaches the flow
@@ -192,12 +192,25 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     if (read.kind === 'invalid') expect(read.reason.length).toBeLessThan(200);
   });
 
+  // §18.7.3 / §18.7.6 — an unusable pick refuses the run (the §18.1 flow-load error), so the reason must not tell
+  // the operator a default flow is running in its place.
+  it.each([
+    ['an unsafe pointer value', (wt: string) => plantPointer(wt, '../../etc/passwd')],
+    ['an unreadable pointer path', (wt: string) => mkdirSync(activeFlowPointerFile(wt), { recursive: true })],
+  ])('the rejection reason for %s never claims the default flow runs instead', (_label, plant) => {
+    const wt = fx.makeWorktree('a3-pointer-refusal-wording');
+    plant(wt);
+    const read = readActiveFlow(wt);
+    expect(read.kind).toBe('invalid');
+    if (read.kind === 'invalid') expect(read.reason).not.toMatch(/running the default/i);
+  });
+
   it('rejects an over-cap pointer FILE before parse (byte bound, CWE-400) even when its value would be valid', () => {
     const wt = fx.makeWorktree('a2-pointer-overcap');
     // A valid id whose FILE is padded past the byte cap with a YAML comment: without the cap the parser would
     // ignore the comment and yield the valid id; the cap must refuse it on size alone.
     plantPointer(wt, `feature-dev\n# ${'x'.repeat(MAX_POINTER_FILE_BYTES)}\n`);
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 
   it('rejects (never unset) when the pointer path is an unreadable non-file — a non-ENOENT read error', () => {
@@ -205,7 +218,7 @@ describe('activeFlowPointer — readActiveFlow field-validates the pointer value
     // A directory planted at the pointer path makes the read throw EISDIR (non-ENOENT): it must be rejected
     // visibly, not collapse to the silent unset default (AC3 vs AC4).
     mkdirSync(activeFlowPointerFile(wt), { recursive: true });
-    expectDegradeWithReason(wt);
+    expectInvalidWithReason(wt);
   });
 });
 

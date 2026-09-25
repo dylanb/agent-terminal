@@ -41,7 +41,7 @@ describe('worktree fixture — deterministic on-disk states over real production
     expect(existsSync(flowHomeDir(wt))).toBe(false);
   });
 
-  it('writeFlowHome seeds a flow.yaml that loadFlowDefinition accepts with the given name and step ids (leg 1 / leg 3)', () => {
+  it('writeFlowHome seeds a flow.yaml that loadFlowDefinition accepts with the given name and step ids (leg 2 / leg 3)', () => {
     const wt = fx.makeWorktree('home');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['alpha', 'beta'] });
     const load = loadFlowDefinition(wt);

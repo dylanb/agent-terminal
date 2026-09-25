@@ -47,7 +47,7 @@ export interface WorktreeFixture {
   nonexistentWorktree(prefix: string): string;
   /** Remove an existing worktree's `.agent-terminal/` (the AC10 "rmSync the root first" variant). */
   removeAgentTerminalDir(dir: string): void;
-  /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-1 local, or leg-3 global fallback on a global root). */
+  /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-2 local, or leg-3 global fallback on a global root). */
   writeFlowHome(dir: string, def: FlowDefInput): string;
   /** Seed a valid progression at the flow-state path. */
   writeFlowState(dir: string, state: FlowStateInput): string;

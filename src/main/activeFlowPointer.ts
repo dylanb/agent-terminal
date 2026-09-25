@@ -29,13 +29,13 @@ export function activeFlowPointerFile(worktreeDir: string): string {
 
 const confinedPointerFile = (worktreeDir: string): string | null => flowHomeLeaf(worktreeDir, ACTIVE_FLOW_FILE);
 
-const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
+const UNREADABLE_REASON = 'The selected flow could not be read; pick another flow or use the default.';
 const UNREADABLE: PointerRead = { kind: 'invalid', reason: UNREADABLE_REASON };
 
 const displaySafeId = (value: string): string => displaySafeEcho(value, MAX_CATALOG_ID_LENGTH);
 
 const invalidIdReason = (value: string): string =>
-  `Selected flow "${displaySafeId(value)}" is not a valid flow id; running the default flow instead.`;
+  `Selected flow "${displaySafeId(value)}" is not a valid flow id; pick another flow or use the default.`;
 
 /** Persist `id` as the worktree's active-flow selection, written as a structured value never
  *  string-concatenated (CWE-78). Throws when `id` fails the gate readActiveFlow applies, or when the pointer

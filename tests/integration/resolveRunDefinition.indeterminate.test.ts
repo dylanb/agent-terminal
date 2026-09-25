@@ -58,15 +58,15 @@ describe('resolveRunDefinition — refuses on indeterminate started-ness (§18.7
     expect(load.ok).toBe(false); // §18.1 error hold — NOT the pointer's 'catalog-flow', NOT the fallback
   });
 
-  it('AC7: indeterminate started-ness holds even when a local flow.yaml is present — the hold precedes leg 1', () => {
+  it('AC7: indeterminate started-ness holds even when a local flow.yaml is present — the hold precedes the local leg', () => {
     const wt = fx.makeWorktree('indeterminate-local');
-    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['local-step'] }); // a PRESENT local flow.yaml (leg 1)
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['local-step'] }); // a PRESENT local flow.yaml (leg 2)
     const globalRoot = seedGlobalFallback();
 
-    // The fail-closed hold must precede leg 1, not only the pointer read: an unverifiable progression may be a
-    // begun CATALOG run whose local flow.yaml was added mid-run, so letting leg 1 win here would swap that
+    // The fail-closed hold must precede the local leg, not only the pointer read: an unverifiable progression may be a
+    // begun CATALOG run whose local flow.yaml was added mid-run, so letting the local leg win here would swap that
     // begun run's source to the local flow (CWE-841). Indeterminate begun-ness cannot tell the two apart, so a
-    // present local flow does NOT win — resolution holds at the §18.1 error. A guard reordered below the leg-1
+    // present local flow does NOT win — resolution holds at the §18.1 error. A guard reordered below the local
     // presence check would run 'local-flow' (load.ok === true) and fail this pin.
     const pointer: () => PointerRead = () => ({ kind: 'unset' });
     const catalogEntry = (): CatalogResolution => ({ ok: false, cause: 'unknown' });

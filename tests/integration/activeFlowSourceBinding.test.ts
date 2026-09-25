@@ -142,11 +142,11 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   it('a run begun from a local flow.yaml never consults the pointer for its lifetime', () => {
     const wt = fx.makeWorktree('a2-swap-local');
     const globalDir = fx.makeWorktree('a2-swap-local-global');
-    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['local-step'] }); // leg 1 wins
+    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['local-step'] }); // no pointer set → leg 2 (local) wins
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
     const resolve = createRunResolver(globalDir);
 
-    const fresh = resolve(wt); // never-started → leg 1 local, binds non-catalog
+    const fresh = resolve(wt); // never-started → leg 2 local, binds non-catalog
     expect(runName(fresh.load)).toBe('local-only');
     recordDisposition(wt, fresh.binding ?? { source: 'non-catalog' });
 
@@ -155,7 +155,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   });
 
   it('a begun run with NO recorded disposition marker holds at the §18.1 error, never re-resolving the live legs (CWE-841)', () => {
-    // A leg-1 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
+    // A leg-2 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
     const wt = fx.makeWorktree('a2-begun-no-marker');
     const globalDir = fx.makeWorktree('a2-begun-no-marker-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
@@ -166,7 +166,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   });
 
   it('a begun run whose PRESENT disposition marker is corrupt still holds at the §18.1 error, never deferring to the live legs (CWE-841)', () => {
-    // A leg-1 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
+    // A leg-2 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
     const wt = fx.makeWorktree('a2-corrupt-marker');
     const globalDir = fx.makeWorktree('a2-corrupt-marker-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
