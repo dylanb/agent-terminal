@@ -135,7 +135,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowSetActiveFlow, { sessionId: SESSION_ID, repoKey, id }) as Promise<ActiveFlowWriteResult>,
   clearActiveFlow: (repoKey) =>
     ipcRenderer.invoke(CH.flowClearActiveFlow, { sessionId: SESSION_ID, repoKey }) as Promise<ActiveFlowWriteResult>,
-  listCatalog: (_repoKey) => Promise.resolve<FlowCatalogListResult>({ ok: false, reason: 'unavailable' }),
+  listCatalog: (repoKey) =>
+    ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);

@@ -6,7 +6,9 @@ import { createCatalogFixture } from '../helpers/catalogFixture';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { flowCatalogDir } from '../../src/main/flow';
 import { activeFlowPointerFile, writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { listCatalog } from '../../src/main/flowCatalogList';
+import { catalogListResult, listCatalog } from '../../src/main/flowCatalogList';
+import { catalogRefusalReason } from '../../src/main/resolveRunDefinition';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import type { FlowCatalogListing } from '../../src/shared/ipc';
@@ -198,5 +200,39 @@ describe('listCatalog — listing flags', () => {
     const fallbackOnly = w2.repo('a3-list-flags-fallback');
     wt.writeFlowHome(w2.home, { name: 'fallback', stepIds: ['fb1'] });
     expect(listCatalog({ worktreeDir: fallbackOnly, globalRoot: w2.home })).toMatchObject({ hasLocalFlow: false, hasGlobalFallback: true });
+  });
+});
+
+describe('listCatalog — an entry that exists but cannot be selected (§18.7.6)', () => {
+  it('lists an escaping repo entry as unavailable from its own tier with the degrade reason, never falling through to the global one', () => {
+    const w = world();
+    const repo = w.repo('a3-list-escapes');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'dual', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(repo), 'dual', ['r1']);
+    catalog.symlinkEntryFlowYaml(flowCatalogDir(repo), 'dual');
+
+    const listing = listCatalog({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries).toEqual([
+      { available: false, label: 'dual', origin: 'repo', reason: catalogRefusalReason('escapes') },
+    ]);
+    expect(listing.resumable).toEqual([{ origin: 'global', id: 'dual' }]);
+  });
+});
+
+describe('catalogListResult — the flow:listCatalog answer (§18.7.6)', () => {
+  it('wraps a listing as ok', () => {
+    const listing: FlowCatalogListing = { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [] };
+    expect(catalogListResult(() => listing)).toEqual({ ok: true, listing });
+  });
+
+  it('turns a listing failure into a display-sanitized, length-bounded reason', () => {
+    const result = catalogListResult(() => {
+      throw new Error(`EACCES /tmp/bad\u202Edir\u200B${'y'.repeat(400)}`);
+    });
+    expect(result.ok).toBe(false);
+    const reason = result.ok ? '' : result.reason;
+    expect(reason).toMatch(/^Could not list flows: EACCES/);
+    expect(reason).not.toMatch(/[\u202E\u200B]/u);
+    expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
   });
 });

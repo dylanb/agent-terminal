@@ -16,6 +16,14 @@ export interface CatalogRoots {
   globalRoot: string;
 }
 
+/** The listing walks and resolution probes this one jail; a second derivation of either tier's root lets the
+ *  picker offer an entry the resolver then refuses (CLAUDE.md writer↔reader rule). */
+export function catalogTierJail(roots: CatalogRoots, tier: CatalogTier): string | null {
+  return tier === 'repo'
+    ? resolveJail(roots.worktreeDir, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR)
+    : resolveOwnedDirJail(flowCatalogDir(roots.globalRoot));
+}
+
 type TierProbe =
   | { kind: 'entry'; flowDir: string }
   | { kind: 'absent' }
@@ -48,21 +56,13 @@ export function resolveCatalogEntry(roots: CatalogRoots, id: string, tier?: Cata
   // §18.7.6 repo tier first — untrusted ground, so resolveJail (a link planted at the entry cannot adopt its
   // target as the jail); a per-repo entry therefore wins a name clash with the global tier.
   if (tier !== 'global') {
-    const repo = probeTier(
-      resolveJail(roots.worktreeDir, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR),
-      id,
-      catalogEntryDefFile(roots.worktreeDir, id),
-    );
+    const repo = probeTier(catalogTierJail(roots, 'repo'), id, catalogEntryDefFile(roots.worktreeDir, id));
     if (repo.kind === 'entry') return { ok: true, tier: 'repo', flowDir: repo.flowDir };
     if (repo.kind === 'degrade') return { ok: false, cause: repo.cause };
     if (tier === 'repo') return { ok: false, cause: 'unknown' };
   }
 
-  const glob = probeTier(
-    resolveOwnedDirJail(flowCatalogDir(roots.globalRoot)),
-    id,
-    catalogEntryDefFile(roots.globalRoot, id),
-  );
+  const glob = probeTier(catalogTierJail(roots, 'global'), id, catalogEntryDefFile(roots.globalRoot, id));
   if (glob.kind === 'entry') return { ok: true, tier: 'global', flowDir: glob.flowDir };
   if (glob.kind === 'degrade') return { ok: false, cause: glob.cause };
 

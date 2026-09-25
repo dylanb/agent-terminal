@@ -2,6 +2,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
+import { shellQuote } from '../../src/shared/shellQuote';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
@@ -107,4 +108,30 @@ test('flow:listCatalog lists a worktree the app entered and refuses one it never
   });
   expect(await listFor(never)).toMatchObject({ ok: false, reason: expect.stringMatching(/\S/) });
   expect(await listFor('relative/path')).toMatchObject({ ok: false, reason: expect.stringMatching(/\S/) });
+});
+
+test('a worktree change while the picker holds keyboard focus lands focus in the app, never on <body> (WCAG 2.4.3)', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('shared-global-flow', ['shared-first']);
+  const repoA = harness.repo('agent-term-e2e-a3-focus-a-');
+  const repoB = harness.repo('agent-term-e2e-a3-focus-b-');
+  harness.seedRepoEntry(repoA, 'repo-a-only-flow', ['a-only-first']);
+  harness.seedRepoEntry(repoB, 'repo-b-only-flow', ['b-only-first']);
+  harness.selectFlow(repoA, 'repo-a-only-flow');
+  harness.selectFlow(repoB, 'repo-b-only-flow');
+
+  const page = await harness.launch();
+  await harness.cdInto(repoA);
+  await expect(harness.stepName(1)).toHaveText('a-only-first', { timeout: 10_000 });
+  await expect(pickerTrigger(page)).toBeEnabled({ timeout: 10_000 });
+
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type(`sleep 2 && cd ${shellQuote(repoB)}`, { delay: 20 });
+  await page.keyboard.press('Enter');
+  await pickerTrigger(page).focus();
+  await expect(pickerTrigger(page)).toBeFocused();
+
+  await expect(harness.stepName(1)).toHaveText('b-only-first', { timeout: 10_000 });
+  expect(await page.evaluate(() => document.activeElement === null || document.activeElement === document.body)).toBe(false);
 });

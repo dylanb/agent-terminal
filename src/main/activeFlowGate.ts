@@ -7,6 +7,7 @@ import { clearActiveFlow, readActiveFlow, writeActiveFlow } from './activeFlowPo
 import { worktreeStartedness } from './startedness';
 import { isSelectionLocked } from '../shared/flowStarted';
 import { errMsg } from './errno';
+import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import type { ActiveFlowWriteResult } from '../shared/ipc';
 import type { WorktreeLock } from './worktreeLock';
 
@@ -35,7 +36,8 @@ export function createActiveFlowGate(lock: Pick<WorktreeLock, 'withWorktreeLock'
       }
       return { ok: true };
     });
-    return locked.ok ? locked.value : { ok: false, reason: locked.reason };
+    const result = locked.ok ? locked.value : { ok: false as const, reason: locked.reason };
+    return result.ok ? result : { ok: false, reason: displaySafeEcho(result.reason, MAX_ECHOED_REASON_LENGTH) };
   };
 
   return {

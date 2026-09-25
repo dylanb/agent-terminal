@@ -243,6 +243,20 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(onView).toHaveBeenCalledWith('/repo', expect.objectContaining({ stepName: '/repo-step' })));
   });
 
+  it('a throwing onView listener never stops the strip painting or pushing the status bar', async () => {
+    const onStatusBar = vi.fn();
+    const onView = vi.fn(() => {
+      throw new Error('picker broke');
+    });
+    const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView, onStatusBar });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onView).toHaveBeenCalled());
+    await vi.waitFor(() => expect(host.textContent).toContain('/repo-step'));
+    expect(onStatusBar).toHaveBeenCalledWith(expect.anything(), '/repo');
+    await strip.refresh();
+    expect(host.textContent).toContain('/repo-step');
+  });
+
   it('tells onView (null, null) when it goes idle: leaving a repo, and a refresh with no repo', async () => {
     const onView = vi.fn();
     const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView });
@@ -260,7 +274,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     onView.mockClear();
     await strip.refresh();
-    expect(onView.mock.calls.every((c) => c[0] === null && c[1] === null)).toBe(true);
+    expect(onView.mock.calls).toEqual([[null, null]]);
   });
 
   it('never hands onView a late view for a repo it has left, nor any view after dispose', async () => {

@@ -4,6 +4,7 @@
 // no control (§18.1). It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3):
 // before a repo key is known it renders nothing.
 
+import type { FlowViewArgs } from './flowView';
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
@@ -91,8 +92,7 @@ export type FlowStripDeps = Omit<
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
-  /** Every view the strip receives, and `(null, null)` when it goes idle. */
-  onView?: (repoKey: string | null, view: FlowStateView | null) => void;
+  onView?: (...args: FlowViewArgs) => void;
   /** Required status-bar handoff on structural and passive state updates (§22.3.1 / §24.2.2 S5). */
   onStatusBar(model: StatusBarModel, repoKey: string | null): void;
   /** Visible transition failure seam (§19.1). */
@@ -333,9 +333,20 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     return button;
   }
 
+  function emitView(state: FlowStateView | null): void {
+    if (disposed) return;
+    try {
+      if (state === null || repoKey === null) deps.onView?.(null, null);
+      else deps.onView?.(repoKey, state);
+    } catch (e: unknown) {
+      console.warn('flow strip: a view listener failed', e instanceof Error ? e.message : String(e));
+    }
+  }
+
   function render(state: FlowStateView): void {
     lastSig = structuralSig(state, heldNotices); // this paint defines the structure a later passive push compares to
     deps.onStatusBar(deriveStatusBar(state), repoKey);
+    emitView(state);
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
@@ -480,6 +491,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  loop read-out's tone/iteration and the derived n/m line can differ. */
   function patchInPlace(state: FlowStateView): void {
     deps.onStatusBar(deriveStatusBar(state), repoKey);
+    emitView(state);
     const dText = derivedText(state);
     if (dText !== null) {
       const line = host.querySelector('.flow-derived');
@@ -506,6 +518,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.replaceChildren();
       lastSig = null;
       deps.onStatusBar(IDLE_STATUS_BAR, null);
+      emitView(null);
       return;
     }
     // §18.1: keep the last rendered state on a failed pull.
@@ -551,6 +564,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
         host.replaceChildren();
         deps.onStatusBar(IDLE_STATUS_BAR, null);
         deps.onPanelState?.(null, '');
+        emitView(null);
       }
       void refresh();
     },

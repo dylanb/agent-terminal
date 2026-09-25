@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFeed, createScriptedAsync, deferred, type Deferred } from '../helpers/scriptedCalls';
 import { assertRendersFromHostDocument } from './relocatable';
 import { createFlowPicker, type FlowPickerDeps } from '../../src/renderer/src/flowPicker';
-import { createFlowStrip } from '../../src/renderer/src/flowStrip';
+import { createFlowStrip, type FlowStripDeps } from '../../src/renderer/src/flowStrip';
+import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 import type { ActiveFlowWriteResult, FlowCatalogListResult, FlowStateView } from '../../src/shared/ipc';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker organism in select mode. It follows the worktree of each view
 // the strip fans out (AC2), and a pick asks for THAT worktree's pointer write (AC1).
@@ -60,7 +64,7 @@ function createCatalog() {
   };
 }
 
-function rig(views = createFeed<[string | null, FlowStateView | null]>()) {
+function rig(views = createFeed<FlowViewArgs>()) {
   const catalog = createCatalog();
   const select = createScriptedAsync<[string, string], ActiveFlowWriteResult>();
   const clearSelection = createScriptedAsync<[string], ActiveFlowWriteResult>();
@@ -111,7 +115,7 @@ async function ensureOpen(host: HTMLElement): Promise<void> {
   await settle();
 }
 
-/** Opens the listbox if it shows no rows and the trigger is enabled, without toggling an open one shut. */
+/** Clicks the trigger as a user could — an aria-disabled one still takes the click — unless rows already show. */
 async function openIfClosed(host: HTMLElement): Promise<void> {
   const btn = findTrigger(host);
   if (options(host).length > 0 || !btn || btn.disabled) return;
@@ -141,13 +145,46 @@ describe('flow picker — select mode (AC1)', () => {
 
     r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
     await settle();
+    expect(trigger(r.host).textContent).toBe('Flow: default');
     await ensureOpen(r.host);
     option(r.host, 'flow-b').click();
     await settle();
 
     expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
     await ensureOpen(r.host);
     expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    picker.dispose();
+  });
+
+  it('names every row by its flow and origin as separate words (WCAG 4.1.2)', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', {
+      ok: true,
+      listing: {
+        entries: [
+          { available: true, id: 'flow-a', origin: 'repo' },
+          { available: false, label: 'flow-x', origin: 'global', reason: 'escapes its tier' },
+        ],
+        tierNotices: [],
+        hasLocalFlow: false,
+        hasGlobalFallback: false,
+        resumable: [{ origin: 'repo', id: 'flow-a' }],
+      },
+    });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+
+    const nameOf = (el: HTMLElement): string =>
+      (el.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    expect(nameOf(option(r.host, 'flow-a'))).toBe('flow-a repo');
+    expect(nameOf(option(r.host, 'flow-x'))).toBe('flow-x global');
     picker.dispose();
   });
 
@@ -187,6 +224,7 @@ describe('flow picker — select mode (AC1)', () => {
     expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
     expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('Could not save the selection: disk full');
     expect(r.catalog.pulls()).toHaveLength(pullsBeforePick);
+    expect(trigger(r.host).textContent).toBe('Flow: flow-a');
     await ensureOpen(r.host);
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
     expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
@@ -256,6 +294,7 @@ describe('flow picker — select mode (AC1)', () => {
 
     expect(r.host.textContent).toContain('Could not list flows: boom');
     expect(options(r.host)).toEqual([]);
+    expect(findTrigger(r.host)?.getAttribute('aria-expanded') ?? 'false').toBe('false');
     picker.dispose();
   });
 });
@@ -451,6 +490,29 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
     picker.dispose();
   });
 
+  it('a listing requested before a pick never overwrites the picked selection when it answers late', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    const beforePick = r.catalog.hold('/repo-a');
+    r.views.fire('/repo-a', neverStarted(['a2']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    beforePick.resolve(listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    await settle();
+    await ensureOpen(r.host);
+
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
+    picker.dispose();
+  });
+
   it('when the strip goes idle it leaves no row or enabled control, and a late listing does not repaint it', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['only-in-a']));
@@ -475,6 +537,20 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
   });
 });
 
+describe('the strip-to-picker view feed', () => {
+  it('carries a worktree together with its view, or neither when idle', () => {
+    const feeds: [Parameters<FlowPickerDeps['onView']>[0], NonNullable<FlowStripDeps['onView']>] = [() => {}, () => {}];
+    for (const emit of feeds) {
+      emit('/repo-a', neverStarted(['a1']));
+      emit(null, null);
+      // @ts-expect-error a view with no worktree
+      emit(null, neverStarted(['a1']));
+      // @ts-expect-error a worktree with no view
+      emit('/repo-a', null);
+    }
+  });
+});
+
 describe('flow picker — relocation (UI-STANDARDS §3.3)', () => {
   it('renders from its host document', async () => {
     const r = rig();
@@ -487,7 +563,7 @@ describe('flow picker — relocation (UI-STANDARDS §3.3)', () => {
   });
 
   it('behaves identically in two placements on one fan-out, and a disposed one receives no further view', async () => {
-    const views = createFeed<[string | null, FlowStateView | null]>();
+    const views = createFeed<FlowViewArgs>();
     const first = rig(views);
     const second = rig(views);
     for (const r of [first, second]) r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
@@ -519,7 +595,7 @@ describe('flow picker — relocation (UI-STANDARDS §3.3)', () => {
 
 describe('flow picker — the strip stays the only flow-state puller', () => {
   it('a one-shot notice still reaches the strip with the picker mounted on its fan-out', async () => {
-    const views = createFeed<[string | null, FlowStateView | null]>();
+    const views = createFeed<FlowViewArgs>();
     const r = rig(views);
     r.catalog.serve('/repo', listingOf(['flow-a']));
     let answered = 0;
@@ -538,7 +614,7 @@ describe('flow picker — the strip stays the only flow-state puller', () => {
       provideInput: state,
       onStateChanged: () => () => {},
       onStatusBar: () => {},
-      onView: (repoKey, view) => views.fire(repoKey, view),
+      onView: (...args) => views.fire(...args),
     });
     const picker = createFlowPicker(r.host, r.deps);
 
@@ -556,5 +632,292 @@ describe('flow picker — the strip stays the only flow-state puller', () => {
     expect(option(r.host, 'flow-b')).toBeDefined();
     picker.dispose();
     strip.dispose();
+  });
+});
+
+describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 / 4.1.2 / 4.1.3)', () => {
+  const withUnavailable = (): FlowCatalogListResult => {
+    const base = listingOf(['flow-a']);
+    if (!base.ok) throw new Error('unreachable');
+    return {
+      ok: true,
+      listing: {
+        ...base.listing,
+        entries: [...base.listing.entries, { available: false, label: 'broken', origin: 'repo', reason: 'it escapes its tier' }],
+      },
+    };
+  };
+  const key = (el: Element, k: string): void => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+  };
+  const active = (): Element | null => document.activeElement;
+
+  it('a view push while an option is focused keeps focus on that option', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b']));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').focus();
+
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c']));
+    r.views.fire('/repo-a', neverStarted(['a2']));
+    await settle();
+
+    expect(option(r.host, 'flow-c')).toBeDefined();
+    expect(active()?.getAttribute('role')).toBe('option');
+    expect(active()?.textContent).toContain('flow-b');
+    picker.dispose();
+  });
+
+  it('a view push whose listing is unchanged leaves the open list in place', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    const row = option(r.host, 'flow-b');
+
+    r.views.fire('/repo-a', neverStarted(['a2']));
+    await settle();
+
+    expect(option(r.host, 'flow-b')).toBe(row);
+    picker.dispose();
+  });
+
+  it('keeps one assertive alert region across re-renders, so a failure is not re-announced on every push', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.select.respond({ ok: false, reason: 'Could not save the selection: disk full' });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    const alert = r.host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('disk full');
+    const rewrites: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => rewrites.push(...records));
+    observer.observe(alert!, { childList: true, characterData: true, subtree: true });
+
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    r.views.fire('/repo-a', neverStarted(['a2']));
+    await settle();
+    rewrites.push(...observer.takeRecords());
+    observer.disconnect();
+
+    expect(rewrites, 'an unchanged reason is not rewritten into the live region').toEqual([]);
+    expect(r.host.querySelector('[role="alert"]')).toBe(alert);
+    expect(alert?.getAttribute('aria-live')).toBe('assertive');
+    picker.dispose();
+  });
+
+  it('while the listing loads, the trigger does not claim the default flow', async () => {
+    const r = rig();
+    r.catalog.hold('/repo-a');
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    expect(trigger(r.host).textContent).not.toMatch(/default/i);
+    expect(trigger(r.host).textContent).toMatch(/loading/i);
+    picker.dispose();
+  });
+
+  it('after a listing failure a Retry control, described by the failure, re-lists the worktree', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', { ok: false, reason: 'Could not list flows: boom' });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    const retry = [...r.host.querySelectorAll('button')].find((b) => /retry/i.test(b.textContent ?? ''));
+    expect(retry?.disabled).toBe(false);
+    for (const control of [retry!, trigger(r.host)]) {
+      expect(document.getElementById(control.getAttribute('aria-describedby') ?? '')?.textContent).toContain('Could not list flows: boom');
+    }
+
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    retry!.click();
+    await settle();
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-a')).toBeDefined();
+    picker.dispose();
+  });
+
+  it('Retry keeps keyboard focus in the picker: on Retry when the re-list fails again, on the trigger once it lists', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', { ok: false, reason: 'Could not list flows: boom' });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    const retry = (): HTMLButtonElement | undefined =>
+      [...r.host.querySelectorAll('button')].find((b) => /retry/i.test(b.textContent ?? ''));
+
+    const relisting = r.catalog.hold('/repo-a');
+    retry()!.focus();
+    retry()!.click();
+    await settle();
+    expect(r.host.contains(active()), 'focus stays inside the picker while it re-lists').toBe(true);
+
+    relisting.resolve({ ok: false, reason: 'Could not list flows: again' });
+    await settle();
+    expect(active()).toBe(retry());
+
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    retry()!.click();
+    await settle();
+    expect(active()).toBe(trigger(r.host));
+    picker.dispose();
+  });
+
+  it("an unavailable entry's accessible name is its label and tier, its reason only its description", async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', withUnavailable());
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    const broken = option(r.host, 'broken');
+    const refText = (attr: string): string =>
+      (broken.getAttribute(attr) ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    // WAI-ARIA accname 1.2 §4.3.2 step 2B
+    const name = broken.hasAttribute('aria-labelledby') ? refText('aria-labelledby') : (broken.textContent ?? '');
+
+    expect(name).toContain('broken');
+    expect(name).toMatch(/repo/i);
+    expect(name).not.toContain('it escapes its tier');
+    expect(refText('aria-describedby')).toContain('it escapes its tier');
+    picker.dispose();
+  });
+
+  it('arrow keys reach an unavailable entry, which exposes its reason and cannot be picked', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', withUnavailable());
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(active()?.textContent).toContain('flow-a');
+
+    key(active()!, 'ArrowDown');
+    const broken = active() as HTMLElement;
+    expect(broken.textContent).toContain('broken');
+    expect(broken.getAttribute('aria-disabled')).toBe('true');
+    expect(document.getElementById(broken.getAttribute('aria-describedby') ?? '')?.textContent).toContain('it escapes its tier');
+
+    key(broken, 'Enter');
+    key(broken, ' ');
+    broken.click();
+    await settle();
+    expect(r.select.calls()).toEqual([]);
+    picker.dispose();
+  });
+
+  it('Enter on an option reached by ArrowDown picks it and returns focus to the trigger', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b']));
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+
+    key(active()!, 'ArrowDown');
+    expect(active()?.textContent).toContain('flow-b');
+    key(active()!, 'Enter');
+    await settle();
+
+    expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
+    expect(active()).toBe(trigger(r.host));
+    picker.dispose();
+  });
+
+  it('Escape, a mousedown outside, and focus leaving the picker each close the list', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const outside = document.body.appendChild(document.createElement('button'));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    await ensureOpen(r.host);
+    key(active()!, 'Escape');
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    expect(active()).toBe(trigger(r.host));
+
+    await ensureOpen(r.host);
+    outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(options(r.host)).toEqual([]);
+
+    await ensureOpen(r.host);
+    active()!.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: outside }));
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    picker.dispose();
+  });
+
+  it('the open trigger names the listbox it controls, uniquely per picker', async () => {
+    const views = createFeed<FlowViewArgs>();
+    const first = rig(views);
+    const second = rig(views);
+    for (const r of [first, second]) r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const pickers = [createFlowPicker(first.host, first.deps), createFlowPicker(second.host, second.deps)];
+    views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    const ids = [];
+    for (const r of [first, second]) {
+      await ensureOpen(r.host);
+      expect(trigger(r.host).getAttribute('aria-expanded')).toBe('true');
+      const controls = trigger(r.host).getAttribute('aria-controls') ?? '';
+      expect(r.host.querySelector('[role="listbox"]')?.id).toBe(controls);
+      ids.push(controls);
+    }
+    expect(new Set(ids).size).toBe(2);
+    for (const p of pickers) p.dispose();
+  });
+
+  it('a rejected write echoes a display-sanitized, length-bounded reason (§18.7.6)', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const failure = r.select.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-a').click();
+    failure.reject(new Error(`bad\u202Ename\u200B${'x'.repeat(500)}`));
+    await settle();
+
+    const text = r.host.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(text).toMatch(/bad\s*name/);
+    expect(text).not.toMatch(/[\u202E\u200B]/u);
+    expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    picker.dispose();
+  });
+});
+
+describe('flow picker placement in the layout (§22.4)', () => {
+  it('declares the picker host in the rail beside the strip, outside the strip’s live status region', () => {
+    const html = readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const strip = doc.getElementById('flow-strip');
+    const host = doc.getElementById('flow-picker');
+
+    expect(host, 'index.html declares #flow-picker').not.toBeNull();
+    expect(host?.classList.contains('flowpicker')).toBe(true);
+    expect(host?.closest('.rail')).not.toBeNull();
+    expect(strip?.nextElementSibling).toBe(host);
+    expect(strip?.contains(host)).toBe(false);
   });
 });

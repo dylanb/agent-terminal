@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripDisplayControlChars } from '../../src/shared/controlChars';
+import { displaySafeEcho, stripDisplayControlChars } from '../../src/shared/controlChars';
 
 // Build the unsafe code points from numbers so no invisible character is ever a literal in this file.
 const cp = (...codes: number[]): string => String.fromCharCode(...codes);
@@ -30,5 +30,15 @@ describe('stripDisplayControlChars — one strip for every repo-supplied string 
 
   it('leaves ordinary text untouched', () => {
     expect(stripDisplayControlChars('Refactor the shadow parser')).toBe('Refactor the shadow parser');
+  });
+});
+
+describe('displaySafeEcho — a display-safe, length-bounded echo of untrusted text (§18.7.6)', () => {
+  it('drops control, bidi, zero-width and joiner characters and bounds the length', () => {
+    const out = displaySafeEcho('a' + cp(0x202e, 0x200b, 0x200c, 0x200d, 0xfeff) + 'b' + 'x'.repeat(50), 10);
+    expect(out).not.toMatch(/[\u202E\u200B\u200C\u200D\uFEFF]/u);
+    expect(out.startsWith('a')).toBe(true);
+    expect(out).toContain('b');
+    expect(out.length).toBeLessThanOrEqual(10);
   });
 });

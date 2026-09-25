@@ -9,3 +9,13 @@ const DISPLAY_UNSAFE = new RegExp(
 export function stripDisplayControlChars(text: string): string {
   return text.replace(DISPLAY_UNSAFE, ' ');
 }
+
+/** §18.7.6 (CWE-400) */
+export const MAX_ECHOED_REASON_LENGTH = 200;
+
+// §18.7.6 (CWE-116/117/1007)
+const JOINERS = new RegExp('[\\u200C\\u200D]', 'gu');
+
+export function displaySafeEcho(value: string, max: number): string {
+  return stripDisplayControlChars(value).replace(JOINERS, '').slice(0, max);
+}

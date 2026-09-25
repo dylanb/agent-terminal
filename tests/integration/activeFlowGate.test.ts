@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowManager } from '../../src/main/flow';
 import { createActiveFlowGate } from '../../src/main/activeFlowGate';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import { readActiveFlow, activeFlowPointerFile, writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { recordDisposition } from '../../src/main/runDisposition';
 import {
@@ -64,6 +65,21 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
       chmodSync(dirname(activeFlowPointerFile(wt)), 0o755);
     }
     expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a write-fault reason that echoes a hostile path is display-sanitized and length-bounded (§18.7.6)', () => {
+    const wt = fx.makeWorktree(`a2-gate-hostile-${String.fromCharCode(0x202e, 0x200b)}${'p'.repeat(150)}`);
+    mkdirSync(dirname(activeFlowPointerFile(wt)), { recursive: true });
+    chmodSync(dirname(activeFlowPointerFile(wt)), 0o555);
+    try {
+      const res = gateFor().set(wt, 'cat-flow');
+      const reason = res.ok ? '' : res.reason;
+      expect(reason).toMatch(/could not be saved/);
+      expect(reason).not.toMatch(/[\u202E\u200B]/u);
+      expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    } finally {
+      chmodSync(dirname(activeFlowPointerFile(wt)), 0o755);
+    }
   });
 
   it('refuses a selection once the run has begun, leaving the pointer byte-for-byte unchanged', () => {

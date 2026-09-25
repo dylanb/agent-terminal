@@ -750,7 +750,7 @@ export interface FlowClearActiveFlowMsg {
  *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
 export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
 
-/** flow:listCatalog request (§18.7.6): the catalog listing for `repoKey`'s worktree. */
+/** §18.7.6 */
 export interface FlowListCatalogMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -762,7 +762,7 @@ export type FlowCatalogEntry =
   | { available: true; id: string; origin: CatalogOrigin }
   | { available: false; label: string; origin: CatalogOrigin; reason: string };
 
-/** §18.1 / §18.7.6 — the merged catalog library of one worktree. */
+/** §18.1 / §18.7.6 */
 export interface FlowCatalogListing {
   entries: FlowCatalogEntry[];
   tierNotices: { origin: CatalogOrigin; notice: string }[];
@@ -1108,7 +1108,7 @@ export interface FlowApi {
   setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   /** Return the worktree to the unset default flow; gated exactly like `setActiveFlow`. */
   clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
-  /** The catalog listing of `repoKey`'s worktree (§18.7.6). */
+  /** §18.7.6 */
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */

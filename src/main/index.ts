@@ -9,6 +9,7 @@ import {
   SESSION_ID,
   type AgentState,
   type ChannelPayloads,
+  type FlowCatalogListResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -16,6 +17,7 @@ import {
   type TodoStatus,
 } from '../shared/ipc';
 import { createInjector, DEFER_DEADLINE_MS } from './inject';
+import { catalogListResult, listCatalog } from './flowCatalogList';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
@@ -37,6 +39,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidFlowListCatalog,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -1208,6 +1211,12 @@ async function createWindow(): Promise<void> {
         const result = activeFlowGate.clear(m.repoKey);
         if (result.ok) pushFlowChanged();
         return result;
+      },
+      [CH.flowListCatalog]: (_e, m): FlowCatalogListResult => {
+        if (!isValidFlowListCatalog(m) || !knownRepoKeys.has(m.repoKey)) {
+          return { ok: false, reason: 'invalid flow:listCatalog request' };
+        }
+        return catalogListResult(() => listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }));
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
       [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>

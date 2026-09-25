@@ -10,7 +10,7 @@ import { atomicWriteFileSync } from './atomicFile';
 import { readBoundedNoFollow } from './boundedRead';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
-import { stripDisplayControlChars } from '../shared/controlChars';
+import { displaySafeEcho } from '../shared/controlChars';
 import { type PointerRead } from './resolveRunDefinition';
 
 export const ACTIVE_FLOW_FILE = 'active-flow.yaml';
@@ -32,16 +32,7 @@ const confinedPointerFile = (worktreeDir: string): string | null => flowHomeLeaf
 const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
 const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
 
-// §18.7.6 (CWE-116/117/1007/400) — stripDisplayControlChars deliberately keeps the U+200C/U+200D joiners for
-// legitimate shaping; an echoed rejected catalog id has no legitimate joiner, so they are stripped here too.
-const JOINERS = new RegExp('[\\u200C\\u200D]', 'gu');
-
-/** §18.7.6 (CWE-116/117/1007/400) — the rejected value FAILED the safe-id gate, so it may carry
- *  control/bidi/zero-width/BOM/joiner bytes and run to the file cap. Display-sanitize and length-bound it here,
- *  where it is echoed into the human-facing reason, so every downstream sink (the flow view, any §25 audit leg)
- *  receives a display-safe value and the ipc.ts `selectionReason` contract holds. */
-const displaySafeId = (value: string): string =>
-  stripDisplayControlChars(value).replace(JOINERS, '').slice(0, MAX_CATALOG_ID_LENGTH);
+const displaySafeId = (value: string): string => displaySafeEcho(value, MAX_CATALOG_ID_LENGTH);
 
 const invalidIdReason = (value: string): string =>
   `Selected flow "${displaySafeId(value)}" is not a valid flow id; running the default flow instead.`;

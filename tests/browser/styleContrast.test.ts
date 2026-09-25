@@ -9,6 +9,7 @@ import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
 import { createConfirmDialog } from '../../src/renderer/src/confirmDialog';
 import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstrapConflict';
+import { createFlowPicker } from '../../src/renderer/src/flowPicker';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -782,5 +783,28 @@ describe('flow strip rail geometry (§B.10a — Reflow 1.4.10 / Resize 1.4.4)', 
     expect(cs.fontSize).toBe('11px'); // the group's size, never the .car chevron's 8px
     expect(cs.whiteSpace).toBe('nowrap');
     expect(cs.flexShrink).toBe('0');
+  });
+});
+
+// UI-STANDARDS §4.1/§4.4 — the picker's alert host lives inside `.flowpicker`, so the idle picker (no
+// worktree shown, no trigger) may collapse its rail chrome but must never be taken out of rendering.
+describe('the idle flow picker keeps its live region rendered (UI-STANDARDS §4, WCAG 4.1.3)', () => {
+  it('collapses to nothing without display:none on the empty alert region or any ancestor', () => {
+    document.body.innerHTML = '<div class="rail"><div class="blk flowpicker"></div></div>';
+    const host = document.querySelector<HTMLElement>('.flowpicker')!;
+    const picker = createFlowPicker(host, {
+      onView: () => () => {},
+      listCatalog: () => new Promise(() => {}),
+      select: () => new Promise(() => {}),
+      clearSelection: () => new Promise(() => {}),
+    });
+    const alert = host.querySelector<HTMLElement>('[role="alert"]')!;
+
+    for (let n: HTMLElement | null = alert; n; n = n.parentElement) {
+      expect(getComputedStyle(n).display, n.className || n.tagName).not.toBe('none');
+    }
+    expect(host.getBoundingClientRect().height).toBe(0);
+    expect(getComputedStyle(host).borderBottomWidth).toBe('0px');
+    picker.dispose();
   });
 });

@@ -202,8 +202,9 @@ export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlow
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
-export function isValidFlowListCatalog(_m: unknown): _m is FlowListCatalogMsg {
-  return false;
+/** flow:listCatalog (§18.7.6) */
+export function isValidFlowListCatalog(m: unknown): m is FlowListCatalogMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 /** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;

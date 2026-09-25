@@ -11,6 +11,7 @@ import {
   type FlowLoad,
 } from './flow';
 import { type StartednessSignal } from '../shared/flowStarted';
+import { type CatalogOrigin } from '../shared/ipc';
 
 /** §18.7.2 read of the per-worktree active-flow pointer that the resolver's leg 2 consults. */
 export type PointerRead =
@@ -19,7 +20,7 @@ export type PointerRead =
   | { kind: 'degrade'; reason: string };
 
 /** §18.7.6 the two catalog tiers a pointer-named id can resolve within (per-repo untrusted, or app-owned global). */
-export type CatalogTier = 'repo' | 'global';
+export type CatalogTier = CatalogOrigin;
 
 /** §18.7.6 per-tier resolution of a pointer-named catalog id to its on-disk entry directory. */
 export type CatalogResolution =
@@ -125,8 +126,9 @@ const CATALOG_DEGRADE_DETAIL: Record<CatalogDegradeCause, string> = {
   unresolvable: 'could not be read',
 };
 
-export function catalogRefusalReason(_cause: Exclude<CatalogDegradeCause, 'unknown'>): string {
-  return '';
+/** §18.7.6 */
+export function catalogRefusalReason(cause: Exclude<CatalogDegradeCause, 'unknown'>): string {
+  return CATALOG_DEGRADE_DETAIL[cause];
 }
 
 function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
