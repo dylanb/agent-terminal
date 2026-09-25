@@ -91,7 +91,7 @@ async function tabToProbe(el: HTMLElement): Promise<void> {
 
 /** The real picker in the rail, showing a never-started worktree whose listing has the selected flow, a second
  *  available flow, and one unavailable entry, and whose pointer writes are all refused. */
-async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker }> {
+async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker; show: (...args: FlowViewArgs) => void }> {
   const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
   let show: ((...args: FlowViewArgs) => void) | undefined;
   const listing: FlowCatalogListing = {
@@ -118,7 +118,7 @@ async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker }>
   });
   show!('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'not_started', runStarted: 'never-started' });
   await vi.waitFor(() => expect(host.querySelector('.flow-picker-trigger')?.textContent).toBe('Flow: flow-a'));
-  return { host, picker };
+  return { host, picker, show: show! };
 }
 const optionNamed = (host: HTMLElement, name: string): HTMLElement => {
   const opt = [...host.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.dataset.flowKey === name);
@@ -348,6 +348,32 @@ for (const theme of ['light', 'dark'] as const) {
           picker.dispose();
         });
       }
+    });
+
+    describe('flow picker lock reason and "use the default" contrast (WCAG 1.4.3 AA)', () => {
+      it('the "use the default" label clears 4.5:1 in the open list', async () => {
+        const { host, picker } = await mountPicker();
+        host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+        const clear = await vi.waitFor(() => {
+          const el = host.querySelector<HTMLElement>('.flow-picker-clear');
+          if (!el) throw new Error('the open list offers no "use the default"');
+          return el;
+        });
+        expect(contrast(fg(clear), paintedBg(clear))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
+      });
+
+      it('the lock reason clears 4.5:1 on the rail', async () => {
+        const { host, picker, show } = await mountPicker();
+        show('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'in_progress', runStarted: 'started' });
+        const lock = await vi.waitFor(() => {
+          const el = host.querySelector<HTMLElement>('.flow-picker-lock');
+          if (!el) throw new Error('the locked picker shows no lock reason');
+          return el;
+        });
+        expect(contrast(fg(lock), paintedBg(lock))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
+      });
     });
 
     // §20.2 code viewer: the editor paints onto --bg (the board), and a changed line adds --changed-wash

@@ -1141,6 +1141,34 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     app.remove();
   });
 
+  it('Escape on "use the default" in the open list closes the list, not the docked loop panel behind it', async () => {
+    const app = document.body.appendChild(document.createElement('div'));
+    app.innerHTML =
+      '<aside class="rail"></aside><aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>' +
+      '<main class="main"></main>';
+    const shell = createShell(app);
+    shell.openLoopPanel();
+    const r = rig();
+    app.querySelector('.rail')!.append(r.host);
+    r.catalog.serve('/repo-a', listingOf(['flow-a']));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    await ensureOpen(r.host);
+    const useDefault = [...r.host.querySelectorAll<HTMLElement>('button')].find((b) => /use the default/i.test(b.textContent ?? ''));
+    expect(useDefault, 'the open list offers "use the default"').toBeDefined();
+    useDefault!.focus();
+    key(active()!, 'Escape');
+
+    expect(options(r.host)).toEqual([]);
+    expect(active()).toBe(trigger(r.host));
+    expect(shell.isLoopPanelOpen()).toBe(true);
+    picker.dispose();
+    shell.dispose();
+    app.remove();
+  });
+
   it('a listing that only confirms the pick just made leaves the focused trigger in place', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
@@ -1252,6 +1280,8 @@ const useDefaultControl = (host: HTMLElement): HTMLElement | undefined =>
   );
 
 describe('flow picker — enable rule (AC3, AC6, AC7)', () => {
+  const active = (): Element | null => document.activeElement;
+
   it.each(LOCKED_VIEWS)('%s renders every picker control disabled, with the lock reason shown, and a click writes nothing', async (_label, view) => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
@@ -1281,17 +1311,60 @@ describe('flow picker — enable rule (AC3, AC6, AC7)', () => {
     r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
     await settle();
     await ensureOpen(r.host);
-    expect(options(r.host).length).toBeGreaterThan(0);
+    const showing = options(r.host);
+    const showingDefault = useDefaultControl(r.host);
+    expect(showing.length).toBeGreaterThan(0);
+    expect(showingDefault, 'the open list offers "use the default"').toBeDefined();
 
     r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
     await settle();
 
     for (const b of r.host.querySelectorAll('button')) expect(b.disabled, `"${b.textContent}" is disabled`).toBe(true);
-    for (const el of options(r.host)) el.click();
-    useDefaultControl(r.host)?.click();
+    for (const el of showing) el.click();
+    showingDefault?.click();
     await settle();
     expect(r.select.calls()).toEqual([]);
     expect(r.clearSelection.calls()).toEqual([]);
+    picker.dispose();
+  });
+
+  it('a locked view over a failed listing disables Retry too', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', { ok: false, reason: 'Could not list flows: boom' });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+
+    const retry = [...r.host.querySelectorAll('button')].find((b) => /retry/i.test(b.textContent ?? ''));
+    expect(retry, 'a failed listing offers Retry').toBeDefined();
+    expect(retry!.disabled).toBe(true);
+    picker.dispose();
+  });
+
+  it.each([
+    ['the trigger', async (host: HTMLElement) => trigger(host).focus()],
+    ['an open option', async (host: HTMLElement) => {
+      await ensureOpen(host);
+      options(host)[0]!.focus();
+    }],
+  ])('a run starting while %s holds focus keeps focus in the picker on the lock reason (WCAG 2.4.3)', async (_label, focusIn) => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+    await settle();
+    await focusIn(r.host);
+    expect(r.host.contains(active())).toBe(true);
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+
+    expect(active(), 'focus is not dropped to <body>').not.toBe(document.body);
+    expect(r.host.contains(active())).toBe(true);
+    expect(active()!.textContent ?? '').toMatch(/terminate/i);
+    const describedBy = (trigger(r.host).getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+    expect(describedBy.map((id) => document.getElementById(id)?.textContent ?? '').join(' ')).toMatch(/terminate/i);
     picker.dispose();
   });
 

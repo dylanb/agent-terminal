@@ -2,6 +2,7 @@
 
 import type { ActiveFlowWriteResult, FlowCatalogListing, FlowCatalogListResult } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
+import { isSelectionLocked } from '../../shared/flowStarted';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
 
@@ -30,6 +31,8 @@ type Catalog =
 const sameRows = (a: FlowCatalogListing, b: FlowCatalogListing): boolean =>
   JSON.stringify({ ...a, selectedId: undefined }) === JSON.stringify({ ...b, selectedId: undefined });
 
+const LOCK_REASON = 'Locked until you Terminate the run';
+
 const reasonOf = (e: unknown, prefix: string): string =>
   displaySafeEcho(`${prefix}: ${e instanceof Error ? e.message : String(e)}`, MAX_ECHOED_REASON_LENGTH);
 
@@ -44,6 +47,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let confirmedId: string | undefined;
   let alertText = '';
   let open = false;
+  let locked = false;
   let generation = 0;
   let pickGeneration = 0;
   let disposed = false;
@@ -97,14 +101,20 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     render();
   }
 
-  function onView(...[key]: FlowViewArgs): void {
+  function onView(...[key, view]: FlowViewArgs): void {
     if (disposed) return;
     if (key === null) {
       ++generation;
+      locked = false;
       switchTo(null);
       return;
     }
+    const nowLocked = isSelectionLocked(view.runStarted);
+    const lockChanged = nowLocked !== locked;
+    locked = nowLocked;
+    if (locked) open = false;
     if (key !== repoKey) switchTo(key);
+    else if (lockChanged) render();
     pull(key);
   }
 
@@ -115,12 +125,12 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     pull(repoKey);
   }
 
-  function pick(id: string): void {
-    if (repoKey === null || catalog.kind !== 'listed') return;
+  function write(next: string | undefined, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
+    if (repoKey === null || catalog.kind !== 'listed' || locked) return;
     const key = repoKey;
     const token = ++pickGeneration;
     ++generation;
-    selectedId = id;
+    selectedId = next;
     alertText = '';
     open = false;
     render();
@@ -131,15 +141,18 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       alertText = reason;
       render();
     };
-    deps.select(key, id).then(
+    save(key).then(
       (result) => {
         if (result.ok) {
-          if (!disposed && repoKey === key) confirmedId = id;
+          if (!disposed && repoKey === key) confirmedId = next;
         } else revert(result.reason);
       },
       (e: unknown) => revert(reasonOf(e, 'Could not save the selection')),
     );
   }
+
+  const pick = (id: string): void => write(id, (key) => deps.select(key, id));
+  const useDefault = (): void => write(undefined, (key) => deps.clearSelection(key));
 
   const trigger = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-trigger');
   const allOptions = (): HTMLElement[] => [...host.querySelectorAll<HTMLElement>('[role="option"]')];
@@ -233,11 +246,13 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.className = 'flow-picker-trigger pill';
     button.setAttribute('aria-haspopup', 'listbox');
     button.setAttribute('aria-expanded', String(open));
-    if (describedByAlert) button.setAttribute('aria-describedby', alert.id);
+    const describedBy = [...(describedByAlert ? [alert.id] : []), ...(locked ? [`${uid}-lock`] : [])];
+    if (describedBy.length > 0) button.setAttribute('aria-describedby', describedBy.join(' '));
     button.textContent = triggerLabel();
+    button.disabled = locked;
     if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
     button.addEventListener('click', () => {
-      if (catalog.kind !== 'listed') return;
+      if (catalog.kind !== 'listed' || locked) return;
       open = !open;
       render();
       if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0])?.focus();
@@ -251,8 +266,27 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     again.className = 'flow-picker-retry pill';
     again.textContent = 'Retry';
     again.setAttribute('aria-describedby', alert.id);
+    again.disabled = locked;
     again.addEventListener('click', retry);
     return again;
+  }
+
+  function lockReason(): HTMLElement {
+    const reason = doc.createElement('p');
+    reason.id = `${uid}-lock`;
+    reason.className = 'flow-picker-lock';
+    reason.tabIndex = -1;
+    reason.textContent = LOCK_REASON;
+    return reason;
+  }
+
+  function useDefaultButton(): HTMLButtonElement {
+    const clear = doc.createElement('button');
+    clear.type = 'button';
+    clear.className = 'flow-picker-clear pill';
+    clear.textContent = 'Use the default (clear selection)';
+    clear.addEventListener('click', useDefault);
+    return clear;
   }
 
   function listbox(listing: FlowCatalogListing): HTMLUListElement {
@@ -279,11 +313,13 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
       const button = triggerButton(shown !== '');
       host.insertBefore(button, alert);
+      if (locked) host.insertBefore(lockReason(), alert);
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (open && catalog.kind === 'listed') {
         const list = listbox(catalog.listing);
         button.setAttribute('aria-controls', list.id);
         host.insertBefore(list, alert);
+        host.insertBefore(useDefaultButton(), alert);
       }
     } finally {
       rendering = false;
@@ -291,6 +327,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     restoreFocus(
       () =>
         (focusedKey === undefined ? null : optionFor(focusedKey)) ??
+        (locked ? host.querySelector<HTMLElement>('.flow-picker-lock') : null) ??
         (catalog.kind === 'failed' ? host.querySelector<HTMLElement>('.flow-picker-retry') : null) ??
         trigger(),
     );

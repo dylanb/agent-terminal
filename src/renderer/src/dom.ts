@@ -14,10 +14,14 @@ export function captureFocusReturn(el: HTMLElement): () => void {
   };
 }
 
-/** WCAG 2.4.3. A popup is recognised only by these ARIA attributes: one that omits them has its Escape
- *  taken by the shell, which closes the loop panel or exits full screen behind the still-open popup. */
+/** WCAG 2.4.3. A popup is recognised only by these ARIA attributes — its listbox, its expanded
+ *  `aria-haspopup="listbox"` trigger, or a control sharing that trigger's parent: one outside them has its
+ *  Escape taken by the shell, which closes the loop panel or exits full screen behind the still-open popup. */
 export function focusedPopupOwnsEscape(doc: Document): boolean {
-  return doc.activeElement?.closest('[role="listbox"], [aria-haspopup="listbox"][aria-expanded="true"]') != null;
+  const el = doc.activeElement;
+  if (!el) return false;
+  if (el.closest('[role="listbox"], [aria-haspopup="listbox"][aria-expanded="true"]') != null) return true;
+  return el.parentElement?.querySelector(':scope > [aria-haspopup="listbox"][aria-expanded="true"]') != null;
 }
 
 /** Capture whether focus is inside `container`, and return a restorer to run after its subtree is
