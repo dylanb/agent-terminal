@@ -125,9 +125,11 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     pull(repoKey);
   }
 
+  const canPick = (): boolean => repoKey !== null && catalog.kind === 'listed' && !locked;
+
   function write(next: string | undefined, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
-    if (repoKey === null || catalog.kind !== 'listed' || locked) return;
     const key = repoKey;
+    if (key === null || !canPick()) return;
     const token = ++pickGeneration;
     ++generation;
     selectedId = next;
@@ -252,7 +254,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.disabled = locked;
     if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
     button.addEventListener('click', () => {
-      if (catalog.kind !== 'listed' || locked) return;
+      if (!canPick()) return;
       open = !open;
       render();
       if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0])?.focus();
@@ -301,8 +303,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
   function render(): void {
     if (disposed) return;
-    const focused = doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement) ? doc.activeElement : null;
-    const focusedKey = focused?.dataset.flowKey;
+    const focusedKey =
+      doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement) ? doc.activeElement.dataset.flowKey : undefined;
     const restoreFocus = captureSubtreeFocus(host);
     rendering = true;
     try {
