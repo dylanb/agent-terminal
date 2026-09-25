@@ -20,7 +20,7 @@ export interface SelectionGesture {
 }
 
 export interface SelectionModel {
-  /** Applies a non-empty gesture; returns false for the blur-clears we ignore (§7.3). */
+  /** Applies a non-empty gesture; an empty one is a no-op that returns false. */
   update(gesture: SelectionGesture): boolean;
   clear(): void;
   get(): Readonly<SelectionState>;
