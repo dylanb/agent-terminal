@@ -114,8 +114,8 @@ describe('resolveRunDefinition — proceeds on a present non-indeterminate start
     const resolve = createResolveRunDefinition({ pointer, catalogEntry, runBinding });
     const load: FlowLoad = resolve(wt, globalRoot).load;
 
-    // A never-started worktree runs the three legs, so leg 2 resolves the pointer's catalog flow specifically
-    // (not merely load.ok): an over-hold fails here, AND a regression that skipped leg 2 to the global fallback
+    // A never-started worktree runs the three legs, so leg 1 resolves the pointer's catalog flow specifically
+    // (not merely load.ok): an over-hold fails here, AND a regression that skipped leg 1 to the global fallback
     // ('global-flow', also ok:true) is caught by pinning the resolved definition.
     expect(definitionName(load)).toBe('catalog-flow');
   });

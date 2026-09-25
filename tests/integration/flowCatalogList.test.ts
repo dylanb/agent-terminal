@@ -164,9 +164,9 @@ describe('listCatalog — listing flags', () => {
     ['an escaping id', '../escape'],
     ['bidi and zero-width text', 'fir\u202Est\u200B'],
     ['an over-long id', 'x'.repeat(MAX_CATALOG_ID_LENGTH + 1)],
-  ])('drops selectedId when the pointer holds %s (a degrade, never the raw text)', (_label, raw) => {
+  ])('drops selectedId when the pointer holds %s (an invalid pointer, never the raw text)', (_label, raw) => {
     const w = world();
-    const repo = w.repo('a3-list-degrade-sel');
+    const repo = w.repo('a3-list-invalid-sel');
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'first', ['f1']);
     const roots = { worktreeDir: repo, globalRoot: w.home };
     writeActiveFlow(repo, 'first');
@@ -204,7 +204,7 @@ describe('listCatalog — listing flags', () => {
 });
 
 describe('listCatalog — an entry that exists but cannot be selected (§18.7.6)', () => {
-  it('lists an escaping repo entry as unavailable from its own tier with the degrade reason, never falling through to the global one', () => {
+  it('lists an escaping repo entry as unavailable from its own tier with the refusal reason, never falling through to the global one', () => {
     const w = world();
     const repo = w.repo('a3-list-escapes');
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'dual', ['g1']);
