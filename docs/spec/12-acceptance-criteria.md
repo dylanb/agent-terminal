@@ -12,10 +12,10 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 - [x] Resizing the window reflows the terminal and `tput cols` reports the new width. *(e2e)*
 
 **Selection (unchanged behavior + capture)**
-- [x] Dragging to select output shows the app's own highlight (custom translucent decoration, not native xterm highlight). *(e2e, including absolute-coordinate placement after 100 lines of scrollback)*
-- [x] **Focus independence:** the highlight remains after clicking any button, typing in the terminal, or focusing the monitor pane. It disappears **only** on Clear / Escape-with-active-selection / starting a new selection. *(e2e: monitor-click persistence + Clear; Escape-clears and Escape-passthrough now e2e too)*
-- [x] The app-owned selection stays highlighted through focus changes and clears only on **Escape** while active (§7.5.1); trim/newline handling is unit-tested via `cleanSelectionText`. *(The former **Send selection** button was removed in v2.132; a selection is copied via the keymap and re-used through the drawer Todo tab / Artifacts add-to-todo.)*
-- [ ] The highlight stays glued to its text when the buffer scrolls. *(implemented — marker-anchored decorations + `onScroll` re-render; no automated assertion yet)*
+- [x] Dragging to select output shows xterm's native highlight in `SEL_COLOR`; the app draws no decoration of its own (v2.150). *(e2e, including absolute-coordinate placement after 100 lines of scrollback)*
+- [x] **Focus independence:** the highlight remains, still visibly painted, after focus moves to the action window. It clears on Escape-with-active-selection and whenever xterm clears its own selection (typing, a click, a buffer switch); Escape then passes through to the agent. *(e2e: drawer-click persistence + Escape-clears + Escape-passthrough; browser test: typing clears → Escape reaches the agent)*
+- [x] Trim/newline handling is unit-tested via `cleanSelectionText`. *(The former **Send selection** button was removed in v2.132; a selection is copied via the keymap and re-used through the drawer Todo tab / Artifacts add-to-todo.)*
+- [x] Scrolling output under an active selection registers no terminal markers, and a §16.8 reveal releases every marker it drew once its highlight clears. *(browser test against a real xterm, `term.markers`)*
 
 **Agent hosting + monitor loop (new — the product-defining criteria)**
 - [ ] Running **Claude Code** (`claude`) inside the session works: it renders correctly, accepts input, and the monitor status strip shows `bracketedPaste: on` while it runs. *(manual — real agent required)*

@@ -70,3 +70,11 @@ Plan for slice 2: the thin vertical that delivers criterion 2 end to end.
 
 A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first, into the
 stacked sub-ticket chain and turns the epic into a tracking issue (§27.10 / §28.7).
+
+## Acceptance criteria are non-negotiable
+
+No acceptance criterion may be deferred, narrowed, or dropped from the plan. Every AC must be assigned to a
+slice that implements it, and the final integration slice must wire every AC into production unless the plan
+explicitly records that wiring a non-goal. The only way an AC leaves scope is explicit, prior operator
+permission (a non-goal recorded in the ticket, or a split into an already-filed sub-ticket of the same epic);
+never self-defer an AC to "a later slice" without it.

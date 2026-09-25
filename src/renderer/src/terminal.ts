@@ -124,12 +124,9 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     screenReaderMode: true,
     theme: {
       background: termBg,
-      // Focused selection paints live during the drag — xterm's hit-testing gives instant,
-      // per-frame feedback the app-owned decoration can't (it churns faster than it paints, §7.1).
+      // §7.0/§7.1: xterm's native selection is the only highlight, focused or not.
       selectionBackground: SEL_COLOR,
-      // Blurred selection stays transparent: once focus leaves, the persistent app-owned
-      // decoration (§7.0) is the sole highlight, so the two never double-tint off-focus.
-      selectionInactiveBackground: 'rgba(0,0,0,0)',
+      selectionInactiveBackground: SEL_COLOR,
     },
   });
   const fit = new FitAddon();
