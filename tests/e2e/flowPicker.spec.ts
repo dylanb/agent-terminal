@@ -1,9 +1,13 @@
 /// <reference lib="dom" />
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { readActiveFlow } from '../../src/main/activeFlowPointer';
+import { activeFlowPointerFile, readActiveFlow } from '../../src/main/activeFlowPointer';
+import { catalogRefusalReason } from '../../src/main/resolveRunDefinition';
+import { createCatalogFixture } from '../helpers/catalogFixture';
+import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 
@@ -260,4 +264,197 @@ test('AC6: a corrupt progression renders the picker locked with its reason, and 
   expect(count).toBeGreaterThan(0);
   for (let i = 0; i < count; i++) await expect(controls.nth(i)).toBeDisabled();
   await expect(pickerHost(page).getByRole('option')).toHaveCount(0);
+});
+
+const stationState = (page: Page, i: number): Locator => page.locator('#flow-strip .flow.vert .stn').nth(i);
+const pickerAlert = (page: Page): Locator => pickerHost(page).getByRole('alert');
+const UNREADABLE_TIER = /could not (be )?read|unreadable|not a directory|ENOTDIR/i;
+
+/** How many elements in the picker, outside every option row, show text matching both `text` and `tier`. */
+const tierNotices = (page: Page, text: RegExp, tier: RegExp): Promise<number> =>
+  pickerHost(page).evaluate(
+    (host, [t, o]) =>
+      [...host.querySelectorAll('*')].filter((el) => {
+        const shown = el.textContent ?? '';
+        return new RegExp(t, 'i').test(shown) && new RegExp(o, 'i').test(shown)
+          && el.querySelector('[role="option"]') === null && el.closest('[role="option"]') === null;
+      }).length,
+    [text.source, tier.source] as const,
+  );
+
+test('AC8: a repo entry whose flow.yaml escapes its tier is listed, cannot be picked, and shows why', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const cat = createCatalogFixture();
+  try {
+    harness.seedGlobalEntry('escaping-flow', ['global-first']);
+    harness.seedGlobalFallback(['fallback-first']);
+    const repo = harness.repo('agent-term-e2e-a3-ac8-');
+    harness.seedRepoEntry(repo, 'escaping-flow', ['repo-first']);
+    cat.symlinkEntryFlowYaml(flowCatalogDir(repo), 'escaping-flow');
+
+    const page = await harness.launch();
+    await harness.cdInto(repo);
+    await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+    await openPicker(page);
+    const row = pickerOption(page, 'escaping-flow');
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute('aria-disabled', 'true');
+    await expect(row).toContainText(catalogRefusalReason('escapes'));
+    await row.click({ force: true });
+    await expect(row).not.toHaveAttribute('aria-selected', 'true');
+    await expect(pickerTrigger(page)).toHaveText('Flow: default');
+    await expect(harness.stepName(1)).toHaveText('fallback-first');
+    expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
+  } finally {
+    cat.cleanup();
+  }
+});
+
+test('AC9: an unreadable repo tier shows a repo-tier notice beside the global entries, listed unavailable with the repo-tier reason', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const cat = createCatalogFixture();
+  try {
+    harness.seedGlobalEntry('global-only-flow', ['global-first']);
+    harness.seedGlobalFallback(['fallback-first']);
+    const repo = harness.repo('agent-term-e2e-a3-ac9-');
+    cat.makeUnreadableTier(repo);
+
+    const page = await harness.launch();
+    await harness.cdInto(repo);
+    await expect(pickerTrigger(page), 'the listing survives an unreadable repo tier').toHaveText('Flow: default', { timeout: 10_000 });
+    await openPicker(page);
+    const row = pickerOption(page, 'global-only-flow');
+    await expect(row).toHaveCount(1);
+    await expect.poll(() => tierNotices(page, UNREADABLE_TIER, /\brepo\b/), { message: 'a repo-tier notice outside the rows' }).toBeGreaterThan(0);
+    await expect(row).toHaveAttribute('aria-disabled', 'true');
+    await expect(row).toContainText(catalogRefusalReason('unresolvable'));
+  } finally {
+    cat.cleanup();
+  }
+});
+
+test('AC10: an over-long hostile pointer with a local flow.yaml shows a clean, bounded flow-load error, and the picker still picks', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const fx = createWorktreeFixture();
+  try {
+    harness.seedGlobalEntry('valid-flow', ['valid-first', 'valid-second']);
+    harness.seedGlobalFallback(['fallback-first']);
+    const repo = harness.repo('agent-term-e2e-a3-ac10-');
+    harness.seedLocalFlow(repo, ['local-first']);
+    fx.writePointer(repo, `"${'z'.repeat(120)}\\u202Ebidi\\u200Bzwsp\\abell"\n`);
+
+    const page = await harness.launch();
+    await harness.cdInto(repo);
+    await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#flow-strip .flow.vert')).toHaveCount(0);
+    const text = (await flowError(page).textContent()) ?? '';
+    expect(text).toMatch(/\S/);
+    expect(text).not.toMatch(/[\u202E\u200B\u0000-\u001F]/u);
+    expect(text, 'the rejected name is shown').toMatch(/z{8,}/);
+    expect(text, 'the rejected name is truncated').not.toContain('z'.repeat(MAX_CATALOG_ID_LENGTH + 1));
+    await expect(page.locator('#flow-strip')).not.toContainText('local-first');
+    await expect(page.locator('#flow-strip')).not.toContainText('fallback-first');
+
+    await openPicker(page);
+    await pickerOption(page, 'valid-flow').click();
+    await expect(harness.stepName(1)).toHaveText('valid-first', { timeout: 10_000 });
+    await expect(flowControl(page)).toHaveText('Start');
+    await expect(flowError(page)).toHaveCount(0);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('AC11: a pick whose pointer write fails shows the reason and returns the highlight to the prior pick', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const fx = createWorktreeFixture();
+  try {
+    harness.seedGlobalEntry('flow-a', ['a-first']);
+    harness.seedGlobalEntry('flow-b', ['b-first']);
+    const repo = harness.repo('agent-term-e2e-a3-ac11-');
+    harness.selectFlow(repo, 'flow-a');
+
+    const page = await harness.launch();
+    await harness.cdInto(repo);
+    await expect(harness.stepName(1)).toHaveText('a-first', { timeout: 10_000 });
+    await openPicker(page);
+    await expect(pickerOption(page, 'flow-a')).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Escape');
+
+    fx.plantPointerDirectory(repo);
+    await openPicker(page);
+    await pickerOption(page, 'flow-b').click();
+
+    await expect(pickerAlert(page)).toHaveText(/\S/, { timeout: 10_000 });
+    await expect(page.locator('#flow-strip'), 'the refused pick is not rendered').not.toContainText('b-first');
+    expect(readActiveFlow(repo)).not.toEqual({ kind: 'value', id: 'flow-b' });
+    await openPicker(page);
+    await expect(pickerOption(page, 'flow-a')).toHaveAttribute('aria-selected', 'true');
+    await expect(pickerOption(page, 'flow-b')).not.toHaveAttribute('aria-selected', 'true');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("AC18: the operator's pick wins over a local flow.yaml at Start and after a relaunch, and an empty repo tier shows no notice", { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('pick-one', ['one-first', 'one-second']);
+  harness.seedGlobalEntry('pick-two', ['two-first', 'two-second']);
+  const repo = harness.repo('agent-term-e2e-a3-ac18-');
+  harness.seedLocalFlow(repo, ['local-first', 'local-second']);
+  mkdirSync(flowCatalogDir(repo), { recursive: true });
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+  await openPicker(page);
+  await expect(pickerOption(page, 'pick-two')).toHaveCount(1);
+  expect(await tierNotices(page, /\S/, /\b(repo|global)\b/), 'an empty repo tier shows no tier notice').toBe(0);
+  await pickerOption(page, 'pick-two').click();
+  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('two-second');
+
+  await flowControl(page).click();
+  await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
+  await expect(stationState(page, 1)).toHaveClass(/\bactive\b/);
+  await expect(harness.stepName(1)).toHaveText('two-first');
+
+  await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('two-first', { timeout: 10_000 });
+  await expect(stationState(harness.page(), 1)).toHaveClass(/\bactive\b/);
+  await expect(flowControl(harness.page())).toHaveText('Advance');
+  await expect(pickerTrigger(harness.page())).toHaveText('Flow: pick-two', { timeout: 10_000 });
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'pick-two' });
+});
+
+test('AC18: a non-file at the pointer path shows the flow-load error, and "use the default" clears it to the local flow at Not started', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const fx = createWorktreeFixture();
+  try {
+    harness.seedGlobalEntry('some-flow', ['some-first']);
+    const repo = harness.repo('agent-term-e2e-a3-ac18-nonfile-');
+    harness.seedLocalFlow(repo, ['local-first', 'local-second']);
+    fx.plantPointerDirectory(repo);
+
+    const page = await harness.launch();
+    await harness.cdInto(repo);
+    await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+    await expect(pickerTrigger(page)).toHaveText('Flow: selection unusable', { timeout: 10_000 });
+
+    await openPicker(page);
+    await useDefault(page).click();
+    await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+    await expect(flowControl(page)).toHaveText('Start');
+    await expect(flowError(page)).toHaveCount(0);
+    expect(existsSync(activeFlowPointerFile(repo))).toBe(false);
+  } finally {
+    fx.cleanup();
+  }
 });

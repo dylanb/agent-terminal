@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { flowCatalogDir } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { activeFlowPointerFile, writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { catalogListResult, listCatalog } from '../../src/main/flowCatalogList';
+import { catalogListResult, listCatalog, MAX_CATALOG_LIST_MEMBERS } from '../../src/main/flowCatalogList';
 import { catalogRefusalReason } from '../../src/main/resolveRunDefinition';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
@@ -243,5 +244,189 @@ describe('catalogListResult — the flow:listCatalog answer (§18.7.6)', () => {
     expect(reason).toMatch(/^Could not list flows: EACCES/);
     expect(reason).not.toMatch(/[\u202E\u200B]/u);
     expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+  });
+});
+
+const nameOf = (e: FlowCatalogListing['entries'][number]): string => (e.available ? e.id : e.label);
+const HOSTILE = /[\u202E\u200B\u0000-\u001F]/u;
+
+/** The listing as `flow:listCatalog` answers it: an unreadable tier is a notice inside a listing, never a failure. */
+function listed(roots: { worktreeDir: string; globalRoot: string }): FlowCatalogListing {
+  const result = catalogListResult(() => listCatalog(roots));
+  expect(result, 'an unreadable tier still yields a listing').toMatchObject({ ok: true });
+  if (!result.ok) throw new Error(result.reason);
+  return result.listing;
+}
+
+describe('listCatalog — tier notices, unreadable vs empty vs absent (AC9)', () => {
+  it('an unreadable repo tier yields a repo notice and lists the global entries unavailable with the repo-tier reason', () => {
+    const w = world();
+    const repo = w.repo('a3-list-unreadable-repo');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-two', ['g1']);
+    catalog.makeUnreadableTier(repo);
+    const roots = { worktreeDir: repo, globalRoot: w.home };
+
+    const listing = listed(roots);
+    expect(listing.tierNotices.map((n) => n.origin)).toEqual(['repo']);
+    expect(listing.tierNotices[0]!.notice).toMatch(/\S/);
+    expect(listing.entries.map(nameOf).sort()).toEqual(['g-one', 'g-two']);
+    for (const e of listing.entries) {
+      if (e.available) throw new Error(`${e.id} is selectable past an unreadable repo tier`);
+      expect(e.reason, e.label).toBe(catalogRefusalReason('unresolvable'));
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a repo tier directory that exists but denies reading yields a repo notice, not a failed listing', () => {
+    const w = world();
+    const repo = w.repo('a3-list-eacces-repo');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    mkdirSync(flowCatalogDir(repo), { recursive: true });
+    chmodSync(flowCatalogDir(repo), 0o000);
+    try {
+      const roots = { worktreeDir: repo, globalRoot: w.home };
+      const listing = listed(roots);
+      expect(listing.tierNotices.map((n) => n.origin)).toEqual(['repo']);
+      expect(listing.entries.map(nameOf)).toEqual(['g-one']);
+      const verdict = resolveCatalogEntry(roots, 'g-one');
+      expect(listing.entries[0]!.available, 'the listing offers g-one exactly when a run could resolve it').toBe(verdict.ok);
+    } finally {
+      chmodSync(flowCatalogDir(repo), 0o755);
+    }
+  });
+
+  it('a repo with no .agent-terminal at all yields no notice and leaves the global entries selectable', () => {
+    const w = world();
+    const repo = w.repo('a3-list-absent-repo');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    rmSync(flowHomeDir(repo), { recursive: true, force: true });
+    expect(existsSync(flowHomeDir(repo)), 'the fixture repo has no .agent-terminal').toBe(false);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.tierNotices).toEqual([]);
+    expect(availableIds(listing)).toEqual(['global:g-one']);
+  });
+
+  it('an empty repo tier yields no notice and leaves the global entries selectable', () => {
+    const w = world();
+    const repo = w.repo('a3-list-empty-repo');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    mkdirSync(flowCatalogDir(repo), { recursive: true });
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.tierNotices).toEqual([]);
+    expect(availableIds(listing)).toEqual(['global:g-one']);
+  });
+
+  it('an unreadable global tier yields a global notice and leaves the repo entries selectable', () => {
+    const w = world();
+    const repo = w.repo('a3-list-unreadable-global');
+    catalog.addEntryWithSteps(flowCatalogDir(repo), 'r-one', ['r1']);
+    catalog.makeUnreadableTier(w.home);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.tierNotices.map((n) => n.origin)).toEqual(['global']);
+    expect(availableIds(listing)).toEqual(['repo:r-one']);
+  });
+
+  it('a first-run global home lists the repo entries with no notice and no global fallback', () => {
+    const w = world();
+    const repo = w.repo('a3-list-first-run');
+    catalog.addEntryWithSteps(flowCatalogDir(repo), 'r-one', ['r1']);
+    catalog.removeGlobalHome(w.home);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.tierNotices).toEqual([]);
+    expect(availableIds(listing)).toEqual(['repo:r-one']);
+    expect(listing.hasGlobalFallback).toBe(false);
+  });
+
+  it("a tier notice over a path planted with bidi and zero-width characters is display-sanitized and bounded", () => {
+    const w = world();
+    const repo = w.repo(`a3-list-\u202Ehostile\u200B-${'p'.repeat(MAX_ECHOED_REASON_LENGTH)}`);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    catalog.makeUnreadableTier(repo);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.tierNotices).toHaveLength(1);
+    const notice = listing.tierNotices[0]!.notice;
+    expect(notice).not.toMatch(HOSTILE);
+    expect(notice.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+  });
+});
+
+describe('listCatalog — unsafe names and tier confinement (§18.7.6, CWE-22/59/400)', () => {
+  it('lists a member whose name is not a safe flow id as unavailable, with a display-safe label and the invalid-id reason', () => {
+    const w = world();
+    const repo = w.repo('a3-list-unsafe');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'fine', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'Bad\u202Ename\u200B', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), `Long\u202E${'x'.repeat(200)}`, ['g1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(availableIds(listing)).toEqual(['global:fine']);
+    const unsafe = listing.entries.flatMap((e) => (e.available ? [] : [e]));
+    expect(unsafe).toHaveLength(2);
+    const row = unsafe.find((e) => e.label.includes('Bad'));
+    if (!row) throw new Error('the unsafe "Bad…" member is not listed');
+    expect(row.origin).toBe('global');
+    expect(row.label).not.toMatch(HOSTILE);
+    expect(row.reason).toMatch(/not a valid flow id/i);
+    const long = unsafe.find((e) => e.label.includes('Long'));
+    if (!long) throw new Error('the over-long unsafe member is not listed');
+    expect(long.label).not.toMatch(HOSTILE);
+    expect(long.label, 'an over-long unsafe name is truncated').not.toContain('x'.repeat(MAX_CATALOG_ID_LENGTH + 1));
+  });
+
+  it.each([
+    ['.agent-terminal/flows', (repo: string, outside: string, _scratch: string) => {
+      mkdirSync(flowHomeDir(repo), { recursive: true });
+      symlinkSync(outside, flowCatalogDir(repo));
+    }],
+    ['.agent-terminal', (repo: string, outside: string, scratch: string) => {
+      const home = join(scratch, 'home');
+      mkdirSync(home);
+      symlinkSync(outside, join(home, 'flows'));
+      wt.plantAgentTerminalDirEscape(repo, home);
+    }],
+  ])('a repo whose %s is a symlink out of the worktree lists no name from the link target, and shows a repo notice', (_label, plant) => {
+    const w = world();
+    const repo = w.repo('a3-list-tier-escape');
+    const outside = mkdtempSync(join(tmpdir(), 'a3-list-outside-'));
+    const scratch = mkdtempSync(join(tmpdir(), 'a3-list-outside-home-'));
+    catalog.addEntryWithSteps(outside, 'sentinel-outside-name', ['x1']);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
+    try {
+      plant(repo, outside, scratch);
+      const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+      expect(listing.entries.map(nameOf)).not.toContain('sentinel-outside-name');
+      expect(listing.resumable.map((r) => r.id)).not.toContain('sentinel-outside-name');
+      expect(listing.tierNotices.map((n) => n.origin)).toContain('repo');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('lists a tier of exactly MAX_CATALOG_LIST_MEMBERS members in full, with no truncation notice', () => {
+    const w = world();
+    const repo = w.repo('a3-list-at-cap');
+    const tier = flowCatalogDir(repo);
+    for (let i = 0; i < MAX_CATALOG_LIST_MEMBERS; i++) catalog.addEntryWithSteps(tier, `m-${String(i).padStart(6, '0')}`, ['s1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries.filter((e) => e.origin === 'repo')).toHaveLength(MAX_CATALOG_LIST_MEMBERS);
+    expect(listing.tierNotices).toEqual([]);
+  });
+
+  it('bounds a tier with more than MAX_CATALOG_LIST_MEMBERS members and says the list was truncated', () => {
+    const w = world();
+    const repo = w.repo('a3-list-over-cap');
+    const tier = flowCatalogDir(repo);
+    for (let i = 0; i <= MAX_CATALOG_LIST_MEMBERS; i++) catalog.addEntryWithSteps(tier, `m-${String(i).padStart(6, '0')}`, ['s1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries.filter((e) => e.origin === 'repo')).toHaveLength(MAX_CATALOG_LIST_MEMBERS);
+    expect(listing.tierNotices.filter((n) => n.origin === 'repo').map((n) => n.notice).join(' ')).toMatch(/truncated/i);
   });
 });

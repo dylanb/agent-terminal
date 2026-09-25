@@ -8,6 +8,8 @@ import { errMsg } from './errno';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { CATALOG_ORIGINS, type CatalogOrigin, type FlowCatalogEntry, type FlowCatalogListing, type FlowCatalogListResult } from '../shared/ipc';
 
+export const MAX_CATALOG_LIST_MEMBERS = 256;
+
 interface TierMember {
   tier: CatalogOrigin;
   id: string;

@@ -91,7 +91,9 @@ async function tabToProbe(el: HTMLElement): Promise<void> {
 
 /** The real picker in the rail, showing a never-started worktree whose listing has the selected flow, a second
  *  available flow, and one unavailable entry, and whose pointer writes are all refused. */
-async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker; show: (...args: FlowViewArgs) => void }> {
+async function mountPicker(
+  tierNotices: FlowCatalogListing['tierNotices'] = [],
+): Promise<{ host: HTMLElement; picker: FlowPicker; show: (...args: FlowViewArgs) => void }> {
   const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
   let show: ((...args: FlowViewArgs) => void) | undefined;
   const listing: FlowCatalogListing = {
@@ -100,7 +102,7 @@ async function mountPicker(): Promise<{ host: HTMLElement; picker: FlowPicker; s
       { available: true, id: 'flow-b', origin: 'global' },
       { available: false, label: 'flow-x', origin: 'repo', reason: 'escapes its tier' },
     ],
-    tierNotices: [],
+    tierNotices,
     selection: { kind: 'value', id: 'flow-a' },
     hasLocalFlow: false,
     hasGlobalFallback: false,
@@ -348,6 +350,24 @@ for (const theme of ['light', 'dark'] as const) {
           picker.dispose();
         });
       }
+    });
+
+    describe('flow picker tier notice contrast (WCAG 1.4.3 AA)', () => {
+      it('an unreadable-tier notice clears 4.5:1 in the open list', async () => {
+        const notice = 'Could not read the repo flows directory: ENOTDIR';
+        const { host, picker } = await mountPicker([{ origin: 'repo', notice }]);
+        host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+        const el = await vi.waitFor(() => {
+          const shown = [...host.querySelectorAll<HTMLElement>('*')].filter(
+            (e) => (e.textContent ?? '').includes(notice) && e.closest('[role="option"]') === null &&
+              ![...e.children].some((c) => (c.textContent ?? '').includes(notice)),
+          );
+          if (shown.length === 0) throw new Error('the open list renders no tier notice');
+          return shown[0]!;
+        });
+        expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
+      });
     });
 
     describe('flow picker lock reason and "use the default" contrast (WCAG 1.4.3 AA)', () => {

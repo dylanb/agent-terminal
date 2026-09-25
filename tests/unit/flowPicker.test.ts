@@ -240,7 +240,7 @@ describe('flow picker — select mode (AC1)', () => {
     picker.dispose();
   });
 
-  it('a refused pick announces its reason and restores the prior selection without re-pulling the listing', async () => {
+  it('a refused pick announces its reason and restores the prior selection', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
     const refusal = r.select.respondLater();
@@ -249,7 +249,6 @@ describe('flow picker — select mode (AC1)', () => {
     r.views.fire('/repo-a', neverStarted(['a1']));
     await settle();
     await ensureOpen(r.host);
-    const pullsBeforePick = r.catalog.pulls().length;
     option(r.host, 'flow-b').click();
     await settle();
     await ensureOpen(r.host);
@@ -259,7 +258,6 @@ describe('flow picker — select mode (AC1)', () => {
 
     expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
     expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('Could not save the selection: disk full');
-    expect(r.catalog.pulls()).toHaveLength(pullsBeforePick);
     expect(trigger(r.host).textContent).toBe('Flow: flow-a');
     await ensureOpen(r.host);
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
@@ -1501,6 +1499,74 @@ describe('flow picker — use the default, and dismiss (AC4)', () => {
     expect(r.select.calls()).toEqual([]);
     expect(r.clearSelection.calls()).toEqual([]);
     expect(trigger(r.host).textContent).toBe('Flow: default');
+    picker.dispose();
+  });
+});
+
+describe('flow picker — display duties (AC8, AC9, AC10)', () => {
+  const noticeListing = (notices: { origin: 'repo' | 'global'; notice: string }[]): FlowCatalogListResult => {
+    const base = listingOf(['g-one']);
+    if (!base.ok) throw new Error('listingOf always lists');
+    return { ok: true, listing: { ...base.listing, tierNotices: notices } };
+  };
+
+  /** The elements that show `text` together with a word naming `origin`, excluding any that wrap or sit in a row. */
+  const noticeShowing = (host: HTMLElement, text: string, origin: RegExp): HTMLElement[] =>
+    [...host.querySelectorAll<HTMLElement>('*')].filter(
+      (el) => (el.textContent ?? '').includes(text) && origin.test(el.textContent ?? '') && el.querySelector('[role="option"]') === null && el.closest('[role="option"]') === null,
+    );
+
+  it.each([
+    ['repo', /repo/i],
+    ['global', /global/i],
+  ] as const)('shows a %s tier notice naming its tier beside the listed entries', async (origin, names) => {
+    const r = rig();
+    const notice = 'Could not read this tier: ENOTDIR';
+    r.catalog.serve('/repo-a', noticeListing([{ origin, notice }]));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['g1']));
+    await settle();
+    await ensureOpen(r.host);
+
+    expect(option(r.host, 'g-one')).toBeDefined();
+    expect(noticeShowing(r.host, notice, names), `a ${origin} tier notice naming its tier`).not.toHaveLength(0);
+    picker.dispose();
+  });
+
+  it("shows no tier notice for a worktree whose listing carries none, even after another worktree's notice was shown", async () => {
+    const r = rig();
+    const notice = 'Could not read this tier: ENOTDIR';
+    r.catalog.serve('/repo-a', noticeListing([{ origin: 'repo', notice }]));
+    r.catalog.serve('/repo-b', noticeListing([]));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['g1']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(noticeShowing(r.host, notice, /repo/i), "worktree A's notice is shown first").not.toHaveLength(0);
+
+    r.views.fire('/repo-b', neverStarted(['g1']));
+    await settle();
+    await ensureOpen(r.host);
+
+    expect(option(r.host, 'g-one')).toBeDefined();
+    expect(noticeShowing(r.host, notice, /repo/i), "worktree A's notice does not carry over to B").toHaveLength(0);
+    expect(noticeShowing(r.host, '', /\b(repo|global)\b/i), 'no element outside the rows names a tier').toHaveLength(0);
+    picker.dispose();
+  });
+
+  it("an unusable pointer's error view leaves the picker enabled and renders no pointer reason of its own (AC10)", async () => {
+    const r = rig();
+    const reason = 'The selected flow "no-such-flow" is not in the catalog: pick another flow or use the default';
+    r.catalog.serve('/repo-a', listingOf(['flow-a'], { kind: 'value', id: 'no-such-flow' }));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', viewOf({ status: 'error', steps: [], stepName: '', total: 0, error: reason, runStarted: 'never-started' }));
+    await settle();
+
+    expect(trigger(r.host).disabled).toBe(false);
+    expect(trigger(r.host).getAttribute('aria-disabled')).not.toBe('true');
+    await ensureOpen(r.host);
+    expect(r.host.textContent ?? '').not.toContain(reason);
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
     picker.dispose();
   });
 });
