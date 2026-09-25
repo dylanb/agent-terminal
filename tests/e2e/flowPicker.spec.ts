@@ -3,6 +3,9 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
@@ -135,4 +138,126 @@ test('a worktree change while the picker holds keyboard focus lands focus in the
 
   await expect(harness.stepName(1)).toHaveText('b-only-first', { timeout: 10_000 });
   expect(await page.evaluate(() => document.activeElement === null || document.activeElement === document.body)).toBe(false);
+});
+
+const flowControl = (page: Page): Locator => page.locator('#flow-strip .flow-control');
+const flowError = (page: Page): Locator => page.locator('#flow-strip .flow-error');
+const flowTerminate = (page: Page): Locator => page.locator('#flow-strip .flow-terminate');
+const confirmModal = (page: Page): Locator => page.locator('#flow-confirm-host .flow-modal');
+const inputModal = (page: Page): Locator => page.locator('#flow-modal-host .flow-modal');
+const useDefault = (page: Page): Locator => pickerHost(page).getByText(/use the default/i);
+
+/** A catalog entry whose first step is a §27 loop step declaring one required input, so a Start prompts for it. */
+function seedLoopEntry(root: string, id: string, stepId: string, input: string): void {
+  const entry = join(flowCatalogDir(root), id);
+  mkdirSync(entry, { recursive: true });
+  writeFileSync(
+    join(entry, FLOW_DEF_FILE),
+    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n` +
+      `    inputs:\n      - name: ${input}\n        type: github-ticket\n        required: true\n`,
+  );
+}
+
+test('AC3: with no flow to run, the picker is usable from the error view, and a pick shows that flow at Not started with Start', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('rescue-flow', ['rescue-first', 'rescue-second']);
+  const repo = harness.repo('agent-term-e2e-a3-ac3-');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+
+  await openPicker(page);
+  await pickerOption(page, 'rescue-flow').click();
+
+  await expect(harness.stepName(1)).toHaveText('rescue-first', { timeout: 10_000 });
+  await expect(flowControl(page)).toHaveText('Start');
+  await expect(flowError(page)).toHaveCount(0);
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'rescue-flow' });
+});
+
+test('AC4: "use the default" clears the selection to the unset resolution, and opening then dismissing writes nothing across a relaunch', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('chosen-flow', ['chosen-first']);
+  harness.seedGlobalFallback(['fallback-first']);
+  const repo = harness.repo('agent-term-e2e-a3-ac4-');
+  harness.selectFlow(repo, 'chosen-flow');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('chosen-first', { timeout: 10_000 });
+
+  await openPicker(page);
+  await expect(useDefault(page)).toBeVisible();
+  await useDefault(page).click();
+  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
+
+  await openPicker(page);
+  await page.keyboard.press('Escape');
+  await expect(pickerHost(page).getByRole('listbox')).toHaveCount(0);
+
+  const relaunched = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  expect(readActiveFlow(repo)).toEqual({ kind: 'unset' });
+  await openPicker(relaunched);
+  await expect(pickerOption(relaunched, 'chosen-flow')).toBeVisible();
+  await expect(pickerOption(relaunched, 'chosen-flow')).not.toHaveAttribute('aria-selected', 'true');
+});
+
+test("AC6/AC7/AC5: a started run locks the picker; after Terminate it is usable with the pre-run pick highlighted, and a switched flow's step 0 asks for its own input", { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('flow-a', ['a-first', 'a-second']);
+  seedLoopEntry(harness.home, 'flow-b', 'b-first', 'pr');
+  const repo = harness.repo('agent-term-e2e-a3-ac7-');
+  harness.selectFlow(repo, 'flow-a');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('a-first', { timeout: 10_000 });
+  await expect(pickerTrigger(page)).toBeEnabled({ timeout: 10_000 });
+
+  await flowControl(page).click();
+  await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
+  await expect(pickerTrigger(page)).toBeDisabled({ timeout: 10_000 });
+
+  await flowTerminate(page).click();
+  await expect(confirmModal(page)).toBeVisible();
+  await confirmModal(page).locator('.confirm').click();
+  await expect(flowControl(page)).toHaveText('Start', { timeout: 10_000 });
+
+  await openPicker(page);
+  await expect(pickerOption(page, 'flow-a')).toHaveAttribute('aria-selected', 'true');
+  await pickerOption(page, 'flow-b').click();
+  await expect(harness.stepName(1)).toHaveText('b-first', { timeout: 10_000 });
+
+  await flowControl(page).click();
+  await expect(inputModal(page)).toBeVisible({ timeout: 10_000 });
+  await expect(inputModal(page).locator('.field .nm')).toHaveText(['pr']);
+});
+
+test('AC6: a corrupt progression renders the picker locked with its reason, and no picker control is enabled', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('corrupt-probe-flow', ['probe-first']);
+  harness.seedGlobalFallback(['fallback-first']);
+  const repo = harness.repo('agent-term-e2e-a3-ac6-corrupt-');
+  mkdirSync(flowHomeDir(repo), { recursive: true });
+  writeFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), '[unterminated flow sequence');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await expect(pickerTrigger(page)).toBeVisible({ timeout: 10_000 });
+
+  await expect(pickerHost(page)).toContainText(/terminate/i, { timeout: 10_000 });
+  const controls = pickerHost(page).getByRole('button');
+  const count = await controls.count();
+  expect(count).toBeGreaterThan(0);
+  for (let i = 0; i < count; i++) await expect(controls.nth(i)).toBeDisabled();
+  await expect(pickerHost(page).getByRole('option')).toHaveCount(0);
 });

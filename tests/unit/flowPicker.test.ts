@@ -36,7 +36,7 @@ const listingOf = (ids: string[], selectedId?: string): FlowCatalogListResult =>
 });
 
 /** The catalog as main serves it: each worktree answers with its own listing, however often it is pulled, and a
- *  successful select is reflected in that worktree's next listing. `hold` parks the next pull for one worktree. */
+ *  successful select or clear is reflected in that worktree's next listing. `hold` parks the next pull for one worktree. */
 function createCatalog() {
   const listings = new Map<string, FlowCatalogListResult>();
   const held = new Map<string, Deferred<FlowCatalogListResult>[]>();
@@ -53,6 +53,12 @@ function createCatalog() {
     select(repoKey: string, id: string): void {
       const current = listings.get(repoKey);
       if (current?.ok) listings.set(repoKey, { ok: true, listing: { ...current.listing, selectedId: id } });
+    },
+    clear(repoKey: string): void {
+      const current = listings.get(repoKey);
+      if (!current?.ok) return;
+      const { selectedId: _dropped, ...listing } = current.listing;
+      listings.set(repoKey, { ok: true, listing });
     },
     listCatalog(repoKey: string): Promise<FlowCatalogListResult> {
       pulls.push(repoKey);
@@ -77,7 +83,11 @@ function rig(views = createFeed<FlowViewArgs>()) {
       if (result.ok) catalog.select(repoKey, id);
       return result;
     },
-    clearSelection: clearSelection.call,
+    clearSelection: async (repoKey) => {
+      const result = await clearSelection.call(repoKey);
+      if (result.ok) catalog.clear(repoKey);
+      return result;
+    },
   };
   const host = document.body.appendChild(document.createElement('div'));
   return { views, catalog, select, clearSelection, deps, host };
@@ -1206,5 +1216,193 @@ describe('flow picker placement in the layout (§22.4)', () => {
     expect(host?.closest('.rail')).not.toBeNull();
     expect(strip?.nextElementSibling).toBe(host);
     expect(strip?.contains(host)).toBe(false);
+  });
+});
+
+const viewOf = (over: Partial<FlowStateView> & Pick<FlowStateView, 'status' | 'runStarted'>): FlowStateView => ({
+  stepName: 's1',
+  steps: ['s1', 's2'],
+  position: 1,
+  total: 2,
+  ...over,
+});
+
+const LOCKED_VIEWS: [label: string, view: FlowStateView][] = [
+  ['an in-progress run', viewOf({ status: 'in_progress', runStarted: 'started' })],
+  ['a done run', viewOf({ status: 'done', position: 2, stepName: 's2', runStarted: 'started' })],
+  ['a first-step rollback (not_started, run begun)', viewOf({ status: 'not_started', runStarted: 'started' })],
+  [
+    'a corrupt progression (indeterminate error view)',
+    viewOf({ status: 'error', steps: [], stepName: '', total: 0, error: 'The run state could not be verified', runStarted: 'indeterminate' }),
+  ],
+];
+
+const neverStartedError: FlowStateView = viewOf({
+  status: 'error',
+  steps: [],
+  stepName: '',
+  total: 0,
+  error: 'No flow.yaml found',
+  runStarted: 'never-started',
+});
+
+const useDefaultControl = (host: HTMLElement): HTMLElement | undefined =>
+  [...host.querySelectorAll<HTMLElement>('button, [role="option"], [role="menuitem"]')].find((el) =>
+    /use the default/i.test(el.textContent ?? ''),
+  );
+
+describe('flow picker — enable rule (AC3, AC6, AC7)', () => {
+  it.each(LOCKED_VIEWS)('%s renders every picker control disabled, with the lock reason shown, and a click writes nothing', async (_label, view) => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', view);
+    await settle();
+
+    const buttons = [...r.host.querySelectorAll('button')];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) expect(b.disabled, `"${b.textContent}" is disabled`).toBe(true);
+    expect(r.host.textContent ?? '').toMatch(/terminate/i);
+
+    await pickEveryOfferedRow(r.host);
+    useDefaultControl(r.host)?.click();
+    await settle();
+    expect(options(r.host)).toEqual([]);
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    picker.dispose();
+  });
+
+  it('a run starting while the listbox is open locks the rows already showing, and clicking them writes nothing', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(options(r.host).length).toBeGreaterThan(0);
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+
+    for (const b of r.host.querySelectorAll('button')) expect(b.disabled, `"${b.textContent}" is disabled`).toBe(true);
+    for (const el of options(r.host)) el.click();
+    useDefaultControl(r.host)?.click();
+    await settle();
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    picker.dispose();
+  });
+
+  it('a never-started error view (no flow to run) leaves the picker usable, and a pick writes that flow (AC3)', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['rescue-flow']));
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStartedError);
+    await settle();
+
+    expect(trigger(r.host).disabled).toBe(false);
+    expect(trigger(r.host).getAttribute('aria-disabled')).not.toBe('true');
+    expect(r.host.textContent ?? '', 'no lock reason is shown').not.toMatch(/terminate/i);
+    await ensureOpen(r.host);
+    option(r.host, 'rescue-flow').click();
+    await settle();
+    expect(r.select.calls()).toEqual([['/repo-a', 'rescue-flow']]);
+    picker.dispose();
+  });
+
+  it("after Terminate the next never-started view unlocks the picker and highlights the listing's pre-run selection (AC7)", async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+    expect(trigger(r.host).disabled, 'a started run locks the picker').toBe(true);
+
+    r.views.fire('/repo-a', neverStarted(['b1', 'b2']));
+    await settle();
+    expect(trigger(r.host).disabled, 'the never-started view after Terminate unlocks the picker').toBe(false);
+    expect(r.host.textContent ?? '', 'the lock reason is gone once unlocked').not.toMatch(/terminate/i);
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
+    expect(r.select.calls()).toEqual([]);
+    picker.dispose();
+  });
+});
+
+describe('flow picker — use the default, and dismiss (AC4)', () => {
+  it('"use the default" asks to clear the shown worktree\'s selection and shows the default', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
+    r.clearSelection.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+    await ensureOpen(r.host);
+    const clear = useDefaultControl(r.host);
+    expect(clear, 'the picker offers a "Use the default" action').toBeDefined();
+    clear!.click();
+    await settle();
+
+    expect(r.clearSelection.calls()).toEqual([['/repo-a']]);
+    expect(r.select.calls()).toEqual([]);
+    expect(trigger(r.host).textContent).toBe('Flow: default');
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+    expect(trigger(r.host).textContent, 'the cleared selection survives the next view').toBe('Flow: default');
+    await ensureOpen(r.host);
+    expect(options(r.host).filter((o) => o.getAttribute('aria-selected') === 'true')).toEqual([]);
+    picker.dispose();
+  });
+
+  it('a refused clear announces its reason and restores the prior selection', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
+    const refusal = r.clearSelection.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+    await ensureOpen(r.host);
+    const clear = useDefaultControl(r.host);
+    expect(clear, 'the picker offers a "Use the default" action').toBeDefined();
+    clear!.click();
+    await settle();
+    expect(trigger(r.host).textContent).toBe('Flow: default');
+
+    refusal.resolve({ ok: false, reason: 'The flow selection could not be saved: disk full' });
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('The flow selection could not be saved: disk full');
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
+    await ensureOpen(r.host);
+    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    picker.dispose();
+  });
+
+  it('opening and dismissing without a pick writes nothing and pre-selects nothing', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b']));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['d1']));
+    await settle();
+    await ensureOpen(r.host);
+    expect(r.host.querySelector('[aria-selected="true"]')).toBeNull();
+    r.host.querySelector<HTMLElement>('[role="listbox"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle();
+
+    expect(options(r.host)).toEqual([]);
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    expect(trigger(r.host).textContent).toBe('Flow: default');
+    picker.dispose();
   });
 });
