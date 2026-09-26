@@ -302,6 +302,8 @@ test('AC8: a repo entry whose flow.yaml escapes its tier is listed, cannot be pi
     await expect(row).toHaveAttribute('aria-disabled', 'true');
     await expect(row).toContainText(catalogRefusalReason('escapes'));
     await row.click({ force: true });
+    const afterClick = await page.evaluate((key) => window.flow.listCatalog(key), repo);
+    expect(afterClick.ok && afterClick.listing.selection, 'no pointer write follows the click').toEqual({ kind: 'unset' });
     await expect(row).not.toHaveAttribute('aria-selected', 'true');
     await expect(pickerTrigger(page)).toHaveText('Flow: default');
     await expect(harness.stepName(1)).toHaveText('fallback-first');

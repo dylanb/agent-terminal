@@ -1,9 +1,10 @@
 import { hasFlowDefinition } from './flow';
 import { catalogTierJail, resolveCatalogEntry, type CatalogRoots } from './flowCatalog';
-import { readDirEntries } from './dirEntries';
+import { readDirEntries, type DirEntry } from './dirEntries';
+import { confinedRealPathResult, resolveJail } from './confinedPath';
 import { readActiveFlow } from './activeFlowPointer';
 import { catalogRefusalReason } from './resolveRunDefinition';
-import { isSafeCatalogId } from '../shared/pathSegment';
+import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { errMsg } from './errno';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { CATALOG_ORIGINS, type CatalogOrigin, type FlowCatalogEntry, type FlowCatalogListing, type FlowCatalogListResult } from '../shared/ipc';
@@ -16,18 +17,67 @@ interface TierMember {
   resolvesInTier: boolean;
 }
 
-function tierMembers(roots: CatalogRoots, tier: CatalogOrigin): TierMember[] {
-  const jail = catalogTierJail(roots, tier);
-  if (jail === null) return [];
-  return readDirEntries(jail).flatMap(({ name }) => {
-    if (!isSafeCatalogId(name)) return [];
-    const res = resolveCatalogEntry(roots, name, tier);
-    return res.ok || res.cause !== 'unknown' ? [{ tier, id: name, resolvesInTier: res.ok }] : [];
-  });
+type TierNotice = FlowCatalogListing['tierNotices'][number];
+
+interface TierScan {
+  members: TierMember[];
+  unsafe: { tier: CatalogOrigin; name: string }[];
+  notices: TierNotice[];
 }
 
+const TIER_DIR_NAME: Record<CatalogOrigin, string> = { repo: 'repo flows directory', global: 'global flows directory' };
+
+const noticeOf = (tier: CatalogOrigin, text: string): TierNotice => ({
+  origin: tier,
+  notice: displaySafeEcho(text, MAX_ECHOED_REASON_LENGTH),
+});
+
+// CWE-22/59
+function walkableTierDir(roots: CatalogRoots, tier: CatalogOrigin): { ok: true; dir: string } | { ok: false; notice: TierNotice } {
+  const jail = catalogTierJail(roots, tier);
+  if (jail === null) return { ok: false, notice: noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: its location does not resolve`) };
+  const anchor = tier === 'repo' ? resolveJail(roots.worktreeDir) : jail;
+  const confined = anchor === null ? ({ ok: false, cause: 'unresolvable' } as const) : confinedRealPathResult(anchor, jail);
+  if (!confined.ok) {
+    const why = confined.cause === 'escapes' ? 'it links outside its location' : 'its location does not resolve';
+    return { ok: false, notice: noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: ${why}`) };
+  }
+  return { ok: true, dir: confined.path };
+}
+
+// CWE-400/770
+function scanTier(roots: CatalogRoots, tier: CatalogOrigin): TierScan {
+  const scan: TierScan = { members: [], unsafe: [], notices: [] };
+  const walkable = walkableTierDir(roots, tier);
+  if (!walkable.ok) return { ...scan, notices: [walkable.notice] };
+  let candidates: DirEntry[];
+  try {
+    candidates = readDirEntries(walkable.dir).filter((e) => !e.isFile);
+  } catch (e) {
+    return { ...scan, notices: [noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: ${errMsg(e)}`)] };
+  }
+  if (candidates.length > MAX_CATALOG_LIST_MEMBERS) {
+    scan.notices.push(noticeOf(tier, `The ${TIER_DIR_NAME[tier]} list was truncated to its first ${MAX_CATALOG_LIST_MEMBERS} members`));
+  }
+  for (const { name, isDirectory } of candidates.slice(0, MAX_CATALOG_LIST_MEMBERS)) {
+    if (!isSafeCatalogId(name)) {
+      if (isDirectory) scan.unsafe.push({ tier, name });
+      continue;
+    }
+    const res = resolveCatalogEntry(roots, name, tier);
+    if (res.ok || res.cause !== 'unknown') scan.members.push({ tier, id: name, resolvesInTier: res.ok });
+  }
+  return scan;
+}
+
+const UNSAFE_NAME_REASON = 'is not a valid flow id';
+
+// Quoted so no label can equal a safe id, which the picker keys its rows by (flowPicker.ts `entryKey`).
+const unsafeNameLabel = (name: string): string => `"${displaySafeEcho(name, MAX_CATALOG_ID_LENGTH)}"`;
+
 export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
-  const members = CATALOG_ORIGINS.flatMap((tier) => tierMembers(roots, tier));
+  const scans = CATALOG_ORIGINS.map((tier) => scanTier(roots, tier));
+  const members = scans.flatMap((s) => s.members);
   const ids = [...new Set(members.map((m) => m.id))].sort((a, b) => a.localeCompare(b));
 
   const entries: FlowCatalogEntry[] = ids.map((id) => {
@@ -38,13 +88,19 @@ export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
     const reason = catalogRefusalReason(verdict.cause === 'unknown' ? 'unresolvable' : verdict.cause);
     return { available: false, label: id, origin, reason };
   });
+  const unsafeNames = new Set<string>();
+  for (const { tier, name } of scans.flatMap((s) => s.unsafe)) {
+    if (unsafeNames.has(name)) continue;
+    unsafeNames.add(name);
+    entries.push({ available: false, label: unsafeNameLabel(name), origin: tier, reason: UNSAFE_NAME_REASON });
+  }
 
   const resumable = members.filter((m) => m.resolvesInTier).map(({ tier, id }) => ({ origin: tier, id }));
 
   const pointer = readActiveFlow(roots.worktreeDir);
   return {
     entries,
-    tierNotices: [],
+    tierNotices: scans.flatMap((s) => s.notices),
     selection: pointer.kind === 'value' ? { kind: 'value', id: pointer.id } : { kind: pointer.kind },
     hasLocalFlow: hasFlowDefinition(roots.worktreeDir),
     hasGlobalFallback: hasFlowDefinition(roots.globalRoot),

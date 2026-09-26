@@ -379,6 +379,55 @@ describe('listCatalog — unsafe names and tier confinement (§18.7.6, CWE-22/59
   });
 
   it.each([
+    ['a zero-width character', 'fine', 'fine\u200D'],
+    ['truncation', 'a'.repeat(MAX_CATALOG_ID_LENGTH), 'a'.repeat(MAX_CATALOG_ID_LENGTH + 6)],
+  ])('an unsafe name that %s would make look like a real flow id is never labelled as that id', (_how, real, unsafeName) => {
+    const w = world();
+    const repo = w.repo('a3-list-unsafe-lookalike');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), real, ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(repo), unsafeName, ['r1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(availableIds(listing)).toEqual([`global:${real}`]);
+    const labels = listing.entries.flatMap((e) => (e.available ? [] : [e.label]));
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).not.toBe(real);
+  });
+
+  it('lists two distinct unsafe names that display alike as two rows', () => {
+    const w = world();
+    const repo = w.repo('a3-list-unsafe-alike');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'Bad\u200Cname', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'Bad\u200Dname', ['g1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries.filter((e) => !e.available)).toHaveLength(2);
+  });
+
+  it('lists an unsafe name present in both tiers once, from the repo tier (§18.1 merged library, repo wins)', () => {
+    const w = world();
+    const repo = w.repo('a3-list-unsafe-both');
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'Bad_name', ['g1']);
+    catalog.addEntryWithSteps(flowCatalogDir(repo), 'Bad_name', ['r1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    const unsafe = listing.entries.filter((e) => !e.available);
+    expect(unsafe.map((e) => e.origin)).toEqual(['repo']);
+  });
+
+  it('never lists a plain file in a tier, whatever its name', () => {
+    const w = world();
+    const repo = w.repo('a3-list-stray-files');
+    catalog.addEntryWithSteps(flowCatalogDir(repo), 'r-one', ['r1']);
+    catalog.fileCatalogMember(flowCatalogDir(repo), '.DS_Store');
+    catalog.fileCatalogMember(flowCatalogDir(repo), 'Read\u202Eme');
+    catalog.fileCatalogMember(flowCatalogDir(repo), 'stray');
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries.map(nameOf)).toEqual(['r-one']);
+  });
+
+  it.each([
     ['.agent-terminal/flows', (repo: string, outside: string, _scratch: string) => {
       mkdirSync(flowHomeDir(repo), { recursive: true });
       symlinkSync(outside, flowCatalogDir(repo));
@@ -413,6 +462,19 @@ describe('listCatalog — unsafe names and tier confinement (§18.7.6, CWE-22/59
     const repo = w.repo('a3-list-at-cap');
     const tier = flowCatalogDir(repo);
     for (let i = 0; i < MAX_CATALOG_LIST_MEMBERS; i++) catalog.addEntryWithSteps(tier, `m-${String(i).padStart(6, '0')}`, ['s1']);
+
+    const listing = listed({ worktreeDir: repo, globalRoot: w.home });
+    expect(listing.entries.filter((e) => e.origin === 'repo')).toHaveLength(MAX_CATALOG_LIST_MEMBERS);
+    expect(listing.tierNotices).toEqual([]);
+  });
+
+  it('does not count stray files against MAX_CATALOG_LIST_MEMBERS', () => {
+    const w = world();
+    const repo = w.repo('a3-list-at-cap-strays');
+    const tier = flowCatalogDir(repo);
+    for (let i = 0; i < MAX_CATALOG_LIST_MEMBERS; i++) catalog.addEntryWithSteps(tier, `m-${String(i).padStart(6, '0')}`, ['s1']);
+    catalog.fileCatalogMember(tier, '.DS_Store');
+    catalog.fileCatalogMember(tier, 'README.md');
 
     const listing = listed({ worktreeDir: repo, globalRoot: w.home });
     expect(listing.entries.filter((e) => e.origin === 'repo')).toHaveLength(MAX_CATALOG_LIST_MEMBERS);

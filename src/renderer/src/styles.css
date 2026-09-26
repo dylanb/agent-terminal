@@ -604,6 +604,7 @@ button:hover { border-color:var(--dim); }
 .flowpicker .flow-picker-origin { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
 .flowpicker .flow-picker-reason { flex-basis:100%; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
 .flowpicker .flow-picker-clear { align-self:flex-start; }
+.flowpicker .flow-picker-notice { margin:0; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
 .flowpicker .flow-picker-lock { margin:0; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
 .flowpicker .flow-picker-alert { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--danger); line-height:1.35; }
 .flowpicker .flow-picker-alert:empty { min-height:0; margin:0; }

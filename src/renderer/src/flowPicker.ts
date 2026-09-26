@@ -1,6 +1,6 @@
 // §18.7.4 / §18.7.6
 
-import type { ActiveFlowWriteResult, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
+import type { ActiveFlowWriteResult, CatalogOrigin, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { captureSubtreeFocus } from './dom';
@@ -34,6 +34,8 @@ const sameRows = (a: FlowCatalogListing, b: FlowCatalogListing): boolean =>
 const UNSET: FlowCatalogSelection = { kind: 'unset' };
 
 const sameSelection = (a: FlowCatalogSelection, b: FlowCatalogSelection): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+const TIER_LABEL: Record<CatalogOrigin, string> = { repo: 'Repo flows', global: 'Global flows' };
 
 const LOCK_REASON = 'Locked until you Terminate the run';
 
@@ -306,6 +308,16 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return list;
   }
 
+  function tierNotices(listing: FlowCatalogListing): HTMLElement[] {
+    return listing.tierNotices.map(({ origin, notice }, index) => {
+      const p = doc.createElement('p');
+      p.id = `${uid}-notice-${index}`;
+      p.className = 'flow-picker-notice';
+      p.textContent = `${TIER_LABEL[origin]}: ${notice}`;
+      return p;
+    });
+  }
+
   function render(): void {
     if (disposed) return;
     const focusedKey =
@@ -324,8 +336,16 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (open && catalog.kind === 'listed') {
         const list = listbox(catalog.listing);
+        const notices = tierNotices(catalog.listing);
         button.setAttribute('aria-controls', list.id);
+        if (notices.length > 0) {
+          const noticeIds = notices.map((n) => n.id);
+          list.setAttribute('aria-describedby', noticeIds.join(' '));
+          const triggerIds = button.getAttribute('aria-describedby')?.split(' ') ?? [];
+          button.setAttribute('aria-describedby', [...triggerIds, ...noticeIds].join(' '));
+        }
         host.insertBefore(list, alert);
+        for (const notice of notices) host.insertBefore(notice, alert);
         host.insertBefore(useDefaultButton(), alert);
       }
     } finally {

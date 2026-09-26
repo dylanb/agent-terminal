@@ -240,7 +240,7 @@ describe('flow picker — select mode (AC1)', () => {
     picker.dispose();
   });
 
-  it('a refused pick announces its reason and restores the prior selection', async () => {
+  it('a refused pick announces its reason and restores the prior selection without re-pulling the listing', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
     const refusal = r.select.respondLater();
@@ -249,6 +249,7 @@ describe('flow picker — select mode (AC1)', () => {
     r.views.fire('/repo-a', neverStarted(['a1']));
     await settle();
     await ensureOpen(r.host);
+    const pullsBeforePick = r.catalog.pulls().length;
     option(r.host, 'flow-b').click();
     await settle();
     await ensureOpen(r.host);
@@ -258,6 +259,7 @@ describe('flow picker — select mode (AC1)', () => {
 
     expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
     expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('Could not save the selection: disk full');
+    expect(r.catalog.pulls()).toHaveLength(pullsBeforePick);
     expect(trigger(r.host).textContent).toBe('Flow: flow-a');
     await ensureOpen(r.host);
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
@@ -1530,6 +1532,26 @@ describe('flow picker — display duties (AC8, AC9, AC10)', () => {
 
     expect(option(r.host, 'g-one')).toBeDefined();
     expect(noticeShowing(r.host, notice, names), `a ${origin} tier notice naming its tier`).not.toHaveLength(0);
+    picker.dispose();
+  });
+
+  it('an open picker names its tier notices as the description of the list and of the trigger (WCAG 1.3.1, 4.1.2)', async () => {
+    const r = rig();
+    const notice = 'Could not read this tier: ENOTDIR';
+    r.catalog.serve('/repo-a', noticeListing([{ origin: 'repo', notice }]));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['g1']));
+    await settle();
+    await ensureOpen(r.host);
+
+    const description = (el: Element | null): string =>
+      (el?.getAttribute('aria-describedby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    expect(description(r.host.querySelector('[role="listbox"]'))).toContain(notice);
+    expect(description(trigger(r.host))).toContain(notice);
     picker.dispose();
   });
 
