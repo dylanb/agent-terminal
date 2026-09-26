@@ -10,6 +10,7 @@ import {
   type AgentState,
   type ChannelPayloads,
   type FlowCatalogListResult,
+  type RebindResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -40,6 +41,7 @@ import {
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
   isValidFlowListCatalog,
+  isValidFlowRebindHeldRun,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -79,6 +81,9 @@ import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
 import { createRunResolver } from './runResolver';
 import { createActiveFlowGate } from './activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
+import { createHeldRunRecovery, realHeldRunRecoveryDeps } from './heldRunRecovery';
+import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
+import { createPendingNotices } from './pendingNotices';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -184,6 +189,7 @@ async function createWindow(): Promise<void> {
     status: 'error',
     error: 'invalid flow request',
     runStarted: 'indeterminate',
+    runHold: { hold: 'not-held' },
   });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
@@ -318,7 +324,7 @@ async function createWindow(): Promise<void> {
   // response for the repo — consumed one-shot when that view is built — because there is no delivery-ack
   // channel to hang it on. The strip then holds it across passive re-pulls and clears it on the next
   // transition (§B.10). Keyed by repoKey; the receiver never re-derives the target (one payload = one repo).
-  const pendingNotice = new Map<string, string>();
+  const pendingNotices = createPendingNotices();
   // §27.15 — the §27 (app-namespace) work-turn engine, driving the hosted instance through its own domain
   // ports. Only one turn is ever in flight (one instance). It keeps its run state and done-file in the §27
   // loop area (AC10).
@@ -331,7 +337,7 @@ async function createWindow(): Promise<void> {
     tiers: resolveAppLoopDefTiers(iconLoc),
     repoDir,
   });
-  let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
+  let lifecycle: FlowLifecycle;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
@@ -405,7 +411,7 @@ async function createWindow(): Promise<void> {
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),
-    terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
+    terminateFlow: (repoDir) => lifecycle.terminateUnattended(repoDir),
   });
   // Watch the §27 done-file (in the §27 loop area) for the active §27 turn, key-matched so a prior turn's
   // latched file cannot complete a different one (§27.12).
@@ -534,6 +540,7 @@ async function createWindow(): Promise<void> {
   // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
   const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
   const activeFlowGate = createActiveFlowGate(worktreeLock);
+  const heldRunRecovery = createHeldRunRecovery({ lock: worktreeLock, ...realHeldRunRecoveryDeps(flowGlobalDir) });
 
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
@@ -653,7 +660,7 @@ async function createWindow(): Promise<void> {
     // §B.5 item 6 / §B.13a — the coordinator's async busy-shell refusal is not an error (the work turn runs
     // fine); stash it on the main-side carrier so it rides the next `flow:state` response for the repo.
     emitNotice: ({ repoDir, notice }) => {
-      pendingNotice.set(repoDir, notice);
+      pendingNotices.post(repoDir, notice);
       pushFlowChanged();
     },
     // §B.20a — request the turn deferred by `enterWork(…, true)`, and abandon one never triggered.
@@ -759,18 +766,25 @@ async function createWindow(): Promise<void> {
     return activity ? { ...base, loopActivity: activity } : base;
   };
 
-  terminateFlowLifecycle = (repoKey) => {
-    const { outcome, view: after } = flow.terminate(repoKey);
-    if (outcome === 'refused') return trackLoop(repoKey, withDerived(repoKey, after));
-    currentFlowEntryTokens.delete(repoKey);
-    trustedAppBootstraps.delete(repoKey);
-    audit.recordTerminate(repoKey);
-    todoStore.clear(repoKey);
-    store.clear();
-    send(CH.monitorCleared, { sessionId: SESSION_ID });
-    pushFlowChanged();
-    return trackLoop(repoKey, withDerived(repoKey, after));
-  };
+  lifecycle = createFlowLifecycle({
+    lock: worktreeLock,
+    flow,
+    recovery: heldRunRecovery,
+    pendingNotices,
+    loopTurnActive: (repoKey) => appEngine.activeRepoDir() === repoKey,
+    forgetRunEntry: (repoKey) => {
+      currentFlowEntryTokens.delete(repoKey);
+      trustedAppBootstraps.delete(repoKey);
+    },
+    recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    clearTodos: (repoKey) => todoStore.clear(repoKey),
+    clearMonitor: () => {
+      store.clear();
+      send(CH.monitorCleared, { sessionId: SESSION_ID });
+    },
+    flowChanged: pushFlowChanged,
+    presentView: (repoKey, view) => trackLoop(repoKey, withDerived(repoKey, view)),
+  });
 
   const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
     const previous = trustedAppBootstraps.get(repoKey);
@@ -856,7 +870,7 @@ async function createWindow(): Promise<void> {
         write: (state) => writeEpicPromotion(repoDir, state),
       }),
     persistAccept: (repoDir, loop, step, turnKey) => writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' }),
-    terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
+    terminateFlow: (repoDir) => lifecycle.terminateUnattended(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),
@@ -1127,10 +1141,9 @@ async function createWindow(): Promise<void> {
         const view = trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
         // §B.5 item 6 / §B.13a — a coordinator-produced async notice (busy shell at hand-off) rides exactly
         // ONE state response: attach it when this view carries none, and consume it so it is not re-sent.
-        const pending = pendingNotice.get(m.repoKey);
-        if (pending === undefined || view.notice !== undefined) return view;
-        pendingNotice.delete(m.repoKey);
-        return { ...view, notice: pending };
+        if (view.notice !== undefined) return view;
+        const pending = pendingNotices.take(m.repoKey);
+        return pending === undefined ? view : { ...view, notice: pending };
       },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
@@ -1173,7 +1186,7 @@ async function createWindow(): Promise<void> {
       // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        return terminateFlowLifecycle(m.repoKey);
+        return lifecycle.terminate(m.repoKey).view;
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
@@ -1217,6 +1230,12 @@ async function createWindow(): Promise<void> {
           return { ok: false, reason: 'invalid flow:listCatalog request' };
         }
         return catalogListResult(() => listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }));
+      },
+      [CH.flowRebindHeldRun]: (_e, m): RebindResult => {
+        if (!isValidFlowRebindHeldRun(m) || !knownRepoKeys.has(m.repoKey)) {
+          return { ok: false, reason: 'invalid flow:rebindHeldRun request' };
+        }
+        return lifecycle.rebind(m.repoKey, m.choice);
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
       [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>

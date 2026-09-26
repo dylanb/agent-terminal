@@ -19,6 +19,7 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
+import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -123,7 +124,7 @@ export interface AppLoopEngineDeps {
   /** The live loop view changed — the panel/strip re-pull. */
   onViewChanged(): void;
   /** Move the flow off the step (§27.9 abandon = flow Terminate) for the terminate route-out. */
-  terminateFlow(repoDir: string): void;
+  terminateFlow(repoDir: string): LifecycleTerminateResult;
   /** Resolve round N's report location (§27.5) — the confined absolute path the engine reads and the
    *  repo-relative path the fixer writes, from ONE resolver; null when the loop area is unresolvable. */
   resolveReportLocation(repoDir: string, round: number): { abs: string; rel: string } | null;

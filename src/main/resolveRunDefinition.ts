@@ -4,6 +4,7 @@
 import path from 'node:path';
 import {
   FLOW_DEF_FILE,
+  loadFlowDefinition,
   loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
   type FlowLoad,
@@ -29,10 +30,12 @@ type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
 
 /** §18.7.3 — the run-scoped source binding a begun run resolves instead of the live pointer. A validated closed
  *  disposition (its field-local validation is the read boundary's): a catalog run carries the tier it was bound
- *  to plus its id; a non-catalog run carries neither and keeps the live local↔global chain. */
+ *  to plus its id; a non-catalog run carries neither and keeps the live local↔global chain; a fallback run
+ *  (written only by held-run recovery) loads the global fallback alone. */
 export type DispositionRead =
   | { source: 'catalog'; tier: CatalogTier; id: string }
-  | { source: 'non-catalog' };
+  | { source: 'non-catalog' }
+  | { source: 'fallback' };
 
 /** §18.7.3/§18.7.4 — the run's binding state, folded so a begun run that IS bound carries its source: the
  *  'started' variant requires a disposition, so a supplied binding cannot wire started-ness half-way and fall
@@ -122,7 +125,8 @@ function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
   return loadFlowDefinitionFromFile(path.join(flowDir, FLOW_DEF_FILE));
 }
 
-function resolveBoundSource(
+/** §18.7.3 */
+export function resolveBoundSource(
   disposition: DispositionRead,
   catalogEntry: (id: string, tier?: CatalogTier) => CatalogResolution,
   localDir: string,
@@ -138,6 +142,8 @@ function resolveBoundSource(
     }
     case 'non-catalog':
       return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: disposition };
+    case 'fallback':
+      return { load: loadFlowDefinition(globalDir), binding: disposition };
     default:
       // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
       // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.

@@ -2,7 +2,8 @@
 // active-flow pointer write, so a second app instance cannot persist in_progress between the write gate's
 // started-ness read and the pointer write (CWE-367). The lockfile lives on the user's app-owned ground, keyed by
 // the resolved worktree path, never in the worktree itself, where a hosted agent could plant one to wedge the
-// gate. Acquisition is fail-fast and fail-closed; only stale-lock reclaim is best-effort.
+// gate. A3 (#134) T6c, operator decision: only a lock held by a live peer refuses; every other acquisition
+// failure lets the critical section run without the lock.
 
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -22,7 +23,9 @@ export interface LockHolder {
 
 export type HolderLiveness = 'dead' | 'live-matching' | 'live-mismatch' | 'unreadable';
 
-export type LockAcquire = { ok: true; release: () => void } | { ok: false; reason: string };
+export type LockRefusalCause = 'held' | 'holder-unreadable' | 'lock-unusable';
+
+export type LockAcquire = { ok: true; release: () => void } | { ok: false; cause: LockRefusalCause; reason: string };
 export type LockedResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 export interface WorktreeLockDeps {
@@ -37,8 +40,7 @@ export interface WorktreeLockDeps {
 
 export interface WorktreeLock {
   acquire(worktreeDir: string): LockAcquire;
-  /** Run `fn` holding the worktree's lock, releasing it whether `fn` returns or throws; refuses (without running
-   *  `fn`) when the lock cannot be acquired. */
+  /** Refuses without running `fn` only when the cause is `held`. */
   withWorktreeLock<T>(worktreeDir: string, fn: () => T): LockedResult<T>;
 }
 
@@ -46,7 +48,7 @@ export interface WorktreeLock {
 export const PROCESS_START_TIME_TIMEOUT_MS = 2_000;
 
 /** Bounds the acquire ↔ reclaim retry by attempt count, never by elapsed time. */
-const MAX_ACQUIRE_ATTEMPTS = 4;
+export const MAX_ACQUIRE_ATTEMPTS = 4;
 
 const HELD_REASON =
   "Another Agent Terminal window is changing this worktree's flow right now; try again in a moment.";
@@ -183,31 +185,37 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   /** Remove `file` only while it still holds the stale content observed, under a reclaim guard that is itself an
    *  exclusive create — so of two reclaimers that judged the same lock stale, the later one re-inspects the
    *  winner's live lock instead of deleting it. */
-  const reclaim = (file: string, staleText: string, self: string): void => {
+  const reclaim = (file: string, staleText: string, self: string): boolean | 'unknown' => {
     const guard = `${file}.reclaim`;
     if (!tryCreate(guard, self, writeNewFile)) {
       const guardText = readText(guard);
-      if (guardText !== null && isStale(guardText) === true) tryUnlink(guard);
-      return;
+      if (guardText === null) return true;
+      const guardStale = isStale(guardText);
+      if (guardStale === true) tryUnlink(guard);
+      return guardStale;
     }
     try {
       if (readText(file) === staleText) unlinkSync(file);
     } finally {
       tryUnlink(guard);
     }
+    return true;
   };
 
   const acquire = (worktreeDir: string): LockAcquire => {
-    const refuse = (detail?: string): LockAcquire => ({
+    const refuse = (cause: LockRefusalCause, detail?: string): LockAcquire => ({
       ok: false,
-      reason: detail === undefined ? HELD_REASON : `The worktree lock could not be taken: ${detail}`,
+      cause,
+      reason: cause === 'held' ? HELD_REASON : `The worktree lock could not be taken: ${detail}`,
     });
     const jail = resolveOwnedDirJail(deps.lockRoot);
     const file = jail === null ? null : confinedRealPath(jail, worktreeLockFile(deps.lockRoot, worktreeDir));
-    if (file === null) return refuse('the lock directory is unresolvable');
+    if (file === null) return refuse('lock-unusable', 'the lock directory is unresolvable');
     const self = serializeLockHolder(currentLockHolder());
+    let sawLive = false;
+    let sawUnreadable = false;
     try {
-      if (!isRealContainer(path.dirname(file))) return refuse('the lock directory is not a real directory');
+      if (!isRealContainer(path.dirname(file))) return refuse('lock-unusable', 'the lock directory is not a real directory');
       mkdirSync(path.dirname(file), { recursive: true });
       for (let attempt = 0; attempt < MAX_ACQUIRE_ATTEMPTS; attempt++) {
         if (tryCreate(file, self, writeNewFile)) {
@@ -221,22 +229,34 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
           };
         }
         const text = readText(file);
-        if (text === null) continue;
-        if (isStale(text) !== true) return refuse();
+        if (text === null) {
+          sawLive = true;
+          continue;
+        }
+        const stale = isStale(text);
+        if (stale === false) return refuse('held');
+        if (stale === 'unknown') return refuse('holder-unreadable', "the lock holder's identity could not be read");
         deps.beforeReclaim?.();
-        reclaim(file, text, self);
+        const guard = reclaim(file, text, self);
+        if (guard === false) sawLive = true;
+        else if (guard === 'unknown') sawUnreadable = true;
       }
     } catch (e) {
-      return refuse(errMsg(e));
+      return refuse('lock-unusable', errMsg(e));
     }
-    return refuse();
+    if (sawLive) return refuse('held');
+    if (sawUnreadable) return refuse('holder-unreadable', "the lock holder's identity could not be read");
+    return refuse('lock-unusable', 'every stale-lock reclaim was lost');
   };
 
   return {
     acquire,
     withWorktreeLock(worktreeDir, fn) {
       const got = acquire(worktreeDir);
-      if (!got.ok) return got;
+      if (!got.ok) {
+        if (got.cause === 'held') return { ok: false, reason: got.reason };
+        return { ok: true, value: fn() };
+      }
       try {
         return { ok: true, value: fn() };
       } finally {

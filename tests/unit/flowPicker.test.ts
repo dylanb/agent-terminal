@@ -8,7 +8,14 @@ import { createFlowPicker, type FlowPickerDeps } from '../../src/renderer/src/fl
 import { createFlowStrip, type FlowStripDeps } from '../../src/renderer/src/flowStrip';
 import { createShell } from '../../src/renderer/src/shell';
 import type { FlowViewArgs } from '../../src/renderer/src/flowView';
-import type { ActiveFlowWriteResult, FlowCatalogListResult, FlowCatalogSelection, FlowStateView } from '../../src/shared/ipc';
+import type {
+  ActiveFlowWriteResult,
+  FlowCatalogListResult,
+  FlowCatalogSelection,
+  FlowStateView,
+  RebindChoice,
+  RebindResult,
+} from '../../src/shared/ipc';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker organism in select mode. It follows the worktree of each view
@@ -75,6 +82,7 @@ function rig(views = createFeed<FlowViewArgs>()) {
   const catalog = createCatalog();
   const select = createScriptedAsync<[string, string], ActiveFlowWriteResult>();
   const clearSelection = createScriptedAsync<[string], ActiveFlowWriteResult>();
+  const rebindHeldRun = createScriptedAsync<[string, RebindChoice], RebindResult>();
   const deps: FlowPickerDeps = {
     onView: (cb) => views.subscribe(cb),
     listCatalog: (repoKey) => catalog.listCatalog(repoKey),
@@ -88,9 +96,10 @@ function rig(views = createFeed<FlowViewArgs>()) {
       if (result.ok) catalog.clear(repoKey);
       return result;
     },
+    rebindHeldRun: (repoKey, choice) => rebindHeldRun.call(repoKey, choice),
   };
   const host = document.body.appendChild(document.createElement('div'));
-  return { views, catalog, select, clearSelection, deps, host };
+  return { views, catalog, select, clearSelection, rebindHeldRun, deps, host };
 }
 
 const settle = async (): Promise<void> => {
@@ -1590,5 +1599,322 @@ describe('flow picker — display duties (AC8, AC9, AC10)', () => {
     expect(r.host.textContent ?? '').not.toContain(reason);
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).not.toBe('true');
     picker.dispose();
+  });
+});
+
+describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
+  const heldView = (
+    hold: 'record-missing' | 'record-unreadable',
+    step = 's2',
+    status: 'in_progress' | 'done' = 'in_progress',
+  ): FlowStateView =>
+    viewOf({
+      status: 'error',
+      steps: [],
+      stepName: '',
+      total: 0,
+      error: 'This run cannot continue: its run record cannot be used',
+      runStarted: 'started',
+      runHold: { hold, step, status },
+    });
+
+  const recoveryListing = (over: { hasLocalFlow?: boolean; hasGlobalFallback?: boolean } = {}): FlowCatalogListResult => ({
+    ok: true,
+    listing: {
+      entries: [
+        { available: true, id: 'alpha-flow', origin: 'repo' },
+        { available: true, id: 'beta-flow', origin: 'global' },
+        { available: true, id: 'stale-flow', origin: 'repo' },
+        { available: false, label: 'escaping-flow', origin: 'repo', reason: 'escapes its tier' },
+      ],
+      tierNotices: [{ origin: 'global', notice: 'could not be read' }],
+      selection: { kind: 'value', id: 'beta-flow' },
+      hasLocalFlow: over.hasLocalFlow ?? true,
+      hasGlobalFallback: over.hasGlobalFallback ?? true,
+      resumable: [
+        { origin: 'repo', id: 'alpha-flow' },
+        { origin: 'global', id: 'beta-flow' },
+        { origin: 'global', id: 'shadowed-flow' },
+      ],
+    },
+  });
+
+  const recoverControl = (host: HTMLElement): HTMLButtonElement | undefined =>
+    [...host.querySelectorAll('button')].find((b) => /recover/i.test(`${b.textContent ?? ''} ${b.getAttribute('aria-label') ?? ''}`));
+
+  async function openRecovery(host: HTMLElement): Promise<void> {
+    const control = recoverControl(host);
+    expect(control, 'a held view offers a recovery control').toBeDefined();
+    expect(control!.disabled).toBe(false);
+    control!.click();
+    await settle();
+  }
+
+  const optionText = (host: HTMLElement): string[] => options(host).map((o) => (o.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+  async function heldRig(view: FlowStateView, listing = recoveryListing()) {
+    const r = rig();
+    r.catalog.serve('/repo-a', listing);
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', view);
+    await settle();
+    return { ...r, picker };
+  }
+
+  it('a record-missing hold says the record is missing and names the step and status a resume would continue (AC14)', async () => {
+    const r = await heldRig(heldView('record-missing', 'review-step', 'in_progress'));
+    await openRecovery(r.host);
+
+    const shown = r.host.textContent ?? '';
+    expect(shown).toMatch(/missing/i);
+    expect(shown).not.toMatch(/unreadable/i);
+    expect(shown).toContain('review-step');
+    expect(shown).toMatch(/in progress/i);
+    r.picker.dispose();
+  });
+
+  it('a record-unreadable hold says the record is unreadable, never missing, with a done status (AC14)', async () => {
+    const r = await heldRig(heldView('record-unreadable', 's3', 'done'));
+    await openRecovery(r.host);
+
+    const shown = r.host.textContent ?? '';
+    expect(shown).toMatch(/unreadable/i);
+    expect(shown).not.toMatch(/missing/i);
+    expect(shown).toContain('s3');
+    expect(shown).toMatch(/done/i);
+    r.picker.dispose();
+  });
+
+  it('lists the local flow, the resumable repo and global entries, and the global fallback, each labelled with its origin (AC14)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+
+    const rows = optionText(r.host);
+    expect(rows.some((t) => /local|this worktree/i.test(t))).toBe(true);
+    expect(rows.find((t) => t.includes('alpha-flow'))).toMatch(/repo/i);
+    expect(rows.find((t) => t.includes('alpha-flow'))).not.toMatch(/global/i);
+    expect(rows.find((t) => t.includes('beta-flow'))).toMatch(/global/i);
+    expect(rows.find((t) => t.includes('beta-flow'))).not.toMatch(/repo/i);
+    expect(rows.find((t) => t.includes('shadowed-flow'))).toMatch(/global/i);
+    expect(rows.some((t) => /fallback/i.test(t))).toBe(true);
+    r.picker.dispose();
+  });
+
+  it('offers no local row without a local flow.yaml and no fallback row without a global fallback (AC14)', async () => {
+    const r = await heldRig(heldView('record-missing'), recoveryListing({ hasLocalFlow: false, hasGlobalFallback: false }));
+    await openRecovery(r.host);
+
+    const rows = optionText(r.host);
+    expect(rows.some((t) => t.includes('beta-flow'))).toBe(true);
+    expect(rows.some((t) => /local|this worktree/i.test(t))).toBe(false);
+    expect(rows.some((t) => /fallback/i.test(t))).toBe(false);
+    r.picker.dispose();
+  });
+
+  it('shows unavailable entries with their reason and the tier notices, as select mode does (AC8, AC9)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+
+    const unavailable = option(r.host, 'escaping-flow');
+    expect(unavailable.getAttribute('aria-disabled')).toBe('true');
+    expect(unavailable.textContent).toContain('escapes its tier');
+    expect(r.host.textContent ?? '').toMatch(/global flows?: could not be read/i);
+    r.picker.dispose();
+  });
+
+  it('offers only resumable entries as choices: an unavailable row and an available but non-resumable entry rebind nothing', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+
+    for (const id of ['escaping-flow', 'stale-flow']) {
+      const row = options(r.host).find((o) => (o.textContent ?? '').includes(id));
+      if (row === undefined) continue;
+      expect(row.getAttribute('aria-disabled')).toBe('true');
+      row.click();
+      await settle();
+    }
+
+    expect(r.rebindHeldRun.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it('a held view over a failed listing keeps Retry enabled, and a Retry that lists makes recovery available (AC14)', async () => {
+    const r = await heldRig(heldView('record-missing'), { ok: false, reason: 'Could not list flows: boom' });
+
+    const control = recoverControl(r.host);
+    expect(control, 'a held view offers a recovery control').toBeDefined();
+    expect(control!.getAttribute('aria-disabled')).toBe('true');
+    control!.click();
+    await settle();
+    expect(options(r.host)).toEqual([]);
+
+    const retry = [...r.host.querySelectorAll('button')].find((b) => /retry/i.test(b.textContent ?? ''));
+    expect(retry, 'a failed listing offers Retry').toBeDefined();
+    expect(retry!.disabled).toBe(false);
+
+    r.catalog.serve('/repo-a', recoveryListing());
+    retry!.click();
+    await settle();
+    expect(recoverControl(r.host)!.getAttribute('aria-disabled')).not.toBe('true');
+    await openRecovery(r.host);
+    option(r.host, 'alpha-flow').click();
+    await settle();
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }]]);
+    r.picker.dispose();
+  });
+
+  it('a held view offers no way to change the selection outside recovery (AC6)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    const recover = recoverControl(r.host);
+    expect(recover, 'a held view offers a recovery control').toBeDefined();
+
+    const others = [...r.host.querySelectorAll('button')].filter((b) => b !== recover);
+    for (const b of others) {
+      expect(b.disabled || b.getAttribute('aria-disabled') === 'true').toBe(true);
+      b.click();
+      await settle();
+    }
+    for (const o of options(r.host)) {
+      o.click();
+      await settle();
+    }
+
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it.each<[string, (rows: HTMLElement[]) => HTMLElement | undefined, RebindChoice]>([
+    ['a global entry', (rows) => rows.find((o) => (o.textContent ?? '').includes('beta-flow')), { origin: 'global', id: 'beta-flow' }],
+    ['a repo entry', (rows) => rows.find((o) => (o.textContent ?? '').includes('alpha-flow')), { origin: 'repo', id: 'alpha-flow' }],
+    ['the local flow', (rows) => rows.find((o) => /local|this worktree/i.test(o.textContent ?? '')), { origin: 'local' }],
+    ['the global fallback', (rows) => rows.find((o) => /fallback/i.test(o.textContent ?? '')), { origin: 'fallback' }],
+  ])("choosing %s asks to rebind the shown worktree's held run onto it", async (_label, find, choice) => {
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: true, outcome: 'resumed' });
+    await openRecovery(r.host);
+
+    const row = find(options(r.host));
+    expect(row, 'the row is offered').toBeDefined();
+    row!.click();
+    await settle();
+
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', choice]]);
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it('a refused rebind announces its reason and leaves recovery offered (AC17)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: false, reason: 'Recovering onto a flow is not available in this build' });
+    await openRecovery(r.host);
+
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('Recovering onto a flow is not available in this build');
+    expect(recoverControl(r.host)?.disabled).toBe(false);
+    r.picker.dispose();
+  });
+
+  it('a refused rebind echoes a display-sanitized, length-bounded reason (§18.7.6)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: false, reason: `bad\u202Ename\u200B${'x'.repeat(500)}` });
+    await openRecovery(r.host);
+
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    const text = r.host.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(text).toMatch(/bad\s*name/);
+    expect(text).not.toMatch(/[\u202E\u200B]/u);
+    expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    r.picker.dispose();
+  });
+
+  it('opening the recovery list and dismissing it writes nothing and leaves recovery offered (AC16)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+    expect(options(r.host).filter((o) => o.getAttribute('aria-disabled') !== 'true').length).toBeGreaterThan(0);
+
+    (document.activeElement ?? r.host).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await settle();
+
+    expect(options(r.host)).toEqual([]);
+    expect(r.rebindHeldRun.calls()).toEqual([]);
+    expect(r.select.calls()).toEqual([]);
+    expect(r.clearSelection.calls()).toEqual([]);
+    expect(recoverControl(r.host)?.disabled).toBe(false);
+    r.picker.dispose();
+  });
+
+  it('a view for another worktree that is not held withdraws recovery, so no row rebinds the held one (AC17, §6)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.catalog.serve('/repo-b', listingOf(['flow-b'], 'flow-b'));
+    await openRecovery(r.host);
+
+    r.views.fire('/repo-b', { ...neverStarted(['b1']), runHold: { hold: 'not-held' } });
+    await settle();
+
+    expect(recoverControl(r.host)).toBeUndefined();
+    for (const o of options(r.host)) {
+      o.click();
+      await settle();
+    }
+    expect(r.rebindHeldRun.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it('a later not-held view of the same worktree withdraws recovery (AC17)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+
+    r.views.fire('/repo-a', { ...neverStarted(['s1']), runHold: { hold: 'not-held' } });
+    await settle();
+
+    expect(recoverControl(r.host)).toBeUndefined();
+    for (const o of options(r.host)) {
+      o.click();
+      await settle();
+    }
+    expect(r.rebindHeldRun.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it("a rebind answer that lands after the view moved to another worktree never shows on that worktree (§6)", async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.catalog.serve('/repo-b', listingOf(['flow-b'], 'flow-b'));
+    const late = r.rebindHeldRun.respondLater();
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }]]);
+
+    r.views.fire('/repo-b', { ...neverStarted(['b1']), runHold: { hold: 'not-held' } });
+    await settle();
+    late.resolve({ ok: false, reason: 'Refused for repo-a only' });
+    await settle();
+
+    expect(r.host.textContent ?? '').not.toContain('Refused for repo-a only');
+    r.picker.dispose();
+  });
+
+  it('an indeterminate error view offers no recovery, only the locked picker (AC17)', async () => {
+    const r = await heldRig(
+      viewOf({
+        status: 'error',
+        steps: [],
+        stepName: '',
+        total: 0,
+        error: 'The run state could not be verified',
+        runStarted: 'indeterminate',
+        runHold: { hold: 'not-held' },
+      }),
+    );
+
+    expect(recoverControl(r.host)).toBeUndefined();
+    expect(trigger(r.host).disabled).toBe(true);
+    r.picker.dispose();
   });
 });

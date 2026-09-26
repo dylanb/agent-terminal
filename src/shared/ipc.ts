@@ -6,6 +6,7 @@ import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
 import type { StartednessSignal } from './flowStarted';
+import type { HeldRunView } from './runHold';
 
 export type SessionId = string;
 
@@ -55,6 +56,7 @@ export const CH = {
   flowSetActiveFlow: 'flow:setActiveFlow',
   flowClearActiveFlow: 'flow:clearActiveFlow',
   flowListCatalog: 'flow:listCatalog',
+  flowRebindHeldRun: 'flow:rebindHeldRun',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -612,6 +614,8 @@ export interface FlowStateView {
    *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
    *  through `isSelectionLocked` (shared/flowStarted.ts). */
   runStarted: StartednessSignal;
+  /** §18.7.3 */
+  runHold?: HeldRunView;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
@@ -772,6 +776,18 @@ export interface FlowCatalogListing {
 }
 
 export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | { ok: false; reason: string };
+
+/** §18.7.3 */
+export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
+
+export type RebindResult = { ok: true; outcome: 'resumed' | 'terminated'; notice?: string } | { ok: false; reason: string };
+
+/** §6 */
+export interface FlowRebindHeldRunMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  choice: RebindChoice;
+}
 
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
  *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
@@ -1109,6 +1125,8 @@ export interface FlowApi {
   clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
   /** §18.7.6 */
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
+  /** §18.7.3 */
+  rebindHeldRun(repoKey: string, choice: RebindChoice): Promise<RebindResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import type { LifecycleTerminateResult } from '../../src/main/flowLifecycle';
+import type { FlowStateView } from '../../src/shared/ipc';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -82,7 +84,7 @@ const completionPredicatesSentinel: LoopCompletionPredicates = {
 let recordChangedTestsImpl: (repoDir: string, step: string, paths: readonly string[]) => void;
 let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
 let emitError: Mock<(reason: string) => void>;
-let terminateFlow: Mock<(repoDir: string) => void>;
+let terminateFlow: Mock<(repoDir: string) => LifecycleTerminateResult>;
 let armTimer: Mock<() => void>;
 let cancelTimer: Mock<() => void>;
 let readArtifact: Mock<(p: string) => string | null>;
@@ -164,7 +166,7 @@ function makeEngine(
 ): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
-  terminateFlow = vi.fn();
+  terminateFlow = vi.fn(() => ({ outcome: 'reset' as const, view: {} as FlowStateView }));
   armTimer = vi.fn();
   cancelTimer = vi.fn();
   injected = [];

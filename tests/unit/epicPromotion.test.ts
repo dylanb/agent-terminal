@@ -3,6 +3,7 @@ import { createEpicPromotionCoordinator, promotionRecordStale, type EpicGateOutc
 import { gateDecisionAuditCmd } from '../../src/shared/audit';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { EpicSubTicket } from '../../src/shared/epicPlan';
+import type { FlowStateView } from '../../src/shared/ipc';
 
 // §28.7 — the epic-promotion coordinator: a gate-decision-time confirm-first hold (mirrors the §27.10
 // bootstrap-conflict coordinator's held/resolve pattern).
@@ -25,7 +26,7 @@ function harness(over: Partial<EpicPromotionCoordinatorDeps> = {}) {
     emitPreview: vi.fn(),
     runPromotion: vi.fn(() => Promise.resolve()),
     persistAccept: vi.fn(),
-    terminateFlow: vi.fn(),
+    terminateFlow: vi.fn(() => ({ outcome: 'reset' as const, view: {} as FlowStateView })),
     audit: vi.fn(),
     emitError: vi.fn(),
     onViewChanged: vi.fn(),
@@ -246,6 +247,24 @@ describe('resolve — complete the held promotion (§28.7)', () => {
     await coord.resolve('/repo', 'plan-bundle', true);
     expect(deps.persistAccept).toHaveBeenCalled(); // the gate is accepted
     expect(deps.emitError).not.toHaveBeenCalledWith('/repo', expect.stringContaining('epic promotion failed'));
+  });
+
+  it.each(['locked', 'failed'] as const)('A3 T6b: a Terminate refused as %s records the "terminate failed" audit entry with its reason', async (cause) => {
+    const { deps, coord } = harness({
+      terminateFlow: vi.fn(() => ({ outcome: 'refused' as const, cause, reason: 'a peer holds the worktree lock', view: {} as FlowStateView })),
+    });
+    begin(coord);
+    await coord.resolve('/repo', 'plan-bundle', true);
+    expect(deps.audit).toHaveBeenCalledWith('/repo', expect.stringMatching(/terminate failed.*a peer holds the worktree lock/), 1);
+  });
+
+  it('A3 T6b: a Terminate refused as not-begun records no "terminate failed" entry (nothing needed terminating)', async () => {
+    const { deps, coord } = harness({
+      terminateFlow: vi.fn(() => ({ outcome: 'refused' as const, cause: 'not-begun' as const, view: {} as FlowStateView })),
+    });
+    begin(coord);
+    await coord.resolve('/repo', 'plan-bundle', true);
+    expect(deps.audit).not.toHaveBeenCalledWith(expect.anything(), expect.stringMatching(/terminate failed/), expect.anything());
   });
 });
 

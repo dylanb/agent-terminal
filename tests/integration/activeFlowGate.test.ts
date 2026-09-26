@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowManager } from '../../src/main/flow';
@@ -14,11 +14,12 @@ import {
   worktreeLockFile,
   type WorktreeLock,
 } from '../../src/main/worktreeLock';
+import { tryPeerLockDuring } from '../helpers/lockDevices';
 
 // A2 (#133) §18.7.4 AC7/AC11 — the composed write gate: a new active-flow selection (set or clear) is permitted
 // ONLY while the run has never started; it is refused once the run has begun, and (fail-closed, CWE-841) while
 // begun-ness is indeterminate; a first-step revertStep keeps it locked. The write is serialized under the
-// cross-process worktree lock and refused when that lock cannot be taken. Observable behavior over real fixtures:
+// cross-process worktree lock and refused only while a live peer holds it (A3 #134 T6c). Observable behavior over real fixtures:
 // a refused write leaves active-flow.yaml byte-for-byte unchanged (§18.7.2 AC8).
 describe('createActiveFlowGate — the AC7 started-ness write gate under the AC11 worktree lock (§18.7.4)', () => {
   const fx = createWorktreeFixture();
@@ -128,7 +129,7 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
   it('refuses with a visible reason when the worktree lock is held by a live peer, leaving the pointer unchanged (AC11)', () => {
     const wt = fx.makeWorktree('a2-gate-lock-held');
     const lockRoot = lockRootFor();
-    const gate = gateFor(createWorktreeLock({ lockRoot }));
+    const gate = gateFor(createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }));
     gate.set(wt, 'first');
     const before = readFileSync(activeFlowPointerFile(wt));
     const lockFile = worktreeLockFile(lockRoot, wt);
@@ -140,6 +141,63 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toMatch(/\S/);
     expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+  });
+
+  describe('only a lock held by a live peer blocks the write (A3 #134 T6c)', () => {
+    it('a peer holder whose identity cannot be read does not block the write, and its lockfile is unchanged', () => {
+      const wt = fx.makeWorktree('a3-gate-unreadable-holder');
+      const lockRoot = lockRootFor();
+      const lockFile = worktreeLockFile(lockRoot, wt);
+      mkdirSync(dirname(lockFile), { recursive: true });
+      writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
+      const before = readFileSync(lockFile);
+
+      const res = gateFor(createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable' })).set(wt, 'picked');
+
+      expect(res).toEqual({ ok: true });
+      expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'picked' });
+      expect(readFileSync(lockFile)).toEqual(before);
+    });
+
+    it('a lock root that is a regular file does not block the write, and the file is unchanged', () => {
+      const wt = fx.makeWorktree('a3-gate-lock-unusable');
+      const lockRoot = lockRootFor();
+      mkdirSync(dirname(lockRoot), { recursive: true });
+      writeFileSync(lockRoot, 'not a directory\n');
+
+      const res = gateFor(createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' })).set(wt, 'picked');
+
+      expect(res).toEqual({ ok: true });
+      expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'picked' });
+      expect(readFileSync(lockRoot, 'utf8')).toBe('not a directory\n');
+    });
+
+    const probedGate = (lockRoot: string, wt: string) => {
+      const probe = tryPeerLockDuring(lockRoot, wt);
+      const real = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
+      const probing: WorktreeLock = {
+        acquire: (dir) => real.acquire(dir),
+        withWorktreeLock: (dir, fn) => real.withWorktreeLock(dir, probe.wrap(fn)),
+      };
+      return { gate: createActiveFlowGate(probing), probe };
+    };
+
+    it.each([
+      ['a deleted lock root', (lockRoot: string) => rmSync(lockRoot, { recursive: true, force: true })],
+      ['a deleted app home', (lockRoot: string) => rmSync(dirname(lockRoot), { recursive: true, force: true })],
+    ] as const)('with %s the lock is rebuilt and really held while the pointer is written', (_label, remove) => {
+      const wt = fx.makeWorktree('a3-gate-rebuild');
+      const lockRoot = lockRootFor();
+      mkdirSync(lockRoot, { recursive: true });
+      remove(lockRoot);
+      const { gate, probe } = probedGate(lockRoot, wt);
+
+      expect(gate.set(wt, 'picked')).toEqual({ ok: true });
+
+      expect(probe.observed()).not.toHaveLength(0);
+      for (const attempt of probe.observed()) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
+      expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'picked' });
+    });
   });
 
   it('reads started-ness INSIDE the lock: a flow:start that lands just before the lock is granted refuses the write', () => {

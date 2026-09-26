@@ -7,9 +7,11 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import { join } from 'node:path';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import type { RebindChoice } from '../../src/shared/ipc';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
@@ -346,7 +348,7 @@ test('AC10: an over-long hostile pointer with a local flow.yaml shows a clean, b
     harness.seedGlobalFallback(['fallback-first']);
     const repo = harness.repo('agent-term-e2e-a3-ac10-');
     harness.seedLocalFlow(repo, ['local-first']);
-    fx.writePointer(repo, `"${'z'.repeat(120)}\\u202Ebidi\\u200Bzwsp\\abell"\n`);
+    fx.writePointer(repo, `"zz\\u202Ebidi\\u200Bzwsp\\abell${'z'.repeat(120)}"\n`);
 
     const page = await harness.launch();
     await harness.cdInto(repo);
@@ -459,4 +461,214 @@ test('AC18: a non-file at the pointer path shows the flow-load error, and "use t
   } finally {
     fx.cleanup();
   }
+});
+
+const recoverControl = (page: Page): Locator => pickerHost(page).getByRole('button', { name: /recover/i });
+const NO_CURRENT_STEP = /does not contain the current step/i;
+const flowStation = (page: Page, i: number): Locator => page.locator('#flow-strip .flow.vert .stn').nth(i);
+
+/** Every picker button other than the recovery control is disabled: a held run's selection changes only through
+ *  recovery (AC6). */
+async function expectOnlyRecoveryEnabled(page: Page): Promise<void> {
+  const buttons = pickerHost(page).getByRole('button');
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const b = buttons.nth(i);
+    const name = `${(await b.textContent()) ?? ''} ${(await b.getAttribute('aria-label')) ?? ''}`;
+    if (!/recover/i.test(name)) await expect(b).toBeDisabled();
+  }
+}
+
+/** The three run files a rebind may touch, as bytes (null when absent), so "nothing changed" is a byte compare. */
+function runFiles(repo: string): (string | null)[] {
+  return [join(flowHomeDir(repo), 'flow-state.yaml'), runDispositionFile(repo), activeFlowPointerFile(repo)].map((f) =>
+    existsSync(f) ? readFileSync(f).toString('base64') : null,
+  );
+}
+
+/** A repo whose run began at step `s2` and whose run record is then missing: a held run. */
+function seedHeldRepo(harness: FlowPickerHarness, prefix: string): string {
+  harness.seedGlobalEntry('resume-flow', ['s1', 's2', 's3']);
+  harness.seedGlobalEntry('no-s2-flow', ['x1', 'x2']);
+  harness.seedGlobalFallback(['s1', 's2']);
+  const repo = harness.repo(prefix);
+  harness.seedRepoEntry(repo, 'alpha-flow', ['s1', 's2']);
+  harness.seedLocalFlow(repo, ['s1', 's2']);
+  const wt = createWorktreeFixture();
+  wt.writeFlowState(repo, { step: 's2', status: 'in_progress' });
+  wt.removeRunRecord(repo);
+  return repo;
+}
+
+test('AC14/AC16: a held run with a missing record offers recovery naming the step and every origin, and dismissing it changes nothing', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const repo = seedHeldRepo(harness, 'agent-term-e2e-a3-held-missing-');
+  const before = runFiles(repo);
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await expect(flowTerminate(page)).toBeVisible();
+
+  await expect(recoverControl(page)).toBeEnabled({ timeout: 10_000 });
+  await expectOnlyRecoveryEnabled(page);
+  await recoverControl(page).click();
+  await expect(pickerHost(page)).toContainText(/missing/i);
+  await expect(pickerHost(page)).not.toContainText(/unreadable/i);
+  await expect(pickerHost(page)).toContainText('s2');
+  await expect(pickerHost(page)).toContainText(/in progress/i);
+  const rows = pickerHost(page).getByRole('option');
+  await expect(rows.filter({ hasText: /local|this worktree/i })).toHaveCount(1);
+  await expect(rows.filter({ hasText: 'alpha-flow' })).toContainText(/repo/i);
+  await expect(rows.filter({ hasText: 'alpha-flow' })).not.toContainText(/global/i);
+  await expect(rows.filter({ hasText: 'resume-flow' })).toContainText(/global/i);
+  await expect(rows.filter({ hasText: /fallback/i })).toHaveCount(1);
+
+  await page.keyboard.press('Escape');
+  await expect(pickerHost(page).getByRole('option')).toHaveCount(0);
+  await expect(flowError(page)).toBeVisible();
+  await expect(flowTerminate(page)).toBeVisible();
+  await expect(recoverControl(page)).toBeEnabled();
+  expect(runFiles(repo)).toEqual(before);
+
+  await recoverControl(page).click();
+  await pickerHost(page).getByRole('option').filter({ hasText: 'no-s2-flow' }).click();
+  await expect(pickerAlert(page)).toContainText(NO_CURRENT_STEP, { timeout: 10_000 });
+  await expect(flowError(page)).toBeVisible();
+  await expect(flowTerminate(page)).toBeVisible();
+  await expect(recoverControl(page)).toBeEnabled();
+  expect(runFiles(repo)).toEqual(before);
+});
+
+test('AC14: a held run with a garbage record says the record is unreadable', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const repo = seedHeldRepo(harness, 'agent-term-e2e-a3-held-garbage-');
+  createWorktreeFixture().writeRunRecordRaw(repo, '[unterminated flow sequence');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await expect(recoverControl(page)).toBeEnabled({ timeout: 10_000 });
+  await recoverControl(page).click();
+  await expect(pickerHost(page)).toContainText(/unreadable/i);
+  await expect(pickerHost(page)).not.toContainText(/missing/i);
+});
+
+test('AC17: a corrupt progression offers Terminate but no recovery, and the picker stays locked', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('corrupt-held-flow', ['s1', 's2']);
+  const repo = harness.repo('agent-term-e2e-a3-held-corrupt-');
+  const wt = createWorktreeFixture();
+  wt.writeFlowStateRaw(repo, '[unterminated flow sequence');
+  wt.removeRunRecord(repo);
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await expect(flowTerminate(page)).toBeVisible();
+  await expect(pickerTrigger(page)).toBeDisabled({ timeout: 10_000 });
+  await expect(recoverControl(page)).toHaveCount(0);
+});
+
+test('AC17: flow:rebindHeldRun reaches recovery for an entered held worktree, and is refused before it for one the app never entered or a malformed choice, changing nothing (§6 resource identity)', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const never = seedHeldRepo(harness, 'agent-term-e2e-a3-rebind-unregistered-');
+  const entered = harness.repo('agent-term-e2e-a3-rebind-entered-');
+  const enteredRun = createWorktreeFixture();
+  enteredRun.writeFlowState(entered, { step: 's2', status: 'in_progress' });
+  enteredRun.removeRunRecord(entered);
+  const before = runFiles(never);
+  const enteredBefore = runFiles(entered);
+
+  const page = await harness.launch();
+  await harness.cdInto(entered);
+
+  const rebind = (rk: string, choice: unknown = { origin: 'global', id: 'resume-flow' }): Promise<unknown> =>
+    page.evaluate(([key, c]) => window.flow.rebindHeldRun(key, c as RebindChoice), [rk, choice] as const);
+  const refused = { ok: false, reason: expect.stringMatching(/\S/) };
+
+  expect(await rebind('relative/path')).toMatchObject(refused);
+  expect(await rebind(entered, { origin: 'global', id: '../escape' })).toMatchObject(refused);
+  expect(runFiles(entered)).toEqual(enteredBefore);
+  expect(await rebind(never)).toMatchObject(refused);
+  expect(runFiles(never)).toEqual(before);
+
+  expect(await rebind(entered)).toEqual({ ok: true, outcome: 'resumed' });
+  const [progression, , pointer] = runFiles(entered);
+  expect([progression, pointer]).toEqual([enteredBefore[0], enteredBefore[2]]);
+  expect(readRunBinding(entered)).toEqual({ source: 'catalog', tier: 'global', id: 'resume-flow' });
+});
+
+/** A repo whose run began at step `s2`, with no local flow.yaml, whose run record is then damaged by `damage`. */
+function seedHeldRunWithoutLocal(harness: FlowPickerHarness, prefix: string, damage: (repo: string) => void): string {
+  harness.seedGlobalEntry('resume-flow', ['s1', 's2', 's3']);
+  harness.seedGlobalEntry('other-flow', ['o1', 'o2']);
+  harness.seedGlobalFallback(['s1', 's2', 'fallback-3']);
+  const repo = harness.repo(prefix);
+  createWorktreeFixture().writeFlowState(repo, { step: 's2', status: 'in_progress' });
+  damage(repo);
+  return repo;
+}
+
+async function recoverOnto(page: Page, row: RegExp | string): Promise<void> {
+  await expect(recoverControl(page)).toBeEnabled({ timeout: 10_000 });
+  await recoverControl(page).click();
+  await pickerHost(page).getByRole('option').filter({ hasText: row }).click();
+}
+
+test('AC12/AC15: a held run with a missing record resumes onto a catalog flow at its step, and stays on it across a relaunch despite a changed pointer and an added local flow.yaml', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const repo = seedHeldRunWithoutLocal(harness, 'agent-term-e2e-a3-resume-catalog-', (r) => createWorktreeFixture().removeRunRecord(r));
+  const [progressionBefore] = runFiles(repo);
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await recoverOnto(page, 'resume-flow');
+
+  await expect(harness.stepName(3)).toHaveText('s3', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('s2');
+  await expect(flowStation(page, 2)).toHaveClass(/\bactive\b/);
+  await expect(flowError(page)).toHaveCount(0);
+  expect(runFiles(repo)[0]).toEqual(progressionBefore);
+  expect(existsSync(activeFlowPointerFile(repo))).toBe(false);
+
+  await harness.close();
+  harness.selectFlow(repo, 'other-flow');
+  harness.seedLocalFlow(repo, ['s1', 's2']);
+  const relaunched = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(3)).toHaveText('s3', { timeout: 10_000 });
+  await expect(flowStation(relaunched, 2)).toHaveClass(/\bactive\b/);
+});
+
+test('AC13/AC15: a held run with a garbage record resumes onto the global fallback, and stays on it across a relaunch despite a changed pointer and an added local flow.yaml', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const repo = seedHeldRunWithoutLocal(harness, 'agent-term-e2e-a3-resume-fallback-', (r) =>
+    createWorktreeFixture().writeRunRecordRaw(r, '[unterminated flow sequence'),
+  );
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await recoverOnto(page, /fallback/i);
+
+  await expect(harness.stepName(3)).toHaveText('fallback-3', { timeout: 10_000 });
+  await expect(flowStation(page, 2)).toHaveClass(/\bactive\b/);
+  await expect(flowError(page)).toHaveCount(0);
+  expect(readRunBinding(repo)).toEqual({ source: 'fallback' });
+
+  await harness.close();
+  harness.selectFlow(repo, 'resume-flow');
+  harness.seedLocalFlow(repo, ['s1', 's2']);
+  const relaunched = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(3)).toHaveText('fallback-3', { timeout: 10_000 });
+  await expect(flowStation(relaunched, 2)).toHaveClass(/\bactive\b/);
 });

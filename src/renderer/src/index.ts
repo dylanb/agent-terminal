@@ -254,6 +254,7 @@ if (flowStripHost) {
     listCatalog: (key) => window.flow.listCatalog(key),
     select: (key, id) => window.flow.setActiveFlow(key, id),
     clearSelection: (key) => window.flow.clearActiveFlow(key),
+    rebindHeldRun: (key, choice) => window.flow.rebindHeldRun(key, choice),
   });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,

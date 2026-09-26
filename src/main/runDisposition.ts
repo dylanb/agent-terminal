@@ -52,12 +52,21 @@ export type DispositionPresence = 'absent' | 'present' | 'indeterminate';
 export function recordDisposition(worktreeDir: string, binding: DispositionRead): void {
   const file = confinedDispositionFile(worktreeDir);
   if (file === null) throw new Error('run-disposition path is unresolvable');
-  const doc =
-    binding.source === 'catalog'
-      ? { schema_version: RUN_DISPOSITION_SCHEMA, source: 'catalog', tier: binding.tier, id: binding.id }
-      : { schema_version: RUN_DISPOSITION_SCHEMA, source: 'non-catalog' };
-  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+  if (!atomicWriteFileSync(file, yaml.dump(dispositionDoc(binding)))) {
     throw new Error(`cannot write run-disposition: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+function dispositionDoc(binding: DispositionRead): Record<string, unknown> {
+  switch (binding.source) {
+    case 'catalog':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'catalog', tier: binding.tier, id: binding.id };
+    case 'non-catalog':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'non-catalog' };
+    case 'fallback':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'fallback' };
+    default:
+      return binding satisfies never;
   }
 }
 
@@ -109,6 +118,7 @@ export function readRunBinding(worktreeDir: string): DispositionRead | null {
 function parseRunBinding(doc: unknown): DispositionRead | null {
   if (!isRecord(doc)) return null;
   if (doc.source === 'non-catalog') return { source: 'non-catalog' };
+  if (doc.source === 'fallback') return { source: 'fallback' };
   if (doc.source === 'catalog' && isCatalogTier(doc.tier) && typeof doc.id === 'string' && isSafeCatalogId(doc.id)) {
     return { source: 'catalog', tier: doc.tier, id: doc.id };
   }

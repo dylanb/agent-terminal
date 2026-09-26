@@ -5,7 +5,7 @@ import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
-import { MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
+import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -30,6 +30,9 @@ import {
   type FlowSetActiveFlowMsg,
   type FlowClearActiveFlowMsg,
   type FlowListCatalogMsg,
+  type FlowRebindHeldRunMsg,
+  type RebindChoice,
+  CATALOG_ORIGINS,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -205,6 +208,33 @@ export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlow
 /** flow:listCatalog (§18.7.6) */
 export function isValidFlowListCatalog(m: unknown): m is FlowListCatalogMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+const hasExactKeys = (r: Record<string, unknown>, keys: readonly string[]): boolean => {
+  const own = Object.keys(r);
+  return own.length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(r, k));
+};
+
+function isValidRebindChoice(c: unknown): c is RebindChoice {
+  if (!isRecord(c)) return false;
+  if (c.origin === 'local' || c.origin === 'fallback') return hasExactKeys(c, ['origin']);
+  return (
+    (CATALOG_ORIGINS as readonly unknown[]).includes(c.origin) &&
+    hasExactKeys(c, ['origin', 'id']) &&
+    typeof c.id === 'string' &&
+    isSafeCatalogId(c.id)
+  );
+}
+
+/** flow:rebindHeldRun (§18.7.3, §6) */
+export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg {
+  return (
+    isRecord(m) &&
+    hasExactKeys(m, ['sessionId', 'repoKey', 'choice']) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isValidRebindChoice(m.choice)
+  );
 }
 
 /** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;

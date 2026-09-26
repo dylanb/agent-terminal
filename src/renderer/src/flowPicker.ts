@@ -1,8 +1,9 @@
 // §18.7.4 / §18.7.6
 
-import type { ActiveFlowWriteResult, CatalogOrigin, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
+import type { ActiveFlowWriteResult, CatalogOrigin, RebindChoice, RebindResult, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
+import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
 
@@ -12,6 +13,7 @@ export interface FlowPickerDeps {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   select(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   clearSelection(repoKey: string): Promise<ActiveFlowWriteResult>;
+  rebindHeldRun(repoKey: string, choice: RebindChoice): Promise<RebindResult>;
 }
 
 export interface FlowPicker {
@@ -20,8 +22,6 @@ export interface FlowPicker {
 }
 
 type CatalogEntry = FlowCatalogListing['entries'][number];
-
-const entryKey = (entry: CatalogEntry): string => (entry.available ? entry.id : entry.label);
 
 type Catalog =
   | { kind: 'loading' }
@@ -39,6 +39,24 @@ const TIER_LABEL: Record<CatalogOrigin, string> = { repo: 'Repo flows', global: 
 
 const LOCK_REASON = 'Locked until you Terminate the run';
 
+type HeldRun = Exclude<HeldRunView, { hold: 'not-held' }>;
+
+const HOLD_TEXT: Record<HeldRun['hold'], string> = {
+  'record-missing': 'This run cannot continue: its run record is missing.',
+  'record-unreadable': 'This run cannot continue: its run record is unreadable.',
+};
+
+const STATUS_TEXT: Record<HeldRun['status'], string> = { in_progress: 'in progress', done: 'done' };
+
+type Row =
+  | { kind: 'choice'; key: string; name: string; origin: string; selected: boolean; choose: () => void }
+  | { kind: 'unavailable'; key: string; name: string; origin: string; reason: string };
+
+const heldOf = (view: { runHold?: HeldRunView }): HeldRun | null => {
+  const hold = view.runHold ?? { hold: 'not-held' };
+  return offersHeldRunRecovery(hold) ? hold : null;
+};
+
 const reasonOf = (e: unknown, prefix: string): string =>
   displaySafeEcho(`${prefix}: ${e instanceof Error ? e.message : String(e)}`, MAX_ECHOED_REASON_LENGTH);
 
@@ -54,6 +72,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let alertText = '';
   let open = false;
   let locked = false;
+  let held: HeldRun | null = null;
   let generation = 0;
   let pickGeneration = 0;
   let disposed = false;
@@ -112,15 +131,18 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     if (key === null) {
       ++generation;
       locked = false;
+      held = null;
       switchTo(null);
       return;
     }
     const nowLocked = isSelectionLocked(view.runStarted);
-    const lockChanged = nowLocked !== locked;
+    const nowHeld = heldOf(view);
+    const changed = nowLocked !== locked || JSON.stringify(nowHeld) !== JSON.stringify(held);
     locked = nowLocked;
-    if (locked) open = false;
+    held = nowHeld;
+    if (changed) open = false;
     if (key !== repoKey) switchTo(key);
-    else if (lockChanged) render();
+    else if (changed) render();
     pull(key);
   }
 
@@ -132,6 +154,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   const canPick = (): boolean => repoKey !== null && catalog.kind === 'listed' && !locked;
+  const canRecover = (): boolean => repoKey !== null && catalog.kind === 'listed' && held !== null;
 
   function write(next: FlowCatalogSelection, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
     const key = repoKey;
@@ -162,7 +185,29 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const pick = (id: string): void => write({ kind: 'value', id }, (key) => deps.select(key, id));
   const useDefault = (): void => write(UNSET, (key) => deps.clearSelection(key));
 
+  function rebind(choice: RebindChoice): void {
+    const key = repoKey;
+    if (key === null || !canRecover()) return;
+    const token = ++pickGeneration;
+    alertText = '';
+    open = false;
+    render();
+    recoverButton()?.focus();
+    const refuse = (reason: string): void => {
+      if (disposed || repoKey !== key || token !== pickGeneration) return;
+      alertText = displaySafeEcho(reason, MAX_ECHOED_REASON_LENGTH);
+      render();
+    };
+    deps.rebindHeldRun(key, choice).then(
+      (result) => {
+        if (!result.ok) refuse(result.reason);
+      },
+      (e: unknown) => refuse(reasonOf(e, 'Could not recover the run')),
+    );
+  }
+
   const trigger = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-trigger');
+  const recoverButton = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-recover');
   const allOptions = (): HTMLElement[] => [...host.querySelectorAll<HTMLElement>('[role="option"]')];
   const optionFor = (flowKey: string): HTMLElement | undefined => allOptions().find((o) => o.dataset.flowKey === flowKey);
 
@@ -174,7 +219,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   function close(): void {
     if (!open) return;
     collapse();
-    trigger()?.focus();
+    (recoverButton() ?? trigger())?.focus();
   }
 
   function onKeydown(e: KeyboardEvent): void {
@@ -203,43 +248,85 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     collapse();
   }
 
-  function option(entry: CatalogEntry, index: number): HTMLElement {
+  function option(row: Row, index: number): HTMLElement {
     const li = doc.createElement('li');
     li.setAttribute('role', 'option');
     li.id = `${uid}-opt-${index}`;
     li.className = 'flow-picker-option';
     li.tabIndex = -1;
-    li.dataset.flowKey = entryKey(entry);
+    li.dataset.flowKey = row.key;
     const name = doc.createElement('span');
     name.id = `${uid}-name-${index}`;
     name.className = 'flow-picker-name';
-    name.textContent = entryKey(entry);
+    name.textContent = row.name;
     const origin = doc.createElement('span');
     origin.id = `${uid}-origin-${index}`;
     origin.className = 'flow-picker-origin';
-    origin.textContent = entry.origin;
+    origin.textContent = row.origin;
     li.append(name, origin);
     li.setAttribute('aria-labelledby', `${name.id} ${origin.id}`);
-    if (!entry.available) {
+    if (row.kind === 'unavailable') {
       li.setAttribute('aria-disabled', 'true');
       const reason = doc.createElement('span');
       reason.id = `${uid}-reason-${index}`;
       reason.className = 'flow-picker-reason';
-      reason.textContent = entry.reason;
+      reason.textContent = row.reason;
       li.setAttribute('aria-describedby', reason.id);
       li.append(reason);
       return li;
     }
-    const id = entry.id;
-    li.setAttribute('aria-selected', String(selected.kind === 'value' && id === selected.id));
-    li.addEventListener('click', () => pick(id));
+    const { choose } = row;
+    li.setAttribute('aria-selected', String(row.selected));
+    li.addEventListener('click', choose);
     li.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        pick(id);
+        choose();
       }
     });
     return li;
+  }
+
+  const isUnavailable = (entry: CatalogEntry): entry is Extract<CatalogEntry, { available: false }> => !entry.available;
+
+  const unavailableRow = (entry: Extract<CatalogEntry, { available: false }>): Row => ({
+    kind: 'unavailable',
+    key: entry.label,
+    name: entry.label,
+    origin: entry.origin,
+    reason: entry.reason,
+  });
+
+  function selectRows(listing: FlowCatalogListing): Row[] {
+    return listing.entries.map((entry): Row => {
+      if (!entry.available) return unavailableRow(entry);
+      const { id } = entry;
+      return {
+        kind: 'choice',
+        key: id,
+        name: id,
+        origin: entry.origin,
+        selected: selected.kind === 'value' && id === selected.id,
+        choose: () => pick(id),
+      };
+    });
+  }
+
+  function recoveryRows(listing: FlowCatalogListing): Row[] {
+    const choice = (key: string, name: string, origin: string, to: RebindChoice): Row => ({
+      kind: 'choice',
+      key,
+      name,
+      origin,
+      selected: false,
+      choose: () => rebind(to),
+    });
+    return [
+      ...(listing.hasLocalFlow ? [choice('local:', 'flow.yaml', 'local (this worktree)', { origin: 'local' })] : []),
+      ...listing.entries.filter(isUnavailable).map(unavailableRow),
+      ...listing.resumable.map(({ origin, id }) => choice(`${origin}:${id}`, id, origin, { origin, id })),
+      ...(listing.hasGlobalFallback ? [choice('fallback:', 'Global fallback flow', 'fallback', { origin: 'fallback' })] : []),
+    ];
   }
 
   function triggerLabel(): string {
@@ -275,7 +362,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     again.className = 'flow-picker-retry pill';
     again.textContent = 'Retry';
     again.setAttribute('aria-describedby', alert.id);
-    again.disabled = locked;
+    again.disabled = locked && held === null;
     again.addEventListener('click', retry);
     return again;
   }
@@ -298,14 +385,40 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return clear;
   }
 
-  function listbox(listing: FlowCatalogListing): HTMLUListElement {
+  function listbox(rows: Row[], label: string): HTMLUListElement {
     const list = doc.createElement('ul');
     list.id = `${uid}-list`;
     list.setAttribute('role', 'listbox');
-    list.setAttribute('aria-label', 'Flows');
+    list.setAttribute('aria-label', label);
     list.className = 'flow-picker-list';
-    list.append(...listing.entries.map(option));
+    list.append(...rows.map(option));
     return list;
+  }
+
+  function recoverControl(describedByAlert: boolean): HTMLButtonElement {
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.className = 'flow-picker-recover pill';
+    button.setAttribute('aria-haspopup', 'listbox');
+    button.setAttribute('aria-expanded', String(open));
+    button.setAttribute('aria-describedby', [`${uid}-held`, ...(describedByAlert ? [alert.id] : [])].join(' '));
+    button.textContent = 'Recover the run onto a flow…';
+    if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
+    button.addEventListener('click', () => {
+      if (!canRecover()) return;
+      open = !open;
+      render();
+      if (open) host.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])')?.focus();
+    });
+    return button;
+  }
+
+  function heldSummary(run: HeldRun): HTMLElement {
+    const p = doc.createElement('p');
+    p.id = `${uid}-held`;
+    p.className = 'flow-picker-held';
+    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow resumes step ${run.step} (${STATUS_TEXT[run.status]}).`;
+    return p;
   }
 
   function tierNotices(listing: FlowCatalogListing): HTMLElement[] {
@@ -333,17 +446,23 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       const listing = open && catalog.kind === 'listed' ? catalog.listing : null;
       const notices = listing === null ? [] : tierNotices(listing);
       const noticeIds = notices.map((n) => n.id);
-      const button = triggerButton(shown !== '', noticeIds);
+      const button = triggerButton(shown !== '' && held === null, noticeIds);
       host.insertBefore(button, alert);
       if (locked) host.insertBefore(lockReason(), alert);
+      const recover = held === null ? null : recoverControl(shown !== '');
+      if (held !== null && recover !== null) {
+        host.insertBefore(heldSummary(held), alert);
+        host.insertBefore(recover, alert);
+      }
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (listing !== null) {
-        const list = listbox(listing);
-        button.setAttribute('aria-controls', list.id);
+        const list =
+          held === null ? listbox(selectRows(listing), 'Flows') : listbox(recoveryRows(listing), 'Flows to recover the run onto');
+        (recover ?? button).setAttribute('aria-controls', list.id);
         if (noticeIds.length > 0) list.setAttribute('aria-describedby', noticeIds.join(' '));
         host.insertBefore(list, alert);
         for (const notice of notices) host.insertBefore(notice, alert);
-        host.insertBefore(useDefaultButton(), alert);
+        if (held === null) host.insertBefore(useDefaultButton(), alert);
       }
     } finally {
       rendering = false;
@@ -351,6 +470,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     restoreFocus(
       () =>
         (focusedKey === undefined ? null : optionFor(focusedKey)) ??
+        recoverButton() ??
         (locked ? host.querySelector<HTMLElement>('.flow-picker-lock') : null) ??
         (catalog.kind === 'failed' ? host.querySelector<HTMLElement>('.flow-picker-retry') : null) ??
         trigger(),

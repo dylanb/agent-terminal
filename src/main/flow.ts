@@ -12,12 +12,14 @@ import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
+import { heldRunOf } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
-import { stripDisplayControlChars } from '../shared/controlChars';
+import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH, stripDisplayControlChars } from '../shared/controlChars';
+import { offersHeldRunRecovery, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
@@ -91,7 +93,19 @@ const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
  *  and the §18.7.6 catalog listing both read, so the "is a flow present here" boundary that decides which flow
  *  runs cannot desync between them (CLAUDE.md shared-semantics). */
 export function hasFlowDefinition(root: string): boolean {
-  return existsSync(path.join(root, FLOW_REL));
+  return existsSync(flowDefinitionFile(root));
+}
+
+/** The flow-home definition file under `root` — the one location the local and global-fallback loaders, the
+ *  presence gate, and a fallback-bound run all read (CLAUDE.md writer↔reader rule). */
+export function flowDefinitionFile(root: string): string {
+  return path.join(root, FLOW_REL);
+}
+
+/** §19.1 — whether a persisted progression at `step` continues under `definition`: a step the definition no
+ *  longer has starts fresh. Held-run recovery (§18.7.3) decides resume-vs-terminate with the same predicate. */
+export function resumesAt(definition: FlowDefinition, step: string): boolean {
+  return definition.steps.some((s) => s.id === step);
 }
 
 export const FLOWS_CATALOG_SUBDIR = 'flows';
@@ -126,7 +140,7 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
 export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(path.join(worktreeDir, FLOW_REL), FLOW_REL);
+  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), FLOW_REL);
 }
 
 /** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
@@ -234,7 +248,7 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
 }
 
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
-export type MachineView = Omit<FlowStateView, 'runStarted'>;
+export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
 export interface FlowMachine {
   state(): MachineView;
@@ -375,9 +389,8 @@ export function createFlowMachine(
     repeatCounts = Object.create(null);
     const persisted = store.read();
     if (persisted) {
-      const i = names.indexOf(persisted.step);
-      if (i >= 0) {
-        index = i;
+      if (resumesAt(def, persisted.step)) {
+        index = names.indexOf(persisted.step);
         status = persisted.status;
       }
       if (persisted.inputs) inputs = { ...persisted.inputs };
@@ -637,7 +650,10 @@ export interface FlowManager {
 }
 
 /** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
-export type TerminateResult = { outcome: 'reset' | 'refused'; view: FlowStateView };
+export type TerminateResult =
+  | { outcome: 'reset'; view: FlowStateView }
+  | { outcome: 'refused'; cause: 'not-begun'; view: FlowStateView }
+  | { outcome: 'refused'; cause: 'failed'; reason: string; view: FlowStateView };
 
 /** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
@@ -653,6 +669,11 @@ export interface FlowManagerDeps {
    *  renders no loop view. A `legacy`-marked step never reaches this — its marked-binding error view (AC 4)
    *  is produced in the machine. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
+}
+
+/** §18.7.6 — the held step is repo-controlled text, so the view carries only its display-safe copy. */
+function displaySafeHold(hold: HeldRunView): HeldRunView {
+  return offersHeldRunRecovery(hold) ? { ...hold, step: displaySafeEcho(hold.step, MAX_ECHOED_REASON_LENGTH) } : hold;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -688,7 +709,11 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   };
   const machineView = (k: string, op: (m: FlowMachine) => MachineView): MachineView => op(machineFor(k).machine);
   // §18.7.4 — read AFTER the operation's own marker write/clear, so the view reports the started-ness it left.
-  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({ ...view, runStarted: worktreeStartedness(k) });
+  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({
+    ...view,
+    runStarted: worktreeStartedness(k),
+    runHold: displaySafeHold(heldRunOf(k)),
+  });
   const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, machineView(k, op));
   return {
     state: (k) => viewOf(k, (m) => m.state()),
@@ -731,12 +756,10 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       try {
         if (status === 'in_progress' || status === 'done') machine.terminate();
         else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
-        else return { outcome: 'refused', view: viewOf(k, (m) => m.state()) };
+        else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
       } catch (e) {
-        return {
-          outcome: 'refused',
-          view: withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
-        };
+        const reason = `The run could not be terminated: ${errMsg(e)}`;
+        return { outcome: 'refused', cause: 'failed', reason, view: withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: reason }) };
       }
       let notice: string | undefined;
       try {
