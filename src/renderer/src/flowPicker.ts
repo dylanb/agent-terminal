@@ -249,13 +249,13 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return `Flow: ${selected.kind === 'value' ? selected.id : 'default'}`;
   }
 
-  function triggerButton(describedByAlert: boolean): HTMLButtonElement {
+  function triggerButton(describedByAlert: boolean, noticeIds: string[]): HTMLButtonElement {
     const button = doc.createElement('button');
     button.type = 'button';
     button.className = 'flow-picker-trigger pill';
     button.setAttribute('aria-haspopup', 'listbox');
     button.setAttribute('aria-expanded', String(open));
-    const describedBy = [...(describedByAlert ? [alert.id] : []), ...(locked ? [`${uid}-lock`] : [])];
+    const describedBy = [...(describedByAlert ? [alert.id] : []), ...(locked ? [`${uid}-lock`] : []), ...noticeIds];
     if (describedBy.length > 0) button.setAttribute('aria-describedby', describedBy.join(' '));
     button.textContent = triggerLabel();
     button.disabled = locked;
@@ -330,20 +330,17 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       if (alert.textContent !== shown) alert.textContent = shown;
       if (repoKey === null) return;
 
-      const button = triggerButton(shown !== '');
+      const listing = open && catalog.kind === 'listed' ? catalog.listing : null;
+      const notices = listing === null ? [] : tierNotices(listing);
+      const noticeIds = notices.map((n) => n.id);
+      const button = triggerButton(shown !== '', noticeIds);
       host.insertBefore(button, alert);
       if (locked) host.insertBefore(lockReason(), alert);
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
-      if (open && catalog.kind === 'listed') {
-        const list = listbox(catalog.listing);
-        const notices = tierNotices(catalog.listing);
+      if (listing !== null) {
+        const list = listbox(listing);
         button.setAttribute('aria-controls', list.id);
-        if (notices.length > 0) {
-          const noticeIds = notices.map((n) => n.id);
-          list.setAttribute('aria-describedby', noticeIds.join(' '));
-          const triggerIds = button.getAttribute('aria-describedby')?.split(' ') ?? [];
-          button.setAttribute('aria-describedby', [...triggerIds, ...noticeIds].join(' '));
-        }
+        if (noticeIds.length > 0) list.setAttribute('aria-describedby', noticeIds.join(' '));
         host.insertBefore(list, alert);
         for (const notice of notices) host.insertBefore(notice, alert);
         host.insertBefore(useDefaultButton(), alert);

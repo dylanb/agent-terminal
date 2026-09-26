@@ -32,16 +32,17 @@ const noticeOf = (tier: CatalogOrigin, text: string): TierNotice => ({
   notice: displaySafeEcho(text, MAX_ECHOED_REASON_LENGTH),
 });
 
+const unreadableNotice = (tier: CatalogOrigin, why: string): TierNotice => noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: ${why}`);
+
+const UNRESOLVED = 'its location does not resolve';
+
 // CWE-22/59
 function walkableTierDir(roots: CatalogRoots, tier: CatalogOrigin): { ok: true; dir: string } | { ok: false; notice: TierNotice } {
   const jail = catalogTierJail(roots, tier);
-  if (jail === null) return { ok: false, notice: noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: its location does not resolve`) };
-  const anchor = tier === 'repo' ? resolveJail(roots.worktreeDir) : jail;
-  const confined = anchor === null ? ({ ok: false, cause: 'unresolvable' } as const) : confinedRealPathResult(anchor, jail);
-  if (!confined.ok) {
-    const why = confined.cause === 'escapes' ? 'it links outside its location' : 'its location does not resolve';
-    return { ok: false, notice: noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: ${why}`) };
-  }
+  const anchor = jail === null ? null : tier === 'repo' ? resolveJail(roots.worktreeDir) : jail;
+  if (jail === null || anchor === null) return { ok: false, notice: unreadableNotice(tier, UNRESOLVED) };
+  const confined = confinedRealPathResult(anchor, jail);
+  if (!confined.ok) return { ok: false, notice: unreadableNotice(tier, confined.cause === 'escapes' ? 'it links outside its location' : UNRESOLVED) };
   return { ok: true, dir: confined.path };
 }
 
@@ -54,7 +55,7 @@ function scanTier(roots: CatalogRoots, tier: CatalogOrigin): TierScan {
   try {
     candidates = readDirEntries(walkable.dir).filter((e) => !e.isFile);
   } catch (e) {
-    return { ...scan, notices: [noticeOf(tier, `Could not read the ${TIER_DIR_NAME[tier]}: ${errMsg(e)}`)] };
+    return { ...scan, notices: [unreadableNotice(tier, errMsg(e))] };
   }
   if (candidates.length > MAX_CATALOG_LIST_MEMBERS) {
     scan.notices.push(noticeOf(tier, `The ${TIER_DIR_NAME[tier]} list was truncated to its first ${MAX_CATALOG_LIST_MEMBERS} members`));
