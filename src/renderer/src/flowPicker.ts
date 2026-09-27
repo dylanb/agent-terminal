@@ -469,8 +469,9 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       const button = triggerButton(shown !== '' && held === null, held === null ? noticeIds : []);
       host.insertBefore(button, alert);
       if (locked) host.insertBefore(lockReason(), alert);
-      const recover = held === null ? null : recoverControl(shown !== '', noticeIds);
-      if (held !== null && recover !== null) {
+      let recover: HTMLButtonElement | null = null;
+      if (held !== null) {
+        recover = recoverControl(shown !== '', noticeIds);
         host.insertBefore(heldSummary(held), alert);
         host.insertBefore(recover, alert);
       }

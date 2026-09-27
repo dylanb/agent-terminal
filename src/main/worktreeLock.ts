@@ -56,13 +56,26 @@ const HELD_REASON =
 
 const reclaimGuard = (file: string): string => `${file}.reclaim`;
 
-function unidentifiedHolderReason(lockFile: string): string {
+const HELD: LockAcquire = { ok: false, cause: 'held', reason: HELD_REASON };
+
+function unusable(detail: string): LockAcquire {
+  return {
+    ok: false,
+    cause: 'lock-unusable',
+    reason: `The worktree lock could not be taken: ${displaySafeEcho(detail, MAX_ECHOED_REASON_LENGTH)}`,
+  };
+}
+
+function unidentifiedHolder(lockFile: string): LockAcquire {
   const shown = displaySafeEcho(lockFile, MAX_ECHOED_PATH_LENGTH);
   const target = shown === lockFile ? lockFile : `the file ${path.basename(lockFile)} in Agent Terminal's lock directory`;
-  return (
-    "The worktree lock is held by a process that cannot be identified. If no other Agent Terminal window is working in " +
-    `this worktree, delete ${target} and try again.`
-  );
+  return {
+    ok: false,
+    cause: 'holder-unreadable',
+    reason:
+      "The worktree lock is held by a process that cannot be identified. If no other Agent Terminal window is working in " +
+      `this worktree, delete ${target} and try again.`,
+  };
 }
 
 /** The lockfiles' directory under the app-state home — the one location every app instance derives. */
@@ -217,36 +230,31 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
     return true;
   };
 
+  /** The refusal a lock holding `text` owes its would-be acquirer, or null when that holder is stale. */
+  const refusalFor = (lockFile: string, text: string): LockAcquire | null => {
+    const stale = isStale(text);
+    if (stale === false) return HELD;
+    return stale === 'unknown' ? unidentifiedHolder(lockFile) : null;
+  };
+
   const acquire = (worktreeDir: string): LockAcquire => {
-    const refuse = (cause: Exclude<LockRefusalCause, 'holder-unreadable'>, detail?: string): LockAcquire => ({
-      ok: false,
-      cause,
-      reason: cause === 'held' ? HELD_REASON : `The worktree lock could not be taken: ${displaySafeEcho(detail ?? '', MAX_ECHOED_REASON_LENGTH)}`,
-    });
-    const unidentified = (holderFile: string): LockAcquire => ({
-      ok: false,
-      cause: 'holder-unreadable',
-      reason: unidentifiedHolderReason(holderFile),
-    });
     // A lock we cannot take is unusable only while no live or unidentifiable holder already has it.
     const heldBy = (lockFile: string): LockAcquire | null => {
       try {
         const text = readText(lockFile);
-        const stale = text === null ? true : isStale(text);
-        if (stale === false) return refuse('held');
-        return stale === 'unknown' ? unidentified(lockFile) : null;
+        return text === null ? null : refusalFor(lockFile, text);
       } catch {
         return null;
       }
     };
     const jail = resolveOwnedDirJail(deps.lockRoot);
     const file = jail === null ? null : confinedRealPath(jail, worktreeLockFile(deps.lockRoot, worktreeDir));
-    if (file === null) return refuse('lock-unusable', 'the lock directory is unresolvable');
+    if (file === null) return unusable('the lock directory is unresolvable');
     const self = serializeLockHolder(currentLockHolder());
     let sawLive = false;
     let sawUnreadable = false;
     try {
-      if (!isRealContainer(path.dirname(file))) return refuse('lock-unusable', 'the lock directory is not a real directory');
+      if (!isRealContainer(path.dirname(file))) return unusable('the lock directory is not a real directory');
       mkdirSync(path.dirname(file), { recursive: true });
       for (let attempt = 0; attempt < MAX_ACQUIRE_ATTEMPTS; attempt++) {
         if (tryCreate(file, self, writeNewFile)) {
@@ -264,20 +272,19 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
           sawLive = true;
           continue;
         }
-        const stale = isStale(text);
-        if (stale === false) return refuse('held');
-        if (stale === 'unknown') return unidentified(file);
+        const refusal = refusalFor(file, text);
+        if (refusal !== null) return refusal;
         deps.beforeReclaim?.();
         const guard = reclaim(file, text, self);
         if (guard === false) sawLive = true;
         else if (guard === 'unknown') sawUnreadable = true;
       }
     } catch (e) {
-      return heldBy(file) ?? refuse('lock-unusable', errMsg(e));
+      return heldBy(file) ?? unusable(errMsg(e));
     }
-    if (sawLive) return refuse('held');
-    if (sawUnreadable) return unidentified(reclaimGuard(file));
-    return refuse('lock-unusable', 'every stale-lock reclaim was lost');
+    if (sawLive) return HELD;
+    if (sawUnreadable) return unidentifiedHolder(reclaimGuard(file));
+    return unusable('every stale-lock reclaim was lost');
   };
 
   const holding = new Set<string>();
