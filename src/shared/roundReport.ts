@@ -58,25 +58,33 @@ interface IssueBlock {
   whatChanged: string | null;
 }
 
-function issueWellFormed(block: IssueBlock): boolean {
-  if (!block.hasPersona) return false; // AC6 — the persona is carried by the enclosing record
-  if (block.issue === '') return false;
-  if (block.disposition === null || !DISPOSITION_SET.has(block.disposition)) return false; // exact, trimmed, never normalized
-  if (block.reason === null || block.reason === '') return false;
-  if (block.disposition === FIXED_DISPOSITION && (block.whatChanged === null || block.whatChanged === '')) return false;
-  return true;
+function issueProblems(block: IssueBlock, line: number): string[] {
+  const g = REPORT_GRAMMAR;
+  const at = `line ${line} (\`${g.issueLabel}: ${block.issue.slice(0, 60)}\`)`;
+  const out: string[] = [];
+  if (!block.hasPersona) out.push(`${at}: the issue is recorded outside any \`${g.personaPrefix.trim()} <persona>\` reviewer record`);
+  if (block.issue === '') out.push(`line ${line}: \`${g.issueLabel}:\` has no text`);
+  if (block.disposition === null) out.push(`${at}: no \`${g.dispositionLabel}:\` line`);
+  else if (!DISPOSITION_SET.has(block.disposition)) {
+    out.push(`${at}: \`${g.dispositionLabel}: ${block.disposition}\` is not exactly one of ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')}`);
+  }
+  if (block.reason === null || block.reason === '') out.push(`${at}: no \`${g.reasonLabel}:\` text`);
+  if (block.disposition === FIXED_DISPOSITION && (block.whatChanged === null || block.whatChanged === '')) {
+    out.push(`${at}: a \`${FIXED_DISPOSITION}\` issue needs \`${g.whatChangedLabel}:\` text`);
+  }
+  return out;
 }
 
-/** Whether the report is well-formed (§27.5/§27.12): def-declared sections present, every recorded issue's
- *  required elements present with a disposition from the closed set (exact match, surrounding whitespace
- *  trimmed — never normalized), and every roster persona accounted for by a persona-keyed record
- *  (present-vs-absent; a zero-issue persona is present via its record, distinct from absent). Disposition
- *  CORRECTNESS is out of scope. */
-export function roundReportWellFormed(report: string, spec: RoundReportSpec): boolean {
+/** Every defect that keeps the report from being well-formed (§27.5/§27.12), each naming the element it
+ *  concerns: a def-declared section missing, a roster persona with no record, and each recorded issue missing
+ *  a required element or carrying a disposition outside the closed set (exact match, trimmed — never
+ *  normalized). Empty ⟺ well-formed. Disposition CORRECTNESS is out of scope. */
+export function roundReportProblems(report: string, spec: RoundReportSpec): string[] {
   const lines = report.split('\n');
   const sectionsPresent = new Set<string>();
   const personasPresent = new Set<string>();
   const g = REPORT_GRAMMAR;
+  const problems: string[] = [];
 
   let currentPersona: string | null = null;
   for (let i = 0; i < lines.length; i++) {
@@ -107,14 +115,21 @@ export function roundReportWellFormed(report: string, spec: RoundReportSpec): bo
         if (w !== null) block.whatChanged = w.value;
         j = (d ?? r ?? w)?.end ?? j + 1;
       }
-      if (!issueWellFormed(block)) return false;
+      problems.push(...issueProblems(block, i + 1));
       i = j - 1;
     }
   }
 
-  for (const s of spec.sections) if (!sectionsPresent.has(s)) return false;
-  for (const p of spec.roster) if (!personasPresent.has(p)) return false;
-  return true;
+  for (const s of spec.sections) if (!sectionsPresent.has(s)) problems.push(`missing the \`${g.sectionPrefix}${s}\` section heading`);
+  for (const p of spec.roster) {
+    if (!personasPresent.has(p)) problems.push(`missing the \`${g.personaPrefix}${p}\` reviewer record (write \`${g.emptyMarker}\` or \`${g.failedMarker}\` if it raised nothing)`);
+  }
+  return problems;
+}
+
+/** Whether the report is well-formed (§27.5/§27.12) — exactly when `roundReportProblems` finds nothing. */
+export function roundReportWellFormed(report: string, spec: RoundReportSpec): boolean {
+  return roundReportProblems(report, spec).length === 0;
 }
 
 /** The personas a round report records as having FAILED TO RUN (§27.5/AC7): each persona whose record

@@ -24,12 +24,13 @@ import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
-import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
-import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
+import { catalogPersonas, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
+import type { ArtifactCheck } from './artifactCheck';
+import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
-import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
-import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
+import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
+import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
@@ -161,6 +162,8 @@ export interface AppLoopEngineDeps {
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
    *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
+  /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
+  artifactCheckCommand(check: ArtifactCheck): string;
 }
 
 export interface AppLoopEngine {
@@ -778,9 +781,67 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
+  const reportCheck = (turn: Extract<ActiveAppTurn, { phase: 'review' }>): Extract<ArtifactCheck, { kind: 'report' }> => ({
+    kind: 'report',
+    rel: turn.reportRel,
+    sections: turn.sections,
+    roster: turn.reviewers.map((r) => r.persona),
+  });
+  const verdictCheck = (turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>): ArtifactCheck => ({
+    kind: 'verdict',
+    rel: turn.outputRel,
+    catalog: turn.catalog,
+  });
+
+  /** §27.12 — the retry for a review or consolidator turn whose report/verdict is ON DISK but malformed: a
+   *  repair of that file alone, naming each problem. Null (→ the full turn is re-injected) when there is no
+   *  file to repair, the turn is some other kind, or the shortfall lies elsewhere (a refactor round's result). */
+  const composeRepair = (): string | null => {
+    if (!active) return null;
+    if (active.phase === 'review' && active.completion.kind !== 'unresolved') {
+      const content = deps.readArtifact(active.reportPath);
+      if (content === null) return null;
+      const check = reportCheck(active);
+      const problems = roundReportProblems(content, check);
+      if (problems.length === 0) return null;
+      if (active.completion.kind === 'refactor-report') {
+        const { resultRel, resultPath } = active.completion;
+        if (resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME) !== null) return null;
+      }
+      return composeReportRepairPrompt({
+        reportRel: active.reportRel,
+        problems,
+        sections: check.sections,
+        roster: check.roster,
+        round: active.round,
+        turnKey: active.turnKey,
+        doneRelPath: APP_DONE_REL_PATH,
+        checkCommand: deps.artifactCheckCommand(check),
+      });
+    }
+    if (active.phase === 'consolidate' && active.completion.kind !== 'unresolved') {
+      const content = deps.readArtifact(active.outputPath);
+      if (content === null) return null;
+      const problems = consolidatorOutputProblems(content, active.catalog);
+      if (problems.length === 0) return null;
+      return composeVerdictRepairPrompt({
+        outputRel: active.outputRel,
+        problems,
+        catalog: active.catalog,
+        round: active.round,
+        turnKey: active.turnKey,
+        doneRelPath: APP_DONE_REL_PATH,
+        checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
+      });
+    }
+    return null;
+  };
+
   runner = createTurnRunner({
-    compose: (turnKey) => {
+    compose: (turnKey, retry) => {
       if (!active) return null;
+      const repair = retry !== undefined ? composeRepair() : null;
+      if (repair !== null) return repair;
       if (active.phase === 'consolidate') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose
         const body = deps.readRecipe(active.recipePath);
@@ -796,6 +857,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
           ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
         });
       }
@@ -811,6 +873,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          checkCommand: deps.artifactCheckCommand(reportCheck(active)),
           ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the

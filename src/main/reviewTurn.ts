@@ -10,6 +10,7 @@ import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { ticketPromptLines } from '../shared/currentTicket';
 
@@ -55,6 +56,8 @@ export interface ReviewAndFixPromptReq {
   round: number;
   /** The turn key the done-signal is scoped to (e.g. `review-plan`). */
   turnKey: string;
+  /** §27.12 — the command that runs the loop's own format check on this round's report; absent omits it. */
+  checkCommand?: string;
   /** The repo-relative §27 done-file the fixer writes last (after its subagents return, §27.12a). */
   doneRelPath: string;
   /** §27.9/§19.4 (AC4) — the operator's request-changes feedback for THIS round, delivered alongside the
@@ -71,6 +74,75 @@ export interface ReviewAndFixPromptReq {
   ticket?: number;
 }
 
+/** The round-report format rules (§27.5), from the ONE shared descriptor the completion predicate reads.
+ *  `whichReviewers` names the roster the per-persona records must cover. */
+function reportFormatLines(sections: string[], whichReviewers: string): string[] {
+  const g = REPORT_GRAMMAR;
+  return [
+    `- one \`${g.sectionPrefix.trim()} <section>\` heading for each of these sections: ${sections.join(', ')}`,
+    `- one \`${g.personaPrefix.trim()} <persona>\` record for ${whichReviewers} — including any that failed to`,
+    "  run or found nothing. Dropping a reviewer makes the report malformed. In a reviewer's record:",
+    `  a reviewer that RAN and raised no issues carries the line \`${g.emptyMarker}\`; a reviewer that FAILED to`,
+    `  run (crashed, timed out, produced nothing usable) carries the line \`${g.failedMarker}\` instead — the two`,
+    '  are distinct, and a round with a failed reviewer can never be judged clean (§27.5/§27.6).',
+    `- for every issue you record under a reviewer, the labelled lines \`${g.issueLabel}:\`, \`${g.dispositionLabel}:\`,`,
+    `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
+    `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,
+    '  verbatim, no other value.',
+  ];
+}
+
+/** §27.12 — tell the agent to run the loop's own checker and fix the file until it passes, before done. */
+export function checkerLines(checkCommand: string, what: string): string[] {
+  return [
+    '',
+    `Before writing the done-signal, run the loop's own format check on the ${what} from the repo root and fix`,
+    `the ${what} until it prints \`${ARTIFACT_CHECK_PASSED}\` — the loop accepts the turn only when this check passes:`,
+    '',
+    `    ${checkCommand}`,
+  ];
+}
+
+export interface ReportRepairPromptReq {
+  reportRel: string;
+  /** What the loop's format check found wrong with the report on disk. */
+  problems: string[];
+  sections: string[];
+  roster: string[];
+  round: number;
+  turnKey: string;
+  doneRelPath: string;
+  checkCommand?: string;
+}
+
+/** §27.12 — the retry for a round whose report is on disk but malformed: repair the report alone, naming each
+ *  problem, so a formatting slip never re-runs the reviewers or re-touches the code. */
+export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
+  const lines: string[] = [
+    `This is a REPAIR of the round-${req.round} report, not a new review round.`,
+    '',
+    `The round report ${req.reportRel} is on disk but fails the loop's format check, so the round is not`,
+    'finished. Fix ONLY that file. Do not re-run the reviewers, and do not change code, tests, or any other',
+    'file. Keep every finding and disposition already recorded; change only what the problems below name.',
+    '',
+    'Problems:',
+    ...req.problems.map((p) => `- ${p}`),
+    '',
+    'The report must have:',
+    ...reportFormatLines(req.sections, `EVERY reviewer of this round (${req.roster.join(', ')})`),
+  ];
+  if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'report'));
+  lines.push(
+    '',
+    doneSignalInstruction(req.turnKey, req.reportRel, req.doneRelPath),
+    '',
+    'A well-formed example:',
+    '',
+    exampleRoundReport({ sections: req.sections, roster: req.roster }).trimEnd(),
+  );
+  return `${lines.join('\n')}\n`;
+}
+
 /** Compose the §27 review-and-fix prompt (§27.3/§27.4/§27.5): spawn the roster as parallel subagents each
  *  handed only the ticket and its charter, fix valid in-scope issues and dismiss the rest, and write the
  *  round report in the prescribed structure — the disposition set, the per-issue element labels, and the
@@ -78,7 +150,6 @@ export interface ReviewAndFixPromptReq {
  *  the predicate cannot diverge. A single canonical example anchors the shape. Ends with the shared
  *  done-signal instruction, verifying the report on disk before the done-file (§27.12a). */
 export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
-  const g = REPORT_GRAMMAR;
   const lines: string[] = [];
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
@@ -119,20 +190,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       feedback,
     );
   }
-  lines.push(
-    '',
-    `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`,
-    `- one \`${g.sectionPrefix.trim()} <section>\` heading for each of these sections: ${req.sections.join(', ')}`,
-    `- one \`${g.personaPrefix.trim()} <persona>\` record for EVERY reviewer above — including any that failed to`,
-    '  run or found nothing. Dropping a reviewer makes the report malformed. In a reviewer\'s record:',
-    `  a reviewer that RAN and raised no issues carries the line \`${g.emptyMarker}\`; a reviewer that FAILED to`,
-    `  run (crashed, timed out, produced nothing usable) carries the line \`${g.failedMarker}\` instead — the two`,
-    '  are distinct, and a round with a failed reviewer can never be judged clean (§27.5/§27.6).',
-    `- for every issue you record under a reviewer, the labelled lines \`${g.issueLabel}:\`, \`${g.dispositionLabel}:\`,`,
-    `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
-    `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,
-    '  verbatim, no other value.',
-  );
+  lines.push('', `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`, ...reportFormatLines(req.sections, 'EVERY reviewer above'));
   // §28.5.3 — a refactor round writes a phase-result file the round gate reads (softer than GREEN: {passed},
   // no build), via the shared writer so this instruction stays single-sourced with the parse predicate. The
   // done-signal verifies the RESULT, not the report — it is the artifact the fixer is least habituated to (the
@@ -151,6 +209,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       }),
     );
   }
+  if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'report'));
   lines.push(
     '',
     doneSignalInstruction(req.turnKey, req.resultRel ? `${req.reportRel} and ${req.resultRel}` : req.reportRel, req.doneRelPath),
