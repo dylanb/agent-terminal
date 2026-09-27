@@ -42,7 +42,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     expect(runName(resolve(wt).load)).toBe('flow-x'); // the begun run ignores the change
   });
 
-  it('re-Starting a catalog run after a first-step revertStep keeps its catalog binding, never rebinding it non-catalog (CWE-841)', () => {
+  it('a re-Start after a first-step revertStep resolves the still-set pointer afresh, binding its catalog entry', () => {
     const wt = fx.makeWorktree('a2-restart-after-revert');
     const globalDir = fx.makeWorktree('a2-restart-after-revert-global');
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] }); // a fallback exists to swap TO
@@ -52,7 +52,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
-    mgr.revertStep(wt, 'x-step'); // first-step rollback → not_started; the begun marker survives
+    mgr.revertStep(wt, 'x-step'); // first-step rollback → never-started; the pointer still names flow-x
     mgr.start(wt); // the documented recovery
 
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'repo', id: 'flow-x' });
@@ -68,7 +68,6 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
-    mgr.revertStep(wt, 'g-step');
     writeActiveFlow(wt, 'flow-x');
 
     expect(mgr.state(wt).steps).toEqual(['g-step']);

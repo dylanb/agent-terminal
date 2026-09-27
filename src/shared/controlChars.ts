@@ -13,6 +13,15 @@ export function stripDisplayControlChars(text: string): string {
 /** §18.7.6 (CWE-400) */
 export const MAX_ECHOED_REASON_LENGTH = 200;
 
+/** §18.7.6 (CWE-400) */
+export const MAX_ECHOED_PATH_LENGTH = 512;
+
+/** §18.7.6 (CWE-400) */
+export const MAX_ECHOED_LOCK_REASON_LENGTH = MAX_ECHOED_REASON_LENGTH + MAX_ECHOED_PATH_LENGTH;
+
+/** §18.7.6 (CWE-400) */
+export const MAX_ECHOED_LOAD_ERROR_LENGTH = 1024;
+
 // §18.7.6 (CWE-116/117/1007)
 const JOINERS = new RegExp('[\\u200C\\u200D]', 'gu');
 

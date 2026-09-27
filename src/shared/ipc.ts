@@ -610,9 +610,9 @@ export interface FlowStateView {
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
    *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
-  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a
-   *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
-   *  through `isSelectionLocked` (shared/flowStarted.ts). */
+  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a reset
+   *  whose run record could not be removed shows `status: 'not_started'` while the run stays `'started'`.
+   *  Classify it only through `isSelectionLocked` (shared/flowStarted.ts). */
   runStarted: StartednessSignal;
   /** §18.7.3 */
   runHold?: HeldRunView;

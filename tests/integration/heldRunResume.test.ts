@@ -3,16 +3,16 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writ
 import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
-import { tryPeerLockDuring } from '../helpers/lockDevices';
+import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/lockDevices';
 import { createFlowManager, flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { activeFlowPointerFile, readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { readRunBinding } from '../../src/main/runDisposition';
+import { clearDisposition, readRunBinding } from '../../src/main/runDisposition';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createWorktreeLock, currentLockHolder, serializeLockHolder, worktreeLockFile, type WorktreeLock } from '../../src/main/worktreeLock';
 import * as recoveryModule from '../../src/main/heldRunRecovery';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import { listCatalog } from '../../src/main/flowCatalogList';
-import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
 
@@ -28,12 +28,12 @@ const realDeps = (globalDir: string): RealDeps => recoveryModule.realHeldRunReco
 
 const bytes = (file: string): string | null => (existsSync(file) ? readFileSync(file).toString('base64') : null);
 
-function expectCleanReason(result: RebindResult): string {
+function expectCleanReason(result: RebindResult, bound = MAX_ECHOED_REASON_LENGTH): string {
   expect(result).toMatchObject({ ok: false });
   const reason = result.ok ? '' : result.reason;
   expect(reason).toMatch(/\S/);
   expect(reason).not.toMatch(/[‮​\u0000-\u001F]/);
-  expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+  expect(reason.length).toBeLessThanOrEqual(bound);
   return reason;
 }
 
@@ -266,6 +266,30 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     expect(existsSync(join(flowHomeDir(wt), 'run-disposition.yaml'))).toBe(false);
   });
 
+  it.each(RECORDS.filter(([record]) => record !== 'missing'))(
+    'record %s: a record write that fails after the old record is cleared is refused, and the run stays held as record-missing',
+    (_record, damage) => {
+      const { home, wt, lockRoot, unchanged } = rig();
+      const rebindRecordThatFails = (worktree: string): void => {
+        clearDisposition(worktree);
+        throw new Error('disk full');
+      };
+      const recovery = recoveryModule.createHeldRunRecovery({
+        ...realDeps(home),
+        lock: createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }),
+        rebindRecord: rebindRecordThatFails,
+      });
+      fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+      damage(wt);
+      const before = unchanged();
+
+      expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }))).toMatch(/disk full/);
+
+      expect(unchanged()).toEqual(before);
+      expect(heldRunOf(wt)).toMatchObject({ hold: 'record-missing', step: 's2', status: 'in_progress' });
+    },
+  );
+
   it('the resume write happens while the rebind holds the worktree lock: a live peer is refused as held at that moment', () => {
     const { home, wt, lockRoot } = rig();
     const deps = realDeps(home);
@@ -308,8 +332,8 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'resume-flow' });
   });
 
-  it('T6c: a lock whose holder cannot be identified does not block a resume', () => {
-    const { wt, lockRoot, recovery } = rig({
+  it('a lock whose holder cannot be identified refuses the resume and nothing is written', () => {
+    const { wt, lockRoot, recovery, unchanged } = rig({
       lock: (root) => createWorktreeLock({ lockRoot: root, holderLiveness: () => 'unreadable' }),
     });
     const lockFile = worktreeLockFile(lockRoot, wt);
@@ -318,10 +342,13 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const peer = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }).acquire(wt);
     expect(peer.ok).toBe(true);
     const planted = readFileSync(lockFile, 'utf8');
+    const before = unchanged();
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    const reason = expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }), MAX_ECHOED_LOCK_REASON_LENGTH);
 
-    expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'resume-flow' });
+    expectsUnidentifiedHolderRemedy(reason, lockFile);
+    expect(unchanged()).toEqual(before);
+    expect(heldRunOf(wt).hold).toBe('record-missing');
     expect(readFileSync(lockFile, 'utf8')).toBe(planted);
     if (peer.ok) peer.release();
   });

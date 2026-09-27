@@ -10,13 +10,14 @@ import { createShell } from '../../src/renderer/src/shell';
 import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 import type {
   ActiveFlowWriteResult,
+  FlowCatalogListing,
   FlowCatalogListResult,
   FlowCatalogSelection,
   FlowStateView,
   RebindChoice,
   RebindResult,
 } from '../../src/shared/ipc';
-import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker organism in select mode. It follows the worktree of each view
 // the strip fans out (AC2), and a pick asks for THAT worktree's pointer write (AC1).
@@ -41,6 +42,11 @@ const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): Flo
     selection:
       selected === undefined ? { kind: 'unset' } : typeof selected === 'string' ? { kind: 'value', id: selected } : selected,
   },
+});
+
+const emptyListing = (over: Partial<FlowCatalogListing> = {}): FlowCatalogListResult => ({
+  ok: true,
+  listing: { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [], selection: { kind: 'unset' }, ...over },
 });
 
 /** The catalog as main serves it: each worktree answers with its own listing, however often it is pulled, and a
@@ -273,6 +279,48 @@ describe('flow picker — select mode (AC1)', () => {
     await ensureOpen(r.host);
     expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
     expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
+    picker.dispose();
+  });
+
+  it("a refused pick's reason is withdrawn once the run starts and the picker locks", async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.select.respond({ ok: false, reason: 'Could not save the selection: disk full' });
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('disk full');
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
+    picker.dispose();
+  });
+
+  it("a pick refused after the run started is withdrawn once a Terminate unlocks the picker (AC7)", async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const slow = r.select.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started' }));
+    await settle();
+    slow.resolve({ ok: false, reason: 'A run has started in this worktree' });
+    await settle();
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('A run has started');
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
     picker.dispose();
   });
 
@@ -1246,6 +1294,47 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     for (const p of pickers) p.dispose();
   });
 
+  it('an empty catalog says no catalog flows are listed instead of opening an empty listbox (WCAG 1.3.1)', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf([]));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    trigger(r.host).click();
+    await settle();
+
+    expect(r.host.querySelector('[role="listbox"]')).toBeNull();
+    expect(trigger(r.host).hasAttribute('aria-controls')).toBe(false);
+    const describedBy = (trigger(r.host).getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+    const described = describedBy.map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toMatch(/no catalog flows are listed/i);
+    picker.dispose();
+  });
+
+  it('an empty listing never claims the default flow runs, whatever the selection or tier state (AC3/AC9/AC10)', async () => {
+    for (const [label, served] of [
+      ['a removed pick', listingOf([], 'gone-flow')],
+      ['an invalid pick', listingOf([], { kind: 'invalid' })],
+      ['an unreadable tier', emptyListing({ tierNotices: [{ origin: 'repo', notice: 'could not be read' }] })],
+    ] as const) {
+      const r = rig();
+      r.catalog.serve('/repo-a', served);
+      const picker = createFlowPicker(r.host, r.deps);
+      r.views.fire('/repo-a', neverStarted(['a1']));
+      await settle();
+
+      trigger(r.host).click();
+      await settle();
+
+      const describedBy = (trigger(r.host).getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+      const described = describedBy.map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
+      expect(described, label).not.toMatch(/default flow runs|no flows are installed/i);
+      expect(described, label).toMatch(/no catalog flows are listed/i);
+      picker.dispose();
+    }
+  });
+
   it('a rejected write echoes a display-sanitized, length-bounded reason (§18.7.6)', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a']));
@@ -1292,7 +1381,7 @@ const viewOf = (over: Partial<FlowStateView> & Pick<FlowStateView, 'status' | 'r
 const LOCKED_VIEWS: [label: string, view: FlowStateView][] = [
   ['an in-progress run', viewOf({ status: 'in_progress', runStarted: 'started' })],
   ['a done run', viewOf({ status: 'done', position: 2, stepName: 's2', runStarted: 'started' })],
-  ['a first-step rollback (not_started, run begun)', viewOf({ status: 'not_started', runStarted: 'started' })],
+  ['a reset run whose run record could not be removed (not_started, run begun)', viewOf({ status: 'not_started', runStarted: 'started' })],
   [
     'a corrupt progression (indeterminate error view)',
     viewOf({ status: 'error', steps: [], stepName: '', total: 0, error: 'The run state could not be verified', runStarted: 'indeterminate' }),
@@ -1335,6 +1424,21 @@ describe('flow picker — enable rule (AC3, AC6, AC7)', () => {
     expect(options(r.host)).toEqual([]);
     expect(r.select.calls()).toEqual([]);
     expect(r.clearSelection.calls()).toEqual([]);
+    picker.dispose();
+  });
+
+  it('a reset run whose run record could not be removed names the route the strip offers — Start, then Terminate — never a bare Terminate', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', viewOf({ status: 'not_started', runStarted: 'started' }));
+    await settle();
+
+    const text = r.host.textContent ?? '';
+    expect(text).not.toMatch(/Locked until you Terminate the run/);
+    expect(text).toMatch(/run record could not be removed/i);
+    expect(text).toMatch(/Start the run, then Terminate it/);
     picker.dispose();
   });
 
@@ -1661,6 +1765,43 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     return { ...r, picker };
   }
 
+  const recoverDescription = (host: HTMLElement): string =>
+    (recoverControl(host)?.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => host.ownerDocument.getElementById(id)?.textContent ?? '')
+      .join(' ');
+
+  it('a held run nothing can resume says so, naming Terminate as the way out, with no listbox and no "use the default" (AC16, WCAG 1.3.1)', async () => {
+    const r = await heldRig(heldView('record-missing'), emptyListing());
+    await openRecovery(r.host);
+
+    expect(r.host.querySelector('[role="listbox"]')).toBeNull();
+    expect(recoverControl(r.host)!.hasAttribute('aria-controls')).toBe(false);
+    expect(recoverDescription(r.host)).toMatch(/Terminate/);
+    expect(useDefaultControl(r.host)).toBeUndefined();
+    r.picker.dispose();
+  });
+
+  it('a held run whose only listed rows are unavailable still says nothing can resume it (WCAG 1.3.1 / 4.1.2)', async () => {
+    const r = await heldRig(
+      heldView('record-missing'),
+      emptyListing({ entries: [{ available: false, label: 'escaping-flow', origin: 'repo', reason: 'escapes its tier' }] }),
+    );
+    await openRecovery(r.host);
+
+    expect(recoverDescription(r.host)).toMatch(/Terminate/);
+    r.picker.dispose();
+  });
+
+  it("a held run's recovery control is described by the tier notices when nothing is listed (WCAG 1.3.1)", async () => {
+    const r = await heldRig(heldView('record-missing'), emptyListing({ tierNotices: [{ origin: 'repo', notice: 'could not be read' }] }));
+    await openRecovery(r.host);
+
+    expect(recoverDescription(r.host)).toMatch(/Repo flows: could not be read/);
+    r.picker.dispose();
+  });
+
   it('a record-missing hold says the record is missing and names the step and status a resume would continue (AC14)', async () => {
     const r = await heldRig(heldView('record-missing', 'review-step', 'in_progress'));
     await openRecovery(r.host);
@@ -1820,7 +1961,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
 
   it('a refused rebind echoes a display-sanitized, length-bounded reason (§18.7.6)', async () => {
     const r = await heldRig(heldView('record-missing'));
-    r.rebindHeldRun.respond({ ok: false, reason: `bad\u202Ename\u200B${'x'.repeat(500)}` });
+    r.rebindHeldRun.respond({ ok: false, reason: `bad\u202Ename\u200B${'x'.repeat(MAX_ECHOED_LOCK_REASON_LENGTH)}` });
     await openRecovery(r.host);
 
     option(r.host, 'beta-flow').click();
@@ -1829,7 +1970,20 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     const text = r.host.querySelector('[role="alert"]')?.textContent ?? '';
     expect(text).toMatch(/bad\s*name/);
     expect(text).not.toMatch(/[\u202E\u200B]/u);
-    expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_LOCK_REASON_LENGTH);
+    r.picker.dispose();
+  });
+
+  it("a refused rebind whose reason names a lockfile to delete shows that whole path", async () => {
+    const lockFile = `/home/${'u'.repeat(60)}/.agent-terminal/locks/worktree-${'a'.repeat(64)}.lock`;
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: false, reason: `The run could not be recovered: delete ${lockFile} and try again.` });
+    await openRecovery(r.host);
+
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toContain(lockFile);
     r.picker.dispose();
   });
 
@@ -1897,6 +2051,53 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await settle();
 
     expect(r.host.textContent ?? '').not.toContain('Refused for repo-a only');
+    r.picker.dispose();
+  });
+
+  it("a refused rebind's reason is withdrawn once the same worktree is no longer held", async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: false, reason: 'The chosen flow does not contain the current step' });
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('The chosen flow does not contain the current step');
+
+    r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started', runHold: { hold: 'not-held' } }));
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
+    r.picker.dispose();
+  });
+
+  it("a refused rebind's reason stays announced when the worktree is still held under another record shape", async () => {
+    const r = await heldRig(heldView('record-unreadable'));
+    r.rebindHeldRun.respond({ ok: false, reason: 'The run could not be recovered: disk full' });
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    r.views.fire('/repo-a', heldView('record-missing'));
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('The run could not be recovered: disk full');
+    r.picker.dispose();
+  });
+
+  it('a rebind whose call rejects announces a display-safe reason and leaves recovery offered', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    const late = r.rebindHeldRun.respondLater();
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    late.reject(new Error(`ipc channel closed‮${'x'.repeat(500)}`));
+    await settle();
+
+    const text = r.host.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(text).toMatch(/ipc channel closed/);
+    expect(text).not.toMatch(/‮/u);
+    expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    expect(recoverControl(r.host)?.disabled).toBe(false);
     r.picker.dispose();
   });
 

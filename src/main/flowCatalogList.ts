@@ -73,7 +73,7 @@ function scanTier(roots: CatalogRoots, tier: CatalogOrigin): TierScan {
 
 const UNSAFE_NAME_REASON = 'is not a valid flow id';
 
-// Quoted so no label can equal a safe id, which the picker keys its rows by (flowPicker.ts `entryKey`).
+// Quoted so no label can equal a safe id, which the picker keys its rows by (flowPicker.ts `Row.key`).
 const unsafeNameLabel = (name: string): string => `"${displaySafeEcho(name, MAX_CATALOG_ID_LENGTH)}"`;
 
 export function listCatalog(roots: CatalogRoots): FlowCatalogListing {

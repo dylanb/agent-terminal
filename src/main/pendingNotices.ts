@@ -1,5 +1,4 @@
-// §B.5 item 6 / §B.13a — a transient notice produced after a transition reply was already sent rides the next
-// `flow:state` response for its repo, exactly once. Keyed by repoKey; the receiver never re-derives the target.
+// §B.5 item 6 / §B.13a
 
 export interface PendingNotices {
   post(repoKey: string, text: string): void;

@@ -4,11 +4,11 @@ import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { createAuditRunFixture } from '../helpers/auditRun';
-import { tryPeerLockDuring } from '../helpers/lockDevices';
+import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/lockDevices';
 import { createFlowManager, flowCatalogDir, flowHomeDir, type FlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createTodoStore } from '../../src/main/todoStore';
-import { readRunBinding } from '../../src/main/runDisposition';
+import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import {
   createWorktreeLock,
   currentLockHolder,
@@ -20,10 +20,11 @@ import { createHeldRunRecovery, realHeldRunRecoveryDeps } from '../../src/main/h
 import { createFlowLifecycle } from '../../src/main/flowLifecycle';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import type { FlowStateView } from '../../src/shared/ipc';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
 // A3 (#134) T6a / T6b — the flow lifecycle owns every Terminate's side effects and takes the worktree lock itself,
-// so the UI route and the engine ports alike are refused while a live peer holds it; a rebind's lifecycle effects
-// run only for what the rebind actually did (§25 truthful-entry rule).
+// so the UI route and the engine ports alike are refused while a live or unidentifiable peer holds it; a rebind's
+// lifecycle effects run only for what the rebind actually did (§25 truthful-entry rule).
 
 const HELD_TEXT = 'Another Agent Terminal window';
 const asRoot = process.getuid?.() === 0;
@@ -47,11 +48,11 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     catalog.cleanup();
   });
 
-  function rig(opts: { lock?: (lockRoot: string) => WorktreeLock; wrapFlow?: (m: FlowManager) => Pick<FlowManager, 'terminate' | 'state'>; activeTurn?: boolean } = {}) {
+  function rig(opts: { lock?: (lockRoot: string) => WorktreeLock; wrapFlow?: (m: FlowManager) => Pick<FlowManager, 'terminate' | 'state' | 'revertStep'>; activeTurn?: boolean; worktreeName?: string } = {}) {
     const home = fx.makeWorktree('a3-lc-home');
     fx.writeFlowHome(home, { name: 'global-fallback', stepIds: ['s1', 's2'] });
     catalog.addEntryWithSteps(flowCatalogDir(home), 'resume-flow', ['s1', 's2', 's3']);
-    const wt = fx.makeWorktree('a3-lc-wt');
+    const wt = fx.makeWorktree(opts.worktreeName ?? 'a3-lc-wt');
     const lockRoot = join(fx.outsideDir('a3-lc-locks'), 'locks');
     const audit = createAuditRunFixture(fx.outsideDir('a3-lc-audit'), 'global-fallback');
     const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
@@ -189,15 +190,21 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       for (const attempt of r.probe()?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
     });
 
-    it('T6c: a lock whose holder cannot be identified does not block a Terminate', () => {
+    it('a lock whose holder cannot be identified refuses a Terminate, and the run stays begun', () => {
       const r = rig({ lock: (root) => createWorktreeLock({ lockRoot: root, holderLiveness: () => 'unreadable' }) });
       r.begin();
       r.holdAsPeer();
       const planted = readFileSync(worktreeLockFile(r.lockRoot, r.wt), 'utf8');
+      const before = r.progression();
 
-      expect(r.lifecycle.terminate(r.wt).outcome).toBe('reset');
+      const result = r.lifecycle.terminate(r.wt);
 
-      expect(r.audit.eventTypes(r.wt)).toContain('flow.terminated');
+      expect(result).toMatchObject({ outcome: 'refused', cause: 'locked' });
+      expectsUnidentifiedHolderRemedy(reasonOf(result) ?? '', worktreeLockFile(r.lockRoot, r.wt));
+      expect(result.view.notice).toBe(reasonOf(result));
+      expect(r.progression()).toBe(before);
+      expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+      expect(r.todos.list(r.wt)).not.toEqual([]);
       expect(r.notices.take(r.wt)).toBeUndefined();
       expect(readFileSync(worktreeLockFile(r.lockRoot, r.wt), 'utf8')).toBe(planted);
     });
@@ -224,6 +231,43 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
 
       expect(r.probe()?.observed()).not.toHaveLength(0);
       for (const attempt of r.probe()?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
+    });
+  });
+
+  describe('rollbackStep (a failed step bootstrap)', () => {
+    it('a first-step rollback resets the run to never-started while holding the worktree lock: a live peer trying it then is refused as held', () => {
+      let probe: ReturnType<typeof tryPeerLockDuring> | undefined;
+      const r = rig({
+        wrapFlow: (m) => ({
+          ...m,
+          revertStep: (k: string, step: string) => {
+            probe ??= tryPeerLockDuring(r.lockRoot, k);
+            return probe.wrap(m.revertStep)(k, step);
+          },
+        }),
+      });
+      r.begin();
+
+      const view = r.lifecycle.rollbackStep(r.wt, 's1');
+
+      expect(view.status).toBe('not_started');
+      expect(view.runStarted).toBe('never-started');
+      expect(probe?.observed()).not.toHaveLength(0);
+      for (const attempt of probe?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
+    });
+
+    it('is refused with the lock reason while a live peer holds the worktree lock, leaving the run begun and its record in place', () => {
+      const { wt, lifecycle, begin, progression, holdAsPeer, manager } = rig();
+      begin();
+      holdAsPeer();
+      const before = progression();
+      const record = readRunBinding(wt);
+
+      expect(() => lifecycle.rollbackStep(wt, 's1')).toThrow(HELD_TEXT);
+
+      expect(progression()).toBe(before);
+      expect(readRunBinding(wt)).toEqual(record);
+      expect(manager.state(wt)).toMatchObject({ status: 'in_progress', runStarted: 'started' });
     });
   });
 
@@ -255,6 +299,20 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(notices.take(wt)).toBeUndefined();
     });
 
+    it.skipIf(asRoot)('a failed refusal whose reason carries a hostile worktree path posts it display-safe and bounded', () => {
+      const r = rig({ worktreeName: `a3-lc-wt‮${'x'.repeat(220)}` });
+      r.begin();
+
+      const result = withReadOnlyFlowHome(r.wt, () => r.lifecycle.terminateUnattended(r.wt));
+
+      expect(result).toMatchObject({ outcome: 'refused', cause: 'failed' });
+      const posted = r.notices.take(r.wt) ?? '';
+      expect(posted).toMatch(/\S/);
+      expect(posted).not.toMatch(/‮/u);
+      expect(posted.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+      expect(reasonOf(result)).toBe(posted);
+    });
+
     it('a not-begun refusal posts nothing', () => {
       const { wt, effects, lifecycle, notices } = rig();
 
@@ -274,15 +332,20 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       for (const attempt of r.probe()?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
     });
 
-    it('T6c: a lock whose holder cannot be identified does not block a Terminate, and nothing is posted', () => {
+    it('a lock whose holder cannot be identified refuses a Terminate, and its reason is posted exactly once', () => {
       const r = rig({ lock: (root) => createWorktreeLock({ lockRoot: root, holderLiveness: () => 'unreadable' }) });
       r.begin();
       r.holdAsPeer();
       const planted = readFileSync(worktreeLockFile(r.lockRoot, r.wt), 'utf8');
+      const before = r.progression();
 
-      expect(r.lifecycle.terminateUnattended(r.wt).outcome).toBe('reset');
+      const result = r.lifecycle.terminateUnattended(r.wt);
 
-      expect(r.audit.eventTypes(r.wt)).toContain('flow.terminated');
+      expect(result).toMatchObject({ outcome: 'refused', cause: 'locked' });
+      expectsUnidentifiedHolderRemedy(reasonOf(result) ?? '', worktreeLockFile(r.lockRoot, r.wt));
+      expect(r.progression()).toBe(before);
+      expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+      expect(r.notices.take(r.wt)).toBe(reasonOf(result));
       expect(r.notices.take(r.wt)).toBeUndefined();
       expect(readFileSync(worktreeLockFile(r.lockRoot, r.wt), 'utf8')).toBe(planted);
     });
@@ -372,6 +435,31 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
 describe('the flow manager names why a Terminate was refused (A3 T6b)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
+
+  it.skipIf(asRoot)('a reset whose run record cannot be removed notices it display-safe and bounded (§18.7.6)', () => {
+    const home = fx.makeWorktree('a3-mgr-notice-home');
+    fx.writeFlowHome(home, { name: 'g', stepIds: ['s1'] });
+    const wt = fx.makeWorktree('a3-mgr-notice-wt');
+    const manager = createFlowManager({ globalDir: home });
+    expect(manager.start(wt).status).toBe('in_progress');
+    const record = runDispositionFile(wt);
+    const stuck = join(record, `locked\u202e${'x'.repeat(220)}`);
+    rmSync(record);
+    mkdirSync(stuck, { recursive: true });
+    writeFileSync(join(stuck, 'f'), '');
+    chmodSync(stuck, 0o555);
+    try {
+      const result = manager.terminate(wt);
+
+      expect(result.outcome).toBe('reset');
+      const notice = result.view.notice ?? '';
+      expect(notice).toMatch(/run record/);
+      expect(notice).not.toMatch(/\u202e/u);
+      expect(notice.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+    } finally {
+      chmodSync(stuck, 0o755);
+    }
+  });
 
   it('a never-started run is refused with cause not-begun', () => {
     const home = fx.makeWorktree('a3-mgr-home');

@@ -487,7 +487,7 @@ async function createWindow(): Promise<void> {
         return { step: s.stepName, status: s.status, issue: s.refs?.ticket ?? null };
       },
       emitError: (repoKey, step, reason) => send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey, step, reason }),
-      revert: (repoKey, step) => flow.revertStep(repoKey, step),
+      revert: (repoKey, step) => lifecycle.rollbackStep(repoKey, step),
       push: () => pushFlowChanged(),
       defer: (fn) => setImmediate(fn),
     }),
@@ -637,7 +637,7 @@ async function createWindow(): Promise<void> {
       ) {
         return false;
       }
-      flow.revertStep(job.repoDir, job.stepId);
+      lifecycle.rollbackStep(job.repoDir, job.stepId);
       pushFlowChanged();
       return true;
     },

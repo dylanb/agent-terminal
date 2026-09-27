@@ -10,7 +10,7 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
+import { clearDisposition, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
@@ -18,7 +18,8 @@ import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinit
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH, stripDisplayControlChars } from '../shared/controlChars';
+import { readBoundedNoFollow } from './boundedRead';
+import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { offersHeldRunRecovery, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
@@ -157,7 +158,32 @@ export function loadFlowDefinitionFromFile(file: string, relLabel: string = file
     if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
     return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
+  return parseFlowDefinition(raw, file);
+}
 
+export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
+
+/** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
+ *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
+export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+  const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
+  if (read.ok) return parseFlowDefinition(read.text, file);
+  switch (read.cause) {
+    case 'absent':
+      return { ok: false, error: `no flow.yaml found at ${file}` };
+    case 'over-cap':
+      return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
+    case 'unreadable':
+      return {
+        ok: false,
+        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+      };
+    default:
+      return read.cause satisfies never;
+  }
+}
+
+function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
   try {
     doc = yaml.load(raw);
@@ -325,10 +351,10 @@ export function createFlowMachine(
         position: 0,
         total: 0,
         status: 'error',
-        // CWE-117/CWE-1007 (§16.3): the load-error message interpolates repo-authored content (a step id, a
-        // kind:, a js-yaml snippet), so strip display-unsafe control chars ONCE over the whole composed
+        // CWE-117/CWE-1007 (§16.3, §18.7.6): the load-error message interpolates repo-authored content (a step
+        // id, a kind:, a js-yaml snippet), so it is made display-safe and bounded ONCE over the whole composed
         // message at the single place MachineView.error is populated (§B.3).
-        error: stripDisplayControlChars(load.error),
+        error: displaySafeEcho(load.error, MAX_ECHOED_LOAD_ERROR_LENGTH),
         ...(named !== null ? { userTitle: named } : {}),
       };
     };
@@ -565,7 +591,10 @@ export function createFlowMachine(
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
       else {
-        status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+        // §18.7.4 (v2.155): no previous step, so the run resets to never-started as a Terminate does.
+        status = 'not_started';
+        inputs = {};
+        repeatCounts = Object.create(null);
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -638,7 +667,8 @@ export interface FlowManager {
   /** §28.4 D1 — the impl-slice a repo's flow is on (default 1). The orchestrator keys each slice's result
    *  artifact off this so a re-entered RED writes fresh. Delegates to the machine keyed by `repoKey`. */
   currentSlice(repoKey: string): number;
-  /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
+  /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27); from the first step,
+   *  reset the run to never-started as a Terminate does (§18.7.4), throwing when its run record cannot be removed. */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
@@ -746,7 +776,35 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     undo: (k) => viewOf(k, (m) => m.undo()),
     reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
-    revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
+    revertStep: (k, fromStepId) => {
+      // §18.7.4 (v2.155) — a first-step rollback resets the run to never-started, so its record goes too, and first:
+      // a failed removal leaves the run in_progress, where Terminate is offered and retries it. `machine` is taken
+      // before the removal: without its record a begun catalog run resolves as held, so re-resolving afterwards
+      // would reset a different machine.
+      const { machine } = machineFor(k);
+      const at = machine.state();
+      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId) {
+        return viewOf(k, (m) => m.revertStep(fromStepId));
+      }
+      const record = readRunBinding(k);
+      try {
+        clearDisposition(k);
+      } catch (e) {
+        throw new Error(`the run record could not be removed: ${errMsg(e)}`);
+      }
+      try {
+        return withRunStarted(k, machine.revertStep(fromStepId));
+      } catch (e) {
+        cache.delete(k);
+        if (record === null) throw e;
+        try {
+          recordDisposition(k, record);
+        } catch (restore) {
+          throw new Error(`${errMsg(e)}; the run record could not be restored: ${errMsg(restore)}`);
+        }
+        throw e;
+      }
+    },
     terminate: (k) => {
       // §18.7.2 AC6 — progression is reset BEFORE the begun marker is cleared: with the marker still present the
       // run resolves its recorded source, and a run held at the §18.1 error (its source unverifiable) is reset
@@ -758,14 +816,17 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
         else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
         else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
       } catch (e) {
-        const reason = `The run could not be terminated: ${errMsg(e)}`;
+        const reason = displaySafeEcho(`The run could not be terminated: ${errMsg(e)}`, MAX_ECHOED_REASON_LENGTH);
         return { outcome: 'refused', cause: 'failed', reason, view: withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: reason }) };
       }
       let notice: string | undefined;
       try {
         clearDisposition(k);
       } catch (e) {
-        notice = `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`;
+        notice = displaySafeEcho(
+          `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`,
+          MAX_ECHOED_REASON_LENGTH,
+        );
       }
       const view = viewOf(k, (m) => m.state());
       return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };

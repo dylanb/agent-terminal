@@ -14,13 +14,13 @@ import {
   worktreeLockFile,
   type WorktreeLock,
 } from '../../src/main/worktreeLock';
-import { tryPeerLockDuring } from '../helpers/lockDevices';
+import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/lockDevices';
 
 // A2 (#133) §18.7.4 AC7/AC11 — the composed write gate: a new active-flow selection (set or clear) is permitted
 // ONLY while the run has never started; it is refused once the run has begun, and (fail-closed, CWE-841) while
-// begun-ness is indeterminate; a first-step revertStep keeps it locked. The write is serialized under the
-// cross-process worktree lock and refused only while a live peer holds it (A3 #134 T6c). Observable behavior over real fixtures:
-// a refused write leaves active-flow.yaml byte-for-byte unchanged (§18.7.2 AC8).
+// begun-ness is indeterminate; a first-step revertStep unlocks it (v2.155). The write is serialized under the
+// cross-process worktree lock and refused while a live or unidentifiable peer holds it (A3 #134 T6c as narrowed at impl round 2). Observable
+// behavior over real fixtures: a refused write leaves active-flow.yaml byte-for-byte unchanged (§18.7.2 AC8).
 describe('createActiveFlowGate — the AC7 started-ness write gate under the AC11 worktree lock (§18.7.4)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
@@ -108,22 +108,22 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
     expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
   });
 
-  it('stays locked across a first-step revertStep (the durable marker survives the rollback)', () => {
+  // Operator decision, #134 impl round 6: a first-step rollback deletes the run record, so the run is never-started.
+  it('unlocks after a first-step revertStep, writing the new selection', () => {
     const wt = fx.makeWorktree('a2-gate-revert');
     const globalDir = fx.makeWorktree('a2-gate-revert-global');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['red', 'green'] });
     const gate = gateFor();
     gate.set(wt, 'first');
-    const before = readFileSync(activeFlowPointerFile(wt));
 
     const mgr = createFlowManager({ globalDir });
     mgr.start(wt); // commits the durable run-begun disposition
-    mgr.revertStep(wt, 'red'); // display status back to not_started, but the run HAS begun
+    mgr.revertStep(wt, 'red');
 
     const res = gate.set(wt, 'second');
 
-    expect(res.ok).toBe(false);
-    expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
+    expect(res.ok).toBe(true);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'second' });
   });
 
   it('refuses with a visible reason when the worktree lock is held by a live peer, leaving the pointer unchanged (AC11)', () => {
@@ -143,19 +143,22 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
     expect(readFileSync(activeFlowPointerFile(wt))).toEqual(before);
   });
 
-  describe('only a lock held by a live peer blocks the write (A3 #134 T6c)', () => {
-    it('a peer holder whose identity cannot be read does not block the write, and its lockfile is unchanged', () => {
+  describe('only an unusable lock lets the write run without it (A3 #134 T6c as narrowed at impl round 2)', () => {
+    it('a peer holder whose identity cannot be read refuses the write, and its lockfile is unchanged', () => {
       const wt = fx.makeWorktree('a3-gate-unreadable-holder');
       const lockRoot = lockRootFor();
       const lockFile = worktreeLockFile(lockRoot, wt);
       mkdirSync(dirname(lockFile), { recursive: true });
       writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
       const before = readFileSync(lockFile);
+      writeActiveFlow(wt, 'prior');
+      const pointerBefore = readFileSync(activeFlowPointerFile(wt));
 
       const res = gateFor(createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable' })).set(wt, 'picked');
 
-      expect(res).toEqual({ ok: true });
-      expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'picked' });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expectsUnidentifiedHolderRemedy(res.reason, lockFile);
+      expect(readFileSync(activeFlowPointerFile(wt))).toEqual(pointerBefore);
       expect(readFileSync(lockFile)).toEqual(before);
     });
 

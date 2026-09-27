@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import {
   createWorktreeLock,
@@ -10,17 +10,26 @@ import {
   MAX_ACQUIRE_ATTEMPTS,
   processStartTime,
   PROCESS_START_TIME_TIMEOUT_MS,
+  selfLockHolder,
   serializeLockHolder,
   worktreeLockFile,
   type LockAcquire,
   type LockHolder,
 } from '../../src/main/worktreeLock';
-import { livenessByHolder, lockAlwaysPresentAtCreate } from '../helpers/lockDevices';
+import { expectsUnidentifiedHolderRemedy, livenessByHolder, lockAlwaysPresentAtCreate } from '../helpers/lockDevices';
+import { unidentifiedHolderRemedy } from '../helpers/lockRemedy';
+import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_PATH_LENGTH } from '../../src/shared/controlChars';
 
 // A2 (#133) §18.7.4 AC11 — the cross-process worktree lock serializing flow:start and the active-flow pointer
 // write. Real lockfiles on a real filesystem; real PIDs for the dead / live-mismatch holders. Every acquirer that
-// meets a live holder names its liveness verdict, so no cause depends on the host's process table. A3 (#134) T6c:
-// only a lock held by a live peer refuses the critical section.
+// meets a live holder names its liveness verdict, so no cause depends on the host's process table. A3 (#134) T6c as narrowed at impl round 2:
+// only an unusable lock lets the critical section run without it.
+const fileNamedIn = (refused: { ok: boolean; reason?: string }): string => {
+  const named = /\bdelete (\/.+) and try again\./.exec(refused.reason ?? '')?.[1];
+  if (named === undefined) throw new Error(`the refusal names no file to delete: ${JSON.stringify(refused)}`);
+  return named;
+};
+
 describe('worktree lock (§18.7.4 AC11)', () => {
   const fx = createWorktreeFixture();
   afterEach(() => fx.cleanup());
@@ -88,6 +97,24 @@ describe('worktree lock (§18.7.4 AC11)', () => {
     expect(lock.acquire(wt).ok).toBe(true);
   });
 
+  it('a critical section nested inside another on the same lock and worktree runs, while a peer stays refused', () => {
+    const { lockRoot, wt } = setup();
+    const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
+    const peer = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
+    let peerSaw: LockAcquire | undefined;
+
+    const outer = lock.withWorktreeLock(wt, () =>
+      lock.withWorktreeLock(wt, () => {
+        peerSaw = peer.acquire(wt);
+        return 'inner ran';
+      }),
+    );
+
+    expect(outer).toEqual({ ok: true, value: { ok: true, value: 'inner ran' } });
+    expect(peerSaw).toMatchObject({ ok: false, cause: 'held' });
+    expect(peer.acquire(wt).ok).toBe(true);
+  });
+
   it('withWorktreeLock refuses without running the critical section while the lock is held', () => {
     const { lockRoot, wt } = setup();
     const held = createWorktreeLock({ lockRoot }).acquire(wt);
@@ -123,22 +150,83 @@ describe('worktree lock (§18.7.4 AC11)', () => {
     const file = plant(lockRoot, wt, currentLockHolder());
     const before = readFileSync(file);
 
-    expect(createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }).acquire(wt)).toMatchObject({
-      ok: false,
-      cause: 'held',
-    });
+    const got = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }).acquire(wt);
+    expect(got).toMatchObject({ ok: false, cause: 'held' });
+    if (!got.ok) {
+      expect(got.reason).not.toContain(unidentifiedHolderRemedy(file).path);
+      expect(got.reason).not.toMatch(unidentifiedHolderRemedy(file).deletes);
+    }
     expect(readFileSync(file)).toEqual(before);
   });
 
-  it('a holder whose identity cannot be read is never reclaimed, and the critical section runs without the lock', () => {
+  it("a start-time probe that fails once does not leave this process's later lockfiles unidentifiable", () => {
+    let probes = 0;
+    const holder = selfLockHolder(() => (probes++ === 0 ? null : 'Mon Sep 27 10:00:00 2026'));
+
+    expect(holder().startTime).toBeNull();
+    expect(holder()).toEqual({ pid: process.pid, startTime: 'Mon Sep 27 10:00:00 2026' });
+    expect(holder()).toEqual({ pid: process.pid, startTime: 'Mon Sep 27 10:00:00 2026' });
+  });
+
+  it('a holder whose identity cannot be read is never reclaimed, and the critical section does not run', () => {
     const { lockRoot, wt } = setup();
     const file = plant(lockRoot, wt, { pid: process.pid, startTime: 'whatever' });
     const before = readFileSync(file);
     const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable' });
 
     expect(lock.acquire(wt)).toMatchObject({ ok: false, cause: 'holder-unreadable' });
-    expect(lock.withWorktreeLock(wt, () => 'ran')).toEqual({ ok: true, value: 'ran' });
+    let ran = false;
+    const got = lock.withWorktreeLock(wt, () => {
+      ran = true;
+    });
+    expect(got.ok).toBe(false);
+    if (!got.ok) expectsUnidentifiedHolderRemedy(got.reason, file);
+    expect(ran).toBe(false);
     expect(readFileSync(file)).toEqual(before);
+  });
+
+  it("deleting the file an unidentified holder's refusal names and trying again runs the critical section", () => {
+    const { lockRoot, wt } = setup();
+    plant(lockRoot, wt, { pid: process.pid, startTime: 'whatever' });
+    const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable' });
+    const refused = lock.withWorktreeLock(wt, () => 'ran');
+
+    rmSync(fileNamedIn(refused));
+
+    expect(lock.withWorktreeLock(wt, () => 'ran')).toEqual({ ok: true, value: 'ran' });
+  });
+
+  describe("an unidentified holder's lockfile path that cannot be shown as it is", () => {
+    const refusedUnder = (home: string): { reason: string; file: string } => {
+      const lockRoot = join(home, 'locks');
+      const wt = fx.makeWorktree('a3-lock-unshowable');
+      const file = plant(lockRoot, wt, { pid: process.pid, startTime: 'whatever' });
+      const got = createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable' }).acquire(wt);
+      return { reason: got.ok ? '' : got.reason, file };
+    };
+
+    it.each([
+      ['carries bidi and zero-width characters', () => fx.outsideDir(`a3-lock-home-\u202Ehostile\u200B-`)],
+      [
+        'is longer than the echo bound',
+        () => {
+          let dir = fx.outsideDir('a3-lock-long-home');
+          while (dir.length <= MAX_ECHOED_PATH_LENGTH) dir = join(dir, 'd'.repeat(200));
+          mkdirSync(dir, { recursive: true });
+          return dir;
+        },
+      ],
+    ])('%s: the reason names the lockfile by its name alone, never an altered or cut path, and stays bounded', (_, home) => {
+      const { reason, file } = refusedUnder(home());
+
+      const remedy = unidentifiedHolderRemedy(file);
+      expect(reason).toContain(basename(remedy.path));
+      expect(reason).toMatch(remedy.deletes);
+      expect(reason).toMatch(remedy.retries);
+      expect(reason).not.toContain(displaySafeEcho(dirname(remedy.path), MAX_ECHOED_PATH_LENGTH));
+      expect(reason).not.toMatch(/[\u202E\u200B]/u);
+      expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_LOCK_REASON_LENGTH);
+    });
   });
 
   it('two acquirers that both find the same stale lock: exactly one wins the reclaim', async () => {
@@ -178,6 +266,48 @@ describe('worktree lock (§18.7.4 AC11)', () => {
     expect(lock.withWorktreeLock(wt, () => 'ran')).toEqual({ ok: true, value: 'ran' });
     expect(readdirSync(lockRoot)).toEqual([]);
     expect(createWorktreeLock({ lockRoot }).acquire(wt).ok).toBe(true);
+  });
+
+  it("a lock write that faults while a live peer holds the lock refuses as held, never running the critical section", () => {
+    const { lockRoot, wt } = setup();
+    const peer = plant(lockRoot, wt, { pid: process.pid, startTime: 'peer' });
+    const diskFull = (): void => {
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    };
+    const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching', writeNewFile: diskFull });
+    let ran = false;
+
+    expect(lock.acquire(wt)).toMatchObject({ ok: false, cause: 'held' });
+    expect(lock.withWorktreeLock(wt, () => (ran = true)).ok).toBe(false);
+    expect(ran).toBe(false);
+    expect(readFileSync(peer, 'utf8')).toBe(serializeLockHolder({ pid: process.pid, startTime: 'peer' }));
+  });
+
+  it('a lock write that faults while an unidentifiable holder has the lock refuses with the delete-and-retry remedy', () => {
+    const { lockRoot, wt } = setup();
+    const held = plant(lockRoot, wt, { pid: process.pid, startTime: 'peer' });
+    const diskFull = (): void => {
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    };
+
+    const got = createWorktreeLock({ lockRoot, holderLiveness: () => 'unreadable', writeNewFile: diskFull }).acquire(wt);
+
+    expect(got).toMatchObject({ ok: false, cause: 'holder-unreadable' });
+    expectsUnidentifiedHolderRemedy(got.ok ? '' : got.reason, held);
+  });
+
+  it('a lock-unusable reason carrying a hostile, overlong fault is display-safe and bounded (§18.7.6)', () => {
+    const { lockRoot, wt } = setup();
+    const hostileFault = (): void => {
+      throw new Error(`EIO: ‮txt.exe​\u0007 ${'x'.repeat(2 * MAX_ECHOED_LOCK_REASON_LENGTH)}`);
+    };
+    const got = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching', writeNewFile: hostileFault }).acquire(wt);
+
+    expect(got).toMatchObject({ ok: false, cause: 'lock-unusable' });
+    const reason = got.ok ? '' : got.reason;
+    expect(reason).toMatch(/EIO/);
+    expect(reason).not.toMatch(/[‮​\u0000-\u001F]/);
+    expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_LOCK_REASON_LENGTH);
   });
 
   it('a lock root that is a regular file reads lock-unusable, and the critical section runs without the lock, leaving the file unchanged', () => {
@@ -242,7 +372,7 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       expect([readFileSync(file), readFileSync(guard)]).toEqual(before);
     });
 
-    it('an unreadable reclaim guard over a dead holder is holder-unreadable, and the critical section runs', () => {
+    it('an unreadable reclaim guard over a dead holder is holder-unreadable, and the critical section does not run', () => {
       const { lockRoot, wt } = setup();
       const file = plant(lockRoot, wt, DEAD);
       const guard = plantGuard(lockRoot, wt, GUARD);
@@ -253,8 +383,24 @@ describe('worktree lock (§18.7.4 AC11)', () => {
 
       expect(reclaims).toBe(MAX_ACQUIRE_ATTEMPTS);
       expect(got).toMatchObject({ ok: false, cause: 'holder-unreadable' });
-      expect(runs(lockRoot, wt, liveness)).toBe(true);
+      if (!got.ok) expectsUnidentifiedHolderRemedy(got.reason, guard);
+      expect(runs(lockRoot, wt, liveness)).toBe(false);
       expect([readFileSync(file), readFileSync(guard)]).toEqual(before);
+    });
+
+    it("deleting the reclaim guard an unidentified holder's refusal names and trying again runs the critical section", () => {
+      const { lockRoot, wt } = setup();
+      plant(lockRoot, wt, DEAD);
+      plantGuard(lockRoot, wt, GUARD);
+      const lock = createWorktreeLock({
+        lockRoot,
+        holderLiveness: livenessByHolder([[DEAD, 'dead'], [GUARD, 'unreadable']], 'live-matching'),
+      });
+      const refused = lock.withWorktreeLock(wt, () => 'ran');
+
+      rmSync(fileNamedIn(refused));
+
+      expect(lock.withWorktreeLock(wt, () => 'ran')).toEqual({ ok: true, value: 'ran' });
     });
 
     it('reclaims lost to a dead holder re-planted on every attempt are lock-unusable, and the critical section runs', () => {

@@ -3,8 +3,8 @@
 // "raw durable started-ness" contract, distinct from the load-maskable display status). It reads the
 // progression through flowState's one confined reader, so this safety-gate read is path-jailed the same way the
 // store's is and the two cannot drift (§18.7.4/CWE-59), and composes the durable run-disposition marker's
-// PRESENCE (runDisposition) so a begun run whose first step is rolled back — the display status back to
-// not_started — still reads 'started' and keeps a new selection locked (AC7/CWE-841).
+// PRESENCE (runDisposition) so a begun run reads 'started' and keeps a new selection locked for as long as its marker
+// exists, whatever its display status (AC7/CWE-841).
 
 import { type StartednessSignal } from '../shared/flowStarted';
 import { isBegunStatus, type BegunStatus, type ProgressionBegunness } from '../shared/runHold';
@@ -43,9 +43,8 @@ export function progressionBegunness(worktreeDir: string): ProgressionBegunness 
 export function worktreeStartedness(worktreeDir: string): StartednessSignal {
   const progression = progressionBegunness(worktreeDir);
   if (progression === 'indeterminate') return 'indeterminate';
-  // Consult the durable marker before the display status, which it overrides: present → 'started' (survives a
-  // revertStep), unverifiable → 'indeterminate'; only a genuinely absent marker defers to the progression
-  // (§18.7.4/CWE-841).
+  // Consult the durable marker before the display status, which it overrides: present → 'started', unverifiable →
+  // 'indeterminate'; only a genuinely absent marker defers to the progression (§18.7.4/CWE-841).
   const disposition = readDisposition(worktreeDir);
   if (disposition === 'indeterminate') return 'indeterminate';
   if (disposition === 'present') return 'started';

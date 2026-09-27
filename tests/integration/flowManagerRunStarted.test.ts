@@ -14,15 +14,14 @@ describe('FlowStateView.runStarted — raw durable started-ness on the flow view
     return { wt, mgr: createFlowManager({ globalDir: fx.makeWorktree(`${prefix}-global`) }) };
   };
 
-  it('tracks never-started → started → (revertStep keeps) started → Terminate → never-started', () => {
+  it('tracks never-started → started → (a first-step revertStep resets to) never-started → started → Terminate → never-started', () => {
     const { wt, mgr } = run('a2-runstarted');
     expect(mgr.state(wt).runStarted).toBe('never-started');
     expect(mgr.start(wt).runStarted).toBe('started');
     const reverted = mgr.revertStep(wt, 'red');
     expect(reverted.status).toBe('not_started');
-    expect(reverted.runStarted).toBe('started');
-    expect(mgr.state(wt).runStarted).toBe('started');
-    mgr.start(wt);
+    expect(reverted.runStarted).toBe('never-started');
+    expect(mgr.start(wt).runStarted).toBe('started');
     expect(mgr.terminate(wt).view.runStarted).toBe('never-started');
     expect(mgr.state(wt).runStarted).toBe('never-started');
   });

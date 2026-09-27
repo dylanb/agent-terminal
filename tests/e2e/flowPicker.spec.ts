@@ -164,6 +164,45 @@ function seedLoopEntry(root: string, id: string, stepId: string, input: string):
   );
 }
 
+// Its first step picks up a ticket through the bundled impl-loop, which has no pickup: entering it fails and rolls back.
+function seedFailingPickupEntry(root: string, id: string, stepId: string): void {
+  const entry = join(flowCatalogDir(root), id);
+  mkdirSync(entry, { recursive: true });
+  writeFileSync(
+    join(entry, FLOW_DEF_FILE),
+    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n    bootstrap: pickup\n` +
+      `  - id: ${stepId}-next\n    kind: manual\n`,
+  );
+}
+
+test('a first-step bootstrap failure leaves no run record: the picker unlocks with no Terminate, and a new Start runs (§18.7.4, v2.155)', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  seedFailingPickupEntry(harness.home, 'pickup-flow', 'p-first');
+  harness.seedGlobalEntry('other-flow', ['o-first', 'o-second']);
+  const repo = harness.repo('agent-term-e2e-a3-first-rollback-');
+  harness.selectFlow(repo, 'pickup-flow');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('p-first', { timeout: 10_000 });
+  await flowControl(page).click();
+
+  const bootstrapError = page.locator('#flow-error-host .flow-modal');
+  await expect(bootstrapError).toContainText('no pickup to run', { timeout: 15_000 });
+  await bootstrapError.locator('.dismiss').click();
+  await expect(flowControl(page)).toHaveText('Start', { timeout: 10_000 });
+
+  await expect.poll(() => existsSync(runDispositionFile(repo)), { timeout: 10_000 }).toBe(false);
+  await expect(pickerHost(page)).not.toContainText('Locked until you Terminate the run');
+  await expect(flowTerminate(page)).toHaveCount(0);
+  await openPicker(page);
+  await pickerOption(page, 'other-flow').click();
+  await expect(harness.stepName(1)).toHaveText('o-first', { timeout: 10_000 });
+  await flowControl(page).click();
+  await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
+});
+
 test('AC3: with no flow to run, the picker is usable from the error view, and a pick shows that flow at Not started with Start', { tag: '@ownapp' }, async () => {
   const harness = createFlowPickerHarness();
   h = harness;

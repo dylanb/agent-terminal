@@ -1,9 +1,8 @@
 // A2 (#133) §18.7.4 AC7/AC11 — the active-flow write gate: a new selection (set or clear) is permitted only while
 // the run has never started, and refused once it has begun or (fail-closed, CWE-841) while begun-ness is
-// indeterminate. The started-ness read and the write both run under the cross-process worktree lock's policy that
-// flow:start also takes, so a live peer's start cannot land between them (CWE-367; the lock-free window when the
-// lock is unusable is the operator's accepted residual, A3 #134 T6c). A refusal leaves the prior on-disk
-// selection in place; a write fault surfaces a reason, never an unrecoverable state (CODE-STANDARDS.md).
+// indeterminate. The started-ness read and the write run under the worktree lock flow:start also takes (CWE-367); the
+// lock-free window when the lock is unusable is an accepted residual (§18.7.4, v2.156). A refusal leaves the prior
+// on-disk selection in place; a write fault surfaces a reason, never an unrecoverable state (CODE-STANDARDS.md).
 import { clearActiveFlow, readActiveFlow, writeActiveFlow } from './activeFlowPointer';
 import { worktreeStartedness } from './startedness';
 import { isSelectionLocked } from '../shared/flowStarted';
@@ -37,7 +36,8 @@ export function createActiveFlowGate(lock: Pick<WorktreeLock, 'withWorktreeLock'
       }
       return { ok: true };
     });
-    const result = locked.ok ? locked.value : { ok: false as const, reason: locked.reason };
+    if (!locked.ok) return locked;
+    const result = locked.value;
     return result.ok ? result : { ok: false, reason: displaySafeEcho(result.reason, MAX_ECHOED_REASON_LENGTH) };
   };
 

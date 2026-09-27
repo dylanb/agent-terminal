@@ -947,3 +947,78 @@ describe('the idle flow picker keeps its live region rendered (UI-STANDARDS §4,
     picker.dispose();
   });
 });
+
+// WCAG 1.4.10 / 1.4.4 — no picker control's label is clipped or overflows the 200px rail, even for a 64-char id.
+describe('the flow picker fits the rail without clipping its labels (WCAG 1.4.10)', () => {
+  it('the trigger, "use the default" and the recover control each show their whole label inside the rail', async () => {
+    const longId = 'feature-dev-with-review-and-a-very-long-descriptive-flow-name-xyz';
+    document.body.innerHTML = '<div class="rail" style="width:200px;height:600px"><div class="blk flowpicker"></div></div>';
+    const rail = document.querySelector<HTMLElement>('.rail')!;
+    const host = rail.querySelector<HTMLElement>('.flowpicker')!;
+    let show: ((...args: FlowViewArgs) => void) | undefined;
+    const listing: FlowCatalogListing = {
+      entries: [{ available: true, id: longId, origin: 'global' }],
+      tierNotices: [],
+      selection: { kind: 'value', id: longId },
+      hasLocalFlow: false,
+      hasGlobalFallback: false,
+      resumable: [{ origin: 'global', id: longId }],
+    };
+    const picker = createFlowPicker(host, {
+      onView: (cb) => {
+        show = cb;
+        return () => {};
+      },
+      listCatalog: async () => ({ ok: true, listing }),
+      select: async () => ({ ok: true }),
+      clearSelection: async () => ({ ok: true }),
+      rebindHeldRun: async () => ({ ok: false, reason: 'no' }),
+    });
+    const railBox = (): { left: number; right: number } => {
+      const r = rail.getBoundingClientRect();
+      const cs = getComputedStyle(rail);
+      return { left: r.left + parseFloat(cs.paddingLeft), right: r.right - parseFloat(cs.paddingRight) };
+    };
+    const expectWhole = (el: HTMLElement | null, name: string): void => {
+      expect(el, name).not.toBeNull();
+      expect(el!.scrollWidth, `${name} clips its label`).toBeLessThanOrEqual(el!.clientWidth);
+      expect(el!.getBoundingClientRect().right, `${name} overflows the rail`).toBeLessThanOrEqual(railBox().right + 0.5);
+    };
+
+    show!('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'not_started', runStarted: 'never-started' });
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-trigger')?.textContent).toBe(`Flow: ${longId}`));
+    host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-clear')).not.toBeNull());
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-trigger'), 'trigger');
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-clear'), 'use the default');
+
+    show!('/repo', {
+      stepName: '', steps: [], position: 0, total: 0, status: 'error', error: 'held', runStarted: 'started',
+      runHold: { hold: 'record-missing', step: 's2', status: 'in_progress' },
+    });
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-recover')).not.toBeNull());
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-trigger'), 'locked trigger');
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-recover'), 'recover');
+    picker.dispose();
+  });
+});
+
+// WCAG 1.4.10 — the unidentified-holder remedy names a lockfile path the user must act on; an unbroken path token
+// wraps inside the 200px rail rather than running off its edge behind a sideways scroll.
+describe('a lock refusal naming a lockfile path wraps inside the rail (WCAG 1.4.10)', () => {
+  const lockFile = `/Users/someone/.agent-terminal/flows/locks/worktree-${'a1b2c3d4'.repeat(8)}.lock`;
+  it.each([
+    ['the flow strip notice', '<div class="flowstrip"><div class="flow-notice"></div></div>', '.flow-notice'],
+    ['the flow picker alert', '<div class="blk flowpicker"><div class="flow-picker-alert" role="alert"></div></div>', '.flow-picker-alert'],
+  ])('%s keeps the whole path inside the rail', (_name, inner, selector) => {
+    document.body.innerHTML = `<div class="rail" style="width:200px;height:600px">${inner}</div>`;
+    const rail = document.querySelector<HTMLElement>('.rail')!;
+    const el = rail.querySelector<HTMLElement>(selector)!;
+    el.textContent = `If no other Agent Terminal window is working in this worktree, delete ${lockFile} and try again.`;
+    const railRight = rail.getBoundingClientRect().right - parseFloat(getComputedStyle(rail).paddingRight);
+
+    expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth);
+    expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(railRight + 0.5);
+    expect(rail.scrollWidth).toBeLessThanOrEqual(rail.clientWidth);
+  });
+});

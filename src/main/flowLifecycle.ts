@@ -1,12 +1,11 @@
-// A3 (#134) §18.7.2 / §18.7.4 / §25 — every Terminate's and every held-run rebind's lifecycle side effects. Each
-// Terminate is taken under the worktree lock, so the UI route and the engine ports cannot interleave with a rebind.
+// §18.7.2 / §18.7.4 / §25
 
 import type { FlowStateView, RebindChoice, RebindResult } from '../shared/ipc';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import type { FlowManager } from './flow';
 import type { HeldRunRecovery } from './heldRunRecovery';
 import type { PendingNotices } from './pendingNotices';
 import type { WorktreeLock } from './worktreeLock';
+import { errMsg } from './errno';
 
 export type LifecycleTerminateResult =
   | { outcome: 'reset'; view: FlowStateView }
@@ -15,12 +14,12 @@ export type LifecycleTerminateResult =
 
 export interface FlowLifecycleDeps {
   lock: Pick<WorktreeLock, 'withWorktreeLock'>;
-  flow: Pick<FlowManager, 'terminate' | 'state'>;
+  flow: Pick<FlowManager, 'terminate' | 'state' | 'revertStep'>;
   recovery: Pick<HeldRunRecovery, 'rebind'>;
   pendingNotices: Pick<PendingNotices, 'post'>;
   /** An app-loop turn bound to the run's current definition is in flight for the worktree. */
   loopTurnActive(repoKey: string): boolean;
-  /** Drop the runtime state issued under the run's current binding (its entry token and trusted bootstrap). */
+  /** Drop the runtime state issued under the run's current binding. */
   forgetRunEntry(repoKey: string): void;
   recordTerminate(repoKey: string): void;
   clearTodos(repoKey: string): void;
@@ -35,6 +34,8 @@ export interface FlowLifecycle {
    *  `flow:state` instead. */
   terminateUnattended(repoKey: string): LifecycleTerminateResult;
   rebind(repoKey: string, choice: RebindChoice): RebindResult;
+  /** Roll a failed step bootstrap back under the worktree lock; throws when the lock or the rollback refuses it. */
+  rollbackStep(repoKey: string, stepId: string): FlowStateView;
 }
 
 const ACTIVE_TURN_REASON =
@@ -44,7 +45,7 @@ function bestEffort(effect: () => void): void {
   try {
     effect();
   } catch (e) {
-    console.error('flow lifecycle side effect failed:', e instanceof Error ? e.message : String(e));
+    console.error('flow lifecycle side effect failed:', errMsg(e));
   }
 }
 
@@ -60,7 +61,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
   const terminate = (repoKey: string): LifecycleTerminateResult => {
     const locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.terminate(repoKey));
     if (!locked.ok) {
-      const reason = displaySafeEcho(locked.reason, MAX_ECHOED_REASON_LENGTH);
+      const { reason } = locked;
       return { outcome: 'refused', cause: 'locked', reason, view: deps.presentView(repoKey, { ...deps.flow.state(repoKey), notice: reason }) };
     }
     const result = locked.value;
@@ -83,6 +84,11 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
         bestEffort(() => deps.flowChanged());
       }
       return result;
+    },
+    rollbackStep(repoKey, stepId) {
+      const locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.revertStep(repoKey, stepId));
+      if (!locked.ok) throw new Error(locked.reason);
+      return locked.value;
     },
     rebind(repoKey, choice) {
       if (deps.loopTurnActive(repoKey)) return { ok: false, reason: ACTIVE_TURN_REASON };

@@ -79,7 +79,8 @@ export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecover
   return {
     rebind(worktree, choice) {
       const locked = deps.lock.withWorktreeLock(worktree, () => rebindHeld(worktree, choice));
-      return locked.ok ? locked.value : refuse(`The run could not be recovered: ${locked.reason}`);
+      if (locked.ok) return locked.value;
+      return { ok: false, reason: `The run could not be recovered: ${locked.reason}` };
     },
   };
 }

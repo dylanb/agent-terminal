@@ -2,10 +2,8 @@
 // (<worktree>/.agent-terminal/run-disposition.yaml). Its PRESENCE is the durable "run has begun" marker that
 // gates a new active-flow selection (worktreeStartedness/§18.7.4 AC7); its CONTENTS are the run-scoped source
 // binding a begun run re-resolves instead of the live pointer (§18.7.3 AC9), so a begun run never silently
-// switches which tier/entry supplies its definition (CWE-841). Recorded when a run transitions to in_progress
-// and cleared only by a Terminate, so it survives a first-step revertStep that rolls the display status back to
-// not_started. Disjoint from flow-state.yaml (own-file) so a wholesale progression write can neither clobber
-// nor resurrect it (§18.7.2, the AC8 non-clobber invariant).
+// switches which tier/entry supplies its definition (CWE-841). Disjoint from flow-state.yaml (own-file) so a
+// wholesale progression write can neither clobber nor resurrect it (§18.7.2, the AC8 non-clobber invariant).
 
 import path from 'node:path';
 import { lstatSync, rmSync } from 'node:fs';
@@ -70,9 +68,9 @@ function dispositionDoc(binding: DispositionRead): Record<string, unknown> {
   }
 }
 
-/** Clear the marker at Terminate; an absent file is already the cleared state. Throws when the marker cannot be
- *  removed, so the Terminate that re-enables selection (§18.7.2 AC6) is refused rather than leaving the worktree
- *  locked with no retry (CWE-703). */
+/** Clear the marker at Terminate or a first-step rollback; an absent file is already the cleared state. Throws when
+ *  the marker cannot be removed, so the reset that re-enables selection (§18.7.2 AC6/§18.7.4) is refused rather than
+ *  leaving the worktree locked with no retry (CWE-703). */
 export function clearDisposition(worktreeDir: string): void {
   const file = confinedDispositionFile(worktreeDir);
   if (file === null) throw new Error('run-disposition path is unresolvable');

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {
   FLOW_DEF_FILE,
   loadFlowDefinition,
-  loadFlowDefinitionFromFile,
+  loadUntrustedFlowDefinition,
   loadFlowDefinitionLocalFirst,
   type FlowLoad,
 } from './flow';
@@ -122,7 +122,7 @@ function catalogRefusal(id: string, cause: CatalogRefusalCause): string {
 }
 
 function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(path.join(flowDir, FLOW_DEF_FILE));
+  return loadUntrustedFlowDefinition(path.join(flowDir, FLOW_DEF_FILE));
 }
 
 /** §18.7.3 */

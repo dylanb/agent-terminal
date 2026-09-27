@@ -9,6 +9,7 @@
 import type { FlowStepDef } from './flow';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import type { LoopBindingResult } from './flowEntryActions';
+import { errMsg } from './errno';
 
 export interface LoopBindingPreparerDeps {
   /** Resolve the step's bound def across the tiers (§27.15). */
@@ -95,7 +96,11 @@ export function createRefuseAndRevert(deps: RefuseAndRevertDeps): (reason: strin
       ) {
         return;
       }
-      deps.revert(guard.repoKey, guard.step);
+      try {
+        deps.revert(guard.repoKey, guard.step);
+      } catch (e) {
+        deps.emitError(guard.repoKey, guard.step, `${reason}; could not roll back step ${guard.step}: ${errMsg(e)}`);
+      }
       deps.push();
     });
   };

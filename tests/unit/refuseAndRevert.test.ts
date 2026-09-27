@@ -63,6 +63,18 @@ describe('createRefuseAndRevert — surface the error, then an identity-guarded 
     }
   });
 
+  it('a revert that throws surfaces its reason instead of escaping the deferred tick, still pushing the state it left', () => {
+    const h = harness();
+    h.revert.mockImplementation(() => {
+      throw new Error('the run record could not be removed: EACCES');
+    });
+    h.refuse('no pickup to run');
+
+    expect(() => h.runDeferred()).not.toThrow();
+    expect(h.emitError).toHaveBeenLastCalledWith('/repo', 'build', expect.stringMatching(/could not roll back.*EACCES/));
+    expect(h.push).toHaveBeenCalledOnce();
+  });
+
   it('is a no-op when no entry is in flight', () => {
     const emitError = vi.fn();
     const refuse = createRefuseAndRevert({

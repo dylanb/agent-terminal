@@ -1,7 +1,7 @@
 // §18.7.4 / §18.7.6
 
 import type { ActiveFlowWriteResult, CatalogOrigin, RebindChoice, RebindResult, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
+import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
@@ -38,6 +38,9 @@ const sameSelection = (a: FlowCatalogSelection, b: FlowCatalogSelection): boolea
 const TIER_LABEL: Record<CatalogOrigin, string> = { repo: 'Repo flows', global: 'Global flows' };
 
 const LOCK_REASON = 'Locked until you Terminate the run';
+const STUCK_RECORD_LOCK_REASON = 'Locked: the run record could not be removed. Start the run, then Terminate it, to retry.';
+const EMPTY_CATALOG_TEXT = 'No catalog flows are listed.';
+const EMPTY_RECOVERY_TEXT = 'No listed flow can resume this run; Terminate it to end the run.';
 
 type HeldRun = Exclude<HeldRunView, { hold: 'not-held' }>;
 
@@ -73,6 +76,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let open = false;
   let locked = false;
   let held: HeldRun | null = null;
+  let resetWithRecord = false;
   let generation = 0;
   let pickGeneration = 0;
   let disposed = false;
@@ -132,12 +136,17 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       ++generation;
       locked = false;
       held = null;
+      resetWithRecord = false;
       switchTo(null);
       return;
     }
     const nowLocked = isSelectionLocked(view.runStarted);
     const nowHeld = heldOf(view);
-    const changed = nowLocked !== locked || JSON.stringify(nowHeld) !== JSON.stringify(held);
+    const nowResetWithRecord = nowLocked && view.status === 'not_started';
+    const changed =
+      nowLocked !== locked || nowResetWithRecord !== resetWithRecord || JSON.stringify(nowHeld) !== JSON.stringify(held);
+    resetWithRecord = nowResetWithRecord;
+    if (nowLocked !== locked || (nowHeld === null) !== (held === null)) alertText = '';
     locked = nowLocked;
     held = nowHeld;
     if (changed) open = false;
@@ -195,7 +204,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     recoverButton()?.focus();
     const refuse = (reason: string): void => {
       if (disposed || repoKey !== key || token !== pickGeneration) return;
-      alertText = displaySafeEcho(reason, MAX_ECHOED_REASON_LENGTH);
+      alertText = displaySafeEcho(reason, MAX_ECHOED_LOCK_REASON_LENGTH);
       render();
     };
     deps.rebindHeldRun(key, choice).then(
@@ -372,7 +381,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     reason.id = `${uid}-lock`;
     reason.className = 'flow-picker-lock';
     reason.tabIndex = -1;
-    reason.textContent = LOCK_REASON;
+    reason.textContent = resetWithRecord ? STUCK_RECORD_LOCK_REASON : LOCK_REASON;
     return reason;
   }
 
@@ -395,13 +404,21 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return list;
   }
 
-  function recoverControl(describedByAlert: boolean): HTMLButtonElement {
+  function emptyNote(): HTMLElement {
+    const p = doc.createElement('p');
+    p.id = `${uid}-empty`;
+    p.className = 'flow-picker-empty';
+    p.textContent = held === null ? EMPTY_CATALOG_TEXT : EMPTY_RECOVERY_TEXT;
+    return p;
+  }
+
+  function recoverControl(describedByAlert: boolean, extraIds: string[]): HTMLButtonElement {
     const button = doc.createElement('button');
     button.type = 'button';
     button.className = 'flow-picker-recover pill';
     button.setAttribute('aria-haspopup', 'listbox');
     button.setAttribute('aria-expanded', String(open));
-    button.setAttribute('aria-describedby', [`${uid}-held`, ...(describedByAlert ? [alert.id] : [])].join(' '));
+    button.setAttribute('aria-describedby', [`${uid}-held`, ...(describedByAlert ? [alert.id] : []), ...extraIds].join(' '));
     button.textContent = 'Recover the run onto a flow…';
     if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
     button.addEventListener('click', () => {
@@ -445,22 +462,27 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
 
       const listing = open && catalog.kind === 'listed' ? catalog.listing : null;
       const notices = listing === null ? [] : tierNotices(listing);
-      const noticeIds = notices.map((n) => n.id);
-      const button = triggerButton(shown !== '' && held === null, noticeIds);
+      const rows = listing === null ? null : held === null ? selectRows(listing) : recoveryRows(listing);
+      const nothingToChoose = rows !== null && (held === null ? rows.length === 0 : !rows.some((row) => row.kind === 'choice'));
+      const empty = nothingToChoose ? emptyNote() : null;
+      const noticeIds = [...(empty === null ? [] : [empty.id]), ...notices.map((n) => n.id)];
+      const button = triggerButton(shown !== '' && held === null, held === null ? noticeIds : []);
       host.insertBefore(button, alert);
       if (locked) host.insertBefore(lockReason(), alert);
-      const recover = held === null ? null : recoverControl(shown !== '');
+      const recover = held === null ? null : recoverControl(shown !== '', noticeIds);
       if (held !== null && recover !== null) {
         host.insertBefore(heldSummary(held), alert);
         host.insertBefore(recover, alert);
       }
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
-      if (listing !== null) {
-        const list =
-          held === null ? listbox(selectRows(listing), 'Flows') : listbox(recoveryRows(listing), 'Flows to recover the run onto');
-        (recover ?? button).setAttribute('aria-controls', list.id);
-        if (noticeIds.length > 0) list.setAttribute('aria-describedby', noticeIds.join(' '));
-        host.insertBefore(list, alert);
+      if (rows !== null) {
+        if (empty !== null) host.insertBefore(empty, alert);
+        if (rows.length > 0) {
+          const list = listbox(rows, held === null ? 'Flows' : 'Flows to recover the run onto');
+          (recover ?? button).setAttribute('aria-controls', list.id);
+          if (notices.length > 0) list.setAttribute('aria-describedby', notices.map((n) => n.id).join(' '));
+          host.insertBefore(list, alert);
+        }
         for (const notice of notices) host.insertBefore(notice, alert);
         if (held === null) host.insertBefore(useDefaultButton(), alert);
       }

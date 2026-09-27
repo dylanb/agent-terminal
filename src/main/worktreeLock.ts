@@ -1,9 +1,6 @@
-// A2 (#133) §18.7.4 AC11 — the cross-process advisory worktree lock that serializes flow:start with the
-// active-flow pointer write, so a second app instance cannot persist in_progress between the write gate's
-// started-ness read and the pointer write (CWE-367). The lockfile lives on the user's app-owned ground, keyed by
-// the resolved worktree path, never in the worktree itself, where a hosted agent could plant one to wedge the
-// gate. A3 (#134) T6c, operator decision: only a lock held by a live peer refuses; every other acquisition
-// failure lets the critical section run without the lock.
+// §18.7.4 AC11 (CWE-367). The lockfile lives on the user's app-owned ground, never in the worktree itself, where a
+// hosted agent could plant one to wedge the gate. Only an unusable lock runs the critical section without the lock, an
+// accepted residual (§18.7.4, v2.156).
 
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -13,6 +10,7 @@ import { isRealContainer } from './atomicFile';
 import { confinedRealPath, resolveOwnedDirJail } from './confinedPath';
 import { errMsg, isErrno } from './errno';
 import { flowHomeDir } from './flow';
+import { displaySafeEcho, MAX_ECHOED_PATH_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 
 /** The lock holder's identity: a PID plus that process's start-time, which a FOREIGN acquirer can independently
  *  re-derive from OS state — so a recycled or planted live PID cannot pass as the holder. */
@@ -25,6 +23,8 @@ export type HolderLiveness = 'dead' | 'live-matching' | 'live-mismatch' | 'unrea
 
 export type LockRefusalCause = 'held' | 'holder-unreadable' | 'lock-unusable';
 
+/** §18.7.6 (CWE-116/400): every `reason` is display-safe and within MAX_ECHOED_LOCK_REASON_LENGTH, so a caller shows
+ *  it as it is — re-bounding it at MAX_ECHOED_REASON_LENGTH cuts off the lockfile path the user must delete. */
 export type LockAcquire = { ok: true; release: () => void } | { ok: false; cause: LockRefusalCause; reason: string };
 export type LockedResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -40,7 +40,8 @@ export interface WorktreeLockDeps {
 
 export interface WorktreeLock {
   acquire(worktreeDir: string): LockAcquire;
-  /** Refuses without running `fn` only when the cause is `held`. */
+  /** Runs `fn` without the lock only when the cause is `lock-unusable`. A call nested inside another's `fn` for the
+   *  same worktree on this instance runs `fn` under the lock already held. */
   withWorktreeLock<T>(worktreeDir: string, fn: () => T): LockedResult<T>;
 }
 
@@ -52,6 +53,17 @@ export const MAX_ACQUIRE_ATTEMPTS = 4;
 
 const HELD_REASON =
   "Another Agent Terminal window is changing this worktree's flow right now; try again in a moment.";
+
+const reclaimGuard = (file: string): string => `${file}.reclaim`;
+
+function unidentifiedHolderReason(lockFile: string): string {
+  const shown = displaySafeEcho(lockFile, MAX_ECHOED_PATH_LENGTH);
+  const target = shown === lockFile ? lockFile : `the file ${path.basename(lockFile)} in Agent Terminal's lock directory`;
+  return (
+    "The worktree lock is held by a process that cannot be identified. If no other Agent Terminal window is working in " +
+    `this worktree, delete ${target} and try again.`
+  );
+}
 
 /** The lockfiles' directory under the app-state home — the one location every app instance derives. */
 export function worktreeLockRoot(appHome: string): string {
@@ -115,12 +127,15 @@ export function processStartTime(pid: number): string | null {
   return null;
 }
 
-let selfStartTime: string | null | undefined;
-
-export function currentLockHolder(): LockHolder {
-  if (selfStartTime === undefined) selfStartTime = processStartTime(process.pid);
-  return { pid: process.pid, startTime: selfStartTime };
+export function selfLockHolder(startTimeOf: (pid: number) => string | null): () => LockHolder {
+  let selfStartTime: string | null = null;
+  return () => {
+    selfStartTime ??= startTimeOf(process.pid);
+    return { pid: process.pid, startTime: selfStartTime };
+  };
 }
+
+export const currentLockHolder = selfLockHolder(processStartTime);
 
 export function realHolderLiveness(holder: LockHolder): HolderLiveness {
   try {
@@ -186,7 +201,7 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
    *  exclusive create — so of two reclaimers that judged the same lock stale, the later one re-inspects the
    *  winner's live lock instead of deleting it. */
   const reclaim = (file: string, staleText: string, self: string): boolean | 'unknown' => {
-    const guard = `${file}.reclaim`;
+    const guard = reclaimGuard(file);
     if (!tryCreate(guard, self, writeNewFile)) {
       const guardText = readText(guard);
       if (guardText === null) return true;
@@ -203,11 +218,27 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   };
 
   const acquire = (worktreeDir: string): LockAcquire => {
-    const refuse = (cause: LockRefusalCause, detail?: string): LockAcquire => ({
+    const refuse = (cause: Exclude<LockRefusalCause, 'holder-unreadable'>, detail?: string): LockAcquire => ({
       ok: false,
       cause,
-      reason: cause === 'held' ? HELD_REASON : `The worktree lock could not be taken: ${detail}`,
+      reason: cause === 'held' ? HELD_REASON : `The worktree lock could not be taken: ${displaySafeEcho(detail ?? '', MAX_ECHOED_REASON_LENGTH)}`,
     });
+    const unidentified = (holderFile: string): LockAcquire => ({
+      ok: false,
+      cause: 'holder-unreadable',
+      reason: unidentifiedHolderReason(holderFile),
+    });
+    // A lock we cannot take is unusable only while no live or unidentifiable holder already has it.
+    const heldBy = (lockFile: string): LockAcquire | null => {
+      try {
+        const text = readText(lockFile);
+        const stale = text === null ? true : isStale(text);
+        if (stale === false) return refuse('held');
+        return stale === 'unknown' ? unidentified(lockFile) : null;
+      } catch {
+        return null;
+      }
+    };
     const jail = resolveOwnedDirJail(deps.lockRoot);
     const file = jail === null ? null : confinedRealPath(jail, worktreeLockFile(deps.lockRoot, worktreeDir));
     if (file === null) return refuse('lock-unusable', 'the lock directory is unresolvable');
@@ -235,31 +266,35 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
         }
         const stale = isStale(text);
         if (stale === false) return refuse('held');
-        if (stale === 'unknown') return refuse('holder-unreadable', "the lock holder's identity could not be read");
+        if (stale === 'unknown') return unidentified(file);
         deps.beforeReclaim?.();
         const guard = reclaim(file, text, self);
         if (guard === false) sawLive = true;
         else if (guard === 'unknown') sawUnreadable = true;
       }
     } catch (e) {
-      return refuse('lock-unusable', errMsg(e));
+      return heldBy(file) ?? refuse('lock-unusable', errMsg(e));
     }
     if (sawLive) return refuse('held');
-    if (sawUnreadable) return refuse('holder-unreadable', "the lock holder's identity could not be read");
+    if (sawUnreadable) return unidentified(reclaimGuard(file));
     return refuse('lock-unusable', 'every stale-lock reclaim was lost');
   };
 
+  const holding = new Set<string>();
   return {
     acquire,
     withWorktreeLock(worktreeDir, fn) {
+      if (holding.has(worktreeDir)) return { ok: true, value: fn() };
       const got = acquire(worktreeDir);
       if (!got.ok) {
-        if (got.cause === 'held') return { ok: false, reason: got.reason };
-        return { ok: true, value: fn() };
+        if (got.cause === 'lock-unusable') return { ok: true, value: fn() };
+        return { ok: false, reason: got.reason };
       }
+      holding.add(worktreeDir);
       try {
         return { ok: true, value: fn() };
       } finally {
+        holding.delete(worktreeDir);
         got.release();
       }
     },

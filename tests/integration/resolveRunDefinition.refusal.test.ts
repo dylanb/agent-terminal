@@ -5,7 +5,9 @@ import {
   type PointerRead,
   type CatalogResolution,
 } from '../../src/main/resolveRunDefinition';
-import { type FlowLoad } from '../../src/main/flow';
+import { MAX_FLOW_DEFINITION_BYTES, type FlowLoad } from '../../src/main/flow';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 
 // §18.7.3 / §18.7.6 — a set but unusable active-flow pointer refuses to run: the resolver returns the §18.1
@@ -36,6 +38,34 @@ describe('resolveRunDefinition — an unusable pick refuses to run (§18.7.3, §
     const { wt, globalRoot } = seedLocalAndGlobal(prefix);
     return createResolveRunDefinition({ pointer: () => pointer, catalogEntry: () => miss })(wt, globalRoot).load;
   };
+
+  const resolveEntry = (prefix: string, plant: (flowYaml: string) => void): FlowLoad => {
+    const { wt, globalRoot } = seedLocalAndGlobal(prefix);
+    const entryDir = join(wt, 'catalog-entry');
+    mkdirSync(entryDir, { recursive: true });
+    plant(join(entryDir, 'flow.yaml'));
+    return createResolveRunDefinition({
+      pointer: () => ({ kind: 'value', id: 'my-flow' }),
+      catalogEntry: () => ({ ok: true, tier: 'repo', flowDir: entryDir }),
+    })(wt, globalRoot).load;
+  };
+
+  it("a picked entry whose flow.yaml is a symlink refuses to run, never loading the link's target (CWE-59)", () => {
+    const outside = fx.makeWorktree('entry-symlink-target');
+    fx.writeFlowHome(outside, { name: 'outside-flow', stepIds: ['outside-step'] });
+
+    const load = resolveEntry('entry-symlink', (flowYaml) => symlinkSync(join(outside, '.agent-terminal', 'flow.yaml'), flowYaml));
+
+    expect(loadError(load)).toMatch(/flow\.yaml/);
+  });
+
+  it('a picked entry whose flow.yaml is larger than the definition cap refuses to run (CWE-400)', () => {
+    const load = resolveEntry('entry-oversize', (flowYaml) =>
+      writeFileSync(flowYaml, `name: big\nsteps:\n  - id: s1\n    kind: manual\n# ${'x'.repeat(MAX_FLOW_DEFINITION_BYTES)}\n`),
+    );
+
+    expect(loadError(load)).toMatch(/larger than/);
+  });
 
   it("a malformed pointer refuses to run and reports the pointer read's own reason", () => {
     const pointerReason = 'active-flow.yaml is malformed [ptr-reason-sentinel]';

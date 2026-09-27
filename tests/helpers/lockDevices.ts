@@ -1,12 +1,14 @@
-// Lock contention and liveness devices for the A3 (#134) Lock-row tests: every acquirer a test builds names its
-// liveness verdict, so no result depends on the host's process table.
+// Lock contention and liveness devices, and the unidentified-holder remedy assertion, for the A3 (#134) Lock-row
+// tests: every acquirer a test builds names its liveness verdict, so no result depends on the host's process table.
 
+import { expect } from 'vitest';
 import {
   createWorktreeLock,
   type HolderLiveness,
   type LockAcquire,
   type LockHolder,
 } from '../../src/main/worktreeLock';
+import { unidentifiedHolderRemedy } from './lockRemedy';
 
 /** A peer acquire as the probe saw it — a refusal verbatim, a success without its release. */
 export type PeerAcquire = { ok: true } | Extract<LockAcquire, { ok: false }>;
@@ -65,4 +67,11 @@ export function tryPeerLockDuring(
     },
     observed: () => [...seen],
   };
+}
+
+export function expectsUnidentifiedHolderRemedy(reason: string, lockFile: string): void {
+  const remedy = unidentifiedHolderRemedy(lockFile);
+  expect(reason).toContain(remedy.path);
+  expect(reason).toMatch(remedy.deletes);
+  expect(reason).toMatch(remedy.retries);
 }
