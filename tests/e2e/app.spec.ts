@@ -3047,6 +3047,9 @@ function seedFakeAgentV2(
     // detection) vs a non-test file. Ignored unless work === 'green'. `resultOutcome` defaults to 'passed'.
     buildOutcome?: BuildOutcome;
     touchTest?: boolean;
+    // §28.5.3 GREEN work mode: whether the review-and-fix round (not the work turn) modifies the committed
+    // test-glob file. Ignored unless work === 'green'.
+    reviewTouchesTest?: boolean;
     // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
     review?: 'full' | 'omit-persona' | 'none' | 'failed';
     // Round-2 review report kind (multi-round runs), default `full`.
@@ -3135,12 +3138,15 @@ function seedFakeAgentV2(
     opts.touchTest === true
       ? `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' >> tests/frozen.test.ts`
       : `printf '%s\\n' 'export const y = 2;' > feature.ts`;
+  const touchFrozenTest = `mkdir -p tests; printf '%s\\n' 'review-round edit' >> tests/frozen.test.ts`;
   const reviewAct =
     reviewKind === 'none'
       ? `${reviewBump}`
       : opts.work === 'refactor'
         ? `${reviewBump}; ${writeReportRoundAware}; ${writeRefactorChange}; ${writeRefactorResult}; ${done(reviewKey)}`
-        : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
+        : opts.work === 'green' && opts.reviewTouchesTest === true
+          ? `${reviewBump}; ${writeReportRoundAware}; ${touchFrozenTest}; ${done(reviewKey)}`
+          : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
   // The consolidator writes its verdict output (round-keyed) then signals; the round is read from run-state
   // so a multi-round run emits the scripted verdict for each round (§27.6).
   const verdicts = opts.verdicts ?? ['verdict: clean\n'];
@@ -6684,6 +6690,39 @@ test('§28.5.3 / AC2 — a GREEN turn that touches a test file STILL completes, 
   // approve committed the change (HEAD+1, the touched test rode in) — the flag is a caution, not a block.
   await expect.poll(() => gitCount(repo), { timeout: 15_000 }).toBe(before + 1);
   expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD')).toContain('tests/frozen.test.ts');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§28.5.3 — a GREEN review-and-fix round that edits a test file after a clean work turn re-records the changed-test flag, surfaced at the gate', { tag: '@ownapp' }, async () => {
+  const repo = seedGreenFlowRepo('agent-term-e2e-green-review-flag-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-green-review-flag-home-'));
+  const cfg = seedGreenGateConfig('agent-term-e2e-green-review-flag-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-green-review-flag-bin-', { realCommitOps: true });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'green', touchTest: false, reviewTouchesTest: true, review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
+  const notice = loopPanel().locator('[data-changed-tests]');
+  await expect(notice).toBeVisible({ timeout: 10_000 });
+  await expect(notice).toContainText('tests/frozen.test.ts');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

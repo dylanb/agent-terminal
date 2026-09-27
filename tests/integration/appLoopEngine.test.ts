@@ -2642,6 +2642,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     engine.onInjectable();
     writeRoundReport(1, []);
     engine.onDoneSignal();
+    await flushGate();
     engine.onInjectable();
     engine.onInjectable();
     completeConsolidate(engine, 1, 'verdict: clean\n');
@@ -2887,7 +2888,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
   });
 
   it('IT-REFAC-probe-throws: a THROWING frozen probe still completes the round — no block, no hang, audited', async () => {
-    // The probe is fired `void refactorFrozenProbe(a).then(...)` with no outer .catch, so a reject would leave
+    // The probe is fired `void reviewRoundFrozenProbe(a).then(...)` with no outer .catch, so a reject would leave
     // asyncGatePendingFor pinned and the round would hang; its internal try/catch must audit and yield null instead.
     const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => { throw new Error('git exploded'); } }));
     seedBaseline();
@@ -2981,7 +2982,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
   });
 
   it('IT-REFAC-2b-throws: human-ACCEPT still finalizes when the frozen probe throws (acceptFinalize is inside the probe .then)', async () => {
-    // On this route acceptFinalize runs INSIDE `refactorFrozenProbe(a).then(...)`, so a reject would silently
+    // On this route acceptFinalize runs INSIDE `reviewRoundFrozenProbe(a).then(...)`, so a reject would silently
     // never finalize the human's Accept; the probe's internal try/catch must yield null so acceptFinalize still runs.
     const engine = makeEngine(undefined, refFake({ changedTestPaths: async () => { throw new Error('git exploded'); } }));
     seedBaseline();
@@ -3051,5 +3052,156 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     completeConsolidate(engine, 1, 'verdict: clean\n');
     expect(readAppLoopState(repo)?.status).toBe('complete'); // reached the gate
     expect(readChangedTests(repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
+  });
+});
+
+// §28.5.3/§28.8.3 — a GREEN loop's review-and-fix rounds edit tests too, so each completed round re-records the
+// changed-test flag (cumulative since the RED baseline) on both completion routes, never blocking the round. A
+// plain review round of a non-GREEN, non-refactor loop runs no probe.
+describe('§28.5.3 — a GREEN loop review round refreshes the changed-test flag', () => {
+  const OID = 'a'.repeat(40);
+  const EDITED = 'tests/a.test.ts';
+  const seedBaseline = (): void => recordBaselineCommit(repo, TEST_BRANCH, OID);
+  const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+  const greenDef = (): LoopDefV2 => ({
+    ...fileDef(),
+    work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'green-result', completion: 'green' },
+    outputs: [binding('green-result', resultPath)],
+  });
+  /** The working tree the frozen check diffs against the baseline — the test edits it between turns. */
+  let changedSinceBaseline: () => ReturnType<LoopCompletionPredicates['changedTestPaths']>;
+  const greenReviewFake = (): LoopCompletionPredicates =>
+    makeFakeCompletionPredicates({ changedTestPaths: () => changedSinceBaseline() });
+  const completed = (engine: ReturnType<typeof createAppLoopEngine>): boolean => engine.activeTurnKey() === CONSOLIDATE_KEY;
+
+  /** GREEN work turn completes with no test changed (flag `[]`), then the review round-1 prompt injects. */
+  const driveGreenToReview = async (engine: ReturnType<typeof createAppLoopEngine>): Promise<void> => {
+    changedSinceBaseline = async () => ({ ok: true, paths: [] });
+    seedBaseline();
+    defResult = resolved(greenDef());
+    enterAndInjectWork(engine);
+    writeResult(examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME }));
+    engine.onDoneSignal();
+    await flushGate();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] });
+  };
+
+  it('IT-GREEN-REVIEW-1: a review round that edits a test re-records the flag naming it (done-signal route)', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    changedSinceBaseline = async () => ({ ok: true, paths: [EDITED] });
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [EDITED] });
+  });
+
+  it('IT-GREEN-REVIEW-2: the human-ACCEPT route of a GREEN review round also re-records the flag', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    changedSinceBaseline = async () => ({ ok: true, paths: [EDITED] });
+    writeRoundReport(1, []);
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [EDITED] });
+  });
+
+  it('IT-GREEN-REVIEW-resume: a relaunch-reconstructed GREEN review round records the flag on accept', async () => {
+    changedSinceBaseline = async () => ({ ok: true, paths: [EDITED] });
+    seedBaseline();
+    defResult = resolved(greenDef());
+    writeRoundReport(1, []);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'stalled', round: 1 }, FIXED);
+    const engine = makeEngine(undefined, greenReviewFake());
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    await flushGate();
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [EDITED] });
+  });
+
+  it('IT-GREEN-REVIEW-noprobe: a probe that cannot run leaves the round completing and is audited', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    changedSinceBaseline = async () => { throw new Error('git exploded'); };
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled();
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] });
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('frozen probe error'), 1);
+  });
+
+  it('IT-GREEN-REVIEW-recordfail: a failing flag write is audited and never aborts the round', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    changedSinceBaseline = async () => ({ ok: true, paths: [EDITED] });
+    recordChangedTestsImpl = () => { throw new Error('disk full'); };
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    await flushGate();
+    expect(completed(engine)).toBe(true);
+    expect(emitError).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('changed-tests flag record failed'), 1);
+  });
+
+  it('IT-GREEN-REVIEW-stale: a stale probe resolving after `active` moved to a fresh turn records nothing against it', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    changedSinceBaseline = () => changedTestPaths({ repoDir: repo, baseline: OID });
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    engine.onStall();
+    engine.enter(repo, 'plan-loop', STEP, 're-entry');
+    resolve({ ok: true, paths: [EDITED] });
+    await flushGate();
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] });
+  });
+
+  it('IT-GREEN-REVIEW-stall: a stall during the probe errors the round; the late probe records nothing', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    const { changedTestPaths, resolve } = deferredChangedTestPaths();
+    changedSinceBaseline = () => changedTestPaths({ repoDir: repo, baseline: OID });
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    engine.onStall();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    resolve({ ok: true, paths: [EDITED] });
+    await flushGate();
+    expect(completed(engine)).toBe(false);
+    expect(readChangedTests(repo)).toEqual({ step: STEP, paths: [] });
+  });
+
+  it('IT-GREEN-REVIEW-dedup: a duplicate done-signal while the probe is pending does not burn a second retry attempt', async () => {
+    const engine = makeEngine(undefined, greenReviewFake());
+    await driveGreenToReview(engine);
+    const report = roundReportFile(repo, 1)!;
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, '# incomplete — a persona is missing\n');
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    await flushGate();
+    expect(emitError).not.toHaveBeenCalled();
+  });
+
+  it('IT-GREEN-REVIEW-plain: a non-GREEN loop review round runs no probe and records no flag', async () => {
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [EDITED] }) }));
+    seedBaseline();
+    driveToReviewInjected(engine);
+    writeRoundReport(1, []);
+    engine.onDoneSignal();
+    await flushGate();
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(repo)).toBeNull();
   });
 });
