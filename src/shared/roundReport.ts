@@ -11,6 +11,9 @@ export type Disposition = (typeof DISPOSITIONS)[number];
  *  anchors the canonical example — spelled once so it cannot desync from DISPOSITIONS. */
 export const FIXED_DISPOSITION: Disposition = 'fixed';
 
+/** The disposition a deferred polish finding takes (§27.8 `polish: defer`). */
+export const OUT_OF_SCOPE_DISPOSITION: Disposition = 'dismissed — out of scope';
+
 /** The report grammar both sides agree on: heading prefixes, per-issue element labels, and the empty/failed
  *  persona marker. It pins the names/tokens, not a rigid layout — an over-constrained template would diverge
  *  the fake-agent from the real fixer (§27.5 Risks). */

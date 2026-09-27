@@ -25,7 +25,7 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
       { boundary: 'pre-work', mode: 'clear' },
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },
     ],
-    report: { sections: ['summary', 'findings', 'disposition'] },
+    report: { sections: ['summary', 'findings', 'disposition'], polish: 'fix' },
     gate: [],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
@@ -172,6 +172,31 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
     expect(p.toLowerCase()).toContain('already correct');
     // it names the dismissal disposition for such a refinement — never `fixed`
     expect(p).toContain('dismissed — invalid');
+  });
+});
+
+// §27.6/§27.8 — a per-slice loop whose def defers polish: the fixer dismisses polish-only findings as out of
+// scope so a polish-only round changes nothing and reaches `clean`; the integration-slice sweep reviews the
+// whole ticket diff with the full catalog and fixes them there. A def that fixes polish carries no such clause.
+describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
+  const req = (polish?: 'fix' | 'defer') => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-green',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    ...(polish !== undefined ? { polish } : {}),
+  });
+  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i;
+
+  it('tells the fixer to dismiss polish-only findings as out of scope when the def defers polish', () => {
+    expect(composeReviewAndFixPrompt(req('defer'))).toMatch(deferClause);
+  });
+
+  it('carries no deferral clause when the def fixes polish', () => {
+    expect(composeReviewAndFixPrompt(req('fix'))).not.toMatch(deferClause);
+    expect(composeReviewAndFixPrompt(req())).not.toMatch(deferClause);
   });
 });
 
