@@ -5,7 +5,8 @@
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
 import type { LoopDefV2 } from './loopDefV2';
-import { boundaryCommand } from './appWorkTurn';
+import { boundaryCommand, sliceBriefLines } from './appWorkTurn';
+import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
@@ -69,6 +70,8 @@ export interface ReviewAndFixPromptReq {
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
   ticket?: number;
+  /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
+  sliceBrief?: SliceBrief;
 }
 
 /** Compose the §27 review-and-fix prompt (§27.3/§27.4/§27.5): spawn the roster as parallel subagents each
@@ -106,6 +109,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Reviewers (persona — charter):',
   );
   for (const r of req.roster) lines.push(`- ${r.persona} — ${r.charter}`);
+  if (req.sliceBrief !== undefined) lines.push(...sliceBriefLines(req.sliceBrief, 'fixer'));
   // This block is the OUTER framing every request-changes feedback carries ("weigh this / record how you
   // addressed it"). The compose-with-agent mode adds its own inner "Synthesize…" prefix upstream in the
   // renderer's frameFeedback; edit either aware of the other so the two divide labor rather than drift.

@@ -25,7 +25,7 @@ const GATE_RUN: AppLoopRunState = {
   verdict: 'clean',
 };
 
-const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [] } as unknown as LoopDefV2);
+const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [], work: { recipe: '/r', artifact: 'commits' } } as unknown as LoopDefV2);
 const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] }];
 const APPROVE_COMMIT = (label: unknown): GateOptionDef[] => [{ option: 'approve', sideEffects: [{ kind: 'commit', args: label === undefined ? {} : { label } }] }];
 
@@ -72,13 +72,16 @@ interface Recorder {
   recordBaselines: Array<{ repoDir: string; branch: string; sha: string }>;
   reopens: string[];
   sliceSources: string[];
+  briefs: Array<{ repoDir: string; fromStep: string; text: string }>;
+  briefClears: string[];
+  order: string[];
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; commitThrows?: string; commitOutcome?: 'committed' | 'nothing-to-commit'; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
@@ -115,7 +118,19 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
-    reopenSlice: (repoDir) => void rec.reopens.push(repoDir),
+    reopenSlice: (repoDir) => {
+      rec.reopens.push(repoDir);
+      rec.order.push('reopen');
+      return true;
+    },
+    recordSliceBrief: (repoDir, fromStep, text) => {
+      rec.briefs.push({ repoDir, fromStep, text });
+      rec.order.push('brief');
+    },
+    clearSliceBrief: (repoDir) => {
+      rec.briefClears.push(repoDir);
+      rec.order.push('clear-brief');
+    },
     sourceSliceCount: (repoDir) => void rec.sliceSources.push(repoDir),
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,
@@ -488,7 +503,7 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
   it('invokes reopenSlice and neither accepts, runs a side-effect, nor advances', async () => {
     const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE });
     const result = await atGreen(deps);
-    expect(result).toBe(false); // one-way — the caller ignores the result
+    expect(result).toBe(true); // the slice reopened
     expect(rec.reopens).toEqual(['/repo']); // the flow jumps back to the slice's RED step
     expect(rec.accepts).toEqual([]); // back-to-red is not terminal — no accept
     expect(rec.sideEffects).toEqual([]); // no gh side-effect (that is approve's)
@@ -526,6 +541,103 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
     await expect(atGreen(deps)).resolves.toBe(false); // resolves — never rejects into the void caller
     expect(rec.errors.some((e) => e.includes('ENOSPC'))).toBe(true); // the failure is surfaced to the operator
     expect(rec.views).toBeGreaterThan(0); // the view still refreshes so the operator is not left with a stale gate
+  });
+});
+
+// §28.4.2 — back-to-red carries an optional brief for the reopened slice. It is recorded BEFORE the reopen (the
+// reopen re-enters RED, whose prompt reads it) and rolled back if the reopen does not land, so a failed reopen
+// never leaves a brief waiting to leak into a later slice. The two-way caller keeps the typed brief on false.
+describe('runAppGateDecision — back-to-red with a slice brief (§28.4.2)', () => {
+  const GATE: GateOptionDef[] = [
+    { option: 'approve', sideEffects: [] },
+    { option: 'back-to-red', sideEffects: [] },
+  ];
+  const RUN: AppLoopRunState = { loop: 'green-loop', step: 'green', turnKey: 'consolidate-green', status: 'complete', round: 1, verdict: 'clean' };
+  const backToRed = (deps: AppGateDecisionDeps, brief?: string): Promise<boolean> =>
+    runAppGateDecision('/repo', 'green', 'consolidate-green', 'back-to-red', deps, brief);
+
+  it('records the brief with the gate it came from, then reopens the slice', async () => {
+    const { deps, rec } = mkDeps({ run: RUN, gate: GATE });
+    await expect(backToRed(deps, 'Cover the empty-input case')).resolves.toBe(true);
+    expect(rec.briefs).toEqual([{ repoDir: '/repo', fromStep: 'green', text: 'Cover the empty-input case' }]);
+    expect(rec.order).toEqual(['brief', 'reopen']);
+  });
+
+  it('records no brief for a blank one — a plain reopen', async () => {
+    const { deps, rec } = mkDeps({ run: RUN, gate: GATE });
+    await expect(backToRed(deps, '   ')).resolves.toBe(true);
+    expect(rec.briefs).toEqual([]);
+    expect(rec.reopens).toEqual(['/repo']);
+  });
+
+  it('rolls the brief back and reports false when the reopen does not move the flow', async () => {
+    const { deps, rec } = mkDeps({ run: RUN, gate: GATE, reopenSlice: () => false });
+    await expect(backToRed(deps, 'Cover the empty-input case')).resolves.toBe(false);
+    expect(rec.briefClears).toEqual(['/repo']);
+    expect(rec.errors.length).toBeGreaterThan(0);
+  });
+
+  it('rolls the brief back when the reopen throws', async () => {
+    const { deps, rec } = mkDeps({
+      run: RUN,
+      gate: GATE,
+      reopenSlice: () => {
+        throw new Error('ENOSPC');
+      },
+    });
+    await expect(backToRed(deps, 'Cover the empty-input case')).resolves.toBe(false);
+    expect(rec.briefClears).toEqual(['/repo']);
+  });
+
+  it('does not reopen when the brief cannot be recorded, so the caller keeps the typed brief', async () => {
+    const { deps, rec } = mkDeps({
+      run: RUN,
+      gate: GATE,
+      recordSliceBrief: () => {
+        throw new Error('loop area is unresolvable');
+      },
+    });
+    await expect(backToRed(deps, 'Cover the empty-input case')).resolves.toBe(false);
+    expect(rec.reopens).toEqual([]);
+    expect(rec.errors.some((e) => e.includes('unresolvable'))).toBe(true);
+  });
+});
+
+// §28.4.2 — the brief lives until the slice ends: approving REFACTOR (the slice's last phase) clears it; approving
+// any other loop leaves it for the phases still to come.
+describe('runAppGateDecision — approve clears the slice brief only at the end of the slice (§28.4.2)', () => {
+  const run = (loop: string, step: string): AppLoopRunState => ({ loop, step, turnKey: `consolidate-${step}`, status: 'complete', round: 1, verdict: 'clean' });
+  const withCompletion = (completion: 'red' | 'green' | 'refactor') => ({
+    ok: true as const,
+    def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion } },
+    tierRoot: '/tmp/tier',
+  });
+
+  it('clears the brief on a refactor approve', async () => {
+    const { deps, rec } = mkDeps({ run: run('refactor-loop', 'refactor'), resolveDef: () => withCompletion('refactor') });
+    await runAppGateDecision('/repo', 'refactor', 'consolidate-refactor', 'approve', deps);
+    expect(rec.briefClears).toEqual(['/repo']);
+  });
+
+  it('a failed brief clear on refactor approve is audited and never blocks the advance', async () => {
+    const { deps, rec } = mkDeps({
+      run: run('refactor-loop', 'refactor'),
+      resolveDef: () => withCompletion('refactor'),
+      clearSliceBrief: () => {
+        throw new Error('EISDIR');
+      },
+    });
+    await runAppGateDecision('/repo', 'refactor', 'consolidate-refactor', 'approve', deps);
+    expect(rec.advances).toEqual(['/repo']);
+    expect(rec.audits.some((a) => a.cmd.includes('clear-brief failed') && a.cmd.includes('EISDIR') && a.exit === 1)).toBe(true);
+  });
+
+  it('keeps the brief on a red or green approve', async () => {
+    for (const c of ['red', 'green'] as const) {
+      const { deps, rec } = mkDeps({ run: run(`${c}-loop`, c), resolveDef: () => withCompletion(c) });
+      await runAppGateDecision('/repo', c, `consolidate-${c}`, 'approve', deps);
+      expect(rec.briefClears, c).toEqual([]);
+    }
   });
 });
 

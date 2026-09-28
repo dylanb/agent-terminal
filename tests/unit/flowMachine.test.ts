@@ -1229,6 +1229,17 @@ describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
     expect(resumed.state().status).toBe('in_progress');
   });
 
+  it('names the step a slice restarts at, so a caller can tell a landed reopen from an inert one', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    expect(flow.sliceStartStep()).toBe('red');
+    const noRepeat: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'a', kind: 'manual' }, { id: 'b', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    expect(createFlowMachine(noRepeat, createFlowStateStore(dir)).sliceStartStep()).toBeNull();
+  });
+
   it('is a no-op when the flow is not in progress', () => {
     const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
     expect(flow.reopenSlice().status).toBe('not_started'); // never started

@@ -19,7 +19,30 @@ export interface ReviewTodo {
 export interface FeedbackComposerCtx {
   step: string;
   todos: ReviewTodo[];
+  /** What the composed text is for: request-changes feedback (required) or a §28.4.2 back-to-RED brief
+   *  (optional — an empty submit is a plain reopen). Absent is request-changes. */
+  purpose?: 'request-changes' | 'back-to-red';
 }
+
+/** The words each purpose shows; everything else about the composer is shared. */
+const PURPOSE_COPY = {
+  'request-changes': {
+    title: (step: string) => `Request changes to ${step}`,
+    description: 'Your feedback joins the next review-and-fix round alongside the reviewers’ findings (§27.9).',
+    fieldLabel: 'request-changes feedback',
+    submitLabel: 'Submit feedback',
+    required: true,
+    dropped: 'Could not start a new round — the loop was busy. Try again.',
+  },
+  'back-to-red': {
+    title: (step: string) => `Send this slice back to RED from ${step}`,
+    description: 'Optional brief: what the slice must redo. It is handed to the RED, GREEN and refactor phases of this slice (§28.4.2).',
+    fieldLabel: 'back-to-RED brief',
+    submitLabel: 'Back to RED',
+    required: false,
+    dropped: 'Could not send the slice back to RED. Your brief is kept — try again.',
+  },
+} as const;
 
 /** The two §19.4 delivery modes: submit-as-is (the material verbatim) or compose-with-agent (the material
  *  framed for the next round's fixer to synthesize before addressing). Carried in the composed text itself,
@@ -60,6 +83,7 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
   return {
     render(ctx, submit) {
       if (!ctx) return shell.render(null);
+      const copy = PURPOSE_COPY[ctx.purpose ?? 'request-changes'];
       shell.render(({ doc, titleId, close, confirm }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
@@ -67,11 +91,11 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         const h3 = doc.createElement('h3');
         h3.className = 'serif';
         h3.id = titleId;
-        h3.textContent = `Request changes to ${ctx.step}`;
+        h3.textContent = copy.title(ctx.step);
         const ph = doc.createElement('p');
         ph.className = 'ph';
         ph.id = describedById;
-        ph.textContent = 'Your feedback joins the next review-and-fix round alongside the reviewers’ findings (§27.9).';
+        ph.textContent = copy.description;
         card.append(h3, ph);
 
         // §19.4 — curate a subset of the repo's review todos. Each is a checkbox, unchecked by default; the
@@ -103,7 +127,7 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         const field = doc.createElement('div');
         field.className = 'field';
         const area = doc.createElement('textarea');
-        area.setAttribute('aria-label', 'request-changes feedback');
+        area.setAttribute('aria-label', copy.fieldLabel);
         area.rows = 5;
         field.append(area);
         card.append(field);
@@ -156,10 +180,10 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         cancel.addEventListener('click', close);
         const submitBtn = doc.createElement('button');
         submitBtn.className = 'pill signal confirm';
-        submitBtn.textContent = 'Submit feedback';
+        submitBtn.textContent = copy.submitLabel;
         submitBtn.setAttribute('aria-describedby', err.id);
         const refreshSubmit = (): void => {
-          const empty = currentComposed().length === 0;
+          const empty = copy.required && currentComposed().length === 0;
           submitBtn.setAttribute('aria-disabled', empty ? 'true' : 'false');
           if (!empty) err.textContent = '';
         };
@@ -167,7 +191,7 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         submitBtn.addEventListener('click', () => {
           if (inFlight) return; // a second press before the first delivery settles must not double-dispatch
           const composed = currentComposed();
-          if (composed.length === 0) {
+          if (copy.required && composed.length === 0) {
             err.textContent = 'Add feedback or select a review todo before submitting.';
             submitBtn.setAttribute('aria-disabled', 'true');
             return;
@@ -179,13 +203,13 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
           err.textContent = '';
           inFlight = true;
           submitBtn.setAttribute('aria-disabled', 'true');
-          void Promise.resolve(submit(frameFeedback(selectedMode(), composed))).then((delivered) => {
+          void Promise.resolve(submit(composed.length === 0 ? '' : frameFeedback(selectedMode(), composed))).then((delivered) => {
             inFlight = false;
             if (delivered) {
               confirm();
               return;
             }
-            err.textContent = 'Could not start a new round — the loop was busy. Try again.';
+            err.textContent = copy.dropped;
             submitBtn.setAttribute('aria-disabled', 'false');
           });
         });
