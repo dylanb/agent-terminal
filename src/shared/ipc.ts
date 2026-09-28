@@ -780,7 +780,12 @@ export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | 
 /** §18.7.3 */
 export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
 
-export type RebindResult = { ok: true; outcome: 'resumed' } | { ok: false; reason: string };
+/** §18.7.3 — `terminated`: the chosen flow lacked the held step, so the run was ended; `notice` names a selection
+ *  that could not be saved after the reset. */
+export type RebindResult =
+  | { ok: true; outcome: 'resumed' }
+  | { ok: true; outcome: 'terminated'; notice?: string }
+  | { ok: false; reason: string };
 
 /** §6 */
 export interface FlowRebindHeldRunMsg {

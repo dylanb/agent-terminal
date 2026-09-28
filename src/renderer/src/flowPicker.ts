@@ -73,6 +73,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   let selected: FlowCatalogSelection = UNSET;
   let confirmed: FlowCatalogSelection = UNSET;
   let alertText = '';
+  let noticeOutlivesRelease = false;
   let open = false;
   let locked = false;
   let held: HeldRun | null = null;
@@ -126,6 +127,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     selected = UNSET;
     confirmed = UNSET;
     alertText = '';
+    noticeOutlivesRelease = false;
     open = false;
     render();
   }
@@ -146,7 +148,9 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     const changed =
       nowLocked !== locked || nowResetWithRecord !== resetWithRecord || JSON.stringify(nowHeld) !== JSON.stringify(held);
     resetWithRecord = nowResetWithRecord;
-    if (nowLocked !== locked || (nowHeld === null) !== (held === null)) alertText = '';
+    const released = held !== null && nowHeld === null;
+    if ((nowLocked !== locked || (nowHeld === null) !== (held === null)) && !(released && noticeOutlivesRelease)) alertText = '';
+    if (released) noticeOutlivesRelease = false;
     locked = nowLocked;
     held = nowHeld;
     if (changed) open = false;
@@ -202,16 +206,20 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     open = false;
     render();
     recoverButton()?.focus();
-    const refuse = (reason: string): void => {
+    const announce = (reason: string): void => {
       if (disposed || repoKey !== key || token !== pickGeneration) return;
       alertText = displaySafeEcho(reason, MAX_ECHOED_LOCK_REASON_LENGTH);
       render();
     };
     deps.rebindHeldRun(key, choice).then(
       (result) => {
-        if (!result.ok) refuse(result.reason);
+        if (!result.ok) announce(result.reason);
+        else if (result.outcome === 'terminated' && result.notice !== undefined) {
+          noticeOutlivesRelease = held !== null;
+          announce(result.notice);
+        }
       },
-      (e: unknown) => refuse(reasonOf(e, 'Could not recover the run')),
+      (e: unknown) => announce(reasonOf(e, 'Could not recover the run')),
     );
   }
 

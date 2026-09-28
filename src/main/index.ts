@@ -79,7 +79,7 @@ import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
 import { createRunResolver } from './runResolver';
-import { createActiveFlowGate } from './activeFlowGate';
+import { createActiveFlowGate, selectIfUnlocked } from './activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
 import { createHeldRunRecovery, realHeldRunRecoveryDeps } from './heldRunRecovery';
 import { createFlowLifecycle, type FlowLifecycle } from './flowLifecycle';
@@ -540,7 +540,12 @@ async function createWindow(): Promise<void> {
   // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
   const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
   const activeFlowGate = createActiveFlowGate(worktreeLock);
-  const heldRunRecovery = createHeldRunRecovery({ lock: worktreeLock, ...realHeldRunRecoveryDeps(flowGlobalDir) });
+  const heldRunRecovery = createHeldRunRecovery({
+    lock: worktreeLock,
+    ...realHeldRunRecoveryDeps(flowGlobalDir),
+    terminate: (repoKey) => flow.terminate(repoKey),
+    selectIfUnlocked,
+  });
 
   const flow = createFlowManager({
     globalDir: flowGlobalDir,

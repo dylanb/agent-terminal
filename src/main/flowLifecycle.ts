@@ -94,6 +94,10 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
       if (deps.loopTurnActive(repoKey)) return { ok: false, reason: ACTIVE_TURN_REASON };
       const result = deps.recovery.rebind(repoKey, choice);
       if (!result.ok) return result;
+      if (result.outcome === 'terminated') {
+        afterTerminateReset(repoKey);
+        return result;
+      }
       bestEffort(() => deps.forgetRunEntry(repoKey));
       bestEffort(() => deps.flowChanged());
       return result;

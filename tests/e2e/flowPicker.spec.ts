@@ -760,3 +760,23 @@ test('AC12: a held run recovered onto a catalog flow lacking its step is ended a
   await expect(harness.stepName(1)).toHaveText('o1', { timeout: 10_000 });
   await expect(flowControl(relaunched)).toHaveText('Start');
 });
+
+test('a reset run whose run record was left behind: the picker names Start as the way out, and Start removes the record and begins the run', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalFallback(['fallback-first']);
+  const repo = harness.repo('agent-term-e2e-a3-stale-record-');
+  harness.seedLocalFlow(repo, ['local-first', 'local-second']);
+  createWorktreeFixture().plantRunRecordDirectory(repo);
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('local-first', { timeout: 10_000 });
+  await expect(pickerHost(page).locator('.flow-picker-lock')).toContainText(/Start the run/);
+  await expect(flowControl(page)).toHaveText('Start');
+  await flowControl(page).click();
+
+  await expect(flowStation(page, 1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(page.locator('#flow-strip .flow-notice')).toHaveCount(0);
+  expect(readRunBinding(repo)).toEqual({ source: 'non-catalog' });
+});

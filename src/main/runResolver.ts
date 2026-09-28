@@ -13,7 +13,7 @@ import {
 import type { FlowLoad } from './flow';
 import { readActiveFlow } from './activeFlowPointer';
 import { resolveCatalogEntry } from './flowCatalog';
-import { worktreeStartedness } from './startedness';
+import { progressionBegunness, worktreeStartedness } from './startedness';
 import { readRunBinding } from './runDisposition';
 
 /** The authoritative resolver: the pointer's catalog entry (repo tier, then global) when a pick is set — an
@@ -29,7 +29,9 @@ export function createRunResolver(globalDir: string): (repoKey: string) => Resol
         const started = worktreeStartedness(repoKey);
         if (started !== 'started') return { started };
         const binding = readRunBinding(repoKey);
-        return binding === null ? { started: 'indeterminate' } : { started, disposition: binding };
+        if (binding !== null) return { started, disposition: binding };
+        // §18.7.2 — a reset run's record that could not be removed binds nothing: no step is in progress to swap.
+        return { started: progressionBegunness(repoKey) === 'begun' ? 'indeterminate' : 'never-started' };
       },
     })(repoKey, globalDir);
 }

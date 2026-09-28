@@ -10,7 +10,7 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import { clearDisposition, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
+import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
 import { heldRunOf } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
@@ -753,6 +753,14 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       // the start with a visible reason, leaving the run not_started.
       const { machine, binding } = machineFor(k);
       const begins = binding !== undefined && machine.state().status === 'not_started';
+      // §18.7.2 — a record a reset could not remove would block the record write below, so it is retried here.
+      if (begins && readDisposition(k) !== 'absent' && readRunBinding(k) === null) {
+        try {
+          clearDisposition(k);
+        } catch (e) {
+          return withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: leftoverRecordRemedy(k, e) });
+        }
+      }
       const hadMarker = readDisposition(k) === 'present';
       if (begins) {
         try {

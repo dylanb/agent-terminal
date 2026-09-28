@@ -28,6 +28,11 @@ export type LockRefusalCause = 'held' | 'holder-unreadable' | 'lock-unusable';
 export type LockAcquire = { ok: true; release: () => void } | { ok: false; cause: LockRefusalCause; reason: string };
 export type LockedResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
+declare const lockScopeBrand: unique symbol;
+/** Minted only by `withWorktreeLock` for its callback: proof the caller went through the lock's policy (CWE-367). */
+export type WorktreeLockScope = { readonly [lockScopeBrand]: true };
+const LOCK_SCOPE = Object.freeze({}) as WorktreeLockScope;
+
 export interface WorktreeLockDeps {
   /** App-owned directory the lockfiles live in (see `worktreeLockRoot`). */
   lockRoot: string;
@@ -42,7 +47,7 @@ export interface WorktreeLock {
   acquire(worktreeDir: string): LockAcquire;
   /** Runs `fn` without the lock only when the cause is `lock-unusable`. A call nested inside another's `fn` for the
    *  same worktree on this instance runs `fn` under the lock already held. */
-  withWorktreeLock<T>(worktreeDir: string, fn: () => T): LockedResult<T>;
+  withWorktreeLock<T>(worktreeDir: string, fn: (scope: WorktreeLockScope) => T): LockedResult<T>;
 }
 
 /** Bounds a macOS `ps` start-time probe, which runs synchronously on the main process. */
@@ -291,15 +296,15 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   return {
     acquire,
     withWorktreeLock(worktreeDir, fn) {
-      if (holding.has(worktreeDir)) return { ok: true, value: fn() };
+      if (holding.has(worktreeDir)) return { ok: true, value: fn(LOCK_SCOPE) };
       const got = acquire(worktreeDir);
       if (!got.ok) {
-        if (got.cause === 'lock-unusable') return { ok: true, value: fn() };
+        if (got.cause === 'lock-unusable') return { ok: true, value: fn(LOCK_SCOPE) };
         return { ok: false, reason: got.reason };
       }
       holding.add(worktreeDir);
       try {
-        return { ok: true, value: fn() };
+        return { ok: true, value: fn(LOCK_SCOPE) };
       } finally {
         holding.delete(worktreeDir);
         got.release();

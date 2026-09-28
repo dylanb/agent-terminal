@@ -10,11 +10,12 @@ import { lstatSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { readBoundedNoFollow } from './boundedRead';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isRecord } from './yamlRecord';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { CATALOG_ORIGINS } from '../shared/ipc';
+import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_PATH_LENGTH } from '../shared/controlChars';
 import type { CatalogTier, DispositionRead } from './resolveRunDefinition';
 
 export const RUN_DISPOSITION_FILE = 'run-disposition.yaml';
@@ -76,6 +77,17 @@ export function clearDisposition(worktreeDir: string): void {
   if (file === null) throw new Error('run-disposition path is unresolvable');
   // `recursive` so a directory planted at the leaf (which readDisposition reads 'present') is cleared too.
   rmSync(file, { recursive: true, force: true });
+}
+
+/** §18.7.2 / §18.7.6 — why Start cannot remove a record a reset left behind, naming the file to delete. */
+export function leftoverRecordRemedy(worktreeDir: string, cause: unknown): string {
+  const file = runDispositionFile(worktreeDir);
+  const shown = displaySafeEcho(file, MAX_ECHOED_PATH_LENGTH);
+  const target = shown === file ? file : `the file ${RUN_DISPOSITION_FILE} in this worktree's ${path.basename(path.dirname(file))} directory`;
+  return displaySafeEcho(
+    `The run could not be started: the previous run's record could not be removed. Delete ${target}, then press Start again. (${errMsg(cause)})`,
+    MAX_ECHOED_LOCK_REASON_LENGTH,
+  );
 }
 
 /** §18.7.4 — read the marker's presence, fail-closed: any unverifiable read — a confinement escape of its own
