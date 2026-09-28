@@ -35,9 +35,15 @@ export function classifyHostedAgent(agentPresent: boolean, agentState: AgentStat
   return agentState === 'quiet' ? 'idle' : 'busy';
 }
 
+/** Why a turn is being re-injected (§27.12): the completion shortfall of the attempt before it. */
+export interface RetryCause {
+  reason: string;
+}
+
 export interface TurnRunnerDeps {
-  /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error. */
-  compose(turnKey: string): string | null;
+  /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error.
+   *  `retry` is present on the re-injection after a failed completion and carries the reason it failed. */
+  compose(turnKey: string, retry?: RetryCause): string | null;
   /** Inject + submit `prompt` into the hosted instance (§9.3). `opts.preamble` marks the actor-boundary
    *  /clear drained ahead of the turn, so the host can tell it apart from the turn prompt (§27 activity). */
   inject(prompt: string, opts?: { preamble?: boolean }): void;
@@ -103,6 +109,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   // §27.12 — a command (the actor-boundary /clear) to drain, gated, BEFORE the turn prompt. Consumed on
   // its own settle; injecting it re-arms quiescence so the prompt waits for /clear to drain (serialized pair).
   let preamble: string | null = null;
+  let retryCause: RetryCause | null = null;
 
   const tryInject = (): void => {
     if (state !== 'in-flight' || turnKey === null) return;
@@ -138,7 +145,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       deps.armTimer();
       return;
     }
-    const prompt = deps.compose(turnKey);
+    const prompt = retryCause !== null ? deps.compose(turnKey, retryCause) : deps.compose(turnKey);
     if (prompt === null) {
       deps.cancelTimer();
       state = 'error';
@@ -158,6 +165,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       deps.writeError(reason);
       return;
     }
+    retryCause = { reason };
     tryInject();
   };
 
@@ -192,6 +200,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       state = 'in-flight';
       turnKey = key;
       attempts = 0;
+      retryCause = null;
       awaitingInjectable = false;
       preamble = opts?.preamble ?? null;
       if (chained) {

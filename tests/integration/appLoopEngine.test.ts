@@ -229,6 +229,10 @@ function makeEngine(
     },
     currentBranch: () => currentBranchOverride,
     workRefs: () => workRefsResult,
+    artifactCheckCommand: (check) =>
+      check.kind === 'report'
+        ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
+        : `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`,
   };
   return createAppLoopEngine(deps);
 }
@@ -1249,6 +1253,48 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining(state!.errorReason!), 1);
   });
 
+  // §27.12 — the agent can run the same checker the engine gates on before it signals done.
+  it('the review prompt hands the agent the checker command for this round\'s report', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).toContain(`check-artifact report ${roundReportRel(1)} --sections summary --roster ${ROSTER.join(',')}`);
+  });
+
+  // §27.12 — a present-but-malformed report is repaired, not re-reviewed: the retry names each problem and
+  // asks for the report alone, so the reviewers do not run a second time.
+  it('a malformed report is retried as a report repair naming each problem, not a re-review', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const firstPrompt = injected[injected.length - 1];
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1]
+    engine.onDoneSignal();
+    const retry = injected[injected.length - 1];
+    expect(retry).not.toBe(firstPrompt);
+    expect(retry).toContain(`### ${ROSTER[1]}`);
+    expect(retry).toContain(roundReportRel(1));
+    expect(retry.toLowerCase()).toContain('do not re-run the reviewers');
+    expect(retry).not.toContain('Spawn each reviewer');
+    expect(retry).toContain(`check-artifact report ${roundReportRel(1)}`);
+    expect(retry).toContain(REVIEW_KEY);
+  });
+
+  it('a repaired report completes the round on the retry', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] }));
+    engine.onDoneSignal();
+    writeReport();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'working', round: 1 });
+  });
+
+  it('a MISSING report is retried as the full review round (nothing to repair)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal();
+    expect(injected[injected.length - 1]).toContain('Spawn each reviewer');
+  });
+
   it('the error names the round report as present-but-malformed, never as missing', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
@@ -1507,6 +1553,27 @@ describe('§27 engine — the consolidator completion gate (AC3)', () => {
     expect(state).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'error', round: 1 });
     expect(state?.errorReason).toBeTruthy();
     expect(emitError).toHaveBeenCalled();
+  });
+
+  it('the consolidator prompt hands the agent the checker command for its verdict', () => {
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    expect(injected[injected.length - 1]).toContain(`check-artifact verdict ${consolidatorOutputRel(1)} --catalog ${ROSTER.join(',')}`);
+  });
+
+  // §27.12 — a present-but-malformed verdict is repaired, not re-judged: the retry names the problem.
+  it('a malformed verdict is retried as a verdict repair naming the problem', () => {
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    const firstPrompt = injected[injected.length - 1];
+    writeConsolidatorOutput(1, 'verdict: another round\nroster: ghost-persona\n');
+    engine.onDoneSignal();
+    const retry = injected[injected.length - 1];
+    expect(retry).not.toBe(firstPrompt);
+    expect(retry).toContain('ghost-persona');
+    expect(retry).toContain(consolidatorOutputRel(1));
+    expect(retry).toContain(`check-artifact verdict ${consolidatorOutputRel(1)}`);
+    expect(retry).toContain(CONSOLIDATE_KEY);
   });
 
   it('an `another round` naming a persona outside the catalog is malformed → error (§27.4)', () => {

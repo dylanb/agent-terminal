@@ -66,17 +66,28 @@ export function parseConsolidatorOutput(text: string): { verdict: ConsolidatorVe
   return { verdict, roster, reason };
 }
 
-/** Whether the consolidator output is well-formed (§27.6/AC3): it carries a verdict from the closed set and
- *  — ONLY when the verdict is `another round` — a non-empty roster drawn from the catalog (§27.4: a persona
- *  the catalog does not declare can never be invoked). A terminal verdict (`clean`/`stop for a human`) needs
- *  no roster, and a roster supplied on one is ignored, not malformed. Judgment CORRECTNESS is out of scope. */
-export function consolidatorOutputWellFormed(text: string, catalog: string[]): boolean {
+/** Every defect that keeps the consolidator output from being well-formed (§27.6/AC3), each naming what is
+ *  wrong: no verdict line from the closed set, or — ONLY under `another round` — an empty roster or a roster
+ *  persona the catalog does not declare (§27.4). A terminal verdict needs no roster, and a roster supplied on
+ *  one is ignored. Empty ⟺ well-formed. Judgment CORRECTNESS is out of scope. */
+export function consolidatorOutputProblems(text: string, catalog: string[]): string[] {
+  const g = CONSOLIDATOR_GRAMMAR;
   const parsed = parseConsolidatorOutput(text);
-  if (parsed === null) return false;
-  if (parsed.verdict !== ANOTHER_ROUND) return true;
-  if (parsed.roster.length === 0) return false;
+  if (parsed === null) {
+    return [`no \`${g.verdictLabel}:\` line carrying exactly one of ${CONSOLIDATOR_VERDICTS.map((v) => `\`${v}\``).join(' / ')}`];
+  }
+  if (parsed.verdict !== ANOTHER_ROUND) return [];
+  if (parsed.roster.length === 0) return [`\`${g.verdictLabel}: ${ANOTHER_ROUND}\` needs a non-empty \`${g.rosterLabel}:\` line naming reviewers from: ${catalog.join(', ')}`];
   const declared = new Set(catalog);
-  return parsed.roster.every((p) => declared.has(p));
+  return parsed.roster
+    .filter((p) => !declared.has(p))
+    .map((p) => `\`${g.rosterLabel}:\` names \`${p}\`, which is not in this loop's reviewer catalog: ${catalog.join(', ')}`);
+}
+
+/** Whether the consolidator output is well-formed (§27.6/AC3) — exactly when `consolidatorOutputProblems`
+ *  finds nothing. */
+export function consolidatorOutputWellFormed(text: string, catalog: string[]): boolean {
+  return consolidatorOutputProblems(text, catalog).length === 0;
 }
 
 /** The single canonical example the predicate happy-path test, the fake-agent output, and the prompt
