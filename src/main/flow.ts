@@ -745,6 +745,8 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     runHold: displaySafeHold(heldRunOf(k)),
   });
   const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, machineView(k, op));
+  const stateWithNotice = (k: string, notice: string): FlowStateView =>
+    withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
     start: (k) => {
@@ -758,7 +760,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
         try {
           clearDisposition(k);
         } catch (e) {
-          return withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: leftoverRecordRemedy(k, e) });
+          return stateWithNotice(k, leftoverRecordRemedy(k, e));
         }
       }
       const hadMarker = readDisposition(k) === 'present';
@@ -766,7 +768,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
         try {
           recordDisposition(k, binding);
         } catch (e) {
-          return withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
+          return stateWithNotice(k, `The run could not be started: ${errMsg(e)}`);
         }
       }
       const view = machineView(k, (m) => m.start());
@@ -825,7 +827,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
         else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
       } catch (e) {
         const reason = displaySafeEcho(`The run could not be terminated: ${errMsg(e)}`, MAX_ECHOED_REASON_LENGTH);
-        return { outcome: 'refused', cause: 'failed', reason, view: withRunStarted(k, { ...machineView(k, (m) => m.state()), notice: reason }) };
+        return { outcome: 'refused', cause: 'failed', reason, view: stateWithNotice(k, reason) };
       }
       let notice: string | undefined;
       try {

@@ -102,9 +102,7 @@ export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecover
     const write = pointerWriteFor(choice);
     const selected = deps.selectIfUnlocked(scope, worktree, write);
     if (selected.ok) return { ok: true, outcome: 'terminated' };
-    if (selected.cause === 'run-begun') {
-      return terminatedWith(ended.view.notice ?? selected.reason);
-    }
+    if (selected.cause === 'run-begun') return terminatedWith(ended.view.notice ?? selected.reason);
     if (write.kind === 'unset') {
       return terminatedWith(`The run was ended, but the saved selection could not be cleared: ${selected.error}`);
     }

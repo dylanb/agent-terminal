@@ -148,8 +148,9 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     const changed =
       nowLocked !== locked || nowResetWithRecord !== resetWithRecord || JSON.stringify(nowHeld) !== JSON.stringify(held);
     resetWithRecord = nowResetWithRecord;
+    const gateFlipped = nowLocked !== locked || (nowHeld === null) !== (held === null);
     const released = held !== null && nowHeld === null;
-    if ((nowLocked !== locked || (nowHeld === null) !== (held === null)) && !(released && noticeOutlivesRelease)) alertText = '';
+    if (gateFlipped && !(released && noticeOutlivesRelease)) alertText = '';
     if (released) noticeOutlivesRelease = false;
     locked = nowLocked;
     held = nowHeld;
