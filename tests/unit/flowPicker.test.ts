@@ -1946,6 +1946,53 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     r.picker.dispose();
   });
 
+  it('a rebind that ended the run and saved the choice announces nothing, collapses the picker, and leaves the regular picker usable on the choice (AC12, AC7)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    r.rebindHeldRun.respond({ ok: true, outcome: 'terminated' });
+    await openRecovery(r.host);
+    option(r.host, 'alpha-flow').click();
+    await settle();
+    const after = recoveryListing();
+    if (after.ok) after.listing.selection = { kind: 'value', id: 'alpha-flow' };
+    r.catalog.serve('/repo-a', after);
+    r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+    await settle();
+
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
+    expect(options(r.host)).toEqual([]);
+    expect(recoverControl(r.host), 'recovery is no longer offered').toBeUndefined();
+    expect(trigger(r.host).disabled).toBe(false);
+    await ensureOpen(r.host);
+    expect(option(r.host, 'alpha-flow').getAttribute('aria-selected')).toBe('true');
+    r.picker.dispose();
+  });
+
+  for (const order of ['reply before view', 'view before reply'] as const) {
+    it(`a rebind that ended the run but could not save the choice announces the notice display-safe and bounded, and the regular picker shows the saved selection, not the choice (AC12, AC11) — ${order}`, async () => {
+      const r = await heldRig(heldView('record-missing'));
+      const notice = `The run was ended, but the chosen flow could not be selected: EISDIR\u202e\u200b${'x'.repeat(MAX_ECHOED_LOCK_REASON_LENGTH)}`;
+      r.rebindHeldRun.respond({ ok: true, outcome: 'terminated', notice });
+      await openRecovery(r.host);
+      option(r.host, 'alpha-flow').click();
+      if (order === 'view before reply') r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+      await settle();
+      if (order === 'reply before view') r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+      await settle();
+
+      const text = r.host.querySelector('[role="alert"]')?.textContent ?? '';
+      expect(text).toContain('The run was ended, but the chosen flow could not be selected: EISDIR');
+      expect(text).not.toMatch(/[\u202e\u200b]/u);
+      expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_LOCK_REASON_LENGTH);
+      expect(options(r.host)).toEqual([]);
+      expect(recoverControl(r.host), 'recovery is no longer offered').toBeUndefined();
+      expect(trigger(r.host).disabled).toBe(false);
+      await ensureOpen(r.host);
+      expect(option(r.host, 'beta-flow').getAttribute('aria-selected')).toBe('true');
+      expect(option(r.host, 'alpha-flow').getAttribute('aria-selected')).not.toBe('true');
+      r.picker.dispose();
+    });
+  }
+
   it('a refused rebind announces its reason and leaves recovery offered (AC17)', async () => {
     const r = await heldRig(heldView('record-missing'));
     r.rebindHeldRun.respond({ ok: false, reason: 'Recovering onto a flow is not available in this build' });
@@ -2056,11 +2103,11 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
 
   it("a refused rebind's reason is withdrawn once the same worktree is no longer held", async () => {
     const r = await heldRig(heldView('record-missing'));
-    r.rebindHeldRun.respond({ ok: false, reason: 'The chosen flow does not contain the current step' });
+    r.rebindHeldRun.respond({ ok: false, reason: 'Another Agent Terminal window is working in this worktree' });
     await openRecovery(r.host);
     option(r.host, 'beta-flow').click();
     await settle();
-    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('The chosen flow does not contain the current step');
+    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('Another Agent Terminal window is working in this worktree');
 
     r.views.fire('/repo-a', viewOf({ status: 'in_progress', runStarted: 'started', runHold: { hold: 'not-held' } }));
     await settle();

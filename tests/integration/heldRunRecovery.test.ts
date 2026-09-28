@@ -13,7 +13,8 @@ import {
   worktreeLockFile,
   type WorktreeLock,
 } from '../../src/main/worktreeLock';
-import { createHeldRunRecovery, realHeldRunRecoveryDeps, type HeldRead, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import { createHeldRunRecovery, type HeldRead, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
@@ -41,11 +42,17 @@ function lstatExists(file: string): boolean {
   }
 }
 
-const CHOICES: RebindChoice[] = [{ origin: 'local' }, { origin: 'global', id: 'resume-flow' }, { origin: 'repo', id: 'repo-flow' }, { origin: 'fallback' }];
+const CHOICES: RebindChoice[] = [
+  { origin: 'local' },
+  { origin: 'global', id: 'resume-flow' },
+  { origin: 'repo', id: 'repo-flow' },
+  { origin: 'fallback' },
+  { origin: 'global', id: 'no-s2-flow' },
+];
 
 const NOT_HELD = /not waiting to be recovered/i;
 
-const realDeps = (globalDir: string): Omit<HeldRunRecoveryDeps, 'lock'> => realHeldRunRecoveryDeps(globalDir);
+const realDeps = (globalDir: string): Omit<HeldRunRecoveryDeps, 'lock'> => productionRecoveryDeps(globalDir);
 
 function expectRefused(result: RebindResult): string {
   expect(result).toMatchObject({ ok: false });
@@ -72,6 +79,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     const home = fx.makeWorktree('a3-rebind-home');
     const lockRoot = join(fx.outsideDir('a3-rebind-locks'), 'locks');
     catalog.addEntryWithSteps(flowCatalogDir(home), 'resume-flow', ['s1', 's2', 's3']);
+    catalog.addEntryWithSteps(flowCatalogDir(home), 'no-s2-flow', ['x1', 'x2']);
     fx.writeFlowHome(home, { name: 'global-fallback', stepIds: ['s1', 's2'] });
     const wt = fx.makeWorktree('a3-rebind-wt');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['s1', 's2', 's3'] });

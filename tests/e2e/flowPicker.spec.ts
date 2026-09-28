@@ -7,11 +7,13 @@ import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createFlowPickerHarness, type FlowPickerHarness } from './flowPickerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import { join } from 'node:path';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import type { RebindChoice } from '../../src/shared/ipc';
+import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
+import { parseAuditStream } from '../../src/shared/audit';
 
 // A3 (#134) §18.7.4 / §18.7.6 — the flow picker in the strip region, driven through the real app.
 
@@ -503,7 +505,6 @@ test('AC18: a non-file at the pointer path shows the flow-load error, and "use t
 });
 
 const recoverControl = (page: Page): Locator => pickerHost(page).getByRole('button', { name: /recover/i });
-const NO_CURRENT_STEP = /does not contain the current step/i;
 const flowStation = (page: Page, i: number): Locator => page.locator('#flow-strip .flow.vert .stn').nth(i);
 
 /** Every picker button other than the recovery control is disabled: a held run's selection changes only through
@@ -566,14 +567,6 @@ test('AC14/AC16: a held run with a missing record offers recovery naming the ste
 
   await page.keyboard.press('Escape');
   await expect(pickerHost(page).getByRole('option')).toHaveCount(0);
-  await expect(flowError(page)).toBeVisible();
-  await expect(flowTerminate(page)).toBeVisible();
-  await expect(recoverControl(page)).toBeEnabled();
-  expect(runFiles(repo)).toEqual(before);
-
-  await recoverControl(page).click();
-  await pickerHost(page).getByRole('option').filter({ hasText: 'no-s2-flow' }).click();
-  await expect(pickerAlert(page)).toContainText(NO_CURRENT_STEP, { timeout: 10_000 });
   await expect(flowError(page)).toBeVisible();
   await expect(flowTerminate(page)).toBeVisible();
   await expect(recoverControl(page)).toBeEnabled();
@@ -710,4 +703,60 @@ test('AC13/AC15: a held run with a garbage record resumes onto the global fallba
   await harness.cdInto(repo);
   await expect(harness.stepName(3)).toHaveText('fallback-3', { timeout: 10_000 });
   await expect(flowStation(relaunched, 2)).toHaveClass(/\bactive\b/);
+});
+
+/** The event types of every §25 audit run the app opened for `repo` under the harness home, found through the
+ *  recorder's own path resolvers. */
+function auditRuns(home: string, repo: string): string[][] {
+  const dir = auditRepoDir(auditRootDir(home), repo);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => parseAuditStream(readFileSync(join(dir, f), 'utf8')).events.map((e) => e.type));
+}
+
+test('AC12: a held run recovered onto a catalog flow lacking its step is ended as a Terminate ends it, the flow is selected at Not started over a local flow.yaml, and it survives a relaunch', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('first-flow', ['s1', 's2']);
+  harness.seedGlobalEntry('other-flow', ['o1', 'o2']);
+  const repo = harness.repo('agent-term-e2e-a3-nomatch-');
+  harness.seedLocalFlow(repo, ['local-first', 'local-second']);
+  harness.selectFlow(repo, 'first-flow');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('s1', { timeout: 10_000 });
+  await expect(flowControl(page)).toHaveText('Start');
+  await flowControl(page).click();
+  await expect(flowStation(page, 1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect.poll(() => auditRuns(harness.home, repo).length).toBe(1);
+
+  await harness.close();
+  createWorktreeFixture().removeRunRecord(repo);
+  const held = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(flowError(held)).toBeVisible({ timeout: 10_000 });
+  await recoverOnto(held, 'other-flow');
+
+  await expect.poll(() => readActiveFlow(repo), { timeout: 10_000 }).toEqual({ kind: 'value', id: 'other-flow' });
+  expect(existsSync(runDispositionFile(repo))).toBe(false);
+  await expect(flowError(held)).toHaveCount(0);
+  await expect(harness.stepName(1)).toHaveText('o1', { timeout: 10_000 });
+  await expect(harness.stepName(2)).toHaveText('o2');
+  await expect(flowControl(held)).toHaveText('Start');
+  await expect(recoverControl(held)).toHaveCount(0);
+  await expect(pickerTrigger(held)).toBeEnabled();
+  await openPicker(held);
+  await expect(pickerOption(held, 'other-flow')).toHaveAttribute('aria-selected', 'true');
+  await expect(pickerOption(held, 'first-flow')).not.toHaveAttribute('aria-selected', 'true');
+  await held.keyboard.press('Escape');
+  const runs = auditRuns(harness.home, repo);
+  expect(runs).toHaveLength(1);
+  expect(runs[0]).toContain('flow.terminated');
+
+  const relaunched = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('o1', { timeout: 10_000 });
+  await expect(flowControl(relaunched)).toHaveText('Start');
 });

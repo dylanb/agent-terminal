@@ -10,6 +10,7 @@ import { clearDisposition, readRunBinding } from '../../src/main/runDisposition'
 import { createRunResolver } from '../../src/main/runResolver';
 import { createWorktreeLock, currentLockHolder, serializeLockHolder, worktreeLockFile, type WorktreeLock } from '../../src/main/worktreeLock';
 import * as recoveryModule from '../../src/main/heldRunRecovery';
+import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import { listCatalog } from '../../src/main/flowCatalogList';
 import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
@@ -24,7 +25,7 @@ const asRoot = process.getuid?.() === 0;
 
 type RealDeps = Omit<recoveryModule.HeldRunRecoveryDeps, 'lock'>;
 
-const realDeps = (globalDir: string): RealDeps => recoveryModule.realHeldRunRecoveryDeps(globalDir);
+const realDeps = (globalDir: string): RealDeps => productionRecoveryDeps(globalDir);
 
 const bytes = (file: string): string | null => (existsSync(file) ? readFileSync(file).toString('base64') : null);
 
@@ -173,18 +174,6 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     expect(view.status).toBe('in_progress');
   });
 
-  it('a hostile held step that the chosen flow lacks is refused with a display-safe, bounded reason', () => {
-    const { wt, recovery, unchanged } = rig();
-    fx.writeFlowState(wt, { step: `s‮​x${'y'.repeat(MAX_ECHOED_REASON_LENGTH * 2)}`, status: 'in_progress' });
-    fx.removeRunRecord(wt);
-    const before = unchanged();
-
-    expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }))).toMatch(/current step/);
-
-    expect(unchanged()).toEqual(before);
-    expect(heldRunOf(wt).hold).toBe('record-missing');
-  });
-
   it('after a resume, a later Terminate shows the pre-run selection', () => {
     const { home, wt, recovery, manager } = rig();
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
@@ -195,19 +184,6 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
 
     expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'no-s2-flow' });
     expect(listCatalog({ worktreeDir: wt, globalRoot: home }).selection).toEqual({ kind: 'value', id: 'no-s2-flow' });
-  });
-
-  it('a choice whose flow lacks the held step is refused in this build, nothing is written, and the run stays held', () => {
-    const { wt, recovery, unchanged } = rig();
-    fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
-    fx.removeRunRecord(wt);
-    const before = unchanged();
-
-    expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }))).toMatch(/does not contain the current step/i);
-
-    expect(unchanged()).toEqual(before);
-    expect(readRunBinding(wt)).toBeNull();
-    expect(heldRunOf(wt).hold).toBe('record-missing');
   });
 
   it.each([

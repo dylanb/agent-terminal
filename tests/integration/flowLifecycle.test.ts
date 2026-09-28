@@ -16,7 +16,9 @@ import {
   worktreeLockFile,
   type WorktreeLock,
 } from '../../src/main/worktreeLock';
-import { createHeldRunRecovery, realHeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import { createHeldRunRecovery, realHeldRunRecoveryDeps, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import * as gateModule from '../../src/main/activeFlowGate';
+import { readActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowLifecycle } from '../../src/main/flowLifecycle';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import type { FlowStateView } from '../../src/shared/ipc';
@@ -52,6 +54,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     const home = fx.makeWorktree('a3-lc-home');
     fx.writeFlowHome(home, { name: 'global-fallback', stepIds: ['s1', 's2'] });
     catalog.addEntryWithSteps(flowCatalogDir(home), 'resume-flow', ['s1', 's2', 's3']);
+    catalog.addEntryWithSteps(flowCatalogDir(home), 'other-flow', ['o1', 'o2']);
     const wt = fx.makeWorktree(opts.worktreeName ?? 'a3-lc-wt');
     const lockRoot = join(fx.outsideDir('a3-lc-locks'), 'locks');
     const audit = createAuditRunFixture(fx.outsideDir('a3-lc-audit'), 'global-fallback');
@@ -63,7 +66,14 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     const lifecycle = createFlowLifecycle({
       lock,
       flow: opts.wrapFlow?.(manager) ?? manager,
-      recovery: createHeldRunRecovery({ lock, ...realHeldRunRecoveryDeps(home) }),
+      recovery: createHeldRunRecovery({
+        lock,
+        ...({
+          ...realHeldRunRecoveryDeps(home),
+          terminate: (k: string) => manager.terminate(k),
+          selectIfUnlocked: gateModule.selectIfUnlocked,
+        } satisfies Omit<HeldRunRecoveryDeps, 'lock'>),
+      }),
       pendingNotices: notices,
       loopTurnActive: (k: string) => opts.activeTurn === true && k === wt,
       forgetRunEntry: (k: string) => effects.forgotten.push(k),
@@ -406,17 +416,70 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
     });
 
-    it('is refused while an app-loop turn is in flight for the worktree, writing nothing and leaving it held', () => {
-      const r = rig({ activeTurn: true });
+    it('a no-match rebind ends the run: flow.terminated in the audit run, todos and the monitor cleared, the strip told, and the choice selected', () => {
+      const r = rig();
+      heldRun(r);
+
+      expect(r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+
+      expect(r.audit.runFiles(r.wt)).toHaveLength(1);
+      expect(r.audit.eventTypes(r.wt).filter((t) => t === 'flow.terminated')).toHaveLength(1);
+      expect(r.todos.list(r.wt)).toHaveLength(0);
+      expect(r.effects.monitorCleared).toBeGreaterThan(0);
+      expect(r.effects.flowChanged).toBeGreaterThan(0);
+      expect([...new Set(r.effects.forgotten)]).toEqual([r.wt]);
+      expect(readActiveFlow(r.wt)).toEqual({ kind: 'value', id: 'other-flow' });
+      expect(r.notices.take(r.wt)).toBeUndefined();
+      expect(r.manager.state(r.wt).status).toBe('not_started');
+    });
+
+    it('a no-match rebind whose selection write fails after the reset returns the notice and still runs every Terminate effect', () => {
+      const r = rig();
+      heldRun(r);
+      fx.plantPointerDirectory(r.wt);
+
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' });
+
+      expect(result).toMatchObject({ ok: true, outcome: 'terminated', notice: expect.stringMatching(/could not be selected/) });
+      expect(r.notices.take(r.wt)).toBeUndefined();
+      expect(r.audit.eventTypes(r.wt).filter((t) => t === 'flow.terminated')).toHaveLength(1);
+      expect(r.todos.list(r.wt)).toHaveLength(0);
+      expect(r.effects.monitorCleared).toBeGreaterThan(0);
+      expect(r.effects.flowChanged).toBeGreaterThan(0);
+      expect([...new Set(r.effects.forgotten)]).toEqual([r.wt]);
+    });
+
+    it.skipIf(asRoot)('a no-match rebind the manager cannot reset writes no audit entry and runs no lifecycle effect', () => {
+      const r = rig();
       heldRun(r);
       const before = r.progression();
 
-      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id: 'resume-flow' });
+      const result = withReadOnlyFlowHome(r.wt, () => r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }));
+
+      expect(reasonOf(result)).toMatch(/EACCES|permission/i);
+      expect(reasonOf(result)).not.toMatch(/current step/i);
+      expect(r.progression()).toBe(before);
+      expect(r.audit.runFiles(r.wt)).toHaveLength(1);
+      expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+      expect(r.todos.list(r.wt)).toHaveLength(1);
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+    });
+
+    it.each(['resume-flow', 'other-flow'])('a %s choice is refused while an app-loop turn is in flight for the worktree, writing nothing and leaving it held', (id) => {
+      const r = rig({ activeTurn: true });
+      heldRun(r);
+      const before = r.progression();
+      const pointerBefore = readActiveFlow(r.wt);
+
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id });
 
       expect(result.ok).toBe(false);
       expect(reasonOf(result)).toMatch(/turn/i);
       expect(r.progression()).toBe(before);
       expect(readRunBinding(r.wt)).toBeNull();
+      expect(readActiveFlow(r.wt)).toEqual(pointerBefore);
+      expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+      expect(r.todos.list(r.wt)).toHaveLength(1);
       expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
     });
 
