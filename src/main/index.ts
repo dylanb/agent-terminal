@@ -104,6 +104,7 @@ import {
   type InstallDestination,
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
+import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
@@ -331,6 +332,9 @@ async function createWindow(): Promise<void> {
   let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
+    // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
+    artifactCheckCommand: (check) =>
+      artifactCheckCommand({ execPath: process.execPath, script: resolveArtifactCheckScript(__dirname) }, check),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
     // §28.5.3/§28.8.3 — the GREEN engine ports: record the changed-test flag (the disjoint changed-tests.yaml

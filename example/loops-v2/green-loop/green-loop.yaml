@@ -29,18 +29,9 @@ reviewers:
   - persona: impl-review-intent
     charter: charter/intent.md
     tools: [Read, Grep, Glob]
-  - persona: impl-review-maintainability
-    charter: charter/maintainability.md
-    tools: [Read, Grep, Glob]
-  - persona: impl-review-conventions
-    charter: charter/conventions.md
-    tools: [Read, Grep, Glob]
   - persona: impl-review-accessibility
     charter: charter/accessibility.md
     tools: [Read, Grep, Glob]
-  - persona: impl-review-diagrams
-    charter: charter/diagrams.md
-    tools: [Read, Grep, Glob, Bash]
   - persona: impl-review-regression-guard
     charter: charter/regression-guard.md
     tools: [Read, Grep, Glob, Bash]
@@ -51,6 +42,7 @@ boundaries:
     mode: clear
 report:
   sections: [summary, findings, disposition]
+  polish: defer
 gate:
   - option: approve
     side_effects:

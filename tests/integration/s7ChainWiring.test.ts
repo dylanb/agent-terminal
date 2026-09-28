@@ -34,11 +34,16 @@ interface LoopRow {
   input: { id: string; path: string };
   output: { id: string; path: string } | null;
   personas: PersonaRow[];
+  polish: 'fix' | 'defer';
 }
 
 const PLAN_INPUT = { id: 'plan', path: 'plan.md' } as const;
 
 const IMPL_LANES = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'] as const;
+// Per-slice catalogs are narrower than the integration-slice sweep, which re-runs every IMPL_LANES lens once
+// over the whole ticket diff (§27.8 `polish: defer`).
+const GREEN_LANES = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'accessibility'] as const;
+const REFACTOR_LANES = ['principal', 'tests', 'reliability', 'architecture'] as const;
 const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'] as const;
 
 const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-loop', charter: `plan-loop/charter/${lane}.md` } });
@@ -50,6 +55,7 @@ export const CHAIN: readonly LoopRow[] = [
   {
     name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: true,
     consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
+    polish: 'fix',
     personas: [
       ...PLAN_LANES.map(plan),
       authored('review-plan-test-architect', 'test-architect'),
@@ -60,6 +66,7 @@ export const CHAIN: readonly LoopRow[] = [
   {
     name: 'infra-loop', kind: 'impl', completion: null, gate: ['commit'], pickup: false,
     consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
+    polish: 'defer',
     personas: [
       ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
       fromPlanBundle('review-plan-determinism', 'determinism'),
@@ -68,21 +75,25 @@ export const CHAIN: readonly LoopRow[] = [
   {
     name: 'red-loop', kind: 'phase', completion: 'red', gate: ['commit'], pickup: false,
     consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.md' },
+    polish: 'defer',
     personas: [...['tests', 'intent'].map(impl), authored('impl-review-red-authenticity', 'red-authenticity')],
   },
   {
     name: 'green-loop', kind: 'phase', completion: 'green', gate: ['commit'], pickup: false,
     consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.md' },
-    personas: [...IMPL_LANES.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
+    polish: 'defer',
+    personas: [...GREEN_LANES.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
   },
   {
     name: 'refactor-loop', kind: 'phase', completion: 'refactor', gate: ['commit'], pickup: false,
     consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
-    personas: [...IMPL_LANES.map(impl)],
+    polish: 'defer',
+    personas: [...REFACTOR_LANES.map(impl)],
   },
   {
     name: 'integration-slice-loop', kind: 'impl', completion: null, gate: ['commit', 'gh'], pickup: false,
     consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
+    polish: 'fix',
     personas: [...IMPL_LANES.map(impl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
   },
 ];
@@ -175,6 +186,10 @@ describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
 
   it('resolves to a def whose catalog is the manifest personas', () => {
     expect(catalogPersonas(mustResolve(name)).slice().sort()).toEqual(row.personas.map((p) => p.persona).sort());
+  });
+
+  it('declares the manifest polish policy (per-slice loops defer to the integration-slice sweep)', () => {
+    expect(mustResolve(name).report.polish).toBe(row.polish);
   });
 
   it('resolves every reviewer charter on disk', () => {

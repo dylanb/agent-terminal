@@ -2786,7 +2786,8 @@ function seedFakeAgentV2(
     buildOutcome?: BuildOutcome;
     touchTest?: boolean;
     // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
-    review?: 'full' | 'omit-persona' | 'none' | 'failed';
+    // `omit-then-repair` writes the omitting report first; on the §27.12 repair prompt it writes the full report.
+    review?: 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair';
     // Round-2 review report kind (multi-round runs), default `full`.
     review2?: 'full' | 'failed';
     // The consolidator output per round (index = round-1); each is the FULL verdict file content. Absent →
@@ -2854,13 +2855,13 @@ function seedFakeAgentV2(
                 : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
-  const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
+  const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
   const r2B64 = (opts.review2 ?? 'full') === 'failed' ? FAILED_REPORT_B64 : FULL_REPORT_B64;
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
   // reports/2.md, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =
     'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
-    `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; ` +
+    `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; [ -f .agent-terminal/repairing ] && RB='${FULL_REPORT_B64}'; ` +
     'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
   // §28.5.3 — a REFACTOR loop's review ROUND additionally writes the round-keyed phase-result the gate reads
   // ({report ∧ passed}, softer than GREEN — no build line) and makes a behavior-preserving change so the approve
@@ -2897,6 +2898,10 @@ function seedFakeAgentV2(
     `  ${logInjected}` +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    (reviewKind === 'omit-then-repair'
+      ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; ${writeReportRoundAware} ;;\n`
+      : '') +
+    '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
     `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;\n` +
     `    *turn-done:${reviewKey}*) ${reviewAct} ;;\n` +
@@ -3010,6 +3015,46 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: complete');
   expect(readIf(join(repo, '.agent-terminal', 'review-runs')).length).toBe(2); // Accept never re-injected the review turn
   expect(readFileSync(appReport1(repo), 'utf8')).toBe(malformed); // the malformed report is kept, malformation included
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
+// record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
+// app binary) and sees pass before signalling; the round then completes and the loop moves on.
+test('a §27 malformed round report is retried as a repair naming the problem; the bundled checker passes the fix and the round completes (§27.12)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-repair-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-repair-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-repair-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'omit-then-repair', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // The round completes on the repaired report and the loop chains the consolidator — never an error.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('turn_key: consolidate-plan');
+  expect(readIf(appRunState(repo))).not.toContain('status: error');
+
+  const injectedLog = readIf(join(repo, '.agent-terminal', 'injected-log'));
+  expect(injectedLog).toContain('This is a REPAIR of the round-1 report');
+  expect(injectedLog).toContain(`### ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
+  expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
+
+  // The agent ran the checker the prompt handed it: it passed the repaired report.
+  const checkerLog = readIf(join(repo, '.agent-terminal', 'checker-log'));
+  expect(checkerLog, injectedLog.split('\n').filter((l) => l.includes('ELECTRON_RUN_AS_NODE')).join('\n')).toContain('OK: .agent-terminal/loop/reports/1.md');
+  expect(checkerLog).toContain('exit=0');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

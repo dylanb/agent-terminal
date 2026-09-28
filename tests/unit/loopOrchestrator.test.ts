@@ -47,7 +47,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
   let hosted: 'idle' | 'busy' | 'absent';
   let artifact: boolean;
   let shortfall: string;
-  let compose: Mock<(turnKey: string) => string | null>;
+  let compose: Mock<(turnKey: string, retry?: { reason: string }) => string | null>;
   let deps: TurnRunnerDeps;
   let inject: Mock<(prompt: string) => void>;
   let armTimer: Mock<() => void>;
@@ -66,7 +66,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     writeError = vi.fn();
     onComplete = vi.fn();
     noteSettle = vi.fn();
-    compose = vi.fn((k: string) => `PROMPT for ${k}`);
+    compose = vi.fn((k: string, retry?: { reason: string }) => (retry ? `RETRY for ${k}: ${retry.reason}` : `PROMPT for ${k}`));
     deps = {
       compose,
       inject,
@@ -148,6 +148,20 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     r.onDoneSignal(); // signalled, but plan.md absent
     expect(onComplete).not.toHaveBeenCalled();
     expect(inject).toHaveBeenCalledTimes(2); // retried
+  });
+
+  // §27.12 — the retry is told why the first attempt fell short, so the composer can ask for a targeted repair
+  // instead of replaying the whole turn.
+  it('composes the retry with the shortfall that caused it, and the first attempt with none', () => {
+    const r = createTurnRunner(deps);
+    r.requestTurn('review-plan');
+    artifact = false;
+    shortfall = 'the round report .agent-terminal/loop/reports/1.md is not well-formed';
+    r.onDoneSignal();
+    expect(inject.mock.calls.map((c) => c[0])).toEqual([
+      'PROMPT for review-plan',
+      'RETRY for review-plan: done-signal received but the round report .agent-terminal/loop/reports/1.md is not well-formed',
+    ]);
   });
 
   it('a second missing-artifact done-signal stops the run in error (retry once, then error)', () => {
