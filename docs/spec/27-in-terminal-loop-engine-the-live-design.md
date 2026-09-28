@@ -109,7 +109,7 @@ A `/clear` at every actor boundary is why nothing in the old loop amortized: eve
   - **`reviewers`** — the **catalog** of personas available to this loop, each with its **charter** (a reference, never an inline body — §18.6) and the tools it may use. Round 1 runs the whole catalog; thereafter the consolidator selects from it (§27.6);
   - **`consolidator`** — its prompt recipe;
   - **`boundaries`** — `clear` or `compact: <message>` for each actor boundary (§27.7);
-  - **`report`** — the prescribed structure the round report must satisfy (§27.5);
+  - **`report`** — the prescribed structure the round report must satisfy (§27.5), and its **`polish`** policy: `fix` (the default) or `defer`. Under `defer` the review-and-fix turn dismisses a polish finding — one whose fix changes no runtime behavior, no test's ability to fail, and no contract another surface reads — as `dismissed — out of scope`, so a polish-only round changes nothing and is `clean` (§27.6). A loop may declare `defer` only when a later loop in its flow re-reviews the same diff with a catalog that fixes polish; the shipped per-slice loops (infra, red, green, refactor) defer to the integration-slice sweep;
   - **`gate`** — the human options available (§27.9) and their side-effects (§27.13);
   - **`pickup`** — the bootstrap contract (§27.10);
   - **`inputs` / `outputs`** — the artifact this loop consumes and the one it produces, which is what chains groom → plan → impl (§27.10).

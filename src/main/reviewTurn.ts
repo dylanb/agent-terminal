@@ -4,11 +4,11 @@
 // is single-sourced from the SHARED report vocabulary (roundReport.ts) so the shape the fixer is told to
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
-import type { LoopDefV2 } from './loopDefV2';
+import type { LoopDefV2, PolishPolicy } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
+import { DISPOSITIONS, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -50,6 +50,8 @@ export interface ReviewAndFixPromptReq {
   roster: RosterEntry[];
   /** The def's prescribed report structure (§27.5). */
   sections: string[];
+  /** §27.8 — the def's polish policy; absent is `fix`. */
+  polish?: PolishPolicy;
   /** The repo-relative round-keyed report path the fixer writes (§27.5). */
   reportRel: string;
   /** The round number. */
@@ -173,6 +175,19 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
     'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
     'only what the loop is not entitled to decide.',
+  );
+  if (req.polish === 'defer') {
+    lines.push(
+      '',
+      'This loop DEFERS POLISH to the integration-slice sweep, which re-reviews the whole ticket diff with every',
+      'lens. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
+      'contract another surface reads: a rename, comment wording or trimming, de-duplicating logic that already',
+      `behaves identically, style or convention conformance — is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
+      '`polish — deferred to the integration-slice sweep`, NEVER `fixed` in this loop. A round whose only',
+      'findings are polish therefore changes nothing.',
+    );
+  }
+  lines.push(
     '',
     'Reviewers (persona — charter):',
   );
