@@ -780,7 +780,7 @@ export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | 
 /** §18.7.3 */
 export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
 
-export type RebindResult = { ok: true; outcome: 'resumed' | 'terminated'; notice?: string } | { ok: false; reason: string };
+export type RebindResult = { ok: true; outcome: 'resumed' } | { ok: false; reason: string };
 
 /** §6 */
 export interface FlowRebindHeldRunMsg {

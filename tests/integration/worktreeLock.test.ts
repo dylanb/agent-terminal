@@ -336,18 +336,7 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       wt: string,
       liveness: (holder: LockHolder) => 'dead' | 'live-matching' | 'live-mismatch' | 'unreadable',
       beforeReclaim: () => void,
-    ): { got: LockAcquire; reclaims: number } => {
-      let reclaims = 0;
-      const got = createWorktreeLock({
-        lockRoot,
-        holderLiveness: liveness,
-        beforeReclaim: () => {
-          reclaims++;
-          beforeReclaim();
-        },
-      }).acquire(wt);
-      return { got, reclaims };
-    };
+    ): LockAcquire => createWorktreeLock({ lockRoot, holderLiveness: liveness, beforeReclaim }).acquire(wt);
 
     const runs = (lockRoot: string, wt: string, liveness: (holder: LockHolder) => 'dead' | 'live-matching' | 'live-mismatch' | 'unreadable', beforeReclaim: () => void = () => {}): boolean => {
       let ran = false;
@@ -364,9 +353,8 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       const before = [readFileSync(file), readFileSync(guard)];
       const liveness = livenessByHolder([[DEAD, 'dead'], [GUARD, 'live-matching']], 'live-matching');
 
-      const { got, reclaims } = exhaust(lockRoot, wt, liveness, () => {});
+      const got = exhaust(lockRoot, wt, liveness, () => {});
 
-      expect(reclaims).toBe(MAX_ACQUIRE_ATTEMPTS);
       expect(got).toMatchObject({ ok: false, cause: 'held' });
       expect(runs(lockRoot, wt, liveness)).toBe(false);
       expect([readFileSync(file), readFileSync(guard)]).toEqual(before);
@@ -379,9 +367,8 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       const before = [readFileSync(file), readFileSync(guard)];
       const liveness = livenessByHolder([[DEAD, 'dead'], [GUARD, 'unreadable']], 'live-matching');
 
-      const { got, reclaims } = exhaust(lockRoot, wt, liveness, () => {});
+      const got = exhaust(lockRoot, wt, liveness, () => {});
 
-      expect(reclaims).toBe(MAX_ACQUIRE_ATTEMPTS);
       expect(got).toMatchObject({ ok: false, cause: 'holder-unreadable' });
       if (!got.ok) expectsUnidentifiedHolderRemedy(got.reason, guard);
       expect(runs(lockRoot, wt, liveness)).toBe(false);
@@ -405,7 +392,6 @@ describe('worktree lock (§18.7.4 AC11)', () => {
 
     it('reclaims lost to a dead holder re-planted on every attempt are lock-unusable, and the critical section runs', () => {
       const { lockRoot, wt } = setup();
-      expect(typeof MAX_ACQUIRE_ATTEMPTS).toBe('number');
       const holders: LockHolder[] = Array.from({ length: 2 * MAX_ACQUIRE_ATTEMPTS + 2 }, (_, n) => ({
         pid: 2_147_000_100 + n,
         startTime: `planted-dead-${n}`,
@@ -420,12 +406,53 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       };
       plant(lockRoot, wt, holders[0]);
 
-      const { got, reclaims } = exhaust(lockRoot, wt, liveness, replant);
+      const got = exhaust(lockRoot, wt, liveness, replant);
 
-      expect(reclaims).toBe(MAX_ACQUIRE_ATTEMPTS);
       expect(got).toMatchObject({ ok: false, cause: 'lock-unusable' });
       expect(runs(lockRoot, wt, liveness, replant)).toBe(true);
       expect(existsSync(`${worktreeLockFile(lockRoot, wt)}.reclaim`)).toBe(false);
+    });
+
+    describe('every attempt is spent before exhaustion, and none past it', () => {
+      const guardClearedAtReclaim = (lockRoot: string, wt: string, n: number): LockAcquire => {
+        plant(lockRoot, wt, DEAD);
+        const guard = plantGuard(lockRoot, wt, GUARD);
+        let reclaims = 0;
+        const liveness = livenessByHolder([[DEAD, 'dead'], [GUARD, 'live-matching']], 'live-matching');
+        return exhaust(lockRoot, wt, liveness, () => {
+          if (++reclaims === n) rmSync(guard);
+        });
+      };
+
+      const presentAtFirstCreates = (n: number): ((file: string, content: string) => void) => {
+        let creates = 0;
+        return (file, content) => {
+          if (++creates <= n) throw Object.assign(new Error(`EEXIST: file already exists, open '${file}'`), { code: 'EEXIST' });
+          writeFileSync(file, content, { flag: 'wx' });
+        };
+      };
+
+      it('a live reclaim guard that leaves before the last attempt yields the lock', () => {
+        const { lockRoot, wt } = setup();
+        expect(guardClearedAtReclaim(lockRoot, wt, MAX_ACQUIRE_ATTEMPTS - 1).ok).toBe(true);
+      });
+
+      it('a live reclaim guard that leaves only at the last attempt is held', () => {
+        const { lockRoot, wt } = setup();
+        expect(guardClearedAtReclaim(lockRoot, wt, MAX_ACQUIRE_ATTEMPTS)).toMatchObject({ ok: false, cause: 'held' });
+      });
+
+      it('a lock that vanishes on every create but the last yields the lock', () => {
+        const { lockRoot, wt } = setup();
+        const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching', writeNewFile: presentAtFirstCreates(MAX_ACQUIRE_ATTEMPTS - 1) });
+        expect(lock.acquire(wt).ok).toBe(true);
+      });
+
+      it('a lock that vanishes on every create is held', () => {
+        const { lockRoot, wt } = setup();
+        const lock = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching', writeNewFile: presentAtFirstCreates(MAX_ACQUIRE_ATTEMPTS) });
+        expect(lock.acquire(wt)).toMatchObject({ ok: false, cause: 'held' });
+      });
     });
 
     it('a lock that vanishes between every create and read is held, and the critical section does not run', () => {
@@ -435,7 +462,6 @@ describe('worktree lock (§18.7.4 AC11)', () => {
 
       const got = lock.acquire(wt);
 
-      expect(device.calls()).toBe(MAX_ACQUIRE_ATTEMPTS);
       expect(got).toMatchObject({ ok: false, cause: 'held' });
       let ran = false;
       lock.withWorktreeLock(wt, () => {
