@@ -387,6 +387,29 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
   });
 });
 
+describe('resolveLoopDefV2 — report polish policy (§27.8)', () => {
+  const withPolish = (v: string) => VALID_DEF.replace('report:\n  sections: [summary, findings, disposition]', `report:\n  sections: [summary, findings, disposition]\n  polish: ${v}`);
+
+  it('defaults to fixing polish when the def declares no policy', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok && r.def.report.polish).toBe('fix');
+  });
+
+  it('reads a declared defer policy', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withPolish('defer'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok && r.def.report.polish).toBe('defer');
+  });
+
+  it('rejects a polish value outside the closed set, naming the field', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withPolish('sometimes'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('polish');
+  });
+});
+
 describe('resolveLoopDefV2 — structural field rejections surface the offending field (AC 6)', () => {
   const cases: Array<{ what: string; mutate: (d: string) => string; field: string }> = [
     { what: 'boundary mode neither clear nor compact', mutate: (d) => d.replace('mode: clear', 'mode: shrink'), field: 'mode' },

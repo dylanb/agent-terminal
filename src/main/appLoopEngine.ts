@@ -18,7 +18,7 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
+import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
@@ -248,6 +248,7 @@ type ActiveAppTurn =
       round: number;
       reviewers: RosterEntry[];
       sections: string[];
+      polish: PolishPolicy;
       reportPath: string;
       reportRel: string;
       /** §28.5.3 — a plain review round carries only its report (`report`); a REFACTOR loop's round also
@@ -305,6 +306,7 @@ function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId:
     round: args.round,
     reviewers: [],
     sections: [],
+    polish: 'fix',
     reportPath: '',
     reportRel: '',
     completion: { kind: 'unresolved' },
@@ -807,6 +809,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return composeReviewAndFixPrompt({
           roster: active.reviewers,
           sections: active.sections,
+          polish: active.polish,
           reportRel: active.reportRel,
           round: active.round,
           turnKey,
@@ -937,6 +940,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       round,
       reviewers,
       sections: r.def.report.sections,
+      polish: r.def.report.polish,
       reportPath: loc.abs,
       reportRel: loc.rel,
       completion,

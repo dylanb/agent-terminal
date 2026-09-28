@@ -21,6 +21,7 @@ boundaries:
     mode: clear
 report:
   sections: [summary, findings, disposition]
+  polish: defer
 gate:
   - option: approve
     side_effects:

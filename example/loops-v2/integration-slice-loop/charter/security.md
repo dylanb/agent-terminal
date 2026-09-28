@@ -7,3 +7,5 @@ every hop, to the sink it reaches, and confirm it crosses each process/shell/OS 
 value (never spliced into a parsed string), that every repo-derived path is confined, and that the policy
 behind a privileged operation is checked at the operation. Focus on code the change newly reaches — a
 missing control that predates the diff is a note, not this change's blocker. Cite OWASP ASVS / CWE ids.
+On a diff that moves no untrusted input across a process, shell, OS, IPC, filesystem, or network boundary,
+return clean.
