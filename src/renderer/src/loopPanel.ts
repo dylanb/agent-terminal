@@ -45,6 +45,9 @@ export interface LoopPanelDeps {
    *  carries the instruction back on the decision. Injected by the composition root; absent → the §27 redo
    *  button does not render (an instruction-less dispatch is dropped, WCAG 4.1.2). */
   composeRedo?(step: string, turnKey: string): void;
+  /** §28.4.2 — open the back-to-RED composer at the gate; its submit carries the optional slice brief. Absent →
+   *  Back to RED dispatches straight to appGateDecision with no brief. */
+  composeBackToRed?(step: string, turnKey: string): void;
   /** §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), carrying the
    *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
    *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
@@ -557,6 +560,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
             // §27.9/AC5 — a §27 redo opens the instruction composer (its submit carries the instruction).
             if (option === 'redo') {
               deps.composeRedo?.(appTurn.step, appTurn.turnKey);
+              return;
+            }
+            if (option === 'back-to-red' && deps.composeBackToRed) {
+              deps.composeBackToRed(appTurn.step, appTurn.turnKey);
               return;
             }
             // The one-way options (approve, polish, §28.4.2 back-to-red) carry no human input to lose — dispatched

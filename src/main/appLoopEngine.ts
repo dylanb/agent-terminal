@@ -32,7 +32,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
@@ -162,6 +162,8 @@ export interface AppLoopEngineDeps {
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
    *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
+  /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
+  sliceBrief(repoDir: string): SliceBrief | null;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
 }
@@ -783,6 +785,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
+  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn carries; other loops never see one. */
+  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBrief } | Record<string, never> => {
+    const r = deps.resolveDef(turn.repoDir, turn.loopName);
+    if (!r.ok || r.def.work.completion === undefined) return {};
+    const brief = deps.sliceBrief(turn.repoDir);
+    return brief !== null ? { sliceBrief: brief } : {};
+  };
+
   const reportCheck = (turn: Extract<ActiveAppTurn, { phase: 'review' }>): Extract<ArtifactCheck, { kind: 'report' }> => ({
     kind: 'report',
     rel: turn.reportRel,
@@ -878,6 +888,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(reportCheck(active)),
           ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
+          ...briefFor(active),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
@@ -905,6 +916,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
                 : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
+        ...briefFor(active),
       });
     },
     inject: (prompt, opts) => {

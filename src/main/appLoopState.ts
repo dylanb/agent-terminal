@@ -464,6 +464,54 @@ export function isPolishActiveForStep(repoDir: string, step: string): boolean {
   return polishStandDown.read(repoDir)?.step === step;
 }
 
+// §28.4.2 — the back-to-RED slice brief in its OWN file, `slice-brief.yaml`, disjoint from run-state.yaml: the
+// RED, GREEN and refactor phases each rewrite run-state wholesale, and the brief must outlive all three.
+const SLICE_BRIEF_FILE = 'slice-brief.yaml';
+
+/** The operator's brief for redoing impl-slice `slice`, sent back to RED from the `fromStep` gate. */
+export interface SliceBrief {
+  slice: number;
+  fromStep: string;
+  text: string;
+}
+
+/** Persist the brief. Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
+ *  run-state writer's fail-loud contract; the caller decides whether that blocks. */
+export function writeSliceBrief(repoDir: string, brief: SliceBrief): void {
+  const file = loopAreaFile(repoDir, SLICE_BRIEF_FILE);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = { schema_version: APP_LOOP_STATE_SCHEMA, slice: brief.slice, from_step: brief.fromStep, brief: brief.text };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write the slice brief: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** Clear the brief — best-effort; an absent file is already the cleared state. */
+export function clearSliceBrief(repoDir: string): void {
+  const file = loopAreaFile(repoDir, SLICE_BRIEF_FILE);
+  if (file === null) return;
+  rmSync(file, { force: true });
+}
+
+/** The persisted brief, or null when unset or malformed (CWE-20): the slice must be a positive integer and the
+ *  source step and text non-blank. */
+export function readSliceBrief(repoDir: string): SliceBrief | null {
+  const file = loopAreaFile(repoDir, SLICE_BRIEF_FILE);
+  if (file === null) return null;
+  let doc: unknown;
+  try {
+    doc = yaml.load(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc) || String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  const { slice, from_step: fromStep } = doc;
+  const text = validInstruction(typeof doc.brief === 'string' ? doc.brief.trim() : undefined);
+  if (typeof slice !== 'number' || !Number.isInteger(slice) || slice < 1) return null;
+  if (typeof fromStep !== 'string' || fromStep.length === 0 || text === undefined) return null;
+  return { slice, fromStep, text };
+}
+
 // §28.4/§28.5.1 — the phase-commit baseline (the SHA a commit side-effect captured on approve) in its OWN file,
 // `baseline-commit.yaml`, disjoint from run-state.yaml. Phase-as-a-loop (§28.4) rewrites run-state wholesale
 // between RED/GREEN/refactor, so a baseline stored in run-state would be clobbered before the next phase's

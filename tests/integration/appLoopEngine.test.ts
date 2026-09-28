@@ -107,6 +107,8 @@ let refactorResultLocationNull: boolean;
  *  a resolved ticket to assert the work prompt binds the agent to that issue; `{ ticket: null }` (no ticket) by
  *  default so the ordinary drive helpers emit no ticket line. */
 let workRefsResult: { ticket: number | null; pr: number | null };
+/** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice (null = none). */
+let sliceBriefResult: { slice: number; fromStep: string; text: string } | null;
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
@@ -169,6 +171,7 @@ function makeEngine(
   cancelTimer = vi.fn();
   injected = [];
   workRefsResult = { ticket: null, pr: null };
+  sliceBriefResult = null;
   polishStep = null;
   clearPolishError = null;
   clearBaselineError = null;
@@ -229,6 +232,7 @@ function makeEngine(
     },
     currentBranch: () => currentBranchOverride,
     workRefs: () => workRefsResult,
+    sliceBrief: () => sliceBriefResult,
     artifactCheckCommand: (check) =>
       check.kind === 'report'
         ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
@@ -376,6 +380,55 @@ describe('§28.4 slice D — per-slice result-artifact identity', () => {
     // static red-result.md would read slice 1's product back and its sync completion clause would pass vacuously.
     expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.md');
     expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.md');
+  });
+});
+
+// §28.4.2 — a back-to-RED brief reaches every turn of the reopened slice's RED/GREEN/refactor loops: the work
+// prompt (what to redo) and the review-and-fix fixer (what to judge the round against). Other loops never see it.
+describe('§28.4.2 — the back-to-RED slice brief reaches the TDD phase turns', () => {
+  const BRIEF = { slice: 1, fromStep: 'green', text: 'Cover the empty-input case the tests missed' };
+
+  it('the RED work prompt names the slice redo and carries the brief', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 1 });
+    engine.onInjectable();
+    const workPrompt = injected[injected.length - 1];
+    expect(workPrompt).toContain(BRIEF.text);
+    expect(workPrompt).toMatch(/redo of impl-slice 1/i);
+    expect(workPrompt).toContain('green');
+  });
+
+  it('the review-and-fix prompt of a TDD phase loop carries the brief', () => {
+    defResult = resolved({ ...commitDef(), work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'commits', completion: 'refactor' } });
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'refactor-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    engine.onDoneSignal(); // the refactor work turn is a commits turn → chains the review round
+    engine.onInjectable();
+    engine.onInjectable();
+    const reviewPrompt = injected[injected.length - 1];
+    expect(reviewPrompt).toContain('review-and-fix');
+    expect(reviewPrompt).toContain(BRIEF.text);
+  });
+
+  it('a loop that is not a TDD phase never sees the brief', () => {
+    defResult = resolved(fileDef());
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(injected[injected.length - 1]).not.toContain(BRIEF.text);
+  });
+
+  it('no brief, no redo block', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 1 });
+    engine.onInjectable();
+    expect(injected[injected.length - 1]).not.toMatch(/redo of impl-slice/i);
   });
 });
 

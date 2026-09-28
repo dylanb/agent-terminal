@@ -5487,6 +5487,35 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   rmSync(home, { recursive: true, force: true });
 });
 
+// §28.4.2 — a back-to-RED brief belongs to the run it was written in: Terminate abandons the run, so a restarted
+// flow's slice 1 must never be handed the abandoned run's brief.
+test('Terminate clears a pending back-to-RED slice brief (§28.4.2)', { tag: '@ownapp' }, async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-brief-', 'groom');
+  const briefFile = join(repo, '.agent-terminal', 'loop', 'slice-brief.yaml');
+  mkdirSync(dirname(briefFile), { recursive: true });
+  writeFileSync(briefFile, 'schema_version: 1\nslice: 1\nfrom_step: green\nbrief: cover the empty input\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-brief-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  expect(existsSync(briefFile)).toBe(true);
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start');
+  await expect.poll(() => existsSync(briefFile), { timeout: 10_000 }).toBe(false);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-zero-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
@@ -6455,7 +6484,7 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {}): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logInjected?: boolean } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
@@ -6471,7 +6500,8 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
-    red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
+    // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
+    red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
     green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), '"${RES:-' + art + '/green-result.md}"')}; ${done('work-green')}`,
     refactor: done('work-refactor'),
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
@@ -6499,6 +6529,7 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
+    (opts.logInjected ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n' : '') +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
@@ -6513,10 +6544,10 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
 
 // A real-git repo carrying the SHIPPED feature-dev flow.yaml, entered at its first loop `groom`; bootstrap
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
-function seedFullTddChainRepo(prefix: string): string {
+function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   const { dir } = seedFlowRepoBase(prefix, {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), 'utf8'),
-    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    flowState: `step: ${startStep}\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n`,
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
   return dir;
@@ -6688,6 +6719,11 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
   await expect(backToRed).toHaveText('Back to RED'); // the readable label
   await backToRed.click();
+  // The composer opens; submitting it empty is a plain reopen (the brief is optional).
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('.confirm').click();
+  await expect(composer).toHaveCount(0, { timeout: 15_000 });
 
   // §28.4.2 — the flow jumped BACKWARD to the slice's RED step (the repeat step's back_to), still in progress;
   // it did NOT advance to refactor. reopenSlice moves the flow only backward-or-self, never forward.
@@ -6709,6 +6745,81 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
       { timeout: 15_000 },
     )
     .toBeGreaterThanOrEqual(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.2 — Back to RED with a brief, end to end: the composer opens from the GREEN gate, its brief rides the
+// reopen, and every RED / GREEN / refactor turn of the reopened slice is handed it (work prompts and fixers);
+// approving refactor ends the slice and clears it, so the next loop's prompt carries no brief.
+test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN and refactor turns, then clears it', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-redbrief-', 'red'); // the slice phases are all this test needs
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir, { logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  const openGate = async (): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  };
+  const approveStep = async (step: string): Promise<void> => {
+    await openGate();
+    // A redone phase can leave nothing new to commit; that benign notice must not block the next gate.
+    const notice = page.locator('#flow-error-host .flow-modal');
+    if ((await notice.count()) > 0) await notice.locator('.dismiss').click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  await approveStep('red');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
+
+  const BRIEF = 'Cover the empty-input case the tests missed';
+  await openGate();
+  await loopPanel().locator('[data-gate-option="back-to-red"]').click();
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('textarea').fill(BRIEF);
+  await composer.locator('.confirm').click();
+  await expect(composer).toHaveCount(0, { timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: red');
+
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  const briefFile = join(repo, '.agent-terminal', 'loop', 'slice-brief.yaml');
+  const logAtReopen = log().length;
+  await approveStep('red');
+  await approveStep('green');
+  await approveStep('refactor');
+  expect(existsSync(briefFile)).toBe(false); // the slice ended → the brief is cleared
+
+  const since = log().slice(logAtReopen);
+  // Each phase's WORK prompt and its review-and-fix FIXER prompt carried the brief after the reopen.
+  for (const key of ['work-red', 'review-red', 'work-green', 'review-green', 'work-refactor', 'review-refactor']) {
+    const at = since.indexOf(`turn-done:${key}`);
+    expect(at, key).toBeGreaterThan(-1);
+    const promptStart = since.lastIndexOf('turn-done:', at - 1);
+    expect(since.slice(promptStart < 0 ? 0 : promptStart, at), key).toContain(BRIEF);
+  }
+  // The loop after the slice (integration-slice) is handed no brief.
+  const afterSlice = since.slice(since.lastIndexOf('turn-done:consolidate-refactor'));
+  await expect.poll(() => log().slice(logAtReopen).includes('turn-done:work-integration-slice'), { timeout: 90_000 }).toBe(true);
+  expect(log().slice(logAtReopen + since.length - afterSlice.length)).not.toContain(BRIEF);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

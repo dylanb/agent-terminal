@@ -41,6 +41,7 @@ import {
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
   isValidFlowAppRedo,
+  isValidFlowAppBackToRed,
   isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
@@ -107,7 +108,7 @@ import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactChec
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -345,6 +346,11 @@ async function createWindow(): Promise<void> {
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
     // cannot diverge from the ticket update-issue-body writes to (CLAUDE.md: never re-derive from ambient state).
+    // §28.4.2 — a back-to-RED brief applies only while the flow is still on the slice it was written for.
+    sliceBrief: (repoDir) => {
+      const brief = readSliceBrief(repoDir);
+      return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
+    },
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };
@@ -756,6 +762,12 @@ async function createWindow(): Promise<void> {
     trustedAppBootstraps.delete(repoKey);
     audit.recordTerminate(repoKey);
     todoStore.clear(repoKey);
+    // §28.4.2 — an abandoned run's back-to-RED brief must never reach a restarted flow's slice. Best-effort.
+    try {
+      clearSliceBrief(repoKey);
+    } catch (e) {
+      void (e instanceof Error ? e.message : String(e));
+    }
     store.clear();
     send(CH.monitorCleared, { sessionId: SESSION_ID });
     pushFlowChanged();
@@ -818,11 +830,12 @@ async function createWindow(): Promise<void> {
   // observable, and no distinct kind is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind
   // would be untestable vocabulary. Run inside inTransition so the RED step's entry actions re-fire. Mirrors
   // autoAdvanceFlow: a void engine-driven transition whose view push is the caller's onViewChanged, not this.
-  const reopenSliceFlow = (repoKey: string): void => {
+  const reopenSliceFlow = (repoKey: string): boolean => {
     const pre = flow.state(repoKey);
-    if (pre.status !== 'in_progress') return;
+    if (pre.status !== 'in_progress') return false;
     const view = inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey));
     audit.recordTransition(repoKey, 'undo', pre, view);
+    return view.status === 'in_progress' && view.stepName === flow.sliceStartStep(repoKey);
   };
 
   // §28.7
@@ -892,6 +905,9 @@ async function createWindow(): Promise<void> {
         },
         // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
         reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
+        // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
+        recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
+        clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
         audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
         emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
         emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),
@@ -1072,6 +1088,10 @@ async function createWindow(): Promise<void> {
       // Fail-closed to false.
       [CH.flowAppRedo]: (_e, m) =>
         isValidFlowAppRedo(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
+      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at RED so the
+      // composer holds open on a failed reopen and never loses the brief. Fail-closed to false.
+      [CH.flowAppBackToRed]: (_e, m) =>
+        isValidFlowAppBackToRed(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,
       // Todo CRUD (§16.4): fail-closed to [] on a malformed payload, so a bad message can never mutate
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).

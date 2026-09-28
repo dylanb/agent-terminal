@@ -101,8 +101,18 @@ crash or skip the flow forward.
 **The human control.** A one-way human gate decision, `back-to-red`, declared on **every phase gate**
 (RED / GREEN / refactor / integration-slice), joins the §27.9 gate vocabulary in the
 reopen-without-advancing family (beside `redo`/`polish`): it runs no side-effect and does not advance — it
-invokes `reopenSlice()` and re-enters RED. It rides the existing one-way `flow:appGateDecision` channel
-(no operator note). The gate decision reopens the flow WITHOUT persisting an accept: the executor calls the
+invokes `reopenSlice()` and re-enters RED. Choosing it opens the request-changes composer framed for a
+**slice brief**: optional free text plus any open review todos, saying what the slice must redo. The decision
+rides the two-way `flow:appBackToRed` channel, so the composer holds open and keeps the brief when the
+reopen does not land; an empty submit is a plain reopen.
+
+**The slice brief.** A non-blank brief is written to `slice-brief.yaml` in the §27 loop area — its own file,
+disjoint from `run-state.yaml`, which each phase rewrites — keyed to the current slice and the gate it came
+from, **before** the reopen re-enters RED; a reopen that does not land clears it again. While the flow is on
+that slice, every RED, GREEN and refactor turn is handed it: the work prompt states it as the redo the phase
+must do its part of, and the review-and-fix fixer judges the round against it alongside the ticket.
+Reviewers still receive only the ticket and their charter (§27.4). Approving refactor — the slice's last
+phase — clears it, as does Terminate; a brief for another slice is never handed to a turn. The gate decision reopens the flow WITHOUT persisting an accept: the executor calls the
 `reopenSlice` port and audits the decision, and the composition root runs `flow.reopenSlice()` inside a §25
 transition so the backward re-entry lands in the run's audit record (a `step.entered` back at RED). A reopen
 carries no distinct §25 `TransitionKind` — its audit diff is the whole observable, so it borrows the
