@@ -406,7 +406,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const r = rig();
       heldRun(r);
 
-      expect(r.lifecycle.rebind(r.wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+      expect(r.lifecycle.rebind(r.wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
       expect(r.effects.forgotten).toEqual([r.wt]);
       expect(r.effects.flowChanged).toBeGreaterThan(0);
@@ -420,7 +420,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const r = rig();
       heldRun(r);
 
-      expect(r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+      expect(r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
       expect(r.audit.runFiles(r.wt)).toHaveLength(1);
       expect(r.audit.eventTypes(r.wt).filter((t) => t === 'flow.terminated')).toHaveLength(1);
@@ -438,7 +438,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       heldRun(r);
       fx.plantPointerDirectory(r.wt);
 
-      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' });
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }, 'end-run');
 
       expect(result).toMatchObject({ ok: true, outcome: 'terminated', notice: expect.stringMatching(/could not be selected/) });
       expect(r.notices.take(r.wt)).toBeUndefined();
@@ -454,7 +454,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       heldRun(r);
       const before = r.progression();
 
-      const result = withReadOnlyFlowHome(r.wt, () => r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }));
+      const result = withReadOnlyFlowHome(r.wt, () => r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }, 'end-run'));
 
       expect(reasonOf(result)).toMatch(/EACCES|permission/i);
       expect(reasonOf(result)).not.toMatch(/current step/i);
@@ -471,10 +471,27 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const before = r.progression();
       const pointerBefore = readActiveFlow(r.wt);
 
-      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id });
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id }, 'end-run');
 
       expect(result.ok).toBe(false);
       expect(reasonOf(result)).toMatch(/turn/i);
+      expect(r.progression()).toBe(before);
+      expect(readRunBinding(r.wt)).toBeNull();
+      expect(readActiveFlow(r.wt)).toEqual(pointerBefore);
+      expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+      expect(r.todos.list(r.wt)).toHaveLength(1);
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+    });
+
+    it('an unconfirmed no-match rebind is refused before the run is ended: no audit entry, no effect, still held (AC20)', () => {
+      const r = rig();
+      heldRun(r);
+      const before = r.progression();
+      const pointerBefore = readActiveFlow(r.wt);
+
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id: 'other-flow' }, 'refuse');
+
+      expect(reasonOf(result)).toMatch(/ends? the run/i);
       expect(r.progression()).toBe(before);
       expect(readRunBinding(r.wt)).toBeNull();
       expect(readActiveFlow(r.wt)).toEqual(pointerBefore);
@@ -487,7 +504,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const r = rig();
       heldRun(r);
 
-      expect(r.lifecycle.rebind(r.wt, { origin: 'repo', id: 'resume-flow' }).ok).toBe(false);
+      expect(r.lifecycle.rebind(r.wt, { origin: 'repo', id: 'resume-flow' }, 'end-run').ok).toBe(false);
 
       expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');

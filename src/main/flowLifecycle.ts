@@ -1,6 +1,6 @@
 // §18.7.2 / §18.7.4 / §25
 
-import type { FlowStateView, RebindChoice, RebindResult } from '../shared/ipc';
+import type { FlowStateView, MissingStepAction, RebindChoice, RebindResult } from '../shared/ipc';
 import type { FlowManager } from './flow';
 import type { HeldRunRecovery } from './heldRunRecovery';
 import type { PendingNotices } from './pendingNotices';
@@ -33,7 +33,7 @@ export interface FlowLifecycle {
   /** A Terminate with no renderer to show its reply: a locked or failed refusal's reason rides the next
    *  `flow:state` instead. */
   terminateUnattended(repoKey: string): LifecycleTerminateResult;
-  rebind(repoKey: string, choice: RebindChoice): RebindResult;
+  rebind(repoKey: string, choice: RebindChoice, ifStepMissing: MissingStepAction): RebindResult;
   /** Roll a failed step bootstrap back under the worktree lock; throws when the lock or the rollback refuses it. */
   rollbackStep(repoKey: string, stepId: string): FlowStateView;
 }
@@ -90,9 +90,9 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
       if (!locked.ok) throw new Error(locked.reason);
       return locked.value;
     },
-    rebind(repoKey, choice) {
+    rebind(repoKey, choice, ifStepMissing) {
       if (deps.loopTurnActive(repoKey)) return { ok: false, reason: ACTIVE_TURN_REASON };
-      const result = deps.recovery.rebind(repoKey, choice);
+      const result = deps.recovery.rebind(repoKey, choice, ifStepMissing);
       if (!result.ok) return result;
       if (result.outcome === 'terminated') {
         afterTerminateReset(repoKey);

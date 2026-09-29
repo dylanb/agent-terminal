@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { tryPeerLockDuring } from '../helpers/lockDevices';
-import { createFlowManager, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
+import { createFlowManager, flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { activeFlowPointerFile, readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { runDispositionFile } from '../../src/main/runDisposition';
 import { createRunResolver } from '../../src/main/runResolver';
@@ -80,7 +80,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
       fx.writeFlowState(wt, { step: 's2', status });
       damage(wt);
 
-      expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+      expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
       expectEnded(wt, manager);
       expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'no-s2-flow' });
@@ -98,7 +98,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     writeFileSync(outside, 'outside content\n');
     fx.plantRunRecordSymlink(wt, outside);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(readFileSync(outside, 'utf8')).toBe('outside content\n');
@@ -111,7 +111,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'repo', id: 'repo-no-s2' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'repo', id: 'repo-no-s2' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'repo-no-s2' });
@@ -125,7 +125,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'fallback' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'fallback' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(existsSync(activeFlowPointerFile(wt))).toBe(false);
@@ -139,7 +139,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     damage(wt);
 
-    expect(recovery.rebind(wt, { origin: 'local' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'local' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(existsSync(activeFlowPointerFile(wt))).toBe(false);
@@ -153,7 +153,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'done' });
     damage(wt);
 
-    expect(recovery.rebind(wt, { origin: 'fallback' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'fallback' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(existsSync(activeFlowPointerFile(wt))).toBe(false);
@@ -171,7 +171,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.removeRunRecord(wt);
     expect(createFlowStateStore(wt).read()).toMatchObject({ inputs: { ticket: '176' }, repeatCounts: { s2: 2 } });
 
-    expect(recovery.rebind(wt, choice)).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, choice, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     const ended = createFlowStateStore(wt).read();
     expect(ended?.inputs).toBeUndefined();
@@ -183,10 +183,73 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: `s‮​x${'y'.repeat(MAX_ECHOED_REASON_LENGTH * 2)}`, status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expectEnded(wt, manager);
     expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'no-s2-flow' });
+  });
+
+  it.each<RebindChoice>([{ origin: 'global', id: 'no-s2-flow' }, { origin: 'local' }, { origin: 'fallback' }])(
+    'an unconfirmed choice lacking the step is refused, saying it would end the run, and changes nothing (AC20): %o',
+    (choice) => {
+      const { wt, recovery, files } = rig();
+      fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+      fx.removeRunRecord(wt);
+      const before = files();
+
+      const result: RebindResult = recovery.rebind(wt, choice, 'refuse');
+
+      expect(result.ok).toBe(false);
+      const reason = result.ok ? '' : result.reason;
+      expect(reason).toMatch(/ends? the run/i);
+      expect(reason).toContain('s2');
+      expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+      expect(files()).toEqual(before);
+      expect(heldRunOf(wt)).toMatchObject({ hold: 'record-missing', step: 's2', status: 'in_progress' });
+    },
+  );
+
+  it('a confirmed choice that contains the step resumes the run rather than ending it (AC20)', () => {
+    const { wt, recovery } = rig();
+    fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+    fx.removeRunRecord(wt);
+
+    expect(recovery.rebind(wt, { origin: 'global', id: 'prior-flow' }, 'end-run')).toEqual({ ok: true, outcome: 'resumed' });
+    expect(heldRunOf(wt)).toEqual({ hold: 'not-held' });
+  });
+
+  it('names, per offered choice, whether it resumes the held run or ends it, omitting a flow that cannot be loaded (AC19)', () => {
+    const { home, wt, recovery, files } = rig();
+    catalog.addEntryWithSteps(flowCatalogDir(wt), 'repo-with-s2', ['s1', 's2']);
+    catalog.addEntryWithSteps(flowCatalogDir(home), 'broken-flow', ['s2']);
+    writeFileSync(join(flowCatalogDir(home), 'broken-flow', FLOW_DEF_FILE), 'name: broken\nsteps:\n  - id: s2\n    kind: bogus\n');
+    fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+    fx.removeRunRecord(wt);
+    const before = files();
+
+    const outcomes = recovery.outcomes(wt, [
+      { origin: 'local' },
+      { origin: 'repo', id: 'repo-with-s2' },
+      { origin: 'global', id: 'prior-flow' },
+      { origin: 'global', id: 'no-s2-flow' },
+      { origin: 'global', id: 'broken-flow' },
+      { origin: 'fallback' },
+    ]);
+
+    expect(outcomes).toEqual([
+      { choice: { origin: 'local' }, outcome: 'ends' },
+      { choice: { origin: 'repo', id: 'repo-with-s2' }, outcome: 'resumes' },
+      { choice: { origin: 'global', id: 'prior-flow' }, outcome: 'resumes' },
+      { choice: { origin: 'global', id: 'no-s2-flow' }, outcome: 'ends' },
+      { choice: { origin: 'fallback' }, outcome: 'ends' },
+    ]);
+    expect(files()).toEqual(before);
+  });
+
+  it('names no outcome for a worktree that is not held', () => {
+    const { wt, recovery } = rig();
+
+    expect(recovery.outcomes(wt, [{ origin: 'global', id: 'prior-flow' }, { origin: 'fallback' }])).toEqual([]);
   });
 
   it('a global choice shadowed by a repo entry of the same id is refused before the run is ended, since the pointer would name the repo one', () => {
@@ -197,7 +260,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.removeRunRecord(wt);
     const before = files();
 
-    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'shared-flow' });
+    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'shared-flow' }, 'end-run');
 
     expect(result.ok ? '' : result.reason).toMatch(/repo/i);
     expect(result.ok ? '' : result.reason).not.toMatch(/current step/i);
@@ -213,10 +276,13 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.removeRunRecord(wt);
     const before = files();
 
-    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' });
+    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
 
     expect(result.ok ? '' : result.reason).toMatch(/no-s2-flow/);
     expect(result.ok ? '' : result.reason).not.toMatch(/current step/i);
+    expect(result.ok ? '' : result.reason, 'the refused repo entry is not offered, so the reason must not send the operator to it').not.toMatch(
+      /choose the repo entry|would be selected instead/i,
+    );
     expect(files()).toEqual(before);
     expect(heldRunOf(wt)).toMatchObject({ hold: 'record-missing', step: 's2', status: 'in_progress' });
   });
@@ -230,7 +296,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     chmodSync(flowHomeDir(wt), 0o555);
     let result: RebindResult;
     try {
-      result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' });
+      result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
     } finally {
       chmodSync(flowHomeDir(wt), 0o755);
     }
@@ -254,7 +320,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     let result: RebindResult;
     try {
       expect(heldRunOf(wt).hold).toBe('record-unreadable');
-      result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' });
+      result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
     } finally {
       chmodSync(stuck, 0o755);
     }
@@ -270,12 +336,32 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.removeRunRecord(wt);
     fx.plantPointerDirectory(wt);
 
-    const result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' });
+    const result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
 
     expect(result).toMatchObject({ ok: true, outcome: 'terminated', notice: expect.stringMatching(/could not be selected/) });
+    expect(result.ok && result.outcome === 'terminated' ? result.notice : '').toMatch(/default flow is selected instead/);
+    expect(readActiveFlow(wt)).toMatchObject({ kind: 'unset' });
     expect(existsSync(runDispositionFile(wt))).toBe(false);
     expect(heldRunOf(wt)).toEqual({ hold: 'not-held' });
     expect(manager().state(wt)).toMatchObject({ runStarted: 'never-started', status: 'not_started' });
+  });
+
+  it.skipIf(asRoot)('a selection write and its fallback clear that both fail after the reset never claim the default flow is selected', () => {
+    const { wt, recovery } = rig();
+    fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+    fx.removeRunRecord(wt);
+    const pointerDir = fx.plantPointerDirectory(wt);
+    chmodSync(pointerDir, 0o555);
+    let result: RebindResult;
+    try {
+      result = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
+    } finally {
+      chmodSync(pointerDir, 0o755);
+    }
+
+    expect(result).toMatchObject({ ok: true, outcome: 'terminated', notice: expect.stringMatching(/could not be selected/) });
+    expect(result.ok && result.outcome === 'terminated' ? result.notice : '').not.toMatch(/default flow is selected/);
+    expect(heldRunOf(wt)).toEqual({ hold: 'not-held' });
   });
 
   it.skipIf(asRoot)('a selection clear that fails after the reset still reports the run ended, with a notice naming the uncleared selection', () => {
@@ -286,7 +372,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     chmodSync(pointerDir, 0o555);
     let result: RebindResult;
     try {
-      result = recovery.rebind(wt, { origin: 'local' });
+      result = recovery.rebind(wt, { origin: 'local' }, 'end-run');
     } finally {
       chmodSync(pointerDir, 0o755);
     }
@@ -310,7 +396,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, choice)).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, choice, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expect(probe?.observed()).not.toHaveLength(0);
     for (const attempt of probe?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
@@ -327,7 +413,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' })).toMatchObject({ ok: true, outcome: 'terminated' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run')).toMatchObject({ ok: true, outcome: 'terminated' });
 
     expect(probe?.observed()).not.toHaveLength(0);
     for (const attempt of probe?.observed() ?? []) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
@@ -359,7 +445,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
       started ??= manager().start(wt);
     };
 
-    recovery.rebind(wt, choice);
+    recovery.rebind(wt, choice, 'end-run');
 
     expect(readActiveFlow(wt)).toEqual(selection);
     expect(started?.steps).toEqual(steps);
@@ -375,7 +461,7 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
     const before = files();
 
-    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' });
+    const result: RebindResult = recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, 'end-run');
 
     expect(result.ok ? '' : result.reason).toMatch(/another agent terminal window/i);
     expect(result.ok ? '' : result.reason).not.toMatch(/current step/i);

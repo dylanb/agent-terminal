@@ -96,7 +96,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     const { wt, recovery, files } = rig();
     const before = files();
 
-    expectRefusedAsNotHeld(recovery.rebind(wt, choice));
+    expectRefusedAsNotHeld(recovery.rebind(wt, choice, 'end-run'));
 
     expect(files()).toEqual(before);
   });
@@ -107,7 +107,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     fx.writeRunRecord(wt, { source: 'catalog', tier: 'global', id: 'resume-flow' });
     const before = files();
 
-    expectRefusedAsNotHeld(recovery.rebind(wt, choice));
+    expectRefusedAsNotHeld(recovery.rebind(wt, choice, 'end-run'));
 
     expect(files()).toEqual(before);
   });
@@ -121,7 +121,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     damage(wt);
     const before = files();
 
-    for (const choice of CHOICES) expectRefusedAsNotHeld(recovery.rebind(wt, choice));
+    for (const choice of CHOICES) expectRefusedAsNotHeld(recovery.rebind(wt, choice, 'end-run'));
 
     expect(files()).toEqual(before);
   });
@@ -140,7 +140,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     fx.removeRunRecord(wt);
     const before = files();
 
-    for (const choice of CHOICES) expectRefusedAsNotHeld(recovery.rebind(wt, choice));
+    for (const choice of CHOICES) expectRefusedAsNotHeld(recovery.rebind(wt, choice, 'end-run'));
 
     expect(files()).toEqual(before);
   });
@@ -156,7 +156,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     expect(lockRefusal.ok).toBe(false);
     const before = files();
 
-    const locked = expectRefused(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }));
+    const locked = expectRefused(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'end-run'));
 
     expect(locked).toContain(lockRefusal.ok ? '' : lockRefusal.reason);
 
@@ -182,7 +182,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
       hold: tryPeerLockDuring(heldRunOf),
     });
 
-    recovery.rebind(wt, { origin: 'local' });
+    recovery.rebind(wt, { origin: 'local' }, 'end-run');
 
     expect(peerTook.length).toBeGreaterThan(0);
     expect(peerTook.at(-1)).toBe(false);

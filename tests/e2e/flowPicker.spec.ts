@@ -620,7 +620,7 @@ test('AC17: flow:rebindHeldRun reaches recovery for an entered held worktree, an
   await harness.cdInto(entered);
 
   const rebind = (rk: string, choice: unknown = { origin: 'global', id: 'resume-flow' }): Promise<unknown> =>
-    page.evaluate(([key, c]) => window.flow.rebindHeldRun(key, c as RebindChoice), [rk, choice] as const);
+    page.evaluate(([key, c]) => window.flow.rebindHeldRun(key, c as RebindChoice, 'refuse'), [rk, choice] as const);
   const refused = { ok: false, reason: expect.stringMatching(/\S/) };
 
   expect(await rebind('relative/path')).toMatchObject(refused);
@@ -715,6 +715,31 @@ function auditRuns(home: string, repo: string): string[][] {
     .map((f) => parseAuditStream(readFileSync(join(dir, f), 'utf8')).events.map((e) => e.type));
 }
 
+test('AC19/AC20: each recovery row says whether it resumes or ends the run, and choosing one that ends it asks first; cancelling leaves the run held and unchanged', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  const repo = seedHeldRepo(harness, 'agent-term-e2e-a3-confirm-end-');
+  const before = runFiles(repo);
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(flowError(page)).toBeVisible({ timeout: 10_000 });
+  await expect(recoverControl(page)).toBeEnabled({ timeout: 10_000 });
+  await recoverControl(page).click();
+  const rows = pickerHost(page).getByRole('option');
+  await expect(rows.filter({ hasText: 'resume-flow' })).toContainText(/resumes the run/i);
+  await expect(rows.filter({ hasText: 'no-s2-flow' })).toContainText(/ends the run/i);
+
+  await rows.filter({ hasText: 'no-s2-flow' }).click();
+  await expect(confirmModal(page)).toBeVisible();
+  await confirmModal(page).locator('.cancel').click();
+
+  await expect(confirmModal(page)).toHaveCount(0);
+  await expect(flowError(page)).toBeVisible();
+  await expect(recoverControl(page)).toBeEnabled();
+  expect(runFiles(repo)).toEqual(before);
+});
+
 test('AC12: a held run recovered onto a catalog flow lacking its step is ended as a Terminate ends it, the flow is selected at Not started over a local flow.yaml, and it survives a relaunch', { tag: '@ownapp' }, async () => {
   const harness = createFlowPickerHarness();
   h = harness;
@@ -738,6 +763,8 @@ test('AC12: a held run recovered onto a catalog flow lacking its step is ended a
   await harness.cdInto(repo);
   await expect(flowError(held)).toBeVisible({ timeout: 10_000 });
   await recoverOnto(held, 'other-flow');
+  await expect(confirmModal(held)).toBeVisible();
+  await confirmModal(held).locator('.confirm').click();
 
   await expect.poll(() => readActiveFlow(repo), { timeout: 10_000 }).toEqual({ kind: 'value', id: 'other-flow' });
   expect(existsSync(runDispositionFile(repo))).toBe(false);

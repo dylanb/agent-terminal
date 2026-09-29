@@ -138,8 +138,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowClearActiveFlow, { sessionId: SESSION_ID, repoKey }) as Promise<ActiveFlowWriteResult>,
   listCatalog: (repoKey) =>
     ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
-  rebindHeldRun: (repoKey, choice) =>
-    ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice }) as Promise<RebindResult>,
+  rebindHeldRun: (repoKey, choice, ifStepMissing) =>
+    ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice, ifStepMissing }) as Promise<RebindResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);

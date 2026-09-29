@@ -231,7 +231,7 @@ describe('listCatalog — an entry that exists but cannot be selected (§18.7.6)
 
 describe('catalogListResult — the flow:listCatalog answer (§18.7.6)', () => {
   it('wraps a listing as ok', () => {
-    const listing: FlowCatalogListing = { entries: [], tierNotices: [], selection: { kind: 'unset' }, hasLocalFlow: false, hasGlobalFallback: false, resumable: [] };
+    const listing: FlowCatalogListing = { entries: [], tierNotices: [], selection: { kind: 'unset' }, hasLocalFlow: false, hasGlobalFallback: false, resumable: [], recoveryOutcomes: [] };
     expect(catalogListResult(() => listing)).toEqual({ ok: true, listing });
   });
 

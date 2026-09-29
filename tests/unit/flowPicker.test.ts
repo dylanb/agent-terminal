@@ -14,8 +14,10 @@ import type {
   FlowCatalogListResult,
   FlowCatalogSelection,
   FlowStateView,
+  MissingStepAction,
   RebindChoice,
   RebindResult,
+  RecoveryOutcomeOf,
 } from '../../src/shared/ipc';
 import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
@@ -39,6 +41,7 @@ const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): Flo
     hasLocalFlow: false,
     hasGlobalFallback: false,
     resumable: ids.map((id) => ({ origin: 'global' as const, id })),
+    recoveryOutcomes: [],
     selection:
       selected === undefined ? { kind: 'unset' } : typeof selected === 'string' ? { kind: 'value', id: selected } : selected,
   },
@@ -46,7 +49,7 @@ const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): Flo
 
 const emptyListing = (over: Partial<FlowCatalogListing> = {}): FlowCatalogListResult => ({
   ok: true,
-  listing: { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [], selection: { kind: 'unset' }, ...over },
+  listing: { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [], recoveryOutcomes: [], selection: { kind: 'unset' }, ...over },
 });
 
 /** The catalog as main serves it: each worktree answers with its own listing, however often it is pulled, and a
@@ -88,7 +91,8 @@ function rig(views = createFeed<FlowViewArgs>()) {
   const catalog = createCatalog();
   const select = createScriptedAsync<[string, string], ActiveFlowWriteResult>();
   const clearSelection = createScriptedAsync<[string], ActiveFlowWriteResult>();
-  const rebindHeldRun = createScriptedAsync<[string, RebindChoice], RebindResult>();
+  const rebindHeldRun = createScriptedAsync<[string, RebindChoice, MissingStepAction], RebindResult>();
+  const endRunConfirmations: { repoKey: string; proceed: () => void; restoreFocusTo: HTMLElement | null | undefined }[] = [];
   const deps: FlowPickerDeps = {
     onView: (cb) => views.subscribe(cb),
     listCatalog: (repoKey) => catalog.listCatalog(repoKey),
@@ -102,10 +106,13 @@ function rig(views = createFeed<FlowViewArgs>()) {
       if (result.ok) catalog.clear(repoKey);
       return result;
     },
-    rebindHeldRun: (repoKey, choice) => rebindHeldRun.call(repoKey, choice),
+    rebindHeldRun: (repoKey, choice, ifStepMissing) => rebindHeldRun.call(repoKey, choice, ifStepMissing),
+    confirmEndRun: (repoKey, proceed, restoreFocusTo) => {
+      endRunConfirmations.push({ repoKey, proceed, restoreFocusTo });
+    },
   };
   const host = document.body.appendChild(document.createElement('div'));
-  return { views, catalog, select, clearSelection, rebindHeldRun, deps, host };
+  return { views, catalog, select, clearSelection, rebindHeldRun, endRunConfirmations, deps, host };
 }
 
 const settle = async (): Promise<void> => {
@@ -197,6 +204,7 @@ describe('flow picker — select mode (AC1)', () => {
         hasLocalFlow: false,
         hasGlobalFallback: false,
         resumable: [{ origin: 'repo', id: 'flow-a' }],
+        recoveryOutcomes: [],
       },
     });
     const picker = createFlowPicker(r.host, r.deps);
@@ -1722,7 +1730,9 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       runHold: { hold, step, status },
     });
 
-  const recoveryListing = (over: { hasLocalFlow?: boolean; hasGlobalFallback?: boolean } = {}): FlowCatalogListResult => ({
+  const recoveryListing = (
+    over: { hasLocalFlow?: boolean; hasGlobalFallback?: boolean; recoveryOutcomes?: RecoveryOutcomeOf[] } = {},
+  ): FlowCatalogListResult => ({
     ok: true,
     listing: {
       entries: [
@@ -1740,6 +1750,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
         { origin: 'global', id: 'beta-flow' },
         { origin: 'global', id: 'shadowed-flow' },
       ],
+      recoveryOutcomes: over.recoveryOutcomes ?? [],
     },
   });
 
@@ -1811,6 +1822,17 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     expect(shown).not.toMatch(/unreadable/i);
     expect(shown).toContain('review-step');
     expect(shown).toMatch(/in progress/i);
+    r.picker.dispose();
+  });
+
+  it('a held run says a flow without its step ends the run as a Terminate does, rather than promising every choice resumes (AC12)', async () => {
+    const r = await heldRig(heldView('record-missing', 'review-step', 'in_progress'));
+    await openRecovery(r.host);
+
+    const shown = r.host.textContent ?? '';
+    expect(shown).not.toMatch(/choosing a flow resumes/i);
+    expect(shown).toMatch(/without (that|this) step[^.]*ends the run/i);
+    expect(shown).toMatch(/terminate/i);
     r.picker.dispose();
   });
 
@@ -1900,7 +1922,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await openRecovery(r.host);
     option(r.host, 'alpha-flow').click();
     await settle();
-    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }]]);
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }, 'refuse']]);
     r.picker.dispose();
   });
 
@@ -1940,9 +1962,29 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     row!.click();
     await settle();
 
-    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', choice]]);
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', choice, 'refuse']]);
     expect(r.select.calls()).toEqual([]);
     expect(r.clearSelection.calls()).toEqual([]);
+    r.picker.dispose();
+  });
+
+  it('a second pick while a rebind is pending sends no second request, so a recovery that worked is never shown as refused', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    const first = r.rebindHeldRun.respondLater();
+    r.rebindHeldRun.respond({ ok: false, reason: 'This run is not waiting to be recovered, so there is nothing to recover onto a flow.' });
+    await openRecovery(r.host);
+    option(r.host, 'alpha-flow').click();
+    await settle();
+
+    recoverControl(r.host)?.click();
+    await settle();
+    options(r.host).find((o) => (o.textContent ?? '').includes('beta-flow'))?.click();
+    await settle();
+    first.resolve({ ok: true, outcome: 'resumed' });
+    await settle();
+
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }, 'refuse']]);
+    expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
     r.picker.dispose();
   });
 
@@ -2090,7 +2132,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await openRecovery(r.host);
     option(r.host, 'beta-flow').click();
     await settle();
-    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }]]);
+    expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }, 'refuse']]);
 
     r.views.fire('/repo-b', { ...neverStarted(['b1']), runHold: { hold: 'not-held' } });
     await settle();
@@ -2146,6 +2188,127 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
     expect(recoverControl(r.host)?.disabled).toBe(false);
     r.picker.dispose();
+  });
+
+  describe('confirm and label the choices that end a held run (AC19, AC20)', () => {
+    const OUTCOMES: RecoveryOutcomeOf[] = [
+      { choice: { origin: 'local' }, outcome: 'ends' },
+      { choice: { origin: 'repo', id: 'alpha-flow' }, outcome: 'resumes' },
+      { choice: { origin: 'global', id: 'beta-flow' }, outcome: 'ends' },
+      { choice: { origin: 'fallback' }, outcome: 'resumes' },
+    ];
+    const labelled = () => heldRig(heldView('record-missing'), recoveryListing({ recoveryOutcomes: OUTCOMES }));
+    const accessibleName = (row: HTMLElement): string =>
+      (row.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .map((id) => row.ownerDocument.getElementById(id)?.textContent ?? '')
+        .join(' ');
+    const row = (host: HTMLElement, match: RegExp | string): HTMLElement => {
+      const found = options(host).find((o) => (typeof match === 'string' ? (o.textContent ?? '').includes(match) : match.test(o.textContent ?? '')));
+      expect(found, `a row for ${String(match)}`).toBeDefined();
+      return found!;
+    };
+
+    it('each row says, in its accessible name, whether choosing it resumes the run or ends it; a row main named no outcome for says neither', async () => {
+      const r = await labelled();
+      await openRecovery(r.host);
+
+      expect(accessibleName(row(r.host, /local|this worktree/i))).toMatch(/ends the run/i);
+      expect(accessibleName(row(r.host, 'alpha-flow'))).toMatch(/resumes the run/i);
+      expect(accessibleName(row(r.host, 'beta-flow'))).toMatch(/ends the run/i);
+      expect(accessibleName(row(r.host, /fallback/i))).toMatch(/resumes the run/i);
+      expect(row(r.host, 'shadowed-flow').textContent ?? '').not.toMatch(/resumes the run|ends the run/i);
+      r.picker.dispose();
+    });
+
+    it('choosing a row that ends the run asks for confirmation and sends nothing until it is given', async () => {
+      const r = await labelled();
+      await openRecovery(r.host);
+
+      row(r.host, 'beta-flow').click();
+      await settle();
+
+      expect(r.endRunConfirmations.map((c) => c.repoKey)).toEqual(['/repo-a']);
+      expect(r.endRunConfirmations[0]!.restoreFocusTo).toBe(recoverControl(r.host));
+      expect(r.rebindHeldRun.calls()).toEqual([]);
+      r.picker.dispose();
+    });
+
+    it('confirming sends the rebind with consent to end the run', async () => {
+      const r = await labelled();
+      r.rebindHeldRun.respond({ ok: true, outcome: 'terminated' });
+      await openRecovery(r.host);
+      row(r.host, 'beta-flow').click();
+      await settle();
+
+      r.endRunConfirmations[0]!.proceed();
+      await settle();
+
+      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }, 'end-run']]);
+      r.picker.dispose();
+    });
+
+    it('never answering the confirmation (a cancel) sends nothing and leaves recovery offered', async () => {
+      const r = await labelled();
+      await openRecovery(r.host);
+      row(r.host, /local|this worktree/i).click();
+      await settle();
+
+      expect(r.rebindHeldRun.calls()).toEqual([]);
+      expect(recoverControl(r.host)?.disabled).toBe(false);
+      r.picker.dispose();
+    });
+
+    it('a confirmation given after the view moved to another worktree rebinds nothing (§6)', async () => {
+      const r = await labelled();
+      r.catalog.serve('/repo-b', listingOf(['flow-b'], 'flow-b'));
+      await openRecovery(r.host);
+      row(r.host, 'beta-flow').click();
+      await settle();
+
+      r.views.fire('/repo-b', heldView('record-missing'));
+      await settle();
+      r.endRunConfirmations[0]!.proceed();
+      await settle();
+
+      expect(r.rebindHeldRun.calls()).toEqual([]);
+      r.picker.dispose();
+    });
+
+    it.each<[string, RegExp | string, RebindChoice]>([
+      ['a row that resumes the run', 'alpha-flow', { origin: 'repo', id: 'alpha-flow' }],
+      ['a row main named no outcome for', 'shadowed-flow', { origin: 'global', id: 'shadowed-flow' }],
+    ])('choosing %s asks nothing and sends the rebind without consent to end the run', async (_label, match, choice) => {
+      const r = await labelled();
+      r.rebindHeldRun.respond({ ok: true, outcome: 'resumed' });
+      await openRecovery(r.host);
+
+      row(r.host, match).click();
+      await settle();
+
+      expect(r.endRunConfirmations).toEqual([]);
+      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', choice, 'refuse']]);
+      r.picker.dispose();
+    });
+
+    it("a refused rebind re-lists the flows, so a row whose outcome changed since it was shown is labelled afresh", async () => {
+      const r = await labelled();
+      r.rebindHeldRun.respond({ ok: false, reason: 'Choosing this flow ends the run, so it needs your confirmation first: the flow has no step "s2".' });
+      await openRecovery(r.host);
+      r.catalog.serve(
+        '/repo-a',
+        recoveryListing({ recoveryOutcomes: OUTCOMES.map((o) => ('id' in o.choice && o.choice.id === 'alpha-flow' ? { ...o, outcome: 'ends' as const } : o)) }),
+      );
+      row(r.host, 'alpha-flow').click();
+      await settle();
+      await openRecovery(r.host);
+
+      expect(accessibleName(row(r.host, 'alpha-flow'))).toMatch(/ends the run/i);
+      row(r.host, 'alpha-flow').click();
+      await settle();
+      expect(r.endRunConfirmations).toHaveLength(1);
+      r.picker.dispose();
+    });
   });
 
   it('an indeterminate error view offers no recovery, only the locked picker (AC17)', async () => {

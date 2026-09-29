@@ -1234,13 +1234,15 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowListCatalog(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:listCatalog request' };
         }
-        return catalogListResult(() => listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }));
+        return catalogListResult(() =>
+          listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
+        );
       },
       [CH.flowRebindHeldRun]: (_e, m): RebindResult => {
         if (!isValidFlowRebindHeldRun(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:rebindHeldRun request' };
         }
-        return lifecycle.rebind(m.repoKey, m.choice);
+        return lifecycle.rebind(m.repoKey, m.choice, m.ifStepMissing);
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
       [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>

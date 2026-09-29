@@ -1,9 +1,19 @@
 // §18.7.4 / §18.7.6
 
-import type { ActiveFlowWriteResult, CatalogOrigin, RebindChoice, RebindResult, FlowCatalogListing, FlowCatalogListResult, FlowCatalogSelection } from '../../shared/ipc';
+import type {
+  ActiveFlowWriteResult,
+  CatalogOrigin,
+  MissingStepAction,
+  RebindChoice,
+  RebindResult,
+  RecoveryOutcome,
+  FlowCatalogListing,
+  FlowCatalogListResult,
+  FlowCatalogSelection,
+} from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
-import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
+import { offersHeldRunRecovery, recoveryChoices, sameRebindChoice, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
 
@@ -13,7 +23,9 @@ export interface FlowPickerDeps {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   select(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   clearSelection(repoKey: string): Promise<ActiveFlowWriteResult>;
-  rebindHeldRun(repoKey: string, choice: RebindChoice): Promise<RebindResult>;
+  rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: MissingStepAction): Promise<RebindResult>;
+  /** Asks the operator to confirm ending `repoKey`'s run; `proceed` runs only on confirmation. */
+  confirmEndRun(repoKey: string, proceed: () => void, restoreFocusTo: HTMLElement | null): void;
 }
 
 export interface FlowPicker {
@@ -51,8 +63,10 @@ const HOLD_TEXT: Record<HeldRun['hold'], string> = {
 
 const STATUS_TEXT: Record<HeldRun['status'], string> = { in_progress: 'in progress', done: 'done' };
 
+const OUTCOME_TEXT: Record<RecoveryOutcome, string> = { resumes: 'resumes the run', ends: 'ends the run' };
+
 type Row =
-  | { kind: 'choice'; key: string; name: string; origin: string; selected: boolean; choose: () => void }
+  | { kind: 'choice'; key: string; name: string; origin: string; outcome?: RecoveryOutcome; selected: boolean; choose: () => void }
   | { kind: 'unavailable'; key: string; name: string; origin: string; reason: string };
 
 const heldOf = (view: { runHold?: HeldRunView }): HeldRun | null => {
@@ -62,6 +76,11 @@ const heldOf = (view: { runHold?: HeldRunView }): HeldRun | null => {
 
 const reasonOf = (e: unknown, prefix: string): string =>
   displaySafeEcho(`${prefix}: ${e instanceof Error ? e.message : String(e)}`, MAX_ECHOED_REASON_LENGTH);
+
+const partitionLocal = (choices: RebindChoice[]): [RebindChoice[], RebindChoice[]] => [
+  choices.filter((c) => c.origin === 'local'),
+  choices.filter((c) => c.origin !== 'local'),
+];
 
 let instances = 0;
 
@@ -168,7 +187,8 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   const canPick = (): boolean => repoKey !== null && catalog.kind === 'listed' && !locked;
-  const canRecover = (): boolean => repoKey !== null && catalog.kind === 'listed' && held !== null;
+  let rebinding = false;
+  const canRecover = (): boolean => repoKey !== null && catalog.kind === 'listed' && held !== null && !rebinding;
 
   function write(next: FlowCatalogSelection, save: (key: string) => Promise<ActiveFlowWriteResult>): void {
     const key = repoKey;
@@ -199,10 +219,21 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const pick = (id: string): void => write({ kind: 'value', id }, (key) => deps.select(key, id));
   const useDefault = (): void => write(UNSET, (key) => deps.clearSelection(key));
 
-  function rebind(choice: RebindChoice): void {
+  function recover(choice: RebindChoice, outcome: RecoveryOutcome | undefined): void {
     const key = repoKey;
     if (key === null || !canRecover()) return;
+    if (outcome !== 'ends') {
+      rebind(key, choice, 'refuse');
+      return;
+    }
+    collapse();
+    deps.confirmEndRun(key, () => rebind(key, choice, 'end-run'), recoverButton());
+  }
+
+  function rebind(key: string, choice: RebindChoice, ifStepMissing: MissingStepAction): void {
+    if (repoKey !== key || !canRecover()) return;
     const token = ++pickGeneration;
+    rebinding = true;
     alertText = '';
     open = false;
     render();
@@ -212,16 +243,23 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       alertText = displaySafeEcho(reason, MAX_ECHOED_LOCK_REASON_LENGTH);
       render();
     };
-    deps.rebindHeldRun(key, choice).then(
-      (result) => {
-        if (!result.ok) announce(result.reason);
-        else if (result.outcome === 'terminated' && result.notice !== undefined) {
-          noticeOutlivesRelease = held !== null;
-          announce(result.notice);
-        }
-      },
-      (e: unknown) => announce(reasonOf(e, 'Could not recover the run')),
-    );
+    deps
+      .rebindHeldRun(key, choice, ifStepMissing)
+      .then(
+        (result) => {
+          if (!result.ok) {
+            announce(result.reason);
+            if (!disposed && repoKey === key) pull(key);
+          } else if (result.outcome === 'terminated' && result.notice !== undefined) {
+            noticeOutlivesRelease = held !== null;
+            announce(result.notice);
+          }
+        },
+        (e: unknown) => announce(reasonOf(e, 'Could not recover the run')),
+      )
+      .finally(() => {
+        rebinding = false;
+      });
   }
 
   const trigger = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.flow-picker-trigger');
@@ -283,6 +321,14 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     origin.textContent = row.origin;
     li.append(name, origin);
     li.setAttribute('aria-labelledby', `${name.id} ${origin.id}`);
+    if (row.kind === 'choice' && row.outcome !== undefined) {
+      const outcome = doc.createElement('span');
+      outcome.id = `${uid}-outcome-${index}`;
+      outcome.className = 'flow-picker-outcome';
+      outcome.textContent = OUTCOME_TEXT[row.outcome];
+      li.append(outcome);
+      li.setAttribute('aria-labelledby', `${name.id} ${origin.id} ${outcome.id}`);
+    }
     if (row.kind === 'unavailable') {
       li.setAttribute('aria-disabled', 'true');
       const reason = doc.createElement('span');
@@ -331,20 +377,18 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   function recoveryRows(listing: FlowCatalogListing): Row[] {
-    const choice = (key: string, name: string, origin: string, to: RebindChoice): Row => ({
-      kind: 'choice',
-      key,
-      name,
-      origin,
-      selected: false,
-      choose: () => rebind(to),
-    });
-    return [
-      ...(listing.hasLocalFlow ? [choice('local:', 'flow.yaml', 'local (this worktree)', { origin: 'local' })] : []),
-      ...listing.entries.filter(isUnavailable).map(unavailableRow),
-      ...listing.resumable.map(({ origin, id }) => choice(`${origin}:${id}`, id, origin, { origin, id })),
-      ...(listing.hasGlobalFallback ? [choice('fallback:', 'Global fallback flow', 'fallback', { origin: 'fallback' })] : []),
-    ];
+    const row = (to: RebindChoice): Row => {
+      const outcome = listing.recoveryOutcomes.find((o) => sameRebindChoice(o.choice, to))?.outcome;
+      const shown =
+        to.origin === 'local'
+          ? { key: 'local:', name: 'flow.yaml', origin: 'local (this worktree)' }
+          : to.origin === 'fallback'
+            ? { key: 'fallback:', name: 'Global fallback flow', origin: 'fallback' }
+            : { key: `${to.origin}:${to.id}`, name: to.id, origin: to.origin };
+      return { kind: 'choice', ...shown, outcome, selected: false, choose: () => recover(to, outcome) };
+    };
+    const [local, rest] = partitionLocal(recoveryChoices(listing));
+    return [...local.map(row), ...listing.entries.filter(isUnavailable).map(unavailableRow), ...rest.map(row)];
   }
 
   function triggerLabel(): string {
@@ -443,7 +487,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     const p = doc.createElement('p');
     p.id = `${uid}-held`;
     p.className = 'flow-picker-held';
-    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow resumes step ${run.step} (${STATUS_TEXT[run.status]}).`;
+    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow that has step ${run.step} resumes it (${STATUS_TEXT[run.status]}); choosing one without that step ends the run as Terminate does and selects that flow.`;
     return p;
   }
 

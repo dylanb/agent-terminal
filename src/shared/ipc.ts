@@ -773,12 +773,26 @@ export interface FlowCatalogListing {
   hasLocalFlow: boolean;
   hasGlobalFallback: boolean;
   resumable: { origin: CatalogOrigin; id: string }[];
+  /** Empty unless the worktree's run is held; a choice whose flow cannot be loaded is absent. */
+  recoveryOutcomes: RecoveryOutcomeOf[];
 }
 
 export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | { ok: false; reason: string };
 
 /** §18.7.3 */
 export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
+
+/** §18.7.3 — whether choosing a flow resumes a held run or ends it. */
+export type RecoveryOutcome = 'resumes' | 'ends';
+
+export interface RecoveryOutcomeOf {
+  choice: RebindChoice;
+  outcome: RecoveryOutcome;
+}
+
+/** §18.7.3 — `end-run` is sent only once the operator has confirmed ending the run. */
+export const MISSING_STEP_ACTIONS = ['refuse', 'end-run'] as const;
+export type MissingStepAction = (typeof MISSING_STEP_ACTIONS)[number];
 
 /** §18.7.3 — `terminated`: the chosen flow lacked the held step, so the run was ended; `notice` names a selection
  *  that could not be saved after the reset. */
@@ -792,6 +806,7 @@ export interface FlowRebindHeldRunMsg {
   sessionId: SessionId;
   repoKey: string;
   choice: RebindChoice;
+  ifStepMissing: MissingStepAction;
 }
 
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
@@ -1131,7 +1146,7 @@ export interface FlowApi {
   /** §18.7.6 */
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** §18.7.3 */
-  rebindHeldRun(repoKey: string, choice: RebindChoice): Promise<RebindResult>;
+  rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: MissingStepAction): Promise<RebindResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

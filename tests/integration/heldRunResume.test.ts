@@ -91,7 +91,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
         damage(wt);
         const before = unchanged();
 
-        expect(recovery.rebind(wt, choice)).toEqual({ ok: true, outcome: 'resumed' });
+        expect(recovery.rebind(wt, choice, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
         const view = manager().state(wt);
         expect(view.steps).toEqual(['s1', 's2', lastStep]);
@@ -111,7 +111,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     writeFileSync(outside, 'outside content\n');
     fx.plantRunRecordSymlink(wt, outside);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(readFileSync(outside, 'utf8')).toBe('outside content\n');
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'resume-flow' });
@@ -121,7 +121,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const { wt, recovery, manager } = rig({ local: false });
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     writeActiveFlow(wt, 'repo-flow');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['s1', 's2', 'local-3'] });
@@ -133,7 +133,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const { wt, recovery, manager } = rig({ local: false });
     fx.writeFlowState(wt, { step: 's2', status: 'done' });
     fx.writeRunRecordRaw(wt, '[unterminated flow sequence');
-    expect(recovery.rebind(wt, { origin: 'fallback' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'fallback' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     writeActiveFlow(wt, 'resume-flow');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['s1', 's2', 'local-3'] });
@@ -150,7 +150,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'shared-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'shared-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(manager().state(wt).steps).toEqual(['s1', 's2', 'global-shared-3']);
     expect(createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) }).state(wt).steps).toEqual([
@@ -167,7 +167,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.writeFlowState(wt, { step: hostile, status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'hostile-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'hostile-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     const view = manager().state(wt);
     expect(view.stepName).toBe(hostile);
@@ -178,7 +178,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const { home, wt, recovery, manager } = rig();
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(manager().terminate(wt).outcome).toBe('reset');
 
@@ -196,7 +196,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.removeRunRecord(wt);
     const before = unchanged();
 
-    expect(expectCleanReason(recovery.rebind(wt, choice))).toMatch(reason);
+    expect(expectCleanReason(recovery.rebind(wt, choice, 'refuse'))).toMatch(reason);
 
     expect(unchanged()).toEqual(before);
     expect(existsSync(join(flowHomeDir(wt), 'run-disposition.yaml'))).toBe(false);
@@ -212,7 +212,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.removeRunRecord(wt);
     const before = unchanged();
 
-    expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'broken-flow' }))).toMatch(/could not be loaded: flow\.yaml step "b/);
+    expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'broken-flow' }, 'refuse'))).toMatch(/could not be loaded: flow\.yaml step "b/);
 
     expect(unchanged()).toEqual(before);
     expect(heldRunOf(wt).hold).toBe('record-missing');
@@ -231,7 +231,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     chmodSync(flowHomeDir(wt), 0o555);
     let result: RebindResult;
     try {
-      result = recovery.rebind(wt, { origin: 'global', id: 'resume-flow' });
+      result = recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse');
     } finally {
       chmodSync(flowHomeDir(wt), 0o755);
     }
@@ -259,7 +259,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
       damage(wt);
       const before = unchanged();
 
-      expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }))).toMatch(/disk full/);
+      expect(expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse'))).toMatch(/disk full/);
 
       expect(unchanged()).toEqual(before);
       expect(heldRunOf(wt)).toMatchObject({ hold: 'record-missing', step: 's2', status: 'in_progress' });
@@ -278,7 +278,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(probe.observed()).not.toHaveLength(0);
     for (const attempt of probe.observed()) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
@@ -301,7 +301,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     mkdirSync(lockRoot, { recursive: true });
     remove(lockRoot);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(probe.observed()).not.toHaveLength(0);
     for (const attempt of probe.observed()) expect(attempt).toMatchObject({ ok: false, cause: 'held' });
@@ -320,7 +320,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     const planted = readFileSync(lockFile, 'utf8');
     const before = unchanged();
 
-    const reason = expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }), MAX_ECHOED_LOCK_REASON_LENGTH);
+    const reason = expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse'), MAX_ECHOED_LOCK_REASON_LENGTH);
 
     expectsUnidentifiedHolderRemedy(reason, lockFile);
     expect(unchanged()).toEqual(before);
@@ -335,7 +335,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     fx.removeRunRecord(wt);
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' })).toEqual({ ok: true, outcome: 'resumed' });
+    expect(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse')).toEqual({ ok: true, outcome: 'resumed' });
 
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'resume-flow' });
     expect(lstatSync(lockRoot).isFile()).toBe(true);
@@ -351,7 +351,7 @@ describe('recovering a held run onto a flow containing its step resumes it (AC12
     writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
     const before = unchanged();
 
-    expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }));
+    expectCleanReason(recovery.rebind(wt, { origin: 'global', id: 'resume-flow' }, 'refuse'));
 
     expect(unchanged()).toEqual(before);
     expect(existsSync(join(flowHomeDir(wt), 'run-disposition.yaml'))).toBe(false);

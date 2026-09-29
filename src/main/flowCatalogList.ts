@@ -7,7 +7,16 @@ import { catalogRefusalReason } from './resolveRunDefinition';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { errMsg } from './errno';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
-import { CATALOG_ORIGINS, type CatalogOrigin, type FlowCatalogEntry, type FlowCatalogListing, type FlowCatalogListResult } from '../shared/ipc';
+import {
+  CATALOG_ORIGINS,
+  type CatalogOrigin,
+  type FlowCatalogEntry,
+  type FlowCatalogListing,
+  type FlowCatalogListResult,
+  type RebindChoice,
+  type RecoveryOutcomeOf,
+} from '../shared/ipc';
+import { recoveryChoices } from '../shared/runHold';
 
 export const MAX_CATALOG_LIST_MEMBERS = 256;
 
@@ -76,7 +85,10 @@ const UNSAFE_NAME_REASON = 'is not a valid flow id';
 // Quoted so no label can equal a safe id, which the picker keys its rows by (flowPicker.ts `Row.key`).
 const unsafeNameLabel = (name: string): string => `"${displaySafeEcho(name, MAX_CATALOG_ID_LENGTH)}"`;
 
-export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
+export function listCatalog(
+  roots: CatalogRoots,
+  recoveryOutcomes: (choices: RebindChoice[]) => RecoveryOutcomeOf[] = () => [],
+): FlowCatalogListing {
   const scans = CATALOG_ORIGINS.map((tier) => scanTier(roots, tier));
   const members = scans.flatMap((s) => s.members);
   const ids = [...new Set(members.map((m) => m.id))].sort((a, b) => a.localeCompare(b));
@@ -99,13 +111,17 @@ export function listCatalog(roots: CatalogRoots): FlowCatalogListing {
   const resumable = members.filter((m) => m.resolvesInTier).map(({ tier, id }) => ({ origin: tier, id }));
 
   const pointer = readActiveFlow(roots.worktreeDir);
+  const offered = {
+    hasLocalFlow: hasFlowDefinition(roots.worktreeDir),
+    hasGlobalFallback: hasFlowDefinition(roots.globalRoot),
+    resumable,
+  };
   return {
     entries,
     tierNotices: scans.flatMap((s) => s.notices),
     selection: pointer.kind === 'value' ? { kind: 'value', id: pointer.id } : { kind: pointer.kind },
-    hasLocalFlow: hasFlowDefinition(roots.worktreeDir),
-    hasGlobalFallback: hasFlowDefinition(roots.globalRoot),
-    resumable,
+    ...offered,
+    recoveryOutcomes: recoveryOutcomes(recoveryChoices(offered)),
   };
 }
 

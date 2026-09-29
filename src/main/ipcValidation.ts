@@ -33,6 +33,7 @@ import {
   type FlowRebindHeldRunMsg,
   type RebindChoice,
   CATALOG_ORIGINS,
+  MISSING_STEP_ACTIONS,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -230,10 +231,11 @@ function isValidRebindChoice(c: unknown): c is RebindChoice {
 export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg {
   return (
     isRecord(m) &&
-    hasExactKeys(m, ['sessionId', 'repoKey', 'choice']) &&
+    hasExactKeys(m, ['sessionId', 'repoKey', 'choice', 'ifStepMissing']) &&
     isLiveSession(m) &&
     isSafeRepoKey(m.repoKey) &&
-    isValidRebindChoice(m.choice)
+    isValidRebindChoice(m.choice) &&
+    (MISSING_STEP_ACTIONS as readonly unknown[]).includes(m.ifStepMissing)
   );
 }
 

@@ -27,29 +27,38 @@ function exposedFlow(): FlowApi {
 beforeEach(() => invoke.mockClear());
 
 describe('window.flow.rebindHeldRun (§6)', () => {
-  it('invokes flow:rebindHeldRun with the session id, the named worktree and the choice, and resolves the result', async () => {
+  it.each(['refuse', 'end-run'] as const)('invokes flow:rebindHeldRun with the session id, the named worktree, the choice and whether to end the run (%s), and resolves the result', async (ifStepMissing) => {
     const flow = exposedFlow();
     invoke.mockResolvedValueOnce({ ok: true, outcome: 'resumed' });
 
-    const res = await flow.rebindHeldRun('/repo-a', { origin: 'global', id: 'flow-b' });
+    const res = await flow.rebindHeldRun('/repo-a', { origin: 'global', id: 'flow-b' }, ifStepMissing);
 
     expect(invoke).toHaveBeenCalledWith('flow:rebindHeldRun', {
       sessionId: SESSION_ID,
       repoKey: '/repo-a',
       choice: { origin: 'global', id: 'flow-b' },
+      ifStepMissing,
     });
     expect(res).toEqual({ ok: true, outcome: 'resumed' });
   });
 });
 
 describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input is untrusted)', () => {
-  const msg = (choice: unknown, extra: Record<string, unknown> = {}): unknown => ({ sessionId: SESSION_ID, repoKey: '/repo', choice, ...extra });
+  const msg = (choice: unknown, extra: Record<string, unknown> = {}): unknown => ({ sessionId: SESSION_ID, repoKey: '/repo', choice, ifStepMissing: 'refuse', ...extra });
 
   it('accepts every choice origin for a safe repoKey on the live session', () => {
     expect(isValid(msg({ origin: 'local' }))).toBe(true);
     expect(isValid(msg({ origin: 'fallback' }))).toBe(true);
     expect(isValid(msg({ origin: 'repo', id: 'flow-a' }))).toBe(true);
     expect(isValid(msg({ origin: 'global', id: 'flow-a' }))).toBe(true);
+    expect(isValid(msg({ origin: 'global', id: 'flow-a' }, { ifStepMissing: 'end-run' }))).toBe(true);
+  });
+
+  it('rejects a request that does not say, as one of the two known actions, whether a missing step may end the run (AC20)', () => {
+    expect(isValid({ sessionId: SESSION_ID, repoKey: '/repo', choice: { origin: 'local' } })).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: 'end' }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: true }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: undefined }))).toBe(false);
   });
 
   it('rejects an unknown origin, an unsafe or missing catalog id, extra keys, and a bad envelope', () => {
@@ -66,10 +75,10 @@ describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input
     expect(isValid({ sessionId: SESSION_ID, repoKey: '/repo' })).toBe(false);
     expect(isValid(msg(null))).toBe(false);
     expect(isValid(msg('local'))).toBe(false);
-    expect(isValid({ sessionId: SESSION_ID, repoKey: 'relative', choice: { origin: 'local' } })).toBe(false);
-    expect(isValid({ sessionId: SESSION_ID, repoKey: '/repo/../etc', choice: { origin: 'local' } })).toBe(false);
-    expect(isValid({ sessionId: 'other', repoKey: '/repo', choice: { origin: 'local' } })).toBe(false);
-    expect(isValid({ sessionId: SESSION_ID, choice: { origin: 'local' } })).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { repoKey: 'relative' }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { repoKey: '/repo/../etc' }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { sessionId: 'other' }))).toBe(false);
+    expect(isValid({ sessionId: SESSION_ID, choice: { origin: 'local' }, ifStepMissing: 'refuse' })).toBe(false);
     expect(isValid(null)).toBe(false);
   });
 });

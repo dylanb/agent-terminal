@@ -352,6 +352,58 @@ for (const theme of ['light', 'dark'] as const) {
       }
     });
 
+    describe('flow picker recovery outcome label contrast (WCAG 1.4.3 AA)', () => {
+      for (const hovered of [false, true]) {
+        it(`each row's "resumes the run" / "ends the run" label clears 4.5:1${hovered ? ' on a hovered row' : ''}`, async () => {
+          const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
+          let show: ((...args: FlowViewArgs) => void) | undefined;
+          const listing: FlowCatalogListing = {
+            entries: [
+              { available: true, id: 'flow-a', origin: 'repo' },
+              { available: true, id: 'flow-b', origin: 'global' },
+            ],
+            tierNotices: [],
+            selection: { kind: 'unset' },
+            hasLocalFlow: false,
+            hasGlobalFallback: false,
+            resumable: [
+              { origin: 'repo', id: 'flow-a' },
+              { origin: 'global', id: 'flow-b' },
+            ],
+            recoveryOutcomes: [
+              { choice: { origin: 'repo', id: 'flow-a' }, outcome: 'resumes' },
+              { choice: { origin: 'global', id: 'flow-b' }, outcome: 'ends' },
+            ],
+          };
+          const picker = createFlowPicker(host, {
+            onView: (cb) => {
+              show = cb;
+              return () => {};
+            },
+            listCatalog: async () => ({ ok: true, listing }),
+            select: async () => ({ ok: true }),
+            clearSelection: async () => ({ ok: true }),
+            rebindHeldRun: async () => ({ ok: false, reason: 'no' }),
+            confirmEndRun: () => {},
+          });
+          show!('/repo', {
+            stepName: '', steps: [], position: 0, total: 0, status: 'error', error: 'held', runStarted: 'started',
+            runHold: { hold: 'record-missing', step: 's2', status: 'in_progress' },
+          });
+          await vi.waitFor(() => expect(host.querySelector('.flow-picker-recover')?.getAttribute('aria-disabled')).not.toBe('true'));
+          host.querySelector<HTMLElement>('.flow-picker-recover')!.click();
+          for (const key of ['repo:flow-a', 'global:flow-b']) {
+            const row = await vi.waitFor(() => optionNamed(host, key));
+            if (hovered) await userEvent.hover(row);
+            const label = [...row.querySelectorAll<HTMLElement>('span')].find((e) => /resumes the run|ends the run/.test(e.textContent ?? ''));
+            expect(label, `${key} shows its outcome`).toBeDefined();
+            expect(contrast(fg(label!), paintedBg(label!)), key).toBeGreaterThanOrEqual(4.5);
+          }
+          picker.dispose();
+        });
+      }
+    });
+
     describe('flow picker tier notice contrast (WCAG 1.4.3 AA)', () => {
       it('an unreadable-tier notice clears 4.5:1 in the open list', async () => {
         const notice = 'Could not read the repo flows directory: ENOTDIR';
