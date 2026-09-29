@@ -4,7 +4,7 @@ import { classifyRunHold, type HeldRunView, type RunRecordRead } from '../shared
 import { readDisposition, readRunBinding } from './runDisposition';
 import { readProgression } from './startedness';
 
-function runRecordRead(worktree: string): RunRecordRead {
+export function runRecordRead(worktree: string): RunRecordRead {
   const presence = readDisposition(worktree);
   if (presence === 'absent') return 'missing';
   if (presence === 'indeterminate') return 'unreadable';

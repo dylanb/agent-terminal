@@ -30,7 +30,6 @@ export interface FlowPickerDeps {
 }
 
 export interface FlowPicker {
-  refresh(): void;
   dispose(): void;
 }
 
@@ -571,9 +570,6 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const unsubscribe = deps.onView(onView);
 
   return {
-    refresh() {
-      if (!disposed && repoKey !== null) pull(repoKey);
-    },
     dispose() {
       disposed = true;
       unsubscribe();

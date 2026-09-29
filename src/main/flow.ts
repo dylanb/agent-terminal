@@ -12,7 +12,7 @@ import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
-import { heldRunOf } from './runHoldRead';
+import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
@@ -590,7 +590,7 @@ export function createFlowMachine(
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
       else {
-        // §18.7.4 (v2.155): no previous step, so the run resets to never-started as a Terminate does.
+        // §18.7.4 (v2.155)
         status = 'not_started';
         inputs = {};
         repeatCounts = Object.create(null);
@@ -754,7 +754,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       const { machine, binding } = machineFor(k);
       const begins = binding !== undefined && machine.state().status === 'not_started';
       // §18.7.2 — a record a reset could not remove would block the record write below, so it is retried here.
-      if (begins && readDisposition(k) !== 'absent' && readRunBinding(k) === null) {
+      if (begins && runRecordRead(k) === 'unreadable') {
         try {
           clearDisposition(k);
         } catch (e) {

@@ -13,8 +13,9 @@ import {
 import type { FlowLoad } from './flow';
 import { readActiveFlow } from './activeFlowPointer';
 import { resolveCatalogEntry } from './flowCatalog';
-import { progressionBegunness, worktreeStartedness } from './startedness';
+import { worktreeStartedness } from './startedness';
 import { readRunBinding } from './runDisposition';
+import { heldRunOf } from './runHoldRead';
 
 /** §18.7.3 / §18.7.4 AC9 (CWE-841) */
 export function createRunResolver(globalDir: string): (repoKey: string) => ResolvedRunDefinition {
@@ -28,7 +29,7 @@ export function createRunResolver(globalDir: string): (repoKey: string) => Resol
         const binding = readRunBinding(repoKey);
         if (binding !== null) return { started, disposition: binding };
         // §18.7.2 — a reset run's record that could not be removed binds nothing: no step is in progress to swap.
-        return { started: progressionBegunness(repoKey) === 'begun' ? 'indeterminate' : 'never-started' };
+        return { started: heldRunOf(repoKey).hold === 'not-held' ? 'never-started' : 'indeterminate' };
       },
     })(repoKey, globalDir);
 }

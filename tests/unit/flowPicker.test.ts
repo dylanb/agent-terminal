@@ -597,31 +597,6 @@ describe('flow picker — follows the worktree of each view (AC2)', () => {
     picker.dispose();
   });
 
-  it('refresh() re-lists the shown worktree, and while idle it shows nothing', async () => {
-    const r = rig();
-    r.catalog.serve('/repo-a', listingOf(['flow-a']));
-    const picker = createFlowPicker(r.host, r.deps);
-
-    r.views.fire('/repo-a', neverStarted(['a1']));
-    await settle();
-    await ensureOpen(r.host);
-    expect(options(r.host).some((o) => (o.textContent ?? '').includes('flow-b'))).toBe(false);
-
-    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b']));
-    picker.refresh();
-    await settle();
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-b')).toBeDefined();
-
-    r.views.fire(null, null);
-    await settle();
-    picker.refresh();
-    await settle();
-    expect(options(r.host)).toEqual([]);
-    expect(findTrigger(r.host)?.disabled ?? true).toBe(true);
-    picker.dispose();
-  });
-
   it.each([
     ['listed', (d: Deferred<FlowCatalogListResult>) => d.resolve(listingOf(['only-in-a']))],
     ['rejected', (d: Deferred<FlowCatalogListResult>) => d.reject(new Error('Could not list flows: only-in-a gone'))],

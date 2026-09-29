@@ -43,8 +43,7 @@ export function progressionBegunness(worktreeDir: string): ProgressionBegunness 
 export function worktreeStartedness(worktreeDir: string): StartednessSignal {
   const progression = progressionBegunness(worktreeDir);
   if (progression === 'indeterminate') return 'indeterminate';
-  // Consult the durable marker before the display status, which it overrides: present → 'started', unverifiable →
-  // 'indeterminate'; only a genuinely absent marker defers to the progression (§18.7.4/CWE-841).
+  // §18.7.4 (CWE-841)
   const disposition = readDisposition(worktreeDir);
   if (disposition === 'indeterminate') return 'indeterminate';
   if (disposition === 'present') return 'started';

@@ -37,8 +37,6 @@ function writePointer(worktreeDir: string, write: PointerWrite): void {
   }
 }
 
-/** The gate's check-then-write body. `withWorktreeLock` is non-reentrant across instances, so a caller already
- *  inside a lock scope calls this rather than `gate.set`/`gate.clear`. */
 export function selectIfUnlocked(_scope: WorktreeLockScope, worktreeDir: string, write: PointerWrite): SelectResult {
   const startedness = worktreeStartedness(worktreeDir);
   if (isSelectionLocked(startedness)) {
