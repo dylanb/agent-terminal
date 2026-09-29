@@ -115,7 +115,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
       'core.sshCommand',
       `sh -c 'touch "${marker}"; exit 1'`,
     ]);
-    runGit(repo, ['remote', 'set-url', 'origin', 'ssh://example.invalid/repo.git']);
+    runGit(repo, ['remote', 'set-url', 'origin', 'ssh://127.0.0.1:1/repo.git']);
     const port = createRealAppBootstrapGit(repo);
 
     await expect(port.branchState(branch)).rejects.toThrow(/remote branch probe failed/i);
