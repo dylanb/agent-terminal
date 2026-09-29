@@ -1858,6 +1858,12 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
     // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
+    // §28.7 — the repo's labels live one per line in a sink: `label list` reports them, `label create` adds one
+    // (or fails under FAKE_GH_LABEL_CREATE_FAIL), and under FAKE_GH_STRICT_LABELS an `--add-label` of an
+    // agent-loop/* label the repo lacks fails as real GitHub does.
+    'if [ "$1" = "label" ] && [ "$2" = "list" ]; then out="["; sep=""; while IFS= read -r l; do out="$out$sep{\\"name\\":\\"$l\\"}"; sep=","; done < <(cat "$FAKE_GHGIT_LOG.labels" 2>/dev/null); echo "$out]"; exit 0; fi\n' +
+    'if [ "$1" = "label" ] && [ "$2" = "create" ]; then if [ -n "$FAKE_GH_LABEL_CREATE_FAIL" ]; then echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; fi; echo "$3" >> "$FAKE_GHGIT_LOG.labels"; exit 0; fi\n' +
+    'if [ -n "$FAKE_GH_STRICT_LABELS" ] && [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-label" ] && [[ "$5" = agent-loop/* ]] && ! grep -qxF "$5" "$FAKE_GHGIT_LOG.labels" 2>/dev/null; then echo "could not add label: \'$5\' not found" >&2; exit 1; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
     // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
     // sub-ticket's label set is independently assertable.
@@ -7025,7 +7031,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   seedEpicChainAgent(binDir, 2);
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, FAKE_GH_STRICT_LABELS: '1' }, // a repo with none of the promotion's labels
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -7054,6 +7060,8 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
     expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/ready');
   }
   expect(readIf(`${logFile}.issue-assignee`)).not.toContain('501'); // no sub-ticket assigned (uniform siblings)
+  // The repo had none of the labels: the promotion created them before labelling any sub-ticket.
+  expect(readIf(`${logFile}.labels`).split('\n')).toEqual(expect.arrayContaining(['agent-loop/subticket', 'agent-loop/ready']));
 
   // The epic became a tracking issue: its original body preserved as a prefix, the checklist appended.
   const epicBody = readIf(`${logFile}.issue-body.176`);
@@ -7062,6 +7070,36 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
 
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported for the operator to create, before anything reaches GitHub', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicLbl-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicLbl-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicLbl-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, FAKE_GH_STRICT_LABELS: '1', FAKE_GH_LABEL_CREATE_FAIL: '1' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const preview = page.getByRole('alertdialog');
+  await expect(preview).toBeVisible({ timeout: 15_000 });
+  const mutationsBeforeConfirm = ghPromotionMutations(logFile);
+  await preview.locator('.pill.danger.confirm').click();
+
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'gh label create agent-loop/subticket' })).toBeVisible({ timeout: 30_000 });
+  expect(ghPromotionMutations(logFile)).toEqual(mutationsBeforeConfirm);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'))).toBe(false);
+  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // the gate stays re-decidable
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
