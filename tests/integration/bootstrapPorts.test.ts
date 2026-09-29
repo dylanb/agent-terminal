@@ -92,7 +92,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     await expect(port.branchState('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
   });
 
-  it('rejects command-capable repository-local Git configuration before it can execute', async () => {
+  it('bootstraps a repo whose own config sets core.hooksPath, without running those hooks', async () => {
+    const hooks = join(root, 'repo-hooks');
+    const marker = join(root, 'repo-hook-ran');
+    mkdirSync(hooks);
+    for (const hook of ['post-checkout', 'pre-commit', 'commit-msg', 'post-commit', 'pre-push', 'reference-transaction']) {
+      writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+    }
+    runGit(repo, ['config', 'core.hooksPath', hooks]);
+
+    const { port, ownedOid } = await createOwnedBranch();
+    await expect(port.pushBranchUpstream(branch, ownedOid)).resolves.toBe(ownedOid);
+
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(ownedOid);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('never runs a repository-local core.sshCommand', async () => {
     const marker = join(root, 'ssh-command-ran');
     runGit(repo, [
       'config',
@@ -102,9 +118,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['remote', 'set-url', 'origin', 'ssh://example.invalid/repo.git']);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchState(branch)).rejects.toThrow(
-      /unsafe repository-local git configuration/i,
-    );
+    await expect(port.branchState(branch)).rejects.toThrow(/remote branch probe failed/i);
 
     expect(existsSync(marker)).toBe(false);
   });
@@ -115,9 +129,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['config', 'core.worktree', redirectedTree]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchState(branch)).rejects.toThrow(
-      /unsafe repository-local git configuration/i,
-    );
+    await expect(port.branchState(branch)).rejects.toThrow(/repository identity mismatch/i);
   });
 
   // Inherited repository-selection variables are stripped from every child, so the port operates on the
@@ -174,24 +186,24 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     );
   });
 
-  it('rejects a repository-local upload-pack override before a read operation', async () => {
-    runGit(repo, ['config', 'remote.origin.uploadpack', 'git-upload-pack']);
+  it('never runs a repository-local upload-pack override on a read operation', async () => {
+    const marker = join(root, 'upload-pack-ran');
+    runGit(repo, ['config', 'remote.origin.uploadpack', `touch "${marker}"; git-upload-pack`]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchState(branch)).rejects.toThrow(
-      /unsafe repository-local git configuration/i,
-    );
+    await expect(port.branchState(branch)).resolves.toEqual({ localOid: null, remoteOid: null });
+
+    expect(existsSync(marker)).toBe(false);
   });
 
-  it('rejects a repository-local receive-pack override before a push operation', async () => {
-    const port = createRealAppBootstrapGit(repo);
-    await port.createBranchFromBase(branch, 'main');
-    const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
-    runGit(repo, ['config', 'remote.origin.receivepack', 'git-receive-pack']);
+  it('never runs a repository-local receive-pack override on a push operation', async () => {
+    const marker = join(root, 'receive-pack-ran');
+    const { port, ownedOid } = await createOwnedBranch();
+    runGit(repo, ['config', 'remote.origin.receivepack', `touch "${marker}"; git-receive-pack`]);
 
-    await expect(port.pushBranchUpstream(branch, ownedOid)).rejects.toThrow(
-      /unsafe repository-local git configuration/i,
-    );
+    await expect(port.pushBranchUpstream(branch, ownedOid)).resolves.toBe(ownedOid);
+
+    expect(existsSync(marker)).toBe(false);
   });
 
   it('neutralizes command-capable inherited Git configuration', async () => {
