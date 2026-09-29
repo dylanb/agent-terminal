@@ -14,6 +14,7 @@ function fakeGh(start = 500) {
   const events: string[] = [];
   let next = start;
   const gh: AppEpicPromotionGitHub = {
+    ensureLabel: async () => {},
     createIssue: async () => {
       next += 1;
       events.push(`create#${next}`);
