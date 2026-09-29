@@ -1895,6 +1895,20 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     r.picker.dispose();
   });
 
+  it('the recovery list is named for recovery, and Escape in it returns focus to the recovery control (WCAG 4.1.2 / 2.4.3)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    await openRecovery(r.host);
+
+    expect(r.host.querySelector('[role="listbox"]')?.getAttribute('aria-label')).toMatch(/recover/i);
+    const row = options(r.host)[0]!;
+    row.focus();
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    expect(options(r.host)).toEqual([]);
+    expect(document.activeElement).toBe(recoverControl(r.host));
+    r.picker.dispose();
+  });
+
   it('shows unavailable entries with their reason and the tier notices, as select mode does (AC8, AC9)', async () => {
     const r = await heldRig(heldView('record-missing'));
     await openRecovery(r.host);

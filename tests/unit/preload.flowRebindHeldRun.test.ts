@@ -79,6 +79,7 @@ describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input
 
   it('rejects an unknown origin, an unsafe or missing catalog id, extra keys, and a bad envelope', () => {
     expect(isValid(msg({ origin: 'elsewhere' }))).toBe(false);
+    expect(isValid(msg({ origin: 'elsewhere', id: 'flow-a' }))).toBe(false);
     expect(isValid(msg({ origin: 'global' }))).toBe(false);
     expect(isValid(msg({ origin: 'global', id: '../escape' }))).toBe(false);
     expect(isValid(msg({ origin: 'repo', id: '' }))).toBe(false);

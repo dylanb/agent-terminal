@@ -51,7 +51,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     catalog.cleanup();
   });
 
-  function rig(opts: { lock?: (lockRoot: string) => WorktreeLock; wrapFlow?: (m: FlowManager) => Pick<FlowManager, 'terminate' | 'state' | 'revertStep'>; activeTurn?: boolean; worktreeName?: string } = {}) {
+  function rig(opts: { lock?: (lockRoot: string) => WorktreeLock; wrapFlow?: (m: FlowManager) => Pick<FlowManager, 'terminate' | 'state' | 'revertStep'>; activeTurn?: boolean; worktreeName?: string; forgetThrows?: boolean } = {}) {
     const home = fx.makeWorktree('a3-lc-home');
     fx.writeFlowHome(home, { name: 'global-fallback', stepIds: ['s1', 's2'] });
     catalog.addEntryWithSteps(flowCatalogDir(home), 'resume-flow', ['s1', 's2', 's3']);
@@ -77,7 +77,10 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       }),
       pendingNotices: notices,
       loopTurnActive: (k: string) => opts.activeTurn === true && k === wt,
-      forgetRunEntry: (k: string) => effects.forgotten.push(k),
+      forgetRunEntry: (k: string) => {
+        effects.forgotten.push(k);
+        if (opts.forgetThrows === true) throw new Error('the run registry is unwritable');
+      },
       recordTerminate: (k: string) => audit.recorder.recordTerminate(k),
       clearTodos: (k: string) => todos.clear(k),
       clearMonitor: () => effects.monitorCleared++,
@@ -139,6 +142,19 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(effects.monitorCleared).toBe(1);
       expect(effects.flowChanged).toBeGreaterThan(0);
       expect(effects.forgotten).toEqual([wt]);
+    });
+
+    it('a reset effect that throws aborts neither the reset nor the effects after it', () => {
+      const { wt, audit, todos, effects, lifecycle, begin } = rig({ forgetThrows: true });
+      begin();
+
+      const result = lifecycle.terminate(wt);
+
+      expect(result.outcome).toBe('reset');
+      expect(audit.eventTypes(wt)).toContain('flow.terminated');
+      expect(todos.list(wt)).toEqual([]);
+      expect(effects.monitorCleared).toBe(1);
+      expect(effects.flowChanged).toBeGreaterThan(0);
     });
 
     it('a never-started run is refused as not-begun, and none of the reset effects happen', () => {
@@ -456,6 +472,19 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(r.todos.list(r.wt)).toHaveLength(1);
       expect(r.audit.runFiles(r.wt)).toHaveLength(1);
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
+    });
+
+    it.each([
+      ['resumes', 'resume-flow', 'resumed'],
+      ['ends', 'other-flow', 'terminated'],
+    ] as const)('a rebind that %s the run still reports it and tells the strip when forgetting the old binding throws', (_label, id, outcome) => {
+      const r = rig({ forgetThrows: true });
+      heldRun(r);
+
+      const result = r.lifecycle.rebind(r.wt, { origin: 'global', id }, outcome === 'resumed' ? 'refuse' : endRun(r));
+
+      expect(result).toMatchObject({ ok: true, outcome });
+      expect(r.effects.flowChanged).toBeGreaterThan(0);
     });
 
     it('a no-match rebind ends the run: flow.terminated in the audit run, todos and the monitor cleared, the strip told, and the choice selected', () => {

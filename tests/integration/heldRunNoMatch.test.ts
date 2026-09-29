@@ -301,6 +301,20 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     expect(refused.ok ? '' : refused.reason, 'the refusal an unconfirmed choice gets is the same one, not a request to confirm').toMatch(reason);
   });
 
+  it("a choice whose flow cannot be loaded is listed unavailable with the load error display-safe and bounded (§18.7.6)", () => {
+    const hostile = `‮${'x'.repeat(500)}\u0007`;
+    const { wt, recovery } = rig({ deps: () => ({ loadBound: () => ({ ok: false, error: hostile }) }) });
+    fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
+    fx.removeRunRecord(wt);
+
+    const [listed] = recovery.outcomes(wt, [{ origin: 'global', id: 'prior-flow' }]);
+
+    expect(listed).toMatchObject({ outcome: 'unavailable', reason: expect.stringMatching(/could not be loaded/) });
+    const reason = listed?.outcome === 'unavailable' ? listed.reason : '';
+    expect(reason).not.toMatch(/[‮\u0000-\u001F]/);
+    expect(reason.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
+  });
+
   it('a confirmation to end the run held at one step never ends a run now held at another (§6)', () => {
     const { wt, recovery, files } = rig();
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });

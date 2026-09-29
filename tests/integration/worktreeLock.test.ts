@@ -360,6 +360,19 @@ describe('worktree lock (§18.7.4 AC11)', () => {
       expect([readFileSync(file), readFileSync(guard)]).toEqual(before);
     });
 
+    it('a dead reclaim guard over a dead holder is cleared, and the lock is acquired', () => {
+      const { lockRoot, wt } = setup();
+      plant(lockRoot, wt, DEAD);
+      const guard = plantGuard(lockRoot, wt, GUARD);
+      const liveness = livenessByHolder([[DEAD, 'dead'], [GUARD, 'dead']], 'live-matching');
+
+      const got = exhaust(lockRoot, wt, liveness, () => {});
+
+      expect(got).toMatchObject({ ok: true });
+      if (got.ok) got.release();
+      expect(existsSync(guard)).toBe(false);
+    });
+
     it('an unreadable reclaim guard over a dead holder is holder-unreadable, and the critical section does not run', () => {
       const { lockRoot, wt } = setup();
       const file = plant(lockRoot, wt, DEAD);
