@@ -807,3 +807,46 @@ test('a reset run whose run record was left behind: the picker names Start as th
   await expect(page.locator('#flow-strip .flow-notice')).toHaveCount(0);
   expect(readRunBinding(repo)).toEqual({ source: 'non-catalog' });
 });
+
+test('integration: a flow picked and started from the picker, then held by a lost run record, resumes through recovery, and after Terminate the picker is usable again with that pick highlighted', { tag: '@ownapp' }, async () => {
+  const harness = createFlowPickerHarness();
+  h = harness;
+  harness.seedGlobalEntry('journey-a', ['ja-first', 'ja-second']);
+  harness.seedGlobalEntry('journey-b', ['jb-first', 'jb-second']);
+  harness.seedGlobalFallback(['fallback-first']);
+  const repo = harness.repo('agent-term-e2e-a3-journey-');
+
+  const page = await harness.launch();
+  await harness.cdInto(repo);
+  await expect(harness.stepName(1)).toHaveText('fallback-first', { timeout: 10_000 });
+  await openPicker(page);
+  await pickerOption(page, 'journey-a').click();
+  await expect(harness.stepName(1)).toHaveText('ja-first', { timeout: 10_000 });
+  await flowControl(page).click();
+  await expect(flowControl(page)).toHaveText('Advance', { timeout: 10_000 });
+  await expect(pickerTrigger(page)).toBeDisabled({ timeout: 10_000 });
+
+  await harness.close();
+  createWorktreeFixture().removeRunRecord(repo);
+  const held = await harness.relaunch();
+  await harness.cdInto(repo);
+  await expect(flowError(held)).toBeVisible({ timeout: 10_000 });
+  await recoverOnto(held, 'journey-a');
+
+  await expect(flowError(held)).toHaveCount(0, { timeout: 10_000 });
+  await expect(harness.stepName(1)).toHaveText('ja-first');
+  await expect(flowStation(held, 1)).toHaveClass(/\bactive\b/);
+  await expect(flowControl(held)).toHaveText('Advance');
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'journey-a' });
+  expect(readRunBinding(repo)).toEqual({ source: 'catalog', tier: 'global', id: 'journey-a' });
+
+  await flowTerminate(held).click();
+  await expect(confirmModal(held)).toBeVisible();
+  await confirmModal(held).locator('.confirm').click();
+  await expect(flowControl(held)).toHaveText('Start', { timeout: 10_000 });
+  await openPicker(held);
+  await expect(pickerOption(held, 'journey-a')).toHaveAttribute('aria-selected', 'true');
+  await pickerOption(held, 'journey-b').click();
+  await expect(harness.stepName(1)).toHaveText('jb-first', { timeout: 10_000 });
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'journey-b' });
+});
