@@ -103,8 +103,7 @@ export function flowDefinitionFile(root: string): string {
   return path.join(root, FLOW_REL);
 }
 
-/** §19.1 — whether a persisted progression at `step` continues under `definition`: a step the definition no
- *  longer has starts fresh. Held-run recovery (§18.7.3) resumes onto a definition only where this holds. */
+/** §19.1 / §18.7.3 */
 export function resumesAt(definition: FlowDefinition, step: string): boolean {
   return definition.steps.some((s) => s.id === step);
 }

@@ -13,7 +13,7 @@ import { createHeldRunRecovery, type HeldRunRecoveryDeps } from '../../src/main/
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import { createFlowStateStore } from '../../src/main/flowState';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
 
 // A3 (#134) §18.7.3 / §18.7.4 AC12 / AC13 — recovering a held run onto a flow that lacks its current step ends the
@@ -178,13 +178,32 @@ describe('recovering a held run onto a flow lacking its step ends the run and se
     expect(ended?.repeatCounts).toBeUndefined();
   });
 
-  it('a hostile held step that the chosen flow lacks ends the run and selects the choice', () => {
+  it('a hostile held step that the chosen flow lacks ends the run on consent naming the step the flow view shows', () => {
     const { wt, recovery, manager } = rig();
     const hostile = `s‮​x${'y'.repeat(MAX_ECHOED_REASON_LENGTH * 2)}`;
     fx.writeFlowState(wt, { step: hostile, status: 'in_progress' });
     fx.removeRunRecord(wt);
+    const shown = manager().state(wt).runHold;
+    if (shown === undefined || shown.hold === 'not-held') throw new Error('the flow view does not show the run as held');
 
-    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, { endRunHeldAt: displaySafeEcho(hostile, MAX_ECHOED_REASON_LENGTH) })).toMatchObject({
+    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, { endRunHeldAt: shown.step })).toMatchObject({
+      ok: true,
+      outcome: 'terminated',
+    });
+
+    expectEnded(wt, manager);
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'no-s2-flow' });
+  });
+
+  it('a held step made only of joiners, which the flow view shows as empty, ends the run on consent naming that empty copy', () => {
+    const { wt, recovery, manager } = rig();
+    fx.writeFlowState(wt, { step: '‍‌', status: 'in_progress' });
+    fx.removeRunRecord(wt);
+    const shown = manager().state(wt).runHold;
+    if (shown === undefined || shown.hold === 'not-held') throw new Error('the flow view does not show the run as held');
+    expect(shown.step).toBe('');
+
+    expect(recovery.rebind(wt, { origin: 'global', id: 'no-s2-flow' }, { endRunHeldAt: shown.step })).toMatchObject({
       ok: true,
       outcome: 'terminated',
     });

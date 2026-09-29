@@ -16,10 +16,7 @@ import { resolveCatalogEntry } from './flowCatalog';
 import { progressionBegunness, worktreeStartedness } from './startedness';
 import { readRunBinding } from './runDisposition';
 
-/** The authoritative resolver: the pointer's catalog entry (repo tier, then global) when a pick is set — an
- *  unusable pick is the §18.1 error with a display-sanitized reason — else the local flow.yaml, else the global
- *  fallback. A BEGUN run resolves its recorded source binding, never the live pointer; a begun run whose binding
- *  cannot be read fails closed to the §18.1 error rather than a live re-resolution (§18.7.3/§18.7.4 AC9, CWE-841). */
+/** §18.7.3 / §18.7.4 AC9 (CWE-841) */
 export function createRunResolver(globalDir: string): (repoKey: string) => ResolvedRunDefinition {
   return (repoKey) =>
     createResolveRunDefinition({

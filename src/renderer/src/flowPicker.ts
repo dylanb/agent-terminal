@@ -261,6 +261,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       )
       .finally(() => {
         rebinding = false;
+        render();
       });
   }
 
@@ -407,7 +408,6 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.type = 'button';
     button.className = 'flow-picker-trigger pill';
     button.setAttribute('aria-haspopup', 'listbox');
-    button.setAttribute('aria-expanded', String(open));
     const describedBy = [...(describedByAlert ? [alert.id] : []), ...(locked ? [`${uid}-lock`] : []), ...noticeIds];
     if (describedBy.length > 0) button.setAttribute('aria-describedby', describedBy.join(' '));
     button.textContent = triggerLabel();
@@ -417,7 +417,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       if (!canPick()) return;
       open = !open;
       render();
-      if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0])?.focus();
+      if (open) (host.querySelector<HTMLElement>('[aria-selected="true"]') ?? allOptions()[0] ?? emptyNoteShown())?.focus();
     });
     return button;
   }
@@ -461,10 +461,13 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     return list;
   }
 
+  const emptyNoteShown = (): HTMLElement | null => host.querySelector<HTMLElement>('.flow-picker-empty');
+
   function emptyNote(): HTMLElement {
     const p = doc.createElement('p');
     p.id = `${uid}-empty`;
     p.className = 'flow-picker-empty';
+    p.tabIndex = -1;
     p.textContent = held === null ? EMPTY_CATALOG_TEXT : EMPTY_RECOVERY_TEXT;
     return p;
   }
@@ -474,15 +477,14 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     button.type = 'button';
     button.className = 'flow-picker-recover pill';
     button.setAttribute('aria-haspopup', 'listbox');
-    button.setAttribute('aria-expanded', String(open));
     button.setAttribute('aria-describedby', [`${uid}-held`, ...(describedByAlert ? [alert.id] : []), ...extraIds].join(' '));
     button.textContent = 'Recover the run onto a flow…';
-    if (catalog.kind !== 'listed') button.setAttribute('aria-disabled', 'true');
+    if (catalog.kind !== 'listed' || rebinding) button.setAttribute('aria-disabled', 'true');
     button.addEventListener('click', () => {
       if (!canRecover()) return;
       open = !open;
       render();
-      if (open) host.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])')?.focus();
+      if (open) (host.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])') ?? emptyNoteShown())?.focus();
     });
     return button;
   }
@@ -491,7 +493,7 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
     const p = doc.createElement('p');
     p.id = `${uid}-held`;
     p.className = 'flow-picker-held';
-    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow that has step ${run.step} resumes it (${STATUS_TEXT[run.status]}); choosing one without that step ends the run as Terminate does and selects that flow.`;
+    p.textContent = `${HOLD_TEXT[run.hold]} Choosing a flow that has step ${run.step} resumes it (${STATUS_TEXT[run.status]}); choosing one without that step ends the run as Terminate does: a catalog flow becomes the selection, while this worktree's flow.yaml or the global fallback clears the selection so the default runs.`;
     return p;
   }
 
@@ -532,10 +534,15 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
         host.insertBefore(heldSummary(held), alert);
         host.insertBefore(recoverBtn, alert);
       }
-      (recoverBtn ?? button).setAttribute('aria-expanded', String(rows !== null && rows.length > 0));
+      const expanded = rows !== null;
+      button.setAttribute('aria-expanded', String(held === null && expanded));
+      recoverBtn?.setAttribute('aria-expanded', String(expanded));
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (rows !== null) {
-        if (empty !== null) host.insertBefore(empty, alert);
+        if (empty !== null) {
+          (recoverBtn ?? button).setAttribute('aria-controls', empty.id);
+          host.insertBefore(empty, alert);
+        }
         if (rows.length > 0) {
           const list = listbox(rows, held === null ? 'Flows' : 'Flows to recover the run onto');
           (recoverBtn ?? button).setAttribute('aria-controls', list.id);

@@ -13,7 +13,7 @@ import { readDisposition } from './runDisposition';
 
 export type ProgressionRead = { kind: 'begun'; step: string; status: BegunStatus } | { kind: Exclude<ProgressionBegunness, 'begun'> };
 
-/** §18.7.4 — the durable progression alone, without the run-disposition marker. */
+/** §18.7.4 */
 export function readProgression(worktreeDir: string): ProgressionRead {
   const loaded = loadFlowStateDoc(worktreeDir);
   // Fail CLOSED on an unverifiable progression — unreadable, unparseable, or a path that escapes the jail — so a

@@ -13,12 +13,9 @@ import { createBoundSourceLoader } from './runResolver';
 import { heldRunOf } from './runHoldRead';
 import type { WorktreeLock, WorktreeLockScope } from './worktreeLock';
 
-/** The held step here is the raw persisted id: `resumesAt` matches it, and only a display copy is ever echoed. */
-export type HeldRead = HeldRunView;
-
 export interface HeldRunRecoveryDeps {
   lock: Pick<WorktreeLock, 'withWorktreeLock'>;
-  hold(worktree: string): HeldRead;
+  hold(worktree: string): HeldRunView;
   loadBound(worktree: string, binding: DispositionRead): FlowLoad;
   resumesAt(definition: FlowDefinition, step: string): boolean;
   rebindRecord(worktree: string, binding: DispositionRead): void;
@@ -33,7 +30,7 @@ export interface HeldRunRecovery {
   outcomes(worktree: string, choices: RebindChoice[]): RecoveryOutcomeOf[];
 }
 
-/** §18.7.3 — replace a missing or unreadable run record with `binding`. */
+/** §18.7.3 */
 export function rebindRunRecord(worktree: string, binding: DispositionRead): void {
   clearDisposition(worktree);
   recordDisposition(worktree, binding);

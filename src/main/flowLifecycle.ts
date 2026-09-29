@@ -4,7 +4,7 @@ import type { FlowStateView, RebindChoice, RebindResult, StepMissingConsent } fr
 import type { FlowManager } from './flow';
 import type { HeldRunRecovery } from './heldRunRecovery';
 import type { PendingNotices } from './pendingNotices';
-import type { WorktreeLock } from './worktreeLock';
+import type { LockedResult, WorktreeLock } from './worktreeLock';
 import { errMsg } from './errno';
 
 export type LifecycleTerminateResult =
@@ -40,6 +40,8 @@ export interface FlowLifecycle {
 
 const ACTIVE_TURN_REASON =
   'A loop turn is running for this worktree; let it finish, or Terminate the run, before recovering it onto a flow.';
+
+const ROLLBACK_FAILED_REMEDY = 'The step was not rolled back; Terminate the run to end it.';
 
 function bestEffort(effect: () => void): void {
   try {
@@ -86,8 +88,14 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
       return result;
     },
     rollbackStep(repoKey, stepId) {
-      const locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.revertStep(repoKey, stepId));
-      if (!locked.ok) throw new Error(locked.reason);
+      let locked: LockedResult<FlowStateView>;
+      try {
+        locked = deps.lock.withWorktreeLock(repoKey, () => deps.flow.revertStep(repoKey, stepId));
+      } catch (e) {
+        bestEffort(() => deps.flowChanged());
+        throw new Error(`${errMsg(e)} ${ROLLBACK_FAILED_REMEDY}`);
+      }
+      if (!locked.ok) throw new Error(`${locked.reason} ${ROLLBACK_FAILED_REMEDY}`);
       return locked.value;
     },
     rebind(repoKey, choice, ifStepMissing) {

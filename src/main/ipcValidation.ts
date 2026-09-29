@@ -246,7 +246,6 @@ function isValidStepMissingConsent(c: unknown): c is StepMissingConsent {
     isRecord(c) &&
     hasExactKeys(c, ['endRunHeldAt']) &&
     typeof c.endRunHeldAt === 'string' &&
-    c.endRunHeldAt.length > 0 &&
     c.endRunHeldAt.length <= MAX_ECHOED_REASON_LENGTH
   );
 }

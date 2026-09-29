@@ -11,6 +11,7 @@ import '../../src/preload/index';
 import { isValidFlowRebindHeldRun as isValid } from '../../src/main/ipcValidation';
 import { SESSION_ID, type FlowApi, type StepMissingConsent } from '../../src/shared/ipc';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
+import { shownHeldStep } from '../../src/shared/runHold';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 
 // A3 (#134) §6 — `flow:rebindHeldRun` carries `sessionId`, the `repoKey` of the held worktree, and the operator's
@@ -65,11 +66,15 @@ describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input
   it('rejects consent to end the run that does not name the held step it was given for (§6)', () => {
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: 'end-run' }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: {} }))).toBe(false);
-    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: '' } }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 42 } }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's'.repeat(MAX_ECHOED_REASON_LENGTH + 1) } }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's2', force: true } }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's'.repeat(MAX_ECHOED_REASON_LENGTH) } }))).toBe(true);
+  });
+
+  it('accepts consent naming a held step the flow view shows as empty, since that is the step it was given for (§6)', () => {
+    const joinersOnly = shownHeldStep('\u200d\u200c');
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: joinersOnly } }))).toBe(true);
   });
 
   it('rejects an unknown origin, an unsafe or missing catalog id, extra keys, and a bad envelope', () => {

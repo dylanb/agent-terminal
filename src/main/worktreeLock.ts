@@ -23,8 +23,8 @@ export type HolderLiveness = 'dead' | 'live-matching' | 'live-mismatch' | 'unrea
 
 export type LockRefusalCause = 'held' | 'holder-unreadable' | 'lock-unusable';
 
-/** §18.7.6 (CWE-116/400): every `reason` is display-safe and within MAX_ECHOED_LOCK_REASON_LENGTH, so a caller shows
- *  it as it is — re-bounding it at MAX_ECHOED_REASON_LENGTH cuts off the lockfile path the user must delete. */
+/** §18.7.6 (CWE-116/400) — re-bounding a `reason` at MAX_ECHOED_REASON_LENGTH cuts off the lockfile path the user
+ *  must delete. */
 export type LockAcquire = { ok: true; release: () => void } | { ok: false; cause: LockRefusalCause; reason: string };
 export type LockedResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -243,7 +243,6 @@ export function createWorktreeLock(deps: WorktreeLockDeps): WorktreeLock {
   };
 
   const acquire = (worktreeDir: string): LockAcquire => {
-    // A lock we cannot take is unusable only while no live or unidentifiable holder already has it.
     const heldBy = (lockFile: string): LockAcquire | null => {
       try {
         const text = readText(lockFile);

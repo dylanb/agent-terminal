@@ -106,6 +106,9 @@ describe('createActiveFlowGate — the AC7 started-ness write gate under the AC1
 
     expect(res.ok).toBe(false);
     expect(readActiveFlow(wt)).toEqual({ kind: 'unset' });
+    if (res.ok) return;
+    expect(res.reason, 'held-run recovery is not offered here, so the reason names the route out that is (§18.7.4)').toMatch(/Terminate/);
+    expect(res.reason).not.toMatch(/recover the run/i);
   });
 
   // Operator decision, #134 impl round 6: a first-step rollback deletes the run record, so the run is never-started.

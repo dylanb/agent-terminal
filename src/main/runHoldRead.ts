@@ -1,7 +1,6 @@
 // §18.7.3 / §18.7.4
 
-import { classifyRunHold, type RunRecordRead } from '../shared/runHold';
-import type { HeldRead } from './heldRunRecovery';
+import { classifyRunHold, type HeldRunView, type RunRecordRead } from '../shared/runHold';
 import { readDisposition, readRunBinding } from './runDisposition';
 import { readProgression } from './startedness';
 
@@ -12,7 +11,7 @@ function runRecordRead(worktree: string): RunRecordRead {
   return readRunBinding(worktree) === null ? 'unreadable' : 'intact';
 }
 
-export function heldRunOf(worktree: string): HeldRead {
+export function heldRunOf(worktree: string): HeldRunView {
   const progression = readProgression(worktree);
   const hold = classifyRunHold(progression.kind, runRecordRead(worktree));
   if (hold === 'not-held' || progression.kind !== 'begun') return { hold: 'not-held' };

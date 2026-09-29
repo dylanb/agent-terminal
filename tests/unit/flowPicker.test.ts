@@ -1253,6 +1253,35 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     app.remove();
   });
 
+  it('opening an empty catalog moves focus to the note saying so, and Escape there closes the picker, not the docked loop panel (WCAG 4.1.3 / 2.4.3)', async () => {
+    const app = document.body.appendChild(document.createElement('div'));
+    app.innerHTML =
+      '<aside class="rail"></aside><aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>' +
+      '<main class="main"></main>';
+    const shell = createShell(app);
+    shell.openLoopPanel();
+    const r = rig();
+    app.querySelector('.rail')!.append(r.host);
+    r.catalog.serve('/repo-a', listingOf([]));
+    const picker = createFlowPicker(r.host, r.deps);
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+
+    trigger(r.host).focus();
+    trigger(r.host).click();
+    await settle();
+
+    expect(active()?.textContent ?? '', 'the note is announced by taking focus').toMatch(/no catalog flows are listed/i);
+    key(active()!, 'Escape');
+
+    expect(r.host.textContent ?? '').not.toMatch(/no catalog flows are listed/i);
+    expect(active()).toBe(trigger(r.host));
+    expect(shell.isLoopPanelOpen()).toBe(true);
+    picker.dispose();
+    shell.dispose();
+    app.remove();
+  });
+
   it('a listing that only confirms the pick just made leaves the focused trigger in place', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
@@ -1307,8 +1336,9 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     await settle();
 
     expect(r.host.querySelector('[role="listbox"]')).toBeNull();
-    expect(trigger(r.host).hasAttribute('aria-controls')).toBe(false);
-    expect(trigger(r.host).getAttribute('aria-expanded'), 'no popup is rendered to be expanded').toBe('false');
+    expect(trigger(r.host).getAttribute('aria-expanded'), 'the open note is what activating the trigger would close').toBe('true');
+    const controlled = r.host.ownerDocument.getElementById(trigger(r.host).getAttribute('aria-controls') ?? '');
+    expect(controlled?.textContent ?? '').toMatch(/no catalog flows are listed/i);
     const describedBy = (trigger(r.host).getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
     const described = describedBy.map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
     expect(described).toMatch(/no catalog flows are listed/i);
@@ -1784,8 +1814,9 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await openRecovery(r.host);
 
     expect(r.host.querySelector('[role="listbox"]')).toBeNull();
-    expect(recoverControl(r.host)!.hasAttribute('aria-controls')).toBe(false);
-    expect(recoverControl(r.host)!.getAttribute('aria-expanded'), 'no popup is rendered to be expanded').toBe('false');
+    expect(recoverControl(r.host)!.getAttribute('aria-expanded'), 'the open note is what activating the control would close').toBe('true');
+    const controlled = r.host.ownerDocument.getElementById(recoverControl(r.host)!.getAttribute('aria-controls') ?? '');
+    expect(controlled?.textContent ?? '').toMatch(/Terminate/);
     expect(recoverDescription(r.host)).toMatch(/Terminate/);
     expect(useDefaultControl(r.host)).toBeUndefined();
     r.picker.dispose();
@@ -1799,6 +1830,9 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await openRecovery(r.host);
 
     expect(recoverDescription(r.host)).toMatch(/Terminate/);
+    const focused = document.activeElement;
+    expect(focused !== null && focused !== r.host && r.host.contains(focused), 'focus is inside the picker').toBe(true);
+    expect(focused?.textContent ?? '', 'the note is announced by taking focus (WCAG 4.1.3)').toMatch(/Terminate/);
     r.picker.dispose();
   });
 
@@ -1822,6 +1856,17 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     r.picker.dispose();
   });
 
+  it('with the recovery list open, only the recover control reports itself expanded, never the disabled flow trigger (WCAG 4.1.2)', async () => {
+    const r = await heldRig(heldView('record-missing', 'review-step', 'in_progress'));
+    await openRecovery(r.host);
+
+    expect(r.host.querySelector('[role="listbox"]')).not.toBeNull();
+    expect(recoverControl(r.host)!.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger(r.host).getAttribute('aria-expanded')).toBe('false');
+    expect(r.host.querySelectorAll('[aria-expanded="true"]')).toHaveLength(1);
+    r.picker.dispose();
+  });
+
   it('a held run says a flow without its step ends the run as a Terminate does, rather than promising every choice resumes (AC12)', async () => {
     const r = await heldRig(heldView('record-missing', 'review-step', 'in_progress'));
     await openRecovery(r.host);
@@ -1830,6 +1875,10 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     expect(shown).not.toMatch(/choosing a flow resumes/i);
     expect(shown).toMatch(/without (that|this) step[^.]*ends the run/i);
     expect(shown).toMatch(/terminate/i);
+    expect(shown, "this worktree's flow.yaml or the global fallback clears the selection rather than being selected").toMatch(
+      /flow\.yaml or the global fallback[^.]*clears the selection/i,
+    );
+    expect(shown).not.toMatch(/ends the run as Terminate does and selects that flow\./i);
     r.picker.dispose();
   });
 
@@ -2166,6 +2215,22 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
     await settle();
 
     expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('The run could not be recovered: disk full');
+    r.picker.dispose();
+  });
+
+  it('the recover control reports itself unavailable while a rebind is in flight, and available again once it is answered (WCAG 4.1.2)', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    const late = r.rebindHeldRun.respondLater();
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+
+    expect(recoverControl(r.host)!.getAttribute('aria-disabled')).toBe('true');
+
+    late.resolve({ ok: false, reason: 'The run could not be recovered: disk full' });
+    await settle();
+
+    expect(recoverControl(r.host)!.getAttribute('aria-disabled') ?? 'false').toBe('false');
     r.picker.dispose();
   });
 

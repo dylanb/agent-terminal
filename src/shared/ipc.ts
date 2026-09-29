@@ -779,7 +779,7 @@ export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | 
 /** §18.7.3 */
 export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
 
-/** §18.7.3 — whether choosing a flow resumes a held run or ends it. */
+/** §18.7.3 */
 export type RecoveryOutcome = 'resumes' | 'ends';
 
 export type RecoveryOutcomeOf =

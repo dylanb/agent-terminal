@@ -13,7 +13,8 @@ import {
   worktreeLockFile,
   type WorktreeLock,
 } from '../../src/main/worktreeLock';
-import { createHeldRunRecovery, type HeldRead, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import { createHeldRunRecovery, type HeldRunRecoveryDeps } from '../../src/main/heldRunRecovery';
+import type { HeldRunView } from '../../src/shared/runHold';
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { heldRunOf } from '../../src/main/runHoldRead';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
@@ -170,7 +171,7 @@ describe('flow:rebindHeldRun refuses a worktree that is not held and changes not
     fx.writeFlowState(wt, { step: 's2', status: 'in_progress' });
     const peer = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
     const peerTook: boolean[] = [];
-    const tryPeerLockDuring = (read: (worktree: string) => HeldRead) => (worktree: string): HeldRead => {
+    const tryPeerLockDuring = (read: (worktree: string) => HeldRunView) => (worktree: string): HeldRunView => {
       const attempt = peer.acquire(worktree);
       peerTook.push(attempt.ok);
       if (attempt.ok) attempt.release();

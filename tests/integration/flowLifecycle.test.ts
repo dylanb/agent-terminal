@@ -275,10 +275,46 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const record = readRunBinding(wt);
 
       expect(() => lifecycle.rollbackStep(wt, 's1')).toThrow(HELD_TEXT);
+      expect(() => lifecycle.rollbackStep(wt, 's1'), 'nothing retries the rollback, so the reason names the way out').toThrow(
+        /Terminate/,
+      );
 
       expect(progression()).toBe(before);
       expect(readRunBinding(wt)).toEqual(record);
       expect(manager.state(wt)).toMatchObject({ status: 'in_progress', runStarted: 'started' });
+    });
+
+    it('a rollback whose run record cannot be removed names Terminate as the way out, since nothing retries it', () => {
+      const r = rig({
+        wrapFlow: (m) => ({
+          ...m,
+          revertStep: () => {
+            throw new Error('the run record could not be removed: EACCES: permission denied');
+          },
+        }),
+      });
+      r.begin();
+
+      expect(() => r.lifecycle.rollbackStep(r.wt, 's1')).toThrow(/could not be removed[^]*Terminate/);
+    });
+
+    it('a rollback that fails after removing the run record tells the strip, which now has a held run to show', () => {
+      const r = rig({
+        wrapFlow: (m) => ({
+          ...m,
+          revertStep: (k: string) => {
+            rmSync(runDispositionFile(k), { force: true });
+            throw new Error('revert failed; the run record could not be restored: EACCES: permission denied');
+          },
+        }),
+      });
+      r.begin();
+      const before = r.effects.flowChanged;
+
+      expect(() => r.lifecycle.rollbackStep(r.wt, 's1')).toThrow(/could not be restored/);
+
+      expect(heldRunOf(r.wt)).toMatchObject({ hold: 'record-missing', step: 's1' });
+      expect(r.effects.flowChanged).toBe(before + 1);
     });
   });
 

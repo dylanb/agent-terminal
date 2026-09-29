@@ -47,7 +47,7 @@ export function selectIfUnlocked(_scope: WorktreeLockScope, worktreeDir: string,
       cause: 'run-begun',
       reason:
         startedness === 'indeterminate'
-          ? "This worktree's run state could not be verified, so a new flow selection is refused; recover the run before selecting a flow."
+          ? "This worktree's run state could not be verified, so a new flow selection is refused; Terminate the run before selecting a flow."
           : "This worktree's run has begun; a new flow selection is locked until you Terminate the run.",
     };
   }
