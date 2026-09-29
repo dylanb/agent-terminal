@@ -3,17 +3,18 @@
 import type {
   ActiveFlowWriteResult,
   CatalogOrigin,
-  MissingStepAction,
   RebindChoice,
   RebindResult,
   RecoveryOutcome,
+  RecoveryOutcomeOf,
+  StepMissingConsent,
   FlowCatalogListing,
   FlowCatalogListResult,
   FlowCatalogSelection,
 } from '../../shared/ipc';
 import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../shared/controlChars';
 import { isSelectionLocked } from '../../shared/flowStarted';
-import { offersHeldRunRecovery, recoveryChoices, sameRebindChoice, type HeldRunView } from '../../shared/runHold';
+import { offersHeldRunRecovery, type HeldRunView } from '../../shared/runHold';
 import { captureSubtreeFocus } from './dom';
 import type { FlowViewArgs } from './flowView';
 
@@ -23,7 +24,7 @@ export interface FlowPickerDeps {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   select(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   clearSelection(repoKey: string): Promise<ActiveFlowWriteResult>;
-  rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: MissingStepAction): Promise<RebindResult>;
+  rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
   /** Asks the operator to confirm ending `repoKey`'s run; `proceed` runs only on confirmation. */
   confirmEndRun(repoKey: string, proceed: () => void, restoreFocusTo: HTMLElement | null): void;
 }
@@ -77,9 +78,9 @@ const heldOf = (view: { runHold?: HeldRunView }): HeldRun | null => {
 const reasonOf = (e: unknown, prefix: string): string =>
   displaySafeEcho(`${prefix}: ${e instanceof Error ? e.message : String(e)}`, MAX_ECHOED_REASON_LENGTH);
 
-const partitionLocal = (choices: RebindChoice[]): [RebindChoice[], RebindChoice[]] => [
-  choices.filter((c) => c.origin === 'local'),
-  choices.filter((c) => c.origin !== 'local'),
+const partitionLocal = (options: RecoveryOutcomeOf[]): [RecoveryOutcomeOf[], RecoveryOutcomeOf[]] => [
+  options.filter((o) => o.choice.origin === 'local'),
+  options.filter((o) => o.choice.origin !== 'local'),
 ];
 
 let instances = 0;
@@ -219,18 +220,19 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   const pick = (id: string): void => write({ kind: 'value', id }, (key) => deps.select(key, id));
   const useDefault = (): void => write(UNSET, (key) => deps.clearSelection(key));
 
-  function recover(choice: RebindChoice, outcome: RecoveryOutcome | undefined): void {
+  function recover(choice: RebindChoice, outcome: RecoveryOutcome): void {
     const key = repoKey;
-    if (key === null || !canRecover()) return;
-    if (outcome !== 'ends') {
+    if (key === null || held === null || !canRecover()) return;
+    if (outcome === 'resumes') {
       rebind(key, choice, 'refuse');
       return;
     }
+    const consent = { endRunHeldAt: held.step };
     collapse();
-    deps.confirmEndRun(key, () => rebind(key, choice, 'end-run'), recoverButton());
+    deps.confirmEndRun(key, () => rebind(key, choice, consent), recoverButton());
   }
 
-  function rebind(key: string, choice: RebindChoice, ifStepMissing: MissingStepAction): void {
+  function rebind(key: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): void {
     if (repoKey !== key || !canRecover()) return;
     const token = ++pickGeneration;
     rebinding = true;
@@ -377,17 +379,19 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
   }
 
   function recoveryRows(listing: FlowCatalogListing): Row[] {
-    const row = (to: RebindChoice): Row => {
-      const outcome = listing.recoveryOutcomes.find((o) => sameRebindChoice(o.choice, to))?.outcome;
+    const row = (option: RecoveryOutcomeOf): Row => {
+      const to = option.choice;
       const shown =
         to.origin === 'local'
           ? { key: 'local:', name: 'flow.yaml', origin: 'local (this worktree)' }
           : to.origin === 'fallback'
             ? { key: 'fallback:', name: 'Global fallback flow', origin: 'fallback' }
             : { key: `${to.origin}:${to.id}`, name: to.id, origin: to.origin };
+      if (option.outcome === 'unavailable') return { kind: 'unavailable', ...shown, reason: option.reason };
+      const { outcome } = option;
       return { kind: 'choice', ...shown, outcome, selected: false, choose: () => recover(to, outcome) };
     };
-    const [local, rest] = partitionLocal(recoveryChoices(listing));
+    const [local, rest] = partitionLocal(listing.recoveryOutcomes);
     return [...local.map(row), ...listing.entries.filter(isUnavailable).map(unavailableRow), ...rest.map(row)];
   }
 
@@ -522,18 +526,19 @@ export function createFlowPicker(host: HTMLElement, deps: FlowPickerDeps): FlowP
       const button = triggerButton(shown !== '' && held === null, held === null ? noticeIds : []);
       host.insertBefore(button, alert);
       if (locked) host.insertBefore(lockReason(), alert);
-      let recover: HTMLButtonElement | null = null;
+      let recoverBtn: HTMLButtonElement | null = null;
       if (held !== null) {
-        recover = recoverControl(shown !== '', noticeIds);
+        recoverBtn = recoverControl(shown !== '', noticeIds);
         host.insertBefore(heldSummary(held), alert);
-        host.insertBefore(recover, alert);
+        host.insertBefore(recoverBtn, alert);
       }
+      (recoverBtn ?? button).setAttribute('aria-expanded', String(rows !== null && rows.length > 0));
       if (catalog.kind === 'failed') host.insertBefore(retryButton(), alert);
       if (rows !== null) {
         if (empty !== null) host.insertBefore(empty, alert);
         if (rows.length > 0) {
           const list = listbox(rows, held === null ? 'Flows' : 'Flows to recover the run onto');
-          (recover ?? button).setAttribute('aria-controls', list.id);
+          (recoverBtn ?? button).setAttribute('aria-controls', list.id);
           if (notices.length > 0) list.setAttribute('aria-describedby', notices.map((n) => n.id).join(' '));
           host.insertBefore(list, alert);
         }

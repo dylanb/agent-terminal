@@ -16,7 +16,6 @@ export interface ActiveFlowGate {
   clear(worktreeDir: string): ActiveFlowWriteResult;
 }
 
-/** The two writes a selection makes: name a catalog id, or clear back to the unset default. */
 export type PointerWrite = { kind: 'set'; id: string } | { kind: 'unset' };
 
 export type SelectResult =

@@ -6,6 +6,7 @@ import { githubHttpsHref } from '../shared/githubUrl';
 import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
+import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -32,8 +33,8 @@ import {
   type FlowListCatalogMsg,
   type FlowRebindHeldRunMsg,
   type RebindChoice,
+  type StepMissingConsent,
   CATALOG_ORIGINS,
-  MISSING_STEP_ACTIONS,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -235,7 +236,18 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
     isLiveSession(m) &&
     isSafeRepoKey(m.repoKey) &&
     isValidRebindChoice(m.choice) &&
-    (MISSING_STEP_ACTIONS as readonly unknown[]).includes(m.ifStepMissing)
+    isValidStepMissingConsent(m.ifStepMissing)
+  );
+}
+
+function isValidStepMissingConsent(c: unknown): c is StepMissingConsent {
+  if (c === 'refuse') return true;
+  return (
+    isRecord(c) &&
+    hasExactKeys(c, ['endRunHeldAt']) &&
+    typeof c.endRunHeldAt === 'string' &&
+    c.endRunHeldAt.length > 0 &&
+    c.endRunHeldAt.length <= MAX_ECHOED_REASON_LENGTH
   );
 }
 

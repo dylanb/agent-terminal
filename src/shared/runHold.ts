@@ -1,6 +1,7 @@
 // §18.7.3 / §18.7.4
 
-import type { FlowCatalogListing, FlowStatus, RebindChoice } from './ipc';
+import type { FlowStatus } from './ipc';
+import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from './controlChars';
 
 export type ProgressionBegunness = 'begun' | 'not-begun' | 'indeterminate';
 export type RunRecordRead = 'intact' | 'missing' | 'unreadable';
@@ -27,15 +28,8 @@ export function offersHeldRunRecovery(v: HeldRunView): v is Exclude<HeldRunView,
   return v.hold !== 'not-held';
 }
 
-/** The flows a held run's recovery picker offers, in the order it lists them. */
-export function recoveryChoices(listing: Pick<FlowCatalogListing, 'hasLocalFlow' | 'resumable' | 'hasGlobalFallback'>): RebindChoice[] {
-  return [
-    ...(listing.hasLocalFlow ? [{ origin: 'local' } as const] : []),
-    ...listing.resumable.map(({ origin, id }) => ({ origin, id })),
-    ...(listing.hasGlobalFallback ? [{ origin: 'fallback' } as const] : []),
-  ];
-}
-
-export function sameRebindChoice(a: RebindChoice, b: RebindChoice): boolean {
-  return a.origin === b.origin && ('id' in a ? a.id : undefined) === ('id' in b ? b.id : undefined);
+/** §18.7.6 — the held step is repo-controlled text: this is the copy the flow view shows, and the one an operator's
+ *  consent to end the run names (§6). */
+export function shownHeldStep(step: string): string {
+  return displaySafeEcho(step, MAX_ECHOED_REASON_LENGTH);
 }

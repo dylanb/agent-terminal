@@ -36,6 +36,12 @@ function world(): { home: string; repo(prefix: string): string } {
 const availableIds = (l: FlowCatalogListing): string[] =>
   l.entries.flatMap((e) => (e.available ? [`${e.origin}:${e.id}`] : [])).sort();
 
+/** The recovery choices a held run's listing offers, in order, as `origin[:id]`. */
+const offeredToRecovery = (roots: { worktreeDir: string; globalRoot: string }): string[] =>
+  listCatalog(roots, (choices) => choices.map((choice) => ({ choice, outcome: 'resumes' as const }))).recoveryOutcomes.map(({ choice }) =>
+    'id' in choice ? `${choice.origin}:${choice.id}` : choice.origin,
+  );
+
 describe('listCatalog — per named worktree (AC2)', () => {
   it("lists each worktree's own repo-tier entries plus the shared global entries, and never another repo's", () => {
     const w = world();
@@ -72,9 +78,9 @@ describe('listCatalog — per named worktree (AC2)', () => {
 
     const listing = listCatalog({ worktreeDir: repo, globalRoot: w.home });
     expect(availableIds(listing)).toEqual(['global:same']);
-    const resumable = listing.resumable.map((r) => `${r.origin}:${r.id}`);
-    expect(resumable).toContain('global:same');
-    expect(resumable).not.toContain('repo:same');
+    const offered = offeredToRecovery({ worktreeDir: repo, globalRoot: w.home });
+    expect(offered).toContain('global:same');
+    expect(offered).not.toContain('repo:same');
   });
 
   it('offers both tiers of a clashing name to recovery, each resolved within its own tier', () => {
@@ -84,8 +90,7 @@ describe('listCatalog — per named worktree (AC2)', () => {
     catalog.addEntryWithSteps(flowCatalogDir(repo), 'clash', ['r1']);
     catalog.addEntryWithSteps(flowCatalogDir(w.home), 'solo', ['s1']);
 
-    const resumable = listCatalog({ worktreeDir: repo, globalRoot: w.home }).resumable.map((r) => `${r.origin}:${r.id}`).sort();
-    expect(resumable).toEqual(['global:clash', 'global:solo', 'repo:clash']);
+    expect(offeredToRecovery({ worktreeDir: repo, globalRoot: w.home }).sort()).toEqual(['global:clash', 'global:solo', 'repo:clash']);
   });
 
   it('every row it offers resolves through the pointer\'s availability check to the same tier', () => {
@@ -102,8 +107,9 @@ describe('listCatalog — per named worktree (AC2)', () => {
     for (const e of listing.entries) {
       if (e.available) expect(resolveCatalogEntry(roots, e.id), e.id).toMatchObject({ ok: true, tier: e.origin });
     }
-    for (const r of listing.resumable) {
-      expect(resolveCatalogEntry(roots, r.id, r.origin), `${r.origin}:${r.id}`).toMatchObject({ ok: true, tier: r.origin });
+    for (const offered of offeredToRecovery(roots)) {
+      const [origin, id] = offered.split(':') as ['repo' | 'global', string];
+      expect(resolveCatalogEntry(roots, id, origin), offered).toMatchObject({ ok: true, tier: origin });
     }
   });
 
@@ -189,27 +195,28 @@ describe('listCatalog — listing flags', () => {
     expect(listCatalog({ worktreeDir: repo, globalRoot: w.home }).selection).toEqual({ kind: 'invalid' });
   });
 
-  it("reports hasLocalFlow and hasGlobalFallback from the worktree's flow.yaml and the global fallback file", () => {
+  it("offers recovery the worktree's flow.yaml first and the global fallback last, each only when its file exists", () => {
     const w = world();
     const repo = w.repo('a3-list-flags');
     const roots = { worktreeDir: repo, globalRoot: w.home };
+    catalog.addEntryWithSteps(flowCatalogDir(w.home), 'g-one', ['g1']);
 
-    expect(listCatalog(roots)).toMatchObject({ hasLocalFlow: false, hasGlobalFallback: false });
+    expect(offeredToRecovery(roots)).toEqual(['global:g-one']);
     wt.writeFlowHome(repo, { name: 'local', stepIds: ['l1'] });
     wt.writeFlowHome(w.home, { name: 'fallback', stepIds: ['fb1'] });
-    expect(listCatalog(roots)).toMatchObject({ hasLocalFlow: true, hasGlobalFallback: true });
+    expect(offeredToRecovery(roots)).toEqual(['local', 'global:g-one', 'fallback']);
   });
 
-  it('reports hasLocalFlow and hasGlobalFallback independently of each other', () => {
+  it('offers the local flow.yaml and the global fallback independently of each other', () => {
     const w = world();
     const localOnly = w.repo('a3-list-flags-local');
     wt.writeFlowHome(localOnly, { name: 'local', stepIds: ['l1'] });
-    expect(listCatalog({ worktreeDir: localOnly, globalRoot: w.home })).toMatchObject({ hasLocalFlow: true, hasGlobalFallback: false });
+    expect(offeredToRecovery({ worktreeDir: localOnly, globalRoot: w.home })).toEqual(['local']);
 
     const w2 = world();
     const fallbackOnly = w2.repo('a3-list-flags-fallback');
     wt.writeFlowHome(w2.home, { name: 'fallback', stepIds: ['fb1'] });
-    expect(listCatalog({ worktreeDir: fallbackOnly, globalRoot: w2.home })).toMatchObject({ hasLocalFlow: false, hasGlobalFallback: true });
+    expect(offeredToRecovery({ worktreeDir: fallbackOnly, globalRoot: w2.home })).toEqual(['fallback']);
   });
 });
 
@@ -225,13 +232,13 @@ describe('listCatalog — an entry that exists but cannot be selected (§18.7.6)
     expect(listing.entries).toEqual([
       { available: false, label: 'dual', origin: 'repo', reason: catalogRefusalReason('escapes') },
     ]);
-    expect(listing.resumable).toEqual([{ origin: 'global', id: 'dual' }]);
+    expect(offeredToRecovery({ worktreeDir: repo, globalRoot: w.home })).toEqual(['global:dual']);
   });
 });
 
 describe('catalogListResult — the flow:listCatalog answer (§18.7.6)', () => {
   it('wraps a listing as ok', () => {
-    const listing: FlowCatalogListing = { entries: [], tierNotices: [], selection: { kind: 'unset' }, hasLocalFlow: false, hasGlobalFallback: false, resumable: [], recoveryOutcomes: [] };
+    const listing: FlowCatalogListing = { entries: [], tierNotices: [], selection: { kind: 'unset' }, recoveryOutcomes: [] };
     expect(catalogListResult(() => listing)).toEqual({ ok: true, listing });
   });
 
@@ -338,7 +345,7 @@ describe('listCatalog — tier notices, unreadable vs empty vs absent (AC9)', ()
     const listing = listed({ worktreeDir: repo, globalRoot: w.home });
     expect(listing.tierNotices).toEqual([]);
     expect(availableIds(listing)).toEqual(['repo:r-one']);
-    expect(listing.hasGlobalFallback).toBe(false);
+    expect(offeredToRecovery({ worktreeDir: repo, globalRoot: w.home })).not.toContain('fallback');
   });
 
   it("a tier notice over a path planted with bidi and zero-width characters is display-sanitized and bounded", () => {
@@ -449,7 +456,7 @@ describe('listCatalog — unsafe names and tier confinement (§18.7.6, CWE-22/59
       plant(repo, outside, scratch);
       const listing = listed({ worktreeDir: repo, globalRoot: w.home });
       expect(listing.entries.map(nameOf)).not.toContain('sentinel-outside-name');
-      expect(listing.resumable.map((r) => r.id)).not.toContain('sentinel-outside-name');
+      expect(offeredToRecovery({ worktreeDir: repo, globalRoot: w.home }).join(' ')).not.toContain('sentinel-outside-name');
       expect(listing.tierNotices.map((n) => n.origin)).toContain('repo');
     } finally {
       rmSync(outside, { recursive: true, force: true });

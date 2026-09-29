@@ -9,7 +9,8 @@ vi.mock('electron', () => ({
 import { contextBridge, ipcRenderer } from 'electron';
 import '../../src/preload/index';
 import { isValidFlowRebindHeldRun as isValid } from '../../src/main/ipcValidation';
-import { SESSION_ID, type FlowApi } from '../../src/shared/ipc';
+import { SESSION_ID, type FlowApi, type StepMissingConsent } from '../../src/shared/ipc';
+import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 
 // A3 (#134) §6 — `flow:rebindHeldRun` carries `sessionId`, the `repoKey` of the held worktree, and the operator's
@@ -27,7 +28,7 @@ function exposedFlow(): FlowApi {
 beforeEach(() => invoke.mockClear());
 
 describe('window.flow.rebindHeldRun (§6)', () => {
-  it.each(['refuse', 'end-run'] as const)('invokes flow:rebindHeldRun with the session id, the named worktree, the choice and whether to end the run (%s), and resolves the result', async (ifStepMissing) => {
+  it.each<StepMissingConsent>(['refuse', { endRunHeldAt: 's2' }])('invokes flow:rebindHeldRun with the session id, the named worktree, the choice and whether to end the run (%o), and resolves the result', async (ifStepMissing) => {
     const flow = exposedFlow();
     invoke.mockResolvedValueOnce({ ok: true, outcome: 'resumed' });
 
@@ -51,7 +52,7 @@ describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input
     expect(isValid(msg({ origin: 'fallback' }))).toBe(true);
     expect(isValid(msg({ origin: 'repo', id: 'flow-a' }))).toBe(true);
     expect(isValid(msg({ origin: 'global', id: 'flow-a' }))).toBe(true);
-    expect(isValid(msg({ origin: 'global', id: 'flow-a' }, { ifStepMissing: 'end-run' }))).toBe(true);
+    expect(isValid(msg({ origin: 'global', id: 'flow-a' }, { ifStepMissing: { endRunHeldAt: 's2' } }))).toBe(true);
   });
 
   it('rejects a request that does not say, as one of the two known actions, whether a missing step may end the run (AC20)', () => {
@@ -59,6 +60,16 @@ describe('flow:rebindHeldRun payload validation (§6 — renderer-supplied input
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: 'end' }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: true }))).toBe(false);
     expect(isValid(msg({ origin: 'local' }, { ifStepMissing: undefined }))).toBe(false);
+  });
+
+  it('rejects consent to end the run that does not name the held step it was given for (§6)', () => {
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: 'end-run' }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: {} }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: '' } }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 42 } }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's'.repeat(MAX_ECHOED_REASON_LENGTH + 1) } }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's2', force: true } }))).toBe(false);
+    expect(isValid(msg({ origin: 'local' }, { ifStepMissing: { endRunHeldAt: 's'.repeat(MAX_ECHOED_REASON_LENGTH) } }))).toBe(true);
   });
 
   it('rejects an unknown origin, an unsafe or missing catalog id, extra keys, and a bad envelope', () => {

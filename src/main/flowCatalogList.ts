@@ -16,7 +16,6 @@ import {
   type RebindChoice,
   type RecoveryOutcomeOf,
 } from '../shared/ipc';
-import { recoveryChoices } from '../shared/runHold';
 
 export const MAX_CATALOG_LIST_MEMBERS = 256;
 
@@ -108,20 +107,18 @@ export function listCatalog(
     entries.push({ available: false, label: unsafeNameLabel(name), origin: tier, reason: UNSAFE_NAME_REASON });
   }
 
-  const resumable = members.filter((m) => m.resolvesInTier).map(({ tier, id }) => ({ origin: tier, id }));
+  const choices: RebindChoice[] = [
+    ...(hasFlowDefinition(roots.worktreeDir) ? [{ origin: 'local' } as const] : []),
+    ...members.filter((m) => m.resolvesInTier).map(({ tier, id }) => ({ origin: tier, id })),
+    ...(hasFlowDefinition(roots.globalRoot) ? [{ origin: 'fallback' } as const] : []),
+  ];
 
   const pointer = readActiveFlow(roots.worktreeDir);
-  const offered = {
-    hasLocalFlow: hasFlowDefinition(roots.worktreeDir),
-    hasGlobalFallback: hasFlowDefinition(roots.globalRoot),
-    resumable,
-  };
   return {
     entries,
     tierNotices: scans.flatMap((s) => s.notices),
     selection: pointer.kind === 'value' ? { kind: 'value', id: pointer.id } : { kind: pointer.kind },
-    ...offered,
-    recoveryOutcomes: recoveryOutcomes(recoveryChoices(offered)),
+    recoveryOutcomes: recoveryOutcomes(choices),
   };
 }
 

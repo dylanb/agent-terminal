@@ -20,7 +20,7 @@ import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
-import { offersHeldRunRecovery, type HeldRunView } from '../shared/runHold';
+import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
@@ -701,9 +701,8 @@ export interface FlowManagerDeps {
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
 }
 
-/** §18.7.6 — the held step is repo-controlled text, so the view carries only its display-safe copy. */
 function displaySafeHold(hold: HeldRunView): HeldRunView {
-  return offersHeldRunRecovery(hold) ? { ...hold, step: displaySafeEcho(hold.step, MAX_ECHOED_REASON_LENGTH) } : hold;
+  return offersHeldRunRecovery(hold) ? { ...hold, step: shownHeldStep(hold.step) } : hold;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {

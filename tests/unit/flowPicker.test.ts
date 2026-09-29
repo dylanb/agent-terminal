@@ -14,10 +14,10 @@ import type {
   FlowCatalogListResult,
   FlowCatalogSelection,
   FlowStateView,
-  MissingStepAction,
   RebindChoice,
   RebindResult,
   RecoveryOutcomeOf,
+  StepMissingConsent,
 } from '../../src/shared/ipc';
 import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 
@@ -38,9 +38,6 @@ const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): Flo
   listing: {
     entries: ids.map((id) => ({ available: true as const, id, origin: 'global' as const })),
     tierNotices: [],
-    hasLocalFlow: false,
-    hasGlobalFallback: false,
-    resumable: ids.map((id) => ({ origin: 'global' as const, id })),
     recoveryOutcomes: [],
     selection:
       selected === undefined ? { kind: 'unset' } : typeof selected === 'string' ? { kind: 'value', id: selected } : selected,
@@ -49,7 +46,7 @@ const listingOf = (ids: string[], selected?: string | FlowCatalogSelection): Flo
 
 const emptyListing = (over: Partial<FlowCatalogListing> = {}): FlowCatalogListResult => ({
   ok: true,
-  listing: { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [], recoveryOutcomes: [], selection: { kind: 'unset' }, ...over },
+  listing: { entries: [], tierNotices: [], recoveryOutcomes: [], selection: { kind: 'unset' }, ...over },
 });
 
 /** The catalog as main serves it: each worktree answers with its own listing, however often it is pulled, and a
@@ -91,7 +88,7 @@ function rig(views = createFeed<FlowViewArgs>()) {
   const catalog = createCatalog();
   const select = createScriptedAsync<[string, string], ActiveFlowWriteResult>();
   const clearSelection = createScriptedAsync<[string], ActiveFlowWriteResult>();
-  const rebindHeldRun = createScriptedAsync<[string, RebindChoice, MissingStepAction], RebindResult>();
+  const rebindHeldRun = createScriptedAsync<[string, RebindChoice, StepMissingConsent], RebindResult>();
   const endRunConfirmations: { repoKey: string; proceed: () => void; restoreFocusTo: HTMLElement | null | undefined }[] = [];
   const deps: FlowPickerDeps = {
     onView: (cb) => views.subscribe(cb),
@@ -201,9 +198,6 @@ describe('flow picker — select mode (AC1)', () => {
         ],
         tierNotices: [],
         selection: { kind: 'unset' },
-        hasLocalFlow: false,
-        hasGlobalFallback: false,
-        resumable: [{ origin: 'repo', id: 'flow-a' }],
         recoveryOutcomes: [],
       },
     });
@@ -1314,6 +1308,7 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
 
     expect(r.host.querySelector('[role="listbox"]')).toBeNull();
     expect(trigger(r.host).hasAttribute('aria-controls')).toBe(false);
+    expect(trigger(r.host).getAttribute('aria-expanded'), 'no popup is rendered to be expanded').toBe('false');
     const describedBy = (trigger(r.host).getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
     const described = describedBy.map((id) => r.host.ownerDocument.getElementById(id)?.textContent ?? '').join(' ');
     expect(described).toMatch(/no catalog flows are listed/i);
@@ -1743,14 +1738,15 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       ],
       tierNotices: [{ origin: 'global', notice: 'could not be read' }],
       selection: { kind: 'value', id: 'beta-flow' },
-      hasLocalFlow: over.hasLocalFlow ?? true,
-      hasGlobalFallback: over.hasGlobalFallback ?? true,
-      resumable: [
-        { origin: 'repo', id: 'alpha-flow' },
-        { origin: 'global', id: 'beta-flow' },
-        { origin: 'global', id: 'shadowed-flow' },
-      ],
-      recoveryOutcomes: over.recoveryOutcomes ?? [],
+      recoveryOutcomes:
+        over.recoveryOutcomes ??
+        [
+          ...(over.hasLocalFlow === false ? [] : [{ origin: 'local' } as const]),
+          { origin: 'repo', id: 'alpha-flow' } as const,
+          { origin: 'global', id: 'beta-flow' } as const,
+          { origin: 'global', id: 'shadowed-flow' } as const,
+          ...(over.hasGlobalFallback === false ? [] : [{ origin: 'fallback' } as const]),
+        ].map((choice): RecoveryOutcomeOf => ({ choice, outcome: 'resumes' })),
     },
   });
 
@@ -1789,6 +1785,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
 
     expect(r.host.querySelector('[role="listbox"]')).toBeNull();
     expect(recoverControl(r.host)!.hasAttribute('aria-controls')).toBe(false);
+    expect(recoverControl(r.host)!.getAttribute('aria-expanded'), 'no popup is rendered to be expanded').toBe('false');
     expect(recoverDescription(r.host)).toMatch(/Terminate/);
     expect(useDefaultControl(r.host)).toBeUndefined();
     r.picker.dispose();
@@ -2195,6 +2192,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       { choice: { origin: 'local' }, outcome: 'ends' },
       { choice: { origin: 'repo', id: 'alpha-flow' }, outcome: 'resumes' },
       { choice: { origin: 'global', id: 'beta-flow' }, outcome: 'ends' },
+      { choice: { origin: 'global', id: 'shadowed-flow' }, outcome: 'unavailable', reason: 'A different flow named "shadowed-flow" would be selected instead' },
       { choice: { origin: 'fallback' }, outcome: 'resumes' },
     ];
     const labelled = () => heldRig(heldView('record-missing'), recoveryListing({ recoveryOutcomes: OUTCOMES }));
@@ -2209,7 +2207,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       return found!;
     };
 
-    it('each row says, in its accessible name, whether choosing it resumes the run or ends it; a row main named no outcome for says neither', async () => {
+    it('each row says, in its accessible name, whether choosing it resumes the run or ends it; a row main cannot recover onto says neither and shows why', async () => {
       const r = await labelled();
       await openRecovery(r.host);
 
@@ -2217,7 +2215,10 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       expect(accessibleName(row(r.host, 'alpha-flow'))).toMatch(/resumes the run/i);
       expect(accessibleName(row(r.host, 'beta-flow'))).toMatch(/ends the run/i);
       expect(accessibleName(row(r.host, /fallback/i))).toMatch(/resumes the run/i);
-      expect(row(r.host, 'shadowed-flow').textContent ?? '').not.toMatch(/resumes the run|ends the run/i);
+      const shadowed = row(r.host, 'shadowed-flow');
+      expect(shadowed.textContent ?? '').not.toMatch(/resumes the run|ends the run/i);
+      expect(shadowed.getAttribute('aria-disabled')).toBe('true');
+      expect(shadowed.textContent ?? '').toContain('would be selected instead');
       r.picker.dispose();
     });
 
@@ -2234,7 +2235,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       r.picker.dispose();
     });
 
-    it('confirming sends the rebind with consent to end the run', async () => {
+    it('confirming sends the rebind with consent to end the run held at the step it was shown at (§6)', async () => {
       const r = await labelled();
       r.rebindHeldRun.respond({ ok: true, outcome: 'terminated' });
       await openRecovery(r.host);
@@ -2244,7 +2245,7 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       r.endRunConfirmations[0]!.proceed();
       await settle();
 
-      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }, 'end-run']]);
+      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'global', id: 'beta-flow' }, { endRunHeldAt: 's2' }]]);
       r.picker.dispose();
     });
 
@@ -2275,19 +2276,28 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
       r.picker.dispose();
     });
 
-    it.each<[string, RegExp | string, RebindChoice]>([
-      ['a row that resumes the run', 'alpha-flow', { origin: 'repo', id: 'alpha-flow' }],
-      ['a row main named no outcome for', 'shadowed-flow', { origin: 'global', id: 'shadowed-flow' }],
-    ])('choosing %s asks nothing and sends the rebind without consent to end the run', async (_label, match, choice) => {
+    it('choosing a row that resumes the run asks nothing and sends the rebind without consent to end the run', async () => {
       const r = await labelled();
       r.rebindHeldRun.respond({ ok: true, outcome: 'resumed' });
       await openRecovery(r.host);
 
-      row(r.host, match).click();
+      row(r.host, 'alpha-flow').click();
       await settle();
 
       expect(r.endRunConfirmations).toEqual([]);
-      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', choice, 'refuse']]);
+      expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }, 'refuse']]);
+      r.picker.dispose();
+    });
+
+    it('choosing a row main cannot recover onto asks nothing and sends nothing', async () => {
+      const r = await labelled();
+      await openRecovery(r.host);
+
+      row(r.host, 'shadowed-flow').click();
+      await settle();
+
+      expect(r.endRunConfirmations).toEqual([]);
+      expect(r.rebindHeldRun.calls()).toEqual([]);
       r.picker.dispose();
     });
 

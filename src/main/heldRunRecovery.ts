@@ -1,7 +1,7 @@
 // §18.7.3 / §18.7.4
 
-import type { MissingStepAction, RebindChoice, RebindResult, RecoveryOutcomeOf } from '../shared/ipc';
-import { offersHeldRunRecovery, type HeldRunView } from '../shared/runHold';
+import type { RebindChoice, RebindResult, RecoveryOutcomeOf, StepMissingConsent } from '../shared/ipc';
+import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { errMsg } from './errno';
 import { hasFlowDefinition, resumesAt, type FlowDefinition, type FlowLoad, type TerminateResult } from './flow';
@@ -29,7 +29,7 @@ export interface HeldRunRecoveryDeps {
 }
 
 export interface HeldRunRecovery {
-  rebind(worktree: string, choice: RebindChoice, ifStepMissing: MissingStepAction): RebindResult;
+  rebind(worktree: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): RebindResult;
   outcomes(worktree: string, choices: RebindChoice[]): RecoveryOutcomeOf[];
 }
 
@@ -69,6 +69,9 @@ const terminatedWith = (notice: string): RebindResult => ({
 const unconfirmedEndReason = (step: string): string =>
   `Choosing this flow ends the run, so it needs your confirmation first: the flow has no step "${step}".`;
 
+const HOLD_CHANGED_REASON =
+  'The run waiting to be recovered has changed since you confirmed ending it, so it was not ended; review the choices again.';
+
 type Verdict = { kind: 'refused'; reason: string } | { kind: 'resumes'; binding: DispositionRead } | { kind: 'ends' };
 
 const refuse = (reason: string): RebindResult => ({ ok: false, reason: displaySafeEcho(reason, MAX_ECHOED_REASON_LENGTH) });
@@ -102,11 +105,6 @@ function pointerWriteFor(choice: RebindChoice): PointerWrite {
 
 export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecovery {
   const endAndSelect = (scope: WorktreeLockScope, worktree: string, choice: RebindChoice): RebindResult => {
-    if (choice.origin === 'repo' || choice.origin === 'global') {
-      const resolved = deps.selectionResolves(worktree, choice.id);
-      if (!resolved.ok) return refuse(unselectableReason(choice.id));
-      if (resolved.tier !== choice.origin) return refuse(shadowedReason(choice.id));
-    }
     const ended = deps.terminate(worktree);
     if (ended.outcome === 'refused') return refuse(ended.cause === 'failed' ? ended.reason : NOT_HELD_REASON);
     const write = pointerWriteFor(choice);
@@ -116,7 +114,6 @@ export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecover
     if (write.kind === 'unset') {
       return terminatedWith(`The run was ended, but the saved selection could not be cleared: ${selected.error}`);
     }
-    // A stale earlier pick must not outlive the operator's choice of a different flow.
     const cleared = deps.selectIfUnlocked(scope, worktree, { kind: 'unset' });
     const outcome = cleared.ok ? 'The run was ended and the default flow is selected instead' : 'The run was ended';
     return terminatedWith(`${outcome}, because the chosen flow could not be selected: ${selected.error}`);
@@ -129,16 +126,27 @@ export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecover
     const binding = bindingFor(choice);
     const load = deps.loadBound(worktree, binding);
     if (!load.ok) return { kind: 'refused', reason: `The chosen flow could not be loaded: ${load.error}` };
-    return deps.resumesAt(load.definition, step) ? { kind: 'resumes', binding } : { kind: 'ends' };
+    if (deps.resumesAt(load.definition, step)) return { kind: 'resumes', binding };
+    return endsVerdict(worktree, choice);
   };
 
-  const rebindHeld = (scope: WorktreeLockScope, worktree: string, choice: RebindChoice, ifStepMissing: MissingStepAction): RebindResult => {
+  const endsVerdict = (worktree: string, choice: RebindChoice): Verdict => {
+    if (choice.origin !== 'repo' && choice.origin !== 'global') return { kind: 'ends' };
+    const resolved = deps.selectionResolves(worktree, choice.id);
+    if (!resolved.ok) return { kind: 'refused', reason: unselectableReason(choice.id) };
+    if (resolved.tier !== choice.origin) return { kind: 'refused', reason: shadowedReason(choice.id) };
+    return { kind: 'ends' };
+  };
+
+  const rebindHeld = (scope: WorktreeLockScope, worktree: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): RebindResult => {
     const held = deps.hold(worktree);
     if (!offersHeldRunRecovery(held)) return refuse(NOT_HELD_REASON);
     const verdict = verdictFor(worktree, held.step, choice);
     if (verdict.kind === 'refused') return refuse(verdict.reason);
     if (verdict.kind === 'ends') {
-      return ifStepMissing === 'end-run' ? endAndSelect(scope, worktree, choice) : refuse(unconfirmedEndReason(held.step));
+      if (ifStepMissing === 'refuse') return refuse(unconfirmedEndReason(held.step));
+      if (ifStepMissing.endRunHeldAt !== shownHeldStep(held.step)) return refuse(HOLD_CHANGED_REASON);
+      return endAndSelect(scope, worktree, choice);
     }
     try {
       deps.rebindRecord(worktree, verdict.binding);
@@ -157,9 +165,11 @@ export function createHeldRunRecovery(deps: HeldRunRecoveryDeps): HeldRunRecover
     outcomes(worktree, choices) {
       const held = deps.hold(worktree);
       if (!offersHeldRunRecovery(held)) return [];
-      return choices.flatMap((choice) => {
+      return choices.map((choice): RecoveryOutcomeOf => {
         const verdict = verdictFor(worktree, held.step, choice);
-        return verdict.kind === 'refused' ? [] : [{ choice, outcome: verdict.kind }];
+        return verdict.kind === 'refused'
+          ? { choice, outcome: 'unavailable', reason: displaySafeEcho(verdict.reason, MAX_ECHOED_REASON_LENGTH) }
+          : { choice, outcome: verdict.kind };
       });
     },
   };

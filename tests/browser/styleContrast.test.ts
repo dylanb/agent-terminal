@@ -104,9 +104,6 @@ async function mountPicker(
     ],
     tierNotices,
     selection: { kind: 'value', id: 'flow-a' },
-    hasLocalFlow: false,
-    hasGlobalFallback: false,
-    resumable: [],
   };
   const refused = async (): Promise<ActiveFlowWriteResult> => ({ ok: false, reason: 'Could not save the selection' });
   const picker = createFlowPicker(host, {
@@ -364,12 +361,6 @@ for (const theme of ['light', 'dark'] as const) {
             ],
             tierNotices: [],
             selection: { kind: 'unset' },
-            hasLocalFlow: false,
-            hasGlobalFallback: false,
-            resumable: [
-              { origin: 'repo', id: 'flow-a' },
-              { origin: 'global', id: 'flow-b' },
-            ],
             recoveryOutcomes: [
               { choice: { origin: 'repo', id: 'flow-a' }, outcome: 'resumes' },
               { choice: { origin: 'global', id: 'flow-b' }, outcome: 'ends' },
@@ -1012,9 +1003,6 @@ describe('the flow picker fits the rail without clipping its labels (WCAG 1.4.10
       entries: [{ available: true, id: longId, origin: 'global' }],
       tierNotices: [],
       selection: { kind: 'value', id: longId },
-      hasLocalFlow: false,
-      hasGlobalFallback: false,
-      resumable: [{ origin: 'global', id: longId }],
     };
     const picker = createFlowPicker(host, {
       onView: (cb) => {

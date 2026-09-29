@@ -28,7 +28,7 @@ beforeEach(() => invoke.mockClear());
 describe('window.flow.listCatalog (§6 / §18.7.6)', () => {
   it('invokes flow:listCatalog with the session id and the named worktree, and resolves the listing result', async () => {
     const flow = exposedFlow();
-    const listing = { ok: true, listing: { entries: [], tierNotices: [], hasLocalFlow: false, hasGlobalFallback: false, resumable: [] } };
+    const listing = { ok: true, listing: { entries: [], tierNotices: [], recoveryOutcomes: [] } };
     invoke.mockResolvedValueOnce(listing);
 
     const res = await flow.listCatalog('/repo-a');
