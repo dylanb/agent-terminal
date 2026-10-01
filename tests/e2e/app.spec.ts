@@ -24,7 +24,8 @@ import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_ST
 import { catalogEntryDefFile, flowCatalogDir, flowDefinitionFile, flowHomeDir, loadUntrustedFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
-import { recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
+import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
+import { createCatalogFixture } from '../helpers/catalogFixture';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 
 
@@ -3524,6 +3525,165 @@ test('seedPickupCatalogEntry writes a global catalog entry whose second step is 
     bootstrap: 'pickup',
     inputs: [{ name: 'ticket', type: 'github-ticket', required: true }],
   });
+});
+
+// #167 AC 1 (§18.7.5) — pickup binds the ticket to a worktree whose flow was bound at Start; a ticket that names
+// another flow (prose, a `flow:` line, a label) never chooses it. Each bounded wait below is named so the test's
+// budget is the sum of its longest stalled path (a mutant's red is a named assertion, never a test timeout).
+const FLOW_X_ID = 'flow-x-pinned';
+const FLOW_X_STEPS = ['x-groom', 'pickup', 'x-review', 'x-ship'];
+const FLOW_Y_STEPS = ['y-alpha', 'y-beta'];
+const PIN_WAIT = { pickupOutcome: 30_000, verdict: 40_000, ui: 10_000 } as const;
+const PIN_GREEN_MS = 9_000;
+const stripStepNames = () => page.locator('#flow-strip .flow.vert .stn .nm');
+const rail = (steps: string[]): string[] => ['Not started', ...steps, 'Completed'];
+const pickerTrigger = () => flowPicker().locator('.flow-picker-trigger');
+const pickerOption = (id: string) => flowPicker().getByRole('option', { name: new RegExp(id) });
+const budget = (uiWaits: number): number =>
+  Math.ceil((3 * PIN_GREEN_MS + PIN_WAIT.pickupOutcome + PIN_WAIT.verdict + uiWaits * PIN_WAIT.ui) / 30_000) * 30_000;
+
+async function launchTicketPinApp(home: string): Promise<{ binDir: string; logFile: string; stepId: (id: string) => void }> {
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-167-bin-');
+  app = await electron.launch({
+    args: launchArgs(),
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_HOME_DIR: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      ...seedServedTicket(TICKET_NAMING_Y),
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  return { binDir, logFile, stepId: (id) => seedFakeAgentV2(binDir, { stepId: id, artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' }) };
+}
+
+// Start → the manual first step → Advance into the pickup step → enter the served ticket, then wait for pickup's
+// outcome on disk: `pr: 4242` once it completed, or the shim's close marker once a stale job was compensated.
+async function pickUpServedTicket(repo: string, logFile: string): Promise<void> {
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance', { timeout: PIN_WAIT.ui });
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: PIN_WAIT.ui });
+  await inputModal().locator('.field input').fill(TICKET_NAMING_Y.number);
+  await inputModal().locator('.confirm').click();
+  await expect
+    .poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')).includes('pr: 4242') || existsSync(`${logFile}.pr-4242-closed`), {
+      timeout: PIN_WAIT.pickupOutcome,
+    })
+    .toBe(true);
+  expect(readGhLog(logFile), 'the ticket naming Y was read').toContain(`gh issue view ${TICKET_NAMING_Y.number}`);
+  expect(
+    readGhLog(logFile).split('\n').filter((line) => line.startsWith('gh pr create')),
+    'pickup took its PR title from the served ticket naming Y',
+  ).toContainEqual(expect.stringContaining(TICKET_NAMING_Y.title));
+}
+
+async function terminateRun(): Promise<void> {
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible({ timeout: PIN_WAIT.ui });
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start', { timeout: PIN_WAIT.ui });
+}
+
+test('a ticket naming another catalog flow never chooses the flow: X stays bound after pickup, after Terminate, and at the next Start (#167 AC 1 / §18.7.5)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(budget(24));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-home-'));
+  seedPickupCatalogEntry(home, FLOW_X_ID, 'Flow X Pinned', ['x-review', 'x-ship']);
+  const catalog = createCatalogFixture();
+  catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
+  mkdirSync(join(repo, '.git'));
+  const { binDir, logFile, stepId } = await launchTicketPinApp(home);
+  stepId('pickup');
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  expect(existsSync(join(repo, '.agent-terminal')), 'first-run: pointer root absent before pick').toBe(false);
+  await expect(pickerTrigger()).toBeEnabled({ timeout: PIN_WAIT.ui });
+  await pickerTrigger().click();
+  await pickerOption(FLOW_X_ID).click();
+  await expect(stripStepNames()).toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(pickerTrigger()).toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
+  await expect.poll(() => readActiveFlow(repo), { timeout: PIN_WAIT.ui }).toEqual({ kind: 'value', id: FLOW_X_ID });
+  await expect(flowControl()).toHaveText('Start', { timeout: PIN_WAIT.ui });
+
+  await pickUpServedTicket(repo, logFile);
+  expect.soft(readRunBinding(repo), 'the run stays bound to X straight after pickup').toEqual({ source: 'catalog', tier: 'global', id: FLOW_X_ID });
+  await expect.soft.poll(() => readIf(appRunState(repo)), { message: "X's pickup step runs to its clean gate", timeout: PIN_WAIT.verdict }).toContain('verdict: clean');
+  await expect.soft(loopReadout(), "X's pickup step's loop read-out is drawn after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
+  if (await loopReadout().isVisible()) await loopReadout().click();
+  await expect.soft(loopPanel().locator('[data-gate-option="approve"]'), "X's pickup step still owns the run after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
+
+  await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  for (const step of FLOW_Y_STEPS) await expect(stripStepNames()).not.toContainText([step], { timeout: PIN_WAIT.ui });
+  await expect.soft(pickerTrigger(), 'the picker still shows X after pickup').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
+
+  await terminateRun();
+  expect.soft(readActiveFlow(repo), 'the selection is still X after Terminate').toEqual({ kind: 'value', id: FLOW_X_ID });
+  await expect.soft(stripStepNames(), 'the strip still shows X after Terminate').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect.soft(pickerTrigger(), 'the picker still shows X after Terminate').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
+  await pickerTrigger().click();
+  await expect.soft(pickerOption(FLOW_Y_ID), 'Y is listed in the catalog').toBeVisible({ timeout: PIN_WAIT.ui });
+  await expect.soft(pickerOption(FLOW_X_ID), 'X is the selected option after Terminate').toHaveAttribute('aria-selected', 'true', { timeout: PIN_WAIT.ui });
+  await expect.soft(pickerOption(FLOW_Y_ID), 'Y is not selected after Terminate').not.toHaveAttribute('aria-selected', 'true', { timeout: PIN_WAIT.ui });
+  await page.keyboard.press('Escape');
+
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance', { timeout: PIN_WAIT.ui });
+  await flowControl().click();
+  await expect(inputModal(), "the second Start runs X: its pickup step asks for the ticket").toBeVisible({ timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows X at the second Start').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
+  await expect(pickerTrigger(), 'the picker shows X at the second Start').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
+  await inputModal().getByRole('button', { name: 'Cancel' }).click();
+
+  await app.close();
+  catalog.cleanup();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a ticket naming a catalog flow never seeds an unset selection: the worktree stays on its default after pickup, after Terminate, and at the next Start (#167 AC 1 / §18.7.5)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(budget(13));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-unset-home-'));
+  const catalog = createCatalogFixture();
+  catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
+  const repo = realpathSync(seedAppBootstrapFlowRepo('agent-term-e2e-167-unset-repo-'));
+  const localSteps = ['groom', 'plan'];
+  const { binDir, logFile, stepId } = await launchTicketPinApp(home);
+  stepId('plan');
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(stripStepNames()).toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await typeCommand('fake-agent');
+  await pickUpServedTicket(repo, logFile);
+  await expect.soft.poll(() => readIf(appRunState(repo)), { message: 'the local pickup step runs to its clean gate', timeout: PIN_WAIT.verdict }).toContain('verdict: clean');
+  await expect(stripStepNames(), 'the strip still shows the local flow after pickup').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await terminateRun();
+
+  expect.soft(readActiveFlow(repo), 'no selection was written from the ticket').toEqual({ kind: 'unset' });
+  await expect.soft(pickerTrigger(), 'the picker still shows the default').toHaveText('Flow: default', { timeout: PIN_WAIT.ui });
+  await pickerTrigger().click();
+  await expect.soft(pickerOption(FLOW_Y_ID), 'Y is listed in the catalog').toBeVisible({ timeout: PIN_WAIT.ui });
+  await expect.soft(flowPicker().locator('[role="option"][aria-selected="true"]'), 'no option is selected').toHaveCount(0, { timeout: PIN_WAIT.ui });
+  await expect.soft(pickerOption(FLOW_Y_ID), 'Y is not selected').not.toHaveAttribute('aria-selected', 'true', { timeout: PIN_WAIT.ui });
+  await page.keyboard.press('Escape');
+
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance', { timeout: PIN_WAIT.ui });
+  await flowControl().click();
+  await expect(inputModal(), 'the next Start runs the local flow: its pickup step asks for the ticket').toBeVisible({ timeout: PIN_WAIT.ui });
+  await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
+  await inputModal().getByRole('button', { name: 'Cancel' }).click();
+
+  await app.close();
+  catalog.cleanup();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
 function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) => string): string {
