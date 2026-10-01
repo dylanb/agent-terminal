@@ -21,7 +21,8 @@ import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { catalogEntryDefFile, flowCatalogDir, flowDefinitionFile, flowHomeDir, loadUntrustedFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
+import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
 import { recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
@@ -1716,6 +1717,7 @@ function seedFlowRepoMultiTemplate(
 const flowStation = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i);
 const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the first real step (Not-started bookend at 0)
 const flowControl = () => page.locator('#flow-strip .flow-control');
+const flowPicker = () => page.locator('#app .rail:has(#flow-strip) #flow-picker');
 
 // Multi-step manual flow named by `stepIds` (§24.2.3 T1).
 function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
@@ -1845,6 +1847,8 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
+    // seedServedTicket's knob; BEFORE the §28.7 body-read arm, which would otherwise shadow the served issue.
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ -n "$FAKE_GH_ISSUE_JSON" ] && [ "$3" = "$FAKE_GH_ISSUE_NUM" ]; then filter=; prev=; for arg in "$@"; do case "$prev" in -q|--jq) filter=$arg;; esac; case "$arg" in -q=*|--jq=*) filter=$arg;; esac; prev=$arg; done; case "$filter" in "") cat "$FAKE_GH_ISSUE_JSON";; .body) cat "$FAKE_GH_ISSUE_BODY";; ".labels[].name") cat "$FAKE_GH_ISSUE_LABELS";; *) echo "fake gh: no served-ticket answer for filter $filter" >&2; exit 1;; esac; exit $?; fi\n' +
     // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
@@ -1881,6 +1885,75 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
   writeFileSync(join(binDir, 'gh'), fakeGh, { mode: 0o755 });
   return { binDir, logFile };
 }
+
+const SERVED_TICKET_FILES = { json: 'issue.json', body: 'issue.body', labels: 'issue.labels' } as const;
+
+interface ServedTicket {
+  number: string;
+  title: string;
+  url: string;
+  body: string;
+  labels: string[];
+}
+
+const FLOW_Y_ID = 'flow-y-from-ticket';
+
+const TICKET_NAMING_Y: ServedTicket = {
+  number: '167',
+  title: 'A ticket that names another flow',
+  url: 'https://github.com/fake/repo/issues/167',
+  body: `Run this with ${FLOW_Y_ID}, please.\n\nflow: ${FLOW_Y_ID}\n`,
+  labels: [`flow/${FLOW_Y_ID}`],
+};
+
+// The launch env that makes seedFakeGhGit's gh answer `issue view <ticket.number>` from `ticket`, whatever the
+// --json fields or -q/--jq filter. Spread it into the app's env alongside FAKE_GHGIT_LOG.
+function seedServedTicket(ticket: ServedTicket): Record<string, string> {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-'));
+  const file = (name: keyof typeof SERVED_TICKET_FILES): string => join(dir, SERVED_TICKET_FILES[name]);
+  const labels = ticket.labels.map((name) => ({ name }));
+  writeFileSync(file('json'), JSON.stringify({ title: ticket.title, url: ticket.url, body: ticket.body, labels }) + '\n');
+  writeFileSync(file('body'), ticket.body);
+  writeFileSync(file('labels'), ticket.labels.map((name) => `${name}\n`).join(''));
+  return {
+    FAKE_GH_ISSUE_NUM: ticket.number,
+    FAKE_GH_ISSUE_JSON: file('json'),
+    FAKE_GH_ISSUE_BODY: file('body'),
+    FAKE_GH_ISSUE_LABELS: file('labels'),
+  };
+}
+
+test('the fake gh serves the knob ticket for every realistic issue-view form, and falls through otherwise', { tag: '@ownapp' }, () => {
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-knob-bin-');
+  const knob = seedServedTicket(TICKET_NAMING_Y);
+  const gh = (env: Record<string, string>, ...args: string[]): string =>
+    execFileSync(join(binDir, 'gh'), args, { encoding: 'utf8', env: { ...process.env, FAKE_GHGIT_LOG: logFile, ...env } });
+  const lines = (out: string): string[] => out.split('\n');
+
+  expect(lines(gh(knob, 'issue', 'view', '167', '--json', 'body', '-q', '.body', '--repo', 'fake/repo'))).toContain(`flow: ${FLOW_Y_ID}`);
+  const json = JSON.parse(gh(knob, 'issue', 'view', '167', '--json', 'body,labels', '--repo', 'fake/repo')) as { body: string; labels: { name: string }[] };
+  expect(lines(json.body)).toContain(`flow: ${FLOW_Y_ID}`);
+  expect(json.labels.map((l) => l.name)).toEqual([`flow/${FLOW_Y_ID}`]);
+  expect(() => gh(knob, 'issue', 'view', '167', '--json', 'title', '-q', '.title', '--repo', 'fake/repo')).toThrow();
+  expect(lines(gh(knob, 'issue', 'view', '167', '--json', 'labels', '--jq', '.labels[].name', '--repo', 'fake/repo')).filter(Boolean)).toEqual([`flow/${FLOW_Y_ID}`]);
+  expect(() => gh(knob, 'issue', 'view', '167', '--json', 'body', '--jq=.body', '--repo', 'fake/repo')).toThrow();
+  expect(() => gh(knob, 'issue', 'view', '167', '--json', 'body', '-q=.body', '--repo', 'fake/repo')).toThrow();
+
+  const epicBodyRead = ['issue', 'view', '176', '--json', 'body', '-q', '.body', '--repo', 'fake/repo'];
+  expect(gh(knob, ...epicBodyRead)).toBe(gh({}, ...epicBodyRead));
+  expect(gh({}, 'issue', 'view', '167', '--json', 'body', '-q', '.body', '--repo', 'fake/repo')).not.toContain(FLOW_Y_ID);
+
+  const absent = (file: string): string => join(dirname(file), `absent-${basename(file)}`);
+  const unreadable = {
+    ...knob,
+    FAKE_GH_ISSUE_JSON: absent(knob.FAKE_GH_ISSUE_JSON),
+    FAKE_GH_ISSUE_BODY: absent(knob.FAKE_GH_ISSUE_BODY),
+    FAKE_GH_ISSUE_LABELS: absent(knob.FAKE_GH_ISSUE_LABELS),
+  };
+  expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'body', '-q', '.body', '--repo', 'fake/repo')).toThrow();
+  expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'body,labels', '--repo', 'fake/repo')).toThrow();
+  expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'labels', '--jq', '.labels[].name', '--repo', 'fake/repo')).toThrow();
+});
 
 // LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
 // defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
@@ -3402,6 +3475,57 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
   return dir;
 }
 
+function writeCatalogEntry(home: string, id: string, yamlText: string): void {
+  const file = catalogEntryDefFile(home, id);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, yamlText);
+}
+
+// The manual first step is what lets Start then Advance reach pickup: a required-input loop step 0 would open
+// its input modal on Start itself.
+function seedPickupCatalogEntry(home: string, id: string, name: string, extraStepIds: string[]): void {
+  writeCatalogEntry(
+    home,
+    id,
+    `name: ${JSON.stringify(name)}\nsteps:\n` +
+      '  - id: x-groom\n    kind: manual\n' +
+      '  - id: pickup\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
+      extraStepIds.map((stepId) => `  - id: ${stepId}\n    kind: manual\n`).join(''),
+  );
+}
+
+// §18.7.6
+function loadCatalogEntry(home: string, id: string, worktreeDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-probe-'))) {
+  const resolved = resolveCatalogEntry({ worktreeDir, globalRoot: home }, id);
+  if (!resolved.ok) throw new Error(`catalog entry ${id} did not resolve: ${resolved.cause}`);
+  expect(resolved.tier).toBe('global');
+  const load = loadUntrustedFlowDefinition(join(resolved.flowDir, FLOW_DEF_FILE));
+  if (!load.ok) throw new Error(`catalog entry ${id} did not load: ${load.error}`);
+  return load.definition;
+}
+
+test('seedPickupCatalogEntry writes a global catalog entry whose second step is the plan-loop pickup', { tag: '@ownapp' }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-pickup-entry-home-'));
+  seedPickupCatalogEntry(home, 'flow-x-pinned', 'Flow X Pinned', ['x-review', 'x-ship']);
+
+  const definition = loadCatalogEntry(home, 'flow-x-pinned');
+  expect(definition.name).toBe('Flow X Pinned');
+  expect(definition.steps.map((s) => [s.id, s.kind])).toEqual([
+    ['x-groom', 'manual'],
+    ['pickup', 'loop'],
+    ['x-review', 'manual'],
+    ['x-ship', 'manual'],
+  ]);
+  const pickup = definition.steps[1];
+  expect({ loop: pickup.loop, loopNamespace: pickup.loopNamespace, bootstrap: pickup.bootstrap, inputs: pickup.inputs }).toEqual({
+    loop: 'plan-loop',
+    loopNamespace: 'app',
+    bootstrap: 'pickup',
+    inputs: [{ name: 'ticket', type: 'github-ticket', required: true }],
+  });
+});
+
 function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) => string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const target = join(root, 'loops-v2', 'plan-loop');
@@ -3613,7 +3737,7 @@ test('a held run resumed onto another flow gates on that flow\'s refs, never the
   rmSync(runDispositionFile(repo), { force: true });
   writeFileSync(appFlowState(repo), 'step: plan\nstatus: in_progress\ninputs:\n  ticket: "176"\n  pr: "9999"\n');
   await typeCommand(`cd "${repo}"`);
-  const picker = page.locator('#app .rail:has(#flow-strip) #flow-picker');
+  const picker = flowPicker();
   const recover = picker.getByRole('button', { name: /recover/i });
   await expect(recover).toBeEnabled({ timeout: 10_000 });
   await recover.click();
@@ -3671,7 +3795,7 @@ test('a pickup still in flight when its held run is resumed onto another flow is
 
   rmSync(runDispositionFile(repo), { force: true });
   await typeCommand('refresh');
-  const picker = page.locator('#app .rail:has(#flow-strip) #flow-picker');
+  const picker = flowPicker();
   const recover = picker.getByRole('button', { name: /recover/i });
   await expect(recover).toBeEnabled({ timeout: 5_000 });
   await recover.click();
@@ -6349,7 +6473,7 @@ const gitCount = (repo: string): number => Number(gitIn(repo, 'rev-list', '--cou
 // advanceFlow's post-commit write. One home for the git-init/config/gitignore/seed/bootstrap boilerplate.
 function seedFlowRepoBase(
   prefix: string,
-  opts: { flowYaml: string; flowState: string; capabilities?: string; seedTestFile?: string },
+  opts: { flowYaml?: string; flowState: string; capabilities?: string; seedTestFile?: string },
 ): { dir: string; g: (...args: string[]) => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const g = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
@@ -6366,7 +6490,7 @@ function seedFlowRepoBase(
     mkdirSync(join(dir, dirname(opts.seedTestFile)), { recursive: true });
     writeFileSync(join(dir, opts.seedTestFile), 'test("baseline", () => {});\n');
   }
-  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
+  if (opts.flowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.flowYaml);
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), opts.flowState);
   seedCompletedAppBootstrap(dir);
   g('add', '-A');
@@ -7283,14 +7407,35 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-function seedEpicChainRepo(prefix: string): string {
+const EPIC_CHAIN_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml');
+
+function seedEpicChainRepo(prefix: string, opts: { catalogEntry?: { home: string; id: string; name: string } } = {}): string {
+  const flowYaml = readFileSync(EPIC_CHAIN_FLOW_SOURCE, 'utf8');
+  const entry = opts.catalogEntry;
   const { dir } = seedFlowRepoBase(prefix, {
-    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
+    flowYaml: entry === undefined ? flowYaml : undefined,
     flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
+  if (entry !== undefined) {
+    writeCatalogEntry(entry.home, entry.id, flowYaml.replace(/^name:.*$/m, `name: ${JSON.stringify(entry.name)}`));
+    writeActiveFlow(dir, entry.id);
+  }
   return dir;
 }
+
+test('seedEpicChainRepo binds the repo to a catalog entry carrying the example flow under the given name', { tag: '@ownapp' }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epic-entry-home-'));
+  const repo = seedEpicChainRepo('agent-term-e2e-epic-entry-', { catalogEntry: { home, id: 'epic-x-catalog-id', name: 'Epic X Flow Name' } });
+
+  expect(existsSync(flowDefinitionFile(repo)), 'no local flow.yaml beside the catalog binding').toBe(false);
+  expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'epic-x-catalog-id' });
+  const definition = loadCatalogEntry(home, 'epic-x-catalog-id', repo);
+  expect(definition.name).toBe('Epic X Flow Name');
+  const example = loadUntrustedFlowDefinition(EPIC_CHAIN_FLOW_SOURCE);
+  if (!example.ok) throw new Error(example.error);
+  expect(definition.steps).toEqual(example.definition.steps);
+});
 
 // Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
 // gate for the caller to inspect/act on.
