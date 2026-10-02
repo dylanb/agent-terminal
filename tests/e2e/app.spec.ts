@@ -7735,6 +7735,68 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// #167 AC 2 (§18.7.5) — a sub-ticket carries no flow: the flow is bound at each sub-ticket's own Start.
+const EPIC_X = { id: 'epic-x-catalog-id', name: 'Epic X Flow Name' } as const;
+const EPIC_PIN_GREEN_MS = 16_100;
+const EPIC_PIN_STALLED_WAITS_MS = WINDOW_TIMEOUT_MS + 15_000 + (10_000 + 90_000 + 30_000 + 90_000) + 15_000 + 30_000 + 30_000;
+
+test('promoting an epic from a run bound to catalog flow X records neither X\'s ID nor its name on any sub-ticket (#167 AC 2 / §18.7.5)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(Math.ceil((3 * EPIC_PIN_GREEN_MS + EPIC_PIN_STALLED_WAITS_MS) / 30_000) * 30_000);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-epic-home-'));
+  const repo = seedEpicChainRepo('agent-term-e2e-167-epic-', { catalogEntry: { home, ...EPIC_X } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-167-epic-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_HOME_DIR: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  expect(readRunBinding(repo), 'the run is bound to catalog flow X').toEqual({ source: 'catalog', tier: 'global', id: EPIC_X.id });
+  const plan = readIf(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'));
+  expect(plan, 'the epic plan was written').toContain('Slice 1 of the feature');
+  for (const needle of Object.values(EPIC_X)) expect(plan, `the epic plan never names ${needle}`).not.toContain(needle);
+
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await dialog.locator('.pill.danger.confirm').click();
+  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('502');
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 30_000 }).toBe(true);
+
+  const createLines = readGhLog(logFile).split('\n').filter((line) => line.startsWith('gh issue create'));
+  expect(createLines, 'exactly two sub-tickets were created').toHaveLength(2);
+  for (const n of [501, 502]) {
+    const body = readIf(`${logFile}.issue-body.${n}`);
+    const labels = readIf(`${logFile}.issue-label.${n}`);
+    expect(body, `sub-ticket #${n} has a body`).not.toBe('');
+    expect(labels, `sub-ticket #${n} has labels`).not.toBe('');
+    for (const needle of Object.values(EPIC_X)) {
+      expect.soft(body, `sub-ticket #${n}'s body records no ${needle}`).not.toContain(needle);
+      expect.soft(labels, `sub-ticket #${n}'s labels record no ${needle}`).not.toContain(needle);
+    }
+  }
+  for (const needle of Object.values(EPIC_X)) {
+    for (const line of createLines) expect.soft(line, `no sub-ticket title records ${needle}`).not.toContain(needle);
+  }
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE any confirm preview (AC3 fail-safe)', { tag: '@ownapp' }, async () => {
   const repo = seedEpicChainRepo('agent-term-e2e-epicD-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicD-home-'));
