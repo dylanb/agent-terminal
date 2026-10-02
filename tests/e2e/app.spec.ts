@@ -7599,16 +7599,19 @@ test('seedEpicChainRepo binds the repo to a catalog entry carrying the example f
 
 // Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
 // gate for the caller to inspect/act on.
+const EPIC_GATE_WAIT = { start: 10_000, gate: 90_000, step: 30_000 } as const;
+const EPIC_GATE_DRIVE_MS = EPIC_GATE_WAIT.start + 2 * EPIC_GATE_WAIT.gate + EPIC_GATE_WAIT.step;
+
 async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
   await typeCommand(`cd "${repo}"`);
-  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
   await typeCommand('fake-agent');
   await flowControl().click(); // Start → enter groom
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // groom at gate
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toContain('verdict: clean'); // groom at gate
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click(); // approve groom → enter plan-bundle
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: plan-bundle');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean'); // plan-bundle at gate
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toContain('verdict: clean'); // plan-bundle at gate
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
 }
 
@@ -7738,7 +7741,9 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
 // #167 AC 2 (§18.7.5) — a sub-ticket carries no flow: the flow is bound at each sub-ticket's own Start.
 const EPIC_X = { id: 'epic-x-catalog-id', name: 'Epic X Flow Name' } as const;
 const EPIC_PIN_GREEN_MS = 16_100;
-const EPIC_PIN_STALLED_WAITS_MS = WINDOW_TIMEOUT_MS + 15_000 + (10_000 + 90_000 + 30_000 + 90_000) + 15_000 + 30_000 + 30_000;
+const EPIC_PIN_WAIT = { firstPaint: 15_000, dialog: 15_000, chain: 30_000 } as const;
+const EPIC_PIN_STALLED_WAITS_MS =
+  WINDOW_TIMEOUT_MS + EPIC_PIN_WAIT.firstPaint + EPIC_GATE_DRIVE_MS + EPIC_PIN_WAIT.dialog + 2 * EPIC_PIN_WAIT.chain;
 
 test('promoting an epic from a run bound to catalog flow X records neither X\'s ID nor its name on any sub-ticket (#167 AC 2 / §18.7.5)', { tag: '@ownapp' }, async () => {
   test.setTimeout(Math.ceil((3 * EPIC_PIN_GREEN_MS + EPIC_PIN_STALLED_WAITS_MS) / 30_000) * 30_000);
@@ -7760,7 +7765,7 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
     },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await expect(termRows()).not.toHaveText('', { timeout: EPIC_PIN_WAIT.firstPaint });
 
   await driveToEpicPlanBundleGate(repo);
   expect(readRunBinding(repo), 'the run is bound to catalog flow X').toEqual({ source: 'catalog', tier: 'global', id: EPIC_X.id });
@@ -7770,10 +7775,10 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
 
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const dialog = page.getByRole('alertdialog');
-  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog).toBeVisible({ timeout: EPIC_PIN_WAIT.dialog });
   await dialog.locator('.pill.danger.confirm').click();
-  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: 30_000 }).toBe('502');
-  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => readIf(`${logFile}.issue-seq`).trim(), { timeout: EPIC_PIN_WAIT.chain }).toBe('502');
+  await expect.poll(() => existsSync(`${logFile}.pr-4242-closed`), { timeout: EPIC_PIN_WAIT.chain }).toBe(true);
 
   const createLines = readGhLog(logFile).split('\n').filter((line) => line.startsWith('gh issue create'));
   expect(createLines, 'exactly two sub-tickets were created').toHaveLength(2);
@@ -7787,8 +7792,8 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
       expect.soft(labels, `sub-ticket #${n}'s labels record no ${needle}`).not.toContain(needle);
     }
   }
-  for (const needle of Object.values(EPIC_X)) {
-    for (const line of createLines) expect.soft(line, `no sub-ticket title records ${needle}`).not.toContain(needle);
+  for (const line of createLines) {
+    for (const needle of Object.values(EPIC_X)) expect.soft(line, `no sub-ticket title records ${needle}`).not.toContain(needle);
   }
 
   await app.close();
