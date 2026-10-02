@@ -1849,7 +1849,7 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
     // seedServedTicket's knob; BEFORE the §28.7 body-read arm, which would otherwise shadow the served issue.
-    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ -n "$FAKE_GH_ISSUE_JSON" ] && [ "$3" = "$FAKE_GH_ISSUE_NUM" ]; then filter=; prev=; for arg in "$@"; do case "$prev" in -q|--jq) filter=$arg;; esac; case "$arg" in -q=*|--jq=*) filter=$arg;; esac; prev=$arg; done; case "$filter" in "") cat "$FAKE_GH_ISSUE_JSON";; .body) cat "$FAKE_GH_ISSUE_BODY";; ".labels[].name") cat "$FAKE_GH_ISSUE_LABELS";; *) echo "fake gh: no served-ticket answer for filter $filter" >&2; exit 1;; esac; exit $?; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ -n "$FAKE_GH_ISSUE_JSON" ] && [ "$3" = "$FAKE_GH_ISSUE_NUM" ]; then filter=; prev=; for arg in "$@"; do case "$prev" in -q|--jq) filter=$arg;; esac; case "$arg" in -q=*|--jq=*) filter=${arg#*=};; esac; prev=$arg; done; case "$filter" in "") cat "$FAKE_GH_ISSUE_JSON";; .body) cat "$FAKE_GH_ISSUE_BODY";; ".labels[].name") cat "$FAKE_GH_ISSUE_LABELS";; *) echo "fake gh: no served-ticket answer for filter $filter" >&2; exit 1;; esac; exit $?; fi\n' +
     // §28.7 — the epic body read for the tracking-issue append; BEFORE the greedy `issue view` arm so it is not
     // shadowed. Returns a fixed non-empty original body so the append preserves it as a prefix.
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
@@ -1937,8 +1937,8 @@ test('the fake gh serves the knob ticket for every realistic issue-view form, an
   expect(json.labels.map((l) => l.name)).toEqual([`flow/${FLOW_Y_ID}`]);
   expect(() => gh(knob, 'issue', 'view', '167', '--json', 'title', '-q', '.title', '--repo', 'fake/repo')).toThrow();
   expect(lines(gh(knob, 'issue', 'view', '167', '--json', 'labels', '--jq', '.labels[].name', '--repo', 'fake/repo')).filter(Boolean)).toEqual([`flow/${FLOW_Y_ID}`]);
-  expect(() => gh(knob, 'issue', 'view', '167', '--json', 'body', '--jq=.body', '--repo', 'fake/repo')).toThrow();
-  expect(() => gh(knob, 'issue', 'view', '167', '--json', 'body', '-q=.body', '--repo', 'fake/repo')).toThrow();
+  expect(lines(gh(knob, 'issue', 'view', '167', '--json', 'body', '--jq=.body', '--repo', 'fake/repo'))).toContain(`flow: ${FLOW_Y_ID}`);
+  expect(lines(gh(knob, 'issue', 'view', '167', '--json', 'body', '-q=.body', '--repo', 'fake/repo'))).toContain(`flow: ${FLOW_Y_ID}`);
 
   const epicBodyRead = ['issue', 'view', '176', '--json', 'body', '-q', '.body', '--repo', 'fake/repo'];
   expect(gh(knob, ...epicBodyRead)).toBe(gh({}, ...epicBodyRead));
