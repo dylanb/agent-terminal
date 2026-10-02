@@ -1,9 +1,10 @@
 # infra-loop — work turn
 
-Build the deterministic test infrastructure the slice plan calls for per `CLAUDE.md`: the harness, fakes,
-and fixtures, hermetic and scriptable per turn — no wall-clock, randomness, or network in the seams a test
-drives. Read `loop-capabilities.yaml` for the repo's `test_command` and `build_command` the harness wraps.
-Leave the built infrastructure in the working tree so the RED/GREEN slices build on it.
+Build the deterministic test infrastructure the slice plan calls for per the repository's agent context,
+guidance, standards, and rules files: the harness, fakes, and fixtures, hermetic and scriptable per turn —
+no wall-clock, randomness, or network in the seams a test drives. Read `loop-capabilities.yaml` for the
+repo's `test_command` and `build_command` the harness wraps. Leave the built infrastructure in the working
+tree so the RED/GREEN slices build on it.
 
 No acceptance criterion may be deferred, partially implemented, or left unwired. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the

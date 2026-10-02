@@ -1,10 +1,10 @@
 # refactor-loop — work turn
 
-Restructure the slice's GREEN code for clarity per `CLAUDE.md` without changing behavior — the review-and-fix
-cycle decides what to change. Keep every test passing: run the repo's `test_command` from
-`loop-capabilities.yaml` and confirm it still reports `passed`. Restructuring a fixture is expected and
-raises the changed-tests flag for the human at the gate, not a block. This turn produces commits, not a
-result file.
+Restructure the slice's GREEN code for clarity per the repository's agent context, guidance, standards,
+and rules files without changing behavior — the review-and-fix cycle decides what to change. Keep every
+test passing: run the repo's `test_command` from `loop-capabilities.yaml` and confirm it still reports
+`passed`. Restructuring a fixture is expected and raises the changed-tests flag for the human at the gate,
+not a block. This turn produces commits, not a result file.
 
 No acceptance criterion may be deferred, dropped, or regressed. You may never self-defer an AC: the only way
 an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the ticket or plan, or a

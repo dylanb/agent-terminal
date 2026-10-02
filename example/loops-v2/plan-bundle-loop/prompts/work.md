@@ -1,8 +1,9 @@
 # plan-bundle-loop — work turn
 
-Produce the planning bundle for the linked ticket per `CLAUDE.md`, as the four delimited sections below.
-Read `loop-capabilities.yaml` for the repo's `test_command`, `build_command`, and `test_globs`, and target
-those in the test, infrastructure, and slice plans. Produce the `planning-bundle` artifact.
+Produce the planning bundle for the linked ticket per the repository's agent context, guidance, standards,
+and rules files, as the four delimited sections below. Read `loop-capabilities.yaml` for the repo's
+`test_command`, `build_command`, and `test_globs`, and target those in the test, infrastructure, and slice
+plans. Produce the `planning-bundle` artifact.
 
 ## Test plan
 
