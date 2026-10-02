@@ -3533,14 +3533,14 @@ test('seedPickupCatalogEntry writes a global catalog entry whose second step is 
 const FLOW_X_ID = 'flow-x-pinned';
 const FLOW_X_STEPS = ['x-groom', 'pickup', 'x-review', 'x-ship'];
 const FLOW_Y_STEPS = ['y-alpha', 'y-beta'];
-const PIN_WAIT = { pickupOutcome: 30_000, verdict: 40_000, ui: 10_000 } as const;
+const PIN_WAIT = { firstPaint: 15_000, pickupOutcome: 30_000, verdict: 40_000, ui: 10_000 } as const;
 const PIN_GREEN_MS = 9_000;
 const stripStepNames = () => page.locator('#flow-strip .flow.vert .stn .nm');
 const rail = (steps: string[]): string[] => ['Not started', ...steps, 'Completed'];
 const pickerTrigger = () => flowPicker().locator('.flow-picker-trigger');
 const pickerOption = (id: string) => flowPicker().getByRole('option', { name: new RegExp(id) });
 const budget = (uiWaits: number): number =>
-  Math.ceil((3 * PIN_GREEN_MS + PIN_WAIT.pickupOutcome + PIN_WAIT.verdict + uiWaits * PIN_WAIT.ui) / 30_000) * 30_000;
+  Math.ceil((3 * PIN_GREEN_MS + WINDOW_TIMEOUT_MS + PIN_WAIT.firstPaint + PIN_WAIT.pickupOutcome + PIN_WAIT.verdict + uiWaits * PIN_WAIT.ui) / 30_000) * 30_000;
 
 async function launchTicketPinApp(home: string, pickupStepId: string): Promise<{ binDir: string; logFile: string }> {
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-167-bin-');
@@ -3561,7 +3561,7 @@ async function launchTicketPinApp(home: string, pickupStepId: string): Promise<{
     },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await expect(termRows()).not.toHaveText('', { timeout: PIN_WAIT.firstPaint });
   return { binDir, logFile };
 }
 
@@ -3629,7 +3629,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   expect.soft(readRunBinding(repo), 'the run stays bound to X straight after pickup').toEqual({ source: 'catalog', tier: 'global', id: FLOW_X_ID });
   await expect.soft.poll(() => readIf(appRunState(repo)), { message: "X's pickup step runs to its clean gate", timeout: PIN_WAIT.verdict }).toContain('verdict: clean');
   await expect.soft(loopReadout(), "X's pickup step's loop read-out is drawn after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
-  if (await loopReadout().isVisible()) await loopReadout().click();
+  if ((await loopReadout().isVisible()) && (await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await expect.soft(loopPanel().locator('[data-gate-option="approve"]'), "X's pickup step still owns the run after pickup").toBeVisible({ timeout: PIN_WAIT.ui });
 
   await expect(stripStepNames(), 'the strip still shows X after pickup').toHaveText(rail(FLOW_X_STEPS), { timeout: PIN_WAIT.ui });
