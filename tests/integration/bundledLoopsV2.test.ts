@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
@@ -70,6 +70,16 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
       const personas = catalogPersonas(r.def);
       const missing = expected.filter((p) => !personas.includes(p));
       expect(missing, `${name} missing personas: ${missing.join(', ')}`).toEqual([]);
+    });
+  }
+
+  // A lens whose subject the change lacks costs a full review for nothing, and green's catalog runs it every
+  // round 1 (§27.4). Each scoped lens's canonical charter tells the reviewer to return clean when its subject
+  // is absent; the per-loop byte-copies are pinned to these sources by s7ChainWiring.
+  for (const lane of ['accessibility', 'security', 'taint']) {
+    it(`impl-loop ${lane} charter returns clean when the change lacks its subject`, () => {
+      const body = readFileSync(join(SOURCE_TREE, 'impl-loop', 'charter', `${lane}.md`), 'utf8');
+      expect(body.toLowerCase()).toMatch(/return clean/);
     });
   }
 

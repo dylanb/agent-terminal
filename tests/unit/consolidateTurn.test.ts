@@ -24,7 +24,7 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },
       { boundary: 'pre-consolidate', mode: 'compact', message: 'Keep the two round reports.' },
     ],
-    report: { sections: ['summary', 'findings', 'disposition'] },
+    report: { sections: ['summary', 'findings', 'disposition'], polish: 'fix' },
     gate: [],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],

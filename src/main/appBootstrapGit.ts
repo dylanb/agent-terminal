@@ -47,22 +47,6 @@ import {
   type AppBootstrapGitFaults,
 } from './bootstrapPorts';
 
-function isUnsafeLocalGitConfigKey(key: string): boolean {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === 'core.askpass' ||
-    normalized === 'core.fsmonitor' ||
-    normalized === 'core.gitproxy' ||
-    normalized === 'core.hookspath' ||
-    normalized === 'core.sshcommand' ||
-    normalized === 'core.worktree' ||
-    /^credential(?:\..+)?\.helper$/.test(normalized) ||
-    /^filter\..+\.(?:clean|process|smudge)$/.test(normalized) ||
-    /^protocol\..+\.allow$/.test(normalized) ||
-    /^remote\..+\.(?:receivepack|uploadpack|vcs)$/.test(normalized)
-  );
-}
-
 function isApprovedGitRemote(url: string): boolean {
   if (/[\0-\x1f\x7f]/.test(url)) return false;
   if (/^(?:https|ssh):\/\/\S+$/i.test(url)) return true;
@@ -110,17 +94,7 @@ export function createRealAppBootstrapGit(
   const git = (args: string[], failure: string): Promise<string> =>
     run('git', [...protectedArgs, ...args], repoDir, failure);
   remote = createAppGitRemote(repoDir, protectedArgs);
-  const assertSafeLocalConfig = async (): Promise<void> => {
-    const keys = await git(
-      ['config', '--local', '--name-only', '--null', '--list'],
-      'repository-local Git configuration check failed',
-    );
-    if (keys.split('\0').some(isUnsafeLocalGitConfigKey)) {
-      throw new Error('unsafe repository-local Git configuration');
-    }
-  };
   const assertSafeRepository = async (): Promise<void> => {
-    await assertSafeLocalConfig();
     const topLevel = (
       await git(
         ['rev-parse', '--show-toplevel'],

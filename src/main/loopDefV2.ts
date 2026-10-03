@@ -123,9 +123,19 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
-/** The prescribed round-report structure (§27.5). */
+/** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
+ *  full-catalog sweep. Closed set, recognized by exact string. */
+export const POLISH_POLICIES = ['fix', 'defer'] as const;
+export type PolishPolicy = (typeof POLISH_POLICIES)[number];
+
+function isPolishPolicy(value: string): value is PolishPolicy {
+  return (POLISH_POLICIES as readonly string[]).includes(value);
+}
+
+/** The prescribed round-report structure (§27.5) and the polish policy its dispositions follow (§27.8). */
 export interface ReportStructure {
   sections: string[];
+  polish: PolishPolicy;
 }
 
 /** The def-supplied executable side-effect (§27.8): a def MAY name a program to run. INERT in this slice —
@@ -369,6 +379,12 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   const report = requireRecord(rec.report, 'report');
   const sections = report.sections;
   if (!Array.isArray(sections) || !(sections as unknown[]).every((s) => typeof s === 'string')) fail('report sections must be a list of strings');
+  let polish: PolishPolicy = 'fix';
+  if (report.polish !== undefined) {
+    const p = requireString(report.polish, 'report polish');
+    if (!isPolishPolicy(p)) fail(`unknown report polish policy: ${p} (expected ${POLISH_POLICIES.join(' or ')})`);
+    polish = p;
+  }
 
   let exec: ExecSideEffect | null = null;
   if (rec.exec !== undefined && rec.exec !== null) {
@@ -396,7 +412,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     reviewers: toReviewers(rec.reviewers, tierRoot, defDir),
     consolidator,
     boundaries: toBoundaries(rec.boundaries),
-    report: { sections: sections as string[] },
+    report: { sections: sections as string[], polish },
     gate: toGate(rec.gate),
     pickup: toPickup(rec.pickup),
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),

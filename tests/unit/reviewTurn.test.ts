@@ -25,7 +25,7 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
       { boundary: 'pre-work', mode: 'clear' },
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },
     ],
-    report: { sections: ['summary', 'findings', 'disposition'] },
+    report: { sections: ['summary', 'findings', 'disposition'], polish: 'fix' },
     gate: [],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
@@ -175,6 +175,31 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   });
 });
 
+// §27.6/§27.8 — a per-slice loop whose def defers polish: the fixer dismisses polish-only findings as out of
+// scope so a polish-only round changes nothing and reaches `clean`; the integration-slice sweep reviews the
+// whole ticket diff with the full catalog and fixes them there. A def that fixes polish carries no such clause.
+describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
+  const req = (polish?: 'fix' | 'defer') => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-green',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    ...(polish !== undefined ? { polish } : {}),
+  });
+  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i;
+
+  it('tells the fixer to dismiss polish-only findings as out of scope when the def defers polish', () => {
+    expect(composeReviewAndFixPrompt(req('defer'))).toMatch(deferClause);
+  });
+
+  it('carries no deferral clause when the def fixes polish', () => {
+    expect(composeReviewAndFixPrompt(req('fix'))).not.toMatch(deferClause);
+    expect(composeReviewAndFixPrompt(req())).not.toMatch(deferClause);
+  });
+});
+
 // §27.9/§19.4 / N5 (AC4) — a request-changes decision delivers the operator's feedback into the NEXT
 // review-and-fix round, "alongside the reviewers' findings." The composer carries it as an optional block; the
 // engine threads it from the run-state a request-changes wrote. Absent feedback leaves the round unchanged.
@@ -261,10 +286,11 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     for (const b of BUILD_OUTCOMES) expect(p).not.toContain(b);
   });
 
-  it('verifies the RESULT file on disk before the done-signal (the new, more-likely-forgotten artifact)', () => {
+  it('verifies BOTH the round report and the result on disk before the done-signal — the round gate reads both', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
-    expect(p).toContain(`re-read ${RESULT_REL}`); // the done-signal verify targets the result rel
-    expect(p).toContain('turn-done:review-plan');
+    const verify = p.slice(p.indexOf('FIRST confirm'), p.indexOf('turn-done:review-plan'));
+    expect(verify).toContain(RESULT_REL);
+    expect(verify).toContain('.agent-terminal/loop/reports/1.md');
   });
 
   it('adds NO phase-result block when resultRel is absent (RED/GREEN loops\' review rounds are unchanged)', () => {

@@ -7,3 +7,4 @@ sink where it lands, and rate each finding by reachability × data class — an 
 compile-time constant is not a taint bug. Watch new callsites of existing sanitizer/wrapper primitives:
 reaching a sink without going through the primitive is the defect. Cite the concrete source→sink chain
 and the CWE.
+On a diff that moves no value from an untrusted source toward a sink, return clean.

@@ -10,6 +10,7 @@ import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
 import { ticketPromptLines } from '../shared/currentTicket';
+import { checkerLines } from './reviewTurn';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
  *  The engine runs whatever the def declares under this name, never a hardcoded choice (§27.7). */
@@ -42,12 +43,62 @@ export interface ConsolidatePromptReq {
   round: number;
   /** The turn key the done-signal is scoped to (e.g. `consolidate-plan`). */
   turnKey: string;
+  /** §27.12 — the command that runs the loop's own format check on the verdict; absent omits it. */
+  checkCommand?: string;
   /** The repo-relative §27 done-file the consolidator writes last (after verifying its output, §27.12a). */
   doneRelPath: string;
   /** §19.1 — the GitHub issue the flow resolved (the SAME identity the gate side-effects act on), named so the
    *  consolidator judges the round against THIS ticket, never one re-derived from the branch/PR/cwd. Absent when
    *  the flow resolved no ticket. */
   ticket?: number;
+}
+
+/** The verdict format rules (§27.6), from the shared consolidator-output vocabulary. */
+function verdictFormatLines(catalog: string[]): string[] {
+  return [
+    `- \`verdict: <one of: ${CONSOLIDATOR_VERDICTS.map((v) => `\`${v}\``).join(' / ')}>\` — spelled verbatim.`,
+    '- ONLY when the verdict is `another round`: `roster: <comma-separated personas>` — a non-empty subset of',
+    `  the reviewer catalog below (a persona the catalog does not declare can never be invoked): ${catalog.join(', ')}`,
+    '- ONLY when the verdict is `stop for a human`: `reason: <why a human must decide>`.',
+  ];
+}
+
+export interface VerdictRepairPromptReq {
+  outputRel: string;
+  /** What the loop's format check found wrong with the verdict on disk. */
+  problems: string[];
+  catalog: string[];
+  round: number;
+  turnKey: string;
+  doneRelPath: string;
+  checkCommand?: string;
+}
+
+/** §27.12 — the retry for a consolidator turn whose verdict is on disk but malformed: repair its format alone,
+ *  naming each problem, keeping the judgment already made. */
+export function composeVerdictRepairPrompt(req: VerdictRepairPromptReq): string {
+  const lines: string[] = [
+    `This is a REPAIR of the round-${req.round} consolidator verdict, not a new judgment.`,
+    '',
+    `The verdict ${req.outputRel} is on disk but fails the loop's format check, so the turn is not finished.`,
+    'Fix ONLY that file, keeping the judgment you already made; change only what the problems below name.',
+    '',
+    'Problems:',
+    ...req.problems.map((p) => `- ${p}`),
+    '',
+    'The verdict must carry these labelled lines:',
+    ...verdictFormatLines(req.catalog),
+  ];
+  if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'verdict'));
+  lines.push(
+    '',
+    doneSignalInstruction(req.turnKey, req.outputRel, req.doneRelPath),
+    '',
+    'A well-formed example:',
+    '',
+    exampleConsolidatorOutput('another round', req.catalog).trimEnd(),
+  );
+  return `${lines.join('\n')}\n`;
 }
 
 /** Compose the §27 consolidator prompt (§27.6): read EXACTLY the last two round reports and nothing else,
@@ -71,13 +122,13 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
     '',
     'Judge the round and choose the next step. Then write your verdict to',
     `${req.outputRel} as a Markdown document with these labelled lines:`,
-    `- \`verdict: <one of: ${CONSOLIDATOR_VERDICTS.map((v) => `\`${v}\``).join(' / ')}>\` — spelled verbatim.`,
-    '- ONLY when the verdict is `another round`: `roster: <comma-separated personas>` — a non-empty subset of',
-    `  the reviewer catalog below (a persona the catalog does not declare can never be invoked): ${req.catalog.join(', ')}`,
-    '- ONLY when the verdict is `stop for a human`: `reason: <why a human must decide>`.',
+    ...verdictFormatLines(req.catalog),
     '',
     '`clean` means the round changed nothing (every issue dismissed, nothing fixed); a round that fixed',
     'something is `another round`. A terminal verdict (`clean` / `stop for a human`) needs no roster.',
+  );
+  if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'verdict'));
+  lines.push(
     '',
     doneSignalInstruction(req.turnKey, req.outputRel, req.doneRelPath),
     '',

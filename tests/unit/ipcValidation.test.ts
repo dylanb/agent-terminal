@@ -15,6 +15,7 @@ import {
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
   isValidFlowAppRedo,
+  isValidFlowAppBackToRed,
   isValidFlowArmInterrupt,
   isValidFlowResolveAppBootstrapConflict,
   isValidOpenExternal,
@@ -248,6 +249,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowAppRedo({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
     expect(isValidFlowAppRedo({ ...base, sessionId: 'other' })).toBe(false); // dead session
     expect(isValidFlowAppRedo(null)).toBe(false);
+  });
+
+  it('validates flow:appBackToRed — the identity is required; the brief is a string and may be empty (§28.4.2)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'green', turnKey: 'consolidate-green', brief: 'cover the empty input' };
+    expect(isValidFlowAppBackToRed(base)).toBe(true);
+    expect(isValidFlowAppBackToRed({ ...base, brief: '' })).toBe(true); // a plain reopen
+    expect(isValidFlowAppBackToRed({ ...base, brief: 42 })).toBe(false);
+    expect(isValidFlowAppBackToRed({ ...base, step: '' })).toBe(false);
+    expect(isValidFlowAppBackToRed({ ...base, turnKey: '' })).toBe(false);
+    expect(isValidFlowAppBackToRed({ ...base, repoKey: 'relative' })).toBe(false);
+    expect(isValidFlowAppBackToRed({ ...base, sessionId: 'other' })).toBe(false);
+    expect(isValidFlowAppBackToRed(null)).toBe(false);
   });
 
   it('the shared GATE_DECISION_OPTIONS set is widened additively by redo and polish (§27.9/§27.15)', () => {

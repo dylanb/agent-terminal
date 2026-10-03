@@ -107,6 +107,8 @@ let refactorResultLocationNull: boolean;
  *  a resolved ticket to assert the work prompt binds the agent to that issue; `{ ticket: null }` (no ticket) by
  *  default so the ordinary drive helpers emit no ticket line. */
 let workRefsResult: { ticket: number | null; pr: number | null };
+/** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice (null = none). */
+let sliceBriefResult: { slice: number; fromStep: string; text: string } | null;
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
@@ -125,7 +127,7 @@ function fileDef(): LoopDefV2 {
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },
       { boundary: 'pre-consolidate', mode: 'compact', message: 'Keep the two round reports.' },
     ],
-    report: { sections: ['summary'] },
+    report: { sections: ['summary'], polish: 'fix' },
     gate: [{ option: 'approve', sideEffects: [] }],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
@@ -169,6 +171,7 @@ function makeEngine(
   cancelTimer = vi.fn();
   injected = [];
   workRefsResult = { ticket: null, pr: null };
+  sliceBriefResult = null;
   polishStep = null;
   clearPolishError = null;
   clearBaselineError = null;
@@ -229,6 +232,11 @@ function makeEngine(
     },
     currentBranch: () => currentBranchOverride,
     workRefs: () => workRefsResult,
+    sliceBrief: () => sliceBriefResult,
+    artifactCheckCommand: (check) =>
+      check.kind === 'report'
+        ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
+        : `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`,
   };
   return createAppLoopEngine(deps);
 }
@@ -375,6 +383,55 @@ describe('§28.4 slice D — per-slice result-artifact identity', () => {
   });
 });
 
+// §28.4.2 — a back-to-RED brief reaches every turn of the reopened slice's RED/GREEN/refactor loops: the work
+// prompt (what to redo) and the review-and-fix fixer (what to judge the round against). Other loops never see it.
+describe('§28.4.2 — the back-to-RED slice brief reaches the TDD phase turns', () => {
+  const BRIEF = { slice: 1, fromStep: 'green', text: 'Cover the empty-input case the tests missed' };
+
+  it('the RED work prompt names the slice redo and carries the brief', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 1 });
+    engine.onInjectable();
+    const workPrompt = injected[injected.length - 1];
+    expect(workPrompt).toContain(BRIEF.text);
+    expect(workPrompt).toMatch(/redo of impl-slice 1/i);
+    expect(workPrompt).toContain('green');
+  });
+
+  it('the review-and-fix prompt of a TDD phase loop carries the brief', () => {
+    defResult = resolved({ ...commitDef(), work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'commits', completion: 'refactor' } });
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'refactor-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    engine.onDoneSignal(); // the refactor work turn is a commits turn → chains the review round
+    engine.onInjectable();
+    engine.onInjectable();
+    const reviewPrompt = injected[injected.length - 1];
+    expect(reviewPrompt).toContain('review-and-fix');
+    expect(reviewPrompt).toContain(BRIEF.text);
+  });
+
+  it('a loop that is not a TDD phase never sees the brief', () => {
+    defResult = resolved(fileDef());
+    const engine = makeEngine();
+    sliceBriefResult = BRIEF;
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(injected[injected.length - 1]).not.toContain(BRIEF.text);
+  });
+
+  it('no brief, no redo block', () => {
+    defResult = resolved(redDef());
+    const engine = makeEngine();
+    engine.enter(repo, 'red-loop', STEP, 'chain-advance', { slice: 1 });
+    engine.onInjectable();
+    expect(injected[injected.length - 1]).not.toMatch(/redo of impl-slice/i);
+  });
+});
+
 describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () => {
   const OID = 'a'.repeat(40);
   it('entering a RED work turn clears a stale same-branch baseline, so the next GREEN frozen check blocks rather than stale-matching a prior slice', () => {
@@ -458,6 +515,19 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     workRefsResult = { ticket: 133, pr: null };
     driveToReviewInjected(engine);
     expect(injected[injected.length - 1]).toContain('#133'); // each reviewer is handed THIS ticket, not an inferred one
+  });
+
+  it('§27.8 — a def that defers polish tells the review-and-fix round to dismiss polish-only findings', () => {
+    defResult = resolved({ ...fileDef(), report: { sections: ['summary'], polish: 'defer' } });
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
+  });
+
+  it('§27.8 — a def that fixes polish injects no deferral clause', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).not.toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {
@@ -1236,6 +1306,71 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining(state!.errorReason!), 1);
   });
 
+  // §27.12 — the agent can run the same checker the engine gates on before it signals done.
+  it('the review prompt hands the agent the checker command for this round\'s report', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    expect(injected[injected.length - 1]).toContain(`check-artifact report ${roundReportRel(1)} --sections summary --roster ${ROSTER.join(',')}`);
+  });
+
+  // §27.12 — a present-but-malformed report is repaired, not re-reviewed: the retry names each problem and
+  // asks for the report alone, so the reviewers do not run a second time.
+  it('a malformed report is retried as a report repair naming each problem, not a re-review', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const firstPrompt = injected[injected.length - 1];
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1]
+    engine.onDoneSignal();
+    const retry = injected[injected.length - 1];
+    expect(retry).not.toBe(firstPrompt);
+    expect(retry).toContain(`### ${ROSTER[1]}`);
+    expect(retry).toContain(roundReportRel(1));
+    expect(retry.toLowerCase()).toContain('do not re-run the reviewers');
+    expect(retry).not.toContain('Spawn each reviewer');
+    expect(retry).toContain(`check-artifact report ${roundReportRel(1)}`);
+    expect(retry).toContain(REVIEW_KEY);
+  });
+
+  it('a repaired report completes the round on the retry', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] }));
+    engine.onDoneSignal();
+    writeReport();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'working', round: 1 });
+  });
+
+  it('a MISSING report is retried as the full review round (nothing to repair)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal();
+    expect(injected[injected.length - 1]).toContain('Spawn each reviewer');
+  });
+
+  it('the error names the round report as present-but-malformed, never as missing', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] }));
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    const reason = readAppLoopState(repo)?.errorReason ?? '';
+    expect(reason).toContain(roundReportRel(1));
+    expect(reason).toContain('not well-formed');
+    expect(reason).not.toContain('missing');
+    expect(emitError).toHaveBeenCalledWith(reason);
+  });
+
+  it('the error names the round report as missing when none was written', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    const reason = readAppLoopState(repo)?.errorReason ?? '';
+    expect(reason).toContain(roundReportRel(1));
+    expect(reason).toContain('missing');
+  });
+
   it('a report that does not parse against the declared structure is malformed → error (AC4)', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
@@ -1471,6 +1606,27 @@ describe('§27 engine — the consolidator completion gate (AC3)', () => {
     expect(state).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'error', round: 1 });
     expect(state?.errorReason).toBeTruthy();
     expect(emitError).toHaveBeenCalled();
+  });
+
+  it('the consolidator prompt hands the agent the checker command for its verdict', () => {
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    expect(injected[injected.length - 1]).toContain(`check-artifact verdict ${consolidatorOutputRel(1)} --catalog ${ROSTER.join(',')}`);
+  });
+
+  // §27.12 — a present-but-malformed verdict is repaired, not re-judged: the retry names the problem.
+  it('a malformed verdict is retried as a verdict repair naming the problem', () => {
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    const firstPrompt = injected[injected.length - 1];
+    writeConsolidatorOutput(1, 'verdict: another round\nroster: ghost-persona\n');
+    engine.onDoneSignal();
+    const retry = injected[injected.length - 1];
+    expect(retry).not.toBe(firstPrompt);
+    expect(retry).toContain('ghost-persona');
+    expect(retry).toContain(consolidatorOutputRel(1));
+    expect(retry).toContain(`check-artifact verdict ${consolidatorOutputRel(1)}`);
+    expect(retry).toContain(CONSOLIDATE_KEY);
   });
 
   it('an `another round` naming a persona outside the catalog is malformed → error (§27.4)', () => {
@@ -2223,7 +2379,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('no test file was added'));
   });
 
-  it('IT-ENGINE-4b: absent loop-capabilities surfaces a DISTINCT reason, not the generic missing-artifact text', async () => {
+  it('IT-ENGINE-4b: absent loop-capabilities surfaces a DISTINCT reason, not a completion-shortfall text', async () => {
     const engine = makeEngine(
       undefined,
       redFake({ workingTreeTestPaths: async () => ({ ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml' }) }),
@@ -2235,7 +2391,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     engine.onDoneSignal();
     await flushRedGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
-    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('done-signal received but'));
   });
 
   it('IT-ENGINE-5: a malformed result file drives retry-then-error', async () => {
@@ -2550,7 +2706,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     await flushGate();
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('loop-capabilities'));
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('baseline')); // names the baseline commit, not "the repository"
-    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('artifact is missing'));
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('done-signal received but'));
   });
 
   it('IT-GREEN-recordfail: a throwing recordChangedTests NEVER aborts the advance (best-effort wrap)', async () => {
