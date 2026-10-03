@@ -8,7 +8,7 @@
 >
 > **One §18.7 requirement is not in this doc's slice list.** §18.7.7 (its own subsection) makes a **deterministic, operator-invokable recovery affordance out of the loop-less begun-run flow-load-error state** a **required** Theme A deliverable — its own slice **A5** (leg 1's routine per-repo source loss makes that state reachable). It is **orthogonal to A3's picker** and maps to **none** of §4.4's A0–A3 slices, so §4.4's slice list is **incomplete** on this point — a Theme A build plan must add an A5 slice for it. §18.7 wins on conflict.
 >
-> **Precedence reversed in place (operator decision 2026-09-25, spec v2.152).** §4.2 item 2, §4.3 and the A2 slice (and the since-dropped A4 slice) originally made a present local `flow.yaml` win over the active-flow pointer ("local-first, back-compat") and had a bad pointer degrade to the global fallback. Both are reversed and the text below now states the rule §18.7.3 carries: **the operator's pick wins**; a set-but-unusable pointer refuses to run with the §18.1 error; an unset pointer resolves local, then global.
+> **Precedence reversed in place (operator decision 2026-09-25, spec v2.158).** §4.2 item 2, §4.3 and the A2 slice (and the since-dropped A4 slice) originally made a present local `flow.yaml` win over the active-flow pointer ("local-first, back-compat") and had a bad pointer degrade to the global fallback. Both are reversed and the text below now states the rule §18.7.3 carries: **the operator's pick wins**; a set-but-unusable pointer refuses to run with the §18.1 error; an unset pointer resolves local, then global.
 >
 > **Scope realized so far:** A0 authors **Theme A only** (the flow catalog + selection, §18.7). This doc's **Theme B** content and its §5 slices are **not yet spec**.
 

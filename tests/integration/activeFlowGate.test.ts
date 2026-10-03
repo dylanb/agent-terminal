@@ -18,7 +18,7 @@ import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/l
 
 // A2 (#133) §18.7.4 AC7/AC11 — the composed write gate: a new active-flow selection (set or clear) is permitted
 // ONLY while the run has never started; it is refused once the run has begun, and (fail-closed, CWE-841) while
-// begun-ness is indeterminate; a first-step revertStep unlocks it (v2.155). The write is serialized under the
+// begun-ness is indeterminate; a first-step revertStep unlocks it (v2.161). The write is serialized under the
 // cross-process worktree lock and refused while a live or unidentifiable peer holds it (A3 #134 T6c as narrowed at impl round 2). Observable
 // behavior over real fixtures: a refused write leaves active-flow.yaml byte-for-byte unchanged (§18.7.2 AC8).
 describe('createActiveFlowGate — the AC7 started-ness write gate under the AC11 worktree lock (§18.7.4)', () => {

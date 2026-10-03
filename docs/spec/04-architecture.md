@@ -15,8 +15,7 @@ flowchart LR
     subgraph Renderer["Renderer process (Chromium)"]
         subgraph TermPane["Terminal pane"]
             XT["xterm.js terminal"]
-            SELMODEL["selection model<br/>(app-owned, focus-independent)"]
-            DECO["decoration layer<br/>(custom highlight)"]
+            SELMODEL["selection model<br/>(app-owned text, follows xterm)"]
         end
         subgraph MonPane["Monitor pane (second UI)"]
             LIST["captured + semantic blocks + status"]
@@ -50,8 +49,8 @@ User types in `xterm.js` → `term.onData(cb)` fires → renderer calls `api.inp
 
 **C. Selection (app-owned, keyboard-driven)**
 1. User drags over output. The app writes the range into an **application-owned selection model** (absolute buffer coordinates + extracted text), not the browser's native selection.
-2. The app renders the persistent highlight itself via xterm.js **decorations**; xterm's native selection paints the *live drag* and is suppressed only once focus leaves (§7.1). The decoration persists regardless of where focus goes.
-3. The selection is acted on by the keyboard alone (§7.7): **Copy** writes `model.text` to the clipboard; **Escape** while a selection is active clears it (§7.5.1); paste/select-all run their chords. The selection survives focus changes; only an explicit clear (Escape) removes it. (The former in-terminal Send/Capture/Clear toolbar was removed in v2.132; capture-to-todo now lives in the drawer Todo tab and the Artifacts view, §16/§20.2.)
+2. xterm's native selection is the highlight, painted the same colour focused or blurred (§7.1); the app draws none of its own (v2.150).
+3. The selection is acted on by the keyboard alone (§7.7): **Copy** writes `model.text` to the clipboard; **Escape** while a selection is active clears it (§7.5.1); paste/select-all run their chords. The selection survives focus changes; Escape clears it, and so does anything that clears xterm's own selection (typing, a click in the terminal, a buffer switch — §7.3). (The former in-terminal Send/Capture/Clear toolbar was removed in v2.132; capture-to-todo now lives in the drawer Todo tab and the Artifacts view, §16/§20.2.)
 
 **D. Monitor-pane actions (second UI → agent)** — *the new headline flow*
 User clicks **Insert into agent** (or **Insert & submit**) on a captured block → monitor pane calls `api.inject({text, submit})` → IPC `agent:inject` → main reads the **live** bracketed-paste mode from the shadow (`shadow.modes.bracketedPasteMode`), wraps via `wrapForPaste`, writes to the PTY, and if `submit` is set follows with `\r` after a short settle delay (§9.3). This path never touches the renderer's xterm — it works even if the terminal pane is unfocused, scrolled away, or (later) in a different process.

@@ -18,21 +18,22 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
+import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
-import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
-import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
+import { catalogPersonas, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
+import type { ArtifactCheck } from './artifactCheck';
+import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
-import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
-import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
+import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
+import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
@@ -162,6 +163,10 @@ export interface AppLoopEngineDeps {
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
    *  ticket when the flow has resolved none. A domain seam (composition root wires the resolved flow refs). */
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
+  /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
+  sliceBrief(repoDir: string): SliceBrief | null;
+  /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
+  artifactCheckCommand(check: ArtifactCheck): string;
 }
 
 export interface AppLoopEngine {
@@ -249,6 +254,7 @@ type ActiveAppTurn =
       round: number;
       reviewers: RosterEntry[];
       sections: string[];
+      polish: PolishPolicy;
       reportPath: string;
       reportRel: string;
       /** §28.5.3 — a plain review round carries only its report (`report`); a GREEN loop's round is gated on its
@@ -311,6 +317,7 @@ function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId:
     round: args.round,
     reviewers: [],
     sections: [],
+    polish: 'fix',
     reportPath: '',
     reportRel: '',
     completion: { kind: 'unresolved' },
@@ -555,64 +562,81 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.onViewChanged();
   };
 
-  const completionSatisfied = (): boolean => {
-    if (!active) return false;
+  /** The phase-result clause (§28.5.3): the result is present, well-formed, and classifies `want`. The echoed
+   *  outcome is a member of the closed PhaseOutcome set (only a well-formed result yields one), never file text. */
+  const resultShortfall = (rel: string, content: string | null, want: PhaseOutcome): string | null => {
+    if (content === null) return `the phase result ${rel} is missing`;
+    const outcome = deps.completionPredicates.resultOutcome(content);
+    if (outcome === null) return `the phase result ${rel} is not well-formed`;
+    return outcome === want ? null : `the phase result ${rel} reports ${outcome}, not ${want}`;
+  };
+
+  const UNRESOLVED_SHORTFALL = 'the loop definition no longer resolves';
+
+  const completionShortfall = (): string | null => {
+    if (!active) return 'no turn is active';
     if (active.phase === 'consolidate') {
       // §27.6/AC3 — the consolidator advances only on a well-formed verdict (a value from the closed set and,
       // for `another round`, a non-empty roster ⊆ catalog). An `unresolved` consolidate turn reads nothing.
-      if (active.completion.kind === 'unresolved') return false;
+      if (active.completion.kind === 'unresolved') return UNRESOLVED_SHORTFALL;
       const content = deps.readArtifact(active.outputPath);
-      return content !== null && consolidatorOutputWellFormed(content, active.catalog);
+      if (content === null) return `the consolidator verdict ${active.outputRel} is missing`;
+      return consolidatorOutputWellFormed(content, active.catalog) ? null : `the consolidator verdict ${active.outputRel} is not well-formed`;
     }
     if (active.phase === 'review') {
       // §27.12b — the review turn completes only on a well-formed round report: def-declared sections, full
       // roster accounting, per-issue elements. An `unresolved` review turn (resume lost the def) reads no
       // report — Accept cannot fabricate a pass, and the OVERRIDE path in routeOut is the human backstop.
-      if (active.completion.kind === 'unresolved') return false;
+      if (active.completion.kind === 'unresolved') return UNRESOLVED_SHORTFALL;
       const content = deps.readArtifact(active.reportPath);
-      if (content === null || !roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) })) return false;
+      if (content === null) return `the round report ${active.reportRel} is missing`;
+      if (!roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) })) {
+        return `the round report ${active.reportRel} is not well-formed`;
+      }
       if (active.completion.kind === 'refactor-report') {
         // §28.5.3 — a REFACTOR round's SYNC clause: {result shape-valid ∧ outcome == passed}, softer than GREEN
         // (no build). The exit-direction is the async refactorAsyncGate (§28.5.3:124); the frozen check is a
         // non-blocking side probe, NOT part of this gate (§28.8.3).
-        const result = deps.readArtifact(active.completion.resultPath);
-        if (result === null) return false;
-        return deps.completionPredicates.resultOutcome(result) === REFACTOR_COMPLETING_OUTCOME;
+        const { resultRel, resultPath } = active.completion;
+        return resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME);
       }
-      return true;
+      return null;
     }
     switch (active.completion.kind) {
       case 'commits':
-        return true; // the done-signal alone completes it
+        return null; // the done-signal alone completes it
       case 'unresolved':
-        return false; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
-      case 'file':
-        return artifactWellFormed(deps.readArtifact(active.completion.path), active.completion.marker);
-      case 'red': {
+        return UNRESOLVED_SHORTFALL; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
+      case 'file': {
+        const { artifactRel, path, marker } = active.completion;
+        const content = deps.readArtifact(path);
+        if (content === null) return `the turn artifact ${artifactRel} is missing`;
+        return artifactWellFormed(content, marker) ? null : `the turn artifact ${artifactRel} does not carry its completion marker`;
+      }
+      case 'red':
         // §28.5.3 — the SYNCHRONOUS RED clause: the result file is shape-valid AND classifies `failed-assertion`
         // (via the injected resultOutcome, which returns the outcome only for a well-formed result — AC3). The
         // async "a test file was added" + exit-direction clauses are the engine's redAsyncGate; BOTH completion
         // routes AND it in — the done-signal via the runner's PrecomputedGate (§28 Option C), the human-accept
         // via routeOut computing the same gate — so AC2 holds on both paths (§28.5.6 keeps "a test was added"
         // machine-authoritative, not a human-override target).
-        const content = deps.readArtifact(active.completion.resultPath);
-        if (content === null) return false;
-        return deps.completionPredicates.resultOutcome(content) === RED_COMPLETING_OUTCOME;
-      }
+        return resultShortfall(active.completion.resultRel, deps.readArtifact(active.completion.resultPath), RED_COMPLETING_OUTCOME);
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
         // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
         // result). The async clauses (baseline present+branch-matched, the exit-direction, and the NON-blocking
         // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
-        const content = deps.readArtifact(active.completion.resultPath);
-        if (content === null) return false;
-        return (
-          deps.completionPredicates.resultOutcome(content) === GREEN_COMPLETING_OUTCOME &&
-          deps.completionPredicates.resultBuildOutcome(content) === GREEN_COMPLETING_BUILD_OUTCOME
-        );
+        const { resultRel, resultPath } = active.completion;
+        const content = deps.readArtifact(resultPath);
+        const outcome = resultShortfall(resultRel, content, GREEN_COMPLETING_OUTCOME);
+        if (outcome !== null || content === null) return outcome;
+        const build = deps.completionPredicates.resultBuildOutcome(content);
+        return build === GREEN_COMPLETING_BUILD_OUTCOME ? null : `the phase result ${resultRel} reports build ${build ?? 'unclassified'}, not ${GREEN_COMPLETING_BUILD_OUTCOME}`;
       }
     }
   };
+
+  const completionSatisfied = (): boolean => completionShortfall() === null;
 
   // §28.5.4/CWE-117 — map the closed capabilities-load `cause` enum to a STATIC operator reason, NEVER embedding
   // the load failure's `.reason` (whose malformed arm can carry untrusted repo yaml text).
@@ -633,7 +657,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   /** §28.5.3 / §28 Option C — the RED turn's ASYNC machine ground truth (git + best-effort exit code), computed
    *  in the engine and threaded to the sync runner as a PrecomputedGate on the done-signal. A false gate carries
-   *  a distinct reason so the operator surface never mislabels it as the generic missing-artifact text. Never
+   *  a distinct reason so the operator surface never mislabels it as a completion shortfall. Never
    *  rejects — an unexpected throw is a fail-toward-firing gate. */
   const redAsyncGate = async (a: ActiveAppTurn): Promise<PrecomputedGate> => {
     try {
@@ -766,9 +790,75 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
+  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn carries; other loops never see one. */
+  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBrief } | Record<string, never> => {
+    const r = deps.resolveDef(turn.repoDir, turn.loopName);
+    if (!r.ok || r.def.work.completion === undefined) return {};
+    const brief = deps.sliceBrief(turn.repoDir);
+    return brief !== null ? { sliceBrief: brief } : {};
+  };
+
+  const reportCheck = (turn: Extract<ActiveAppTurn, { phase: 'review' }>): Extract<ArtifactCheck, { kind: 'report' }> => ({
+    kind: 'report',
+    rel: turn.reportRel,
+    sections: turn.sections,
+    roster: turn.reviewers.map((r) => r.persona),
+  });
+  const verdictCheck = (turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>): ArtifactCheck => ({
+    kind: 'verdict',
+    rel: turn.outputRel,
+    catalog: turn.catalog,
+  });
+
+  /** §27.12 — the retry for a review or consolidator turn whose report/verdict is ON DISK but malformed: a
+   *  repair of that file alone, naming each problem. Null (→ the full turn is re-injected) when there is no
+   *  file to repair, the turn is some other kind, or the shortfall lies elsewhere (a refactor round's result). */
+  const composeRepair = (): string | null => {
+    if (!active) return null;
+    if (active.phase === 'review' && active.completion.kind !== 'unresolved') {
+      const content = deps.readArtifact(active.reportPath);
+      if (content === null) return null;
+      const check = reportCheck(active);
+      const problems = roundReportProblems(content, check);
+      if (problems.length === 0) return null;
+      if (active.completion.kind === 'refactor-report') {
+        const { resultRel, resultPath } = active.completion;
+        if (resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME) !== null) return null;
+      }
+      return composeReportRepairPrompt({
+        reportRel: active.reportRel,
+        problems,
+        sections: check.sections,
+        roster: check.roster,
+        round: active.round,
+        turnKey: active.turnKey,
+        doneRelPath: APP_DONE_REL_PATH,
+        checkCommand: deps.artifactCheckCommand(check),
+      });
+    }
+    if (active.phase === 'consolidate' && active.completion.kind !== 'unresolved') {
+      const content = deps.readArtifact(active.outputPath);
+      if (content === null) return null;
+      const problems = consolidatorOutputProblems(content, active.catalog);
+      if (problems.length === 0) return null;
+      return composeVerdictRepairPrompt({
+        outputRel: active.outputRel,
+        problems,
+        catalog: active.catalog,
+        round: active.round,
+        turnKey: active.turnKey,
+        doneRelPath: APP_DONE_REL_PATH,
+        checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
+      });
+    }
+    return null;
+  };
+
   runner = createTurnRunner({
-    compose: (turnKey) => {
+    compose: (turnKey, retry) => {
       if (!active) return null;
+      const repair = retry !== undefined ? composeRepair() : null;
+      if (repair !== null) return repair;
       if (active.phase === 'consolidate') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose
         const body = deps.readRecipe(active.recipePath);
@@ -784,6 +874,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          checkCommand: deps.artifactCheckCommand(verdictCheck(active)),
           ...(consolidateTicket !== null ? { ticket: consolidateTicket } : {}),
         });
       }
@@ -795,11 +886,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return composeReviewAndFixPrompt({
           roster: active.reviewers,
           sections: active.sections,
+          polish: active.polish,
           reportRel: active.reportRel,
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          checkCommand: deps.artifactCheckCommand(reportCheck(active)),
           ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
+          ...briefFor(active),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
@@ -827,6 +921,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
                 : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
+        ...briefFor(active),
       });
     },
     inject: (prompt, opts) => {
@@ -836,7 +931,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.inject(prompt);
     },
     hostedAgent: () => deps.hostedAgent(),
-    artifactPresent: completionSatisfied,
+    completionShortfall,
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {
@@ -927,6 +1022,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       round,
       reviewers,
       sections: r.def.report.sections,
+      polish: r.def.report.polish,
       reportPath: loc.abs,
       reportRel: loc.rel,
       completion,

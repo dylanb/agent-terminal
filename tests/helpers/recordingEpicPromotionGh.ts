@@ -17,6 +17,7 @@ export function recordingEpicPromotionGh(start = 500): { gh: AppEpicPromotionGit
       tickets.push({ issue: next, title, body, labels: [] });
       return next;
     },
+    ensureLabel: async () => {},
     addLabel: async (issue, label) => {
       labels.set(issue, [...(labels.get(issue) ?? []), label]);
     },

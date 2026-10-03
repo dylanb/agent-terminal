@@ -23,7 +23,7 @@ describe('createRealAppEpicPromotionGitHub — gh adapter', () => {
   let root: string;
   let repo: string;
   let log: string;
-  let saved: { path?: string; log?: string; ghRepo?: string; createOut?: string; body?: string };
+  let saved: { path?: string; log?: string; ghRepo?: string; createOut?: string; body?: string; labels?: string; labelFail?: string };
 
   function writeFakeGh(): void {
     writeFileSync(
@@ -34,6 +34,8 @@ describe('createRealAppEpicPromotionGitHub — gh adapter', () => {
         'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then cat > "$FAKE_GH_LOG.create-body"; printf \'%s\\n\' "${FAKE_CREATE_OUT:-https://github.com/owner/repository/issues/501}"; exit 0; fi\n' +
         'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then printf \'%s\\n\' "${FAKE_BODY-existing epic body}"; exit 0; fi\n' +
         'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then cat > "$FAKE_GH_LOG.edit"; exit 0; fi\n' +
+        'if [ "$1" = "label" ] && [ "$2" = "list" ]; then printf \'%s\\n\' "${FAKE_LABELS-[]}"; exit 0; fi\n' +
+        'if [ "$1" = "label" ] && [ "$2" = "create" ]; then if [ -n "$FAKE_LABEL_CREATE_FAIL" ]; then echo "HTTP 403: Resource not accessible" >&2; exit 1; fi; exit 0; fi\n' +
         'exit 0\n',
       { mode: 0o755 },
     );
@@ -47,16 +49,18 @@ describe('createRealAppEpicPromotionGitHub — gh adapter', () => {
     runGit(repo, ['init']);
     runGit(repo, ['remote', 'add', 'origin', 'https://github.com/owner/repository.git']);
     writeFakeGh();
-    saved = { path: process.env.PATH, log: process.env.FAKE_GH_LOG, ghRepo: process.env.GH_REPO, createOut: process.env.FAKE_CREATE_OUT, body: process.env.FAKE_BODY };
+    saved = { path: process.env.PATH, log: process.env.FAKE_GH_LOG, ghRepo: process.env.GH_REPO, createOut: process.env.FAKE_CREATE_OUT, body: process.env.FAKE_BODY, labels: process.env.FAKE_LABELS, labelFail: process.env.FAKE_LABEL_CREATE_FAIL };
     process.env.PATH = `${root}:${saved.path ?? ''}`;
     process.env.FAKE_GH_LOG = log;
     process.env.GH_REPO = 'attacker/other';
     delete process.env.FAKE_CREATE_OUT;
     delete process.env.FAKE_BODY;
+    delete process.env.FAKE_LABELS;
+    delete process.env.FAKE_LABEL_CREATE_FAIL;
   });
 
   afterEach(() => {
-    for (const [k, v] of Object.entries({ PATH: saved.path, FAKE_GH_LOG: saved.log, GH_REPO: saved.ghRepo, FAKE_CREATE_OUT: saved.createOut, FAKE_BODY: saved.body })) {
+    for (const [k, v] of Object.entries({ PATH: saved.path, FAKE_GH_LOG: saved.log, GH_REPO: saved.ghRepo, FAKE_CREATE_OUT: saved.createOut, FAKE_BODY: saved.body, FAKE_LABELS: saved.labels, FAKE_LABEL_CREATE_FAIL: saved.labelFail })) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
@@ -72,6 +76,33 @@ describe('createRealAppEpicPromotionGitHub — gh adapter', () => {
     const line = readIf(log).split('\n').find((l) => l.startsWith('issue create'))!;
     expect(line).toContain('--repo github.com/owner/repository');
     expect(line).toContain('GH_REPO=unset'); // the inherited attacker GH_REPO is dropped
+  });
+
+  const labelCreates = (): string[] => readIf(log).split('\n').filter((l) => l.startsWith('label create'));
+
+  it('ensureLabel creates nothing when the repository already has the label', async () => {
+    process.env.FAKE_LABELS = '[{"name":"agent-loop/subticket"}]';
+    await adapter().ensureLabel('agent-loop/subticket');
+    expect(labelCreates()).toEqual([]);
+  });
+
+  it('ensureLabel creates a missing label, pinned to the repo, even when a similarly-named label exists', async () => {
+    process.env.FAKE_LABELS = '[{"name":"agent-loop/subticket-old"}]';
+    await adapter().ensureLabel('agent-loop/subticket');
+    expect(labelCreates()).toHaveLength(1);
+    expect(labelCreates()[0]).toMatch(/^label create agent-loop\/subticket /);
+    expect(labelCreates()[0]).toContain('--repo github.com/owner/repository');
+  });
+
+  it('ensureLabel rejects when the missing label cannot be created', async () => {
+    process.env.FAKE_LABEL_CREATE_FAIL = '1';
+    await expect(adapter().ensureLabel('agent-loop/subticket')).rejects.toThrow(/label creation failed/);
+  });
+
+  it('ensureLabel rejects an unreadable label listing rather than guessing', async () => {
+    process.env.FAKE_LABELS = 'not json';
+    await expect(adapter().ensureLabel('agent-loop/subticket')).rejects.toThrow(/label/i);
+    expect(labelCreates()).toEqual([]);
   });
 
   it('createIssue refuses an unrecognized create outcome (fail closed, not a bogus 0)', async () => {
