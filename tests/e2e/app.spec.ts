@@ -1908,8 +1908,8 @@ const TICKET_NAMING_Y: ServedTicket = {
 };
 
 // The launch env that makes seedFakeGhGit's gh answer `issue view <ticket.number>` from `ticket`, whatever the
-// --json fields or -q/--jq filter. Spread it into the app's env alongside FAKE_GHGIT_LOG.
-function seedServedTicket(ticket: ServedTicket): Record<string, string> {
+// --json fields or -q/--jq filter. Spread `env` into the app's env alongside FAKE_GHGIT_LOG; the caller removes `dir`.
+function seedServedTicket(ticket: ServedTicket): { dir: string; env: Record<string, string> } {
   const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-'));
   const file = (name: keyof typeof SERVED_TICKET_FILES): string => join(dir, SERVED_TICKET_FILES[name]);
   const labels = ticket.labels.map((name) => ({ name }));
@@ -1917,16 +1917,19 @@ function seedServedTicket(ticket: ServedTicket): Record<string, string> {
   writeFileSync(file('body'), ticket.body);
   writeFileSync(file('labels'), ticket.labels.map((name) => `${name}\n`).join(''));
   return {
-    FAKE_GH_ISSUE_NUM: ticket.number,
-    FAKE_GH_ISSUE_JSON: file('json'),
-    FAKE_GH_ISSUE_BODY: file('body'),
-    FAKE_GH_ISSUE_LABELS: file('labels'),
+    dir,
+    env: {
+      FAKE_GH_ISSUE_NUM: ticket.number,
+      FAKE_GH_ISSUE_JSON: file('json'),
+      FAKE_GH_ISSUE_BODY: file('body'),
+      FAKE_GH_ISSUE_LABELS: file('labels'),
+    },
   };
 }
 
 test('the fake gh serves the knob ticket for every realistic issue-view form, and falls through otherwise', { tag: '@ownapp' }, () => {
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-knob-bin-');
-  const knob = seedServedTicket(TICKET_NAMING_Y);
+  const { dir: ticketDir, env: knob } = seedServedTicket(TICKET_NAMING_Y);
   const gh = (env: Record<string, string>, ...args: string[]): string =>
     execFileSync(join(binDir, 'gh'), args, { encoding: 'utf8', env: { ...process.env, FAKE_GHGIT_LOG: logFile, ...env } });
   const lines = (out: string): string[] => out.split('\n');
@@ -1954,6 +1957,9 @@ test('the fake gh serves the knob ticket for every realistic issue-view form, an
   expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'body', '-q', '.body', '--repo', 'fake/repo')).toThrow();
   expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'body,labels', '--repo', 'fake/repo')).toThrow();
   expect(() => gh(unreadable, 'issue', 'view', '167', '--json', 'labels', '--jq', '.labels[].name', '--repo', 'fake/repo')).toThrow();
+
+  rmSync(ticketDir, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 // LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
@@ -3497,7 +3503,7 @@ function seedPickupCatalogEntry(home: string, id: string, name: string, extraSte
 }
 
 // §18.7.6
-function loadCatalogEntry(home: string, id: string, worktreeDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-probe-'))) {
+function loadCatalogEntry(home: string, id: string, worktreeDir: string) {
   const resolved = resolveCatalogEntry({ worktreeDir, globalRoot: home }, id);
   if (!resolved.ok) throw new Error(`catalog entry ${id} did not resolve: ${resolved.cause}`);
   expect(resolved.tier).toBe('global');
@@ -3510,7 +3516,8 @@ test('seedPickupCatalogEntry writes a global catalog entry whose second step is 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-pickup-entry-home-'));
   seedPickupCatalogEntry(home, 'flow-x-pinned', 'Flow X Pinned', ['x-review', 'x-ship']);
 
-  const definition = loadCatalogEntry(home, 'flow-x-pinned');
+  const probe = mkdtempSync(join(tmpdir(), 'agent-term-e2e-probe-'));
+  const definition = loadCatalogEntry(home, 'flow-x-pinned', probe);
   expect(definition.name).toBe('Flow X Pinned');
   expect(definition.steps.map((s) => [s.id, s.kind])).toEqual([
     ['x-groom', 'manual'],
@@ -3525,6 +3532,8 @@ test('seedPickupCatalogEntry writes a global catalog entry whose second step is 
     bootstrap: 'pickup',
     inputs: [{ name: 'ticket', type: 'github-ticket', required: true }],
   });
+  rmSync(probe, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 // #167 AC 1 (§18.7.5) — pickup binds the ticket to a worktree whose flow was bound at Start; a ticket that names
@@ -3542,8 +3551,9 @@ const pickerOption = (id: string) => flowPicker().getByRole('option', { name: ne
 const budget = (uiWaits: number): number =>
   Math.ceil((3 * PIN_GREEN_MS + WINDOW_TIMEOUT_MS + PIN_WAIT.firstPaint + PIN_WAIT.pickupOutcome + PIN_WAIT.verdict + uiWaits * PIN_WAIT.ui) / 30_000) * 30_000;
 
-async function launchTicketPinApp(home: string, pickupStepId: string): Promise<{ binDir: string; logFile: string }> {
+async function launchTicketPinApp(home: string, pickupStepId: string): Promise<{ binDir: string; logFile: string; ticketDir: string }> {
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-167-bin-');
+  const ticket = seedServedTicket(TICKET_NAMING_Y);
   seedFakeAgentV2(binDir, { stepId: pickupStepId, artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
     args: launchArgs(),
@@ -3557,12 +3567,12 @@ async function launchTicketPinApp(home: string, pickupStepId: string): Promise<{
       CLAUDE_CONFIG_DIR: exampleConfigDir,
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
-      ...seedServedTicket(TICKET_NAMING_Y),
+      ...ticket.env,
     },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: PIN_WAIT.firstPaint });
-  return { binDir, logFile };
+  return { binDir, logFile, ticketDir: ticket.dir };
 }
 
 async function closeTicketPinApp(catalog: CatalogFixture, dirs: string[]): Promise<void> {
@@ -3571,7 +3581,6 @@ async function closeTicketPinApp(catalog: CatalogFixture, dirs: string[]): Promi
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 }
 
-// Start → the manual first step → Advance into the pickup step, whose required ticket input opens the modal.
 async function enterPickupStep(message: string): Promise<void> {
   await flowControl().click();
   await expect(flowControl()).toHaveText('Advance', { timeout: PIN_WAIT.ui });
@@ -3612,7 +3621,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-167-repo-')));
   mkdirSync(join(repo, '.git'));
-  const { binDir, logFile } = await launchTicketPinApp(home, 'pickup');
+  const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'pickup');
 
   await typeCommand(`cd "${repo}"`);
   await typeCommand('fake-agent');
@@ -3651,7 +3660,7 @@ test('a ticket naming another catalog flow never chooses the flow: X stays bound
   await expect(pickerTrigger(), 'the picker shows X at the second Start').toHaveText(`Flow: ${FLOW_X_ID}`, { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
-  await closeTicketPinApp(catalog, [repo, home, binDir]);
+  await closeTicketPinApp(catalog, [repo, home, binDir, ticketDir]);
 });
 
 test('a ticket naming a catalog flow never seeds an unset selection: the worktree stays on its default after pickup, after Terminate, and at the next Start (#167 AC 1 / §18.7.5)', { tag: '@ownapp' }, async () => {
@@ -3661,7 +3670,7 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   catalog.addEntryWithSteps(flowCatalogDir(home), FLOW_Y_ID, FLOW_Y_STEPS);
   const repo = realpathSync(seedAppBootstrapFlowRepo('agent-term-e2e-167-unset-repo-'));
   const localSteps = ['groom', 'plan'];
-  const { binDir, logFile } = await launchTicketPinApp(home, 'plan');
+  const { binDir, logFile, ticketDir } = await launchTicketPinApp(home, 'plan');
 
   await typeCommand(`cd "${repo}"`);
   await expect(stripStepNames()).toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
@@ -3683,7 +3692,7 @@ test('a ticket naming a catalog flow never seeds an unset selection: the worktre
   await expect(stripStepNames(), 'the strip shows the local flow at the next Start').toHaveText(rail(localSteps), { timeout: PIN_WAIT.ui });
   await inputModal().getByRole('button', { name: 'Cancel' }).click();
 
-  await closeTicketPinApp(catalog, [repo, home, binDir]);
+  await closeTicketPinApp(catalog, [repo, home, binDir, ticketDir]);
 });
 
 function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) => string): string {
@@ -7595,6 +7604,8 @@ test('seedEpicChainRepo binds the repo to a catalog entry carrying the example f
   const example = loadUntrustedFlowDefinition(EPIC_CHAIN_FLOW_SOURCE);
   if (!example.ok) throw new Error(example.error);
   expect(definition.steps).toEqual(example.definition.steps);
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 // Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
@@ -7738,7 +7749,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// #167 AC 2 (§18.7.5) — a sub-ticket carries no flow: the flow is bound at each sub-ticket's own Start.
+// #167 AC 2 (§18.7.5)
 const EPIC_X = { id: 'epic-x-catalog-id', name: 'Epic X Flow Name' } as const;
 const EPIC_PIN_GREEN_MS = 16_100;
 const EPIC_PIN_WAIT = { firstPaint: 15_000, dialog: 15_000, chain: 30_000 } as const;

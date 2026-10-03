@@ -12,7 +12,7 @@ import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { FlowStateView } from '../../src/shared/ipc';
 import { recordingEpicPromotionGh } from '../helpers/recordingEpicPromotionGh';
 
-// #167 AC 2 (§18.7.5) — the flow is bound at each sub-ticket's own Start, so promotion records none on it.
+// #167 AC 2 (§18.7.5)
 const X = { id: 'epic-x-catalog-id', name: 'Epic X Flow Name' } as const;
 
 let repo: string;

@@ -55,7 +55,7 @@ const specFilesExceptChangelog = (): string[] =>
     .map((f) => join(SPEC_DIR, f))
     .concat(ROOT_SPEC);
 
-describe(`#167 slice 3 — no ${SECTION}18 / spec clause requires or plans pickup seeding or a ticket-borne stamp (AC 3)`, () => {
+describe(`#167 — no ${SECTION}18 / spec clause requires or plans pickup seeding or a ticket-borne stamp (AC 3)`, () => {
   const NEEDLES = [
     join2('Pickup see', 'ding (A4)'),
     join2('stamps the chosen ', 'selection'),
@@ -86,7 +86,7 @@ describe(`#167 slice 3 — no ${SECTION}18 / spec clause requires or plans picku
   });
 });
 
-describe(`#167 slice 3 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their numbers and subjects (AC 5)`, () => {
+describe(`#167 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their numbers and subjects (AC 5)`, () => {
   const SUBJECTS: ReadonlyArray<readonly [string, string]> = [
     ['18.7.1', 'catalog'],
     ['18.7.2', 'pointer'],
@@ -109,7 +109,7 @@ describe(`#167 slice 3 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their number
   });
 });
 
-describe(`#167 slice 3 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, () => {
+describe(`#167 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, () => {
   it(`${SECTION}18.7.5 states the rule and that a ticket is untrusted input`, () => {
     const body = lower(sectionOf(CH18, '18.7.5'));
     expect(body).toContain('bound at start');
@@ -144,7 +144,7 @@ describe(`#167 slice 3 — ${SECTION}18.7.5 states the flow is bound at Start (A
   });
 });
 
-describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4)`, () => {
+describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4)`, () => {
   /** The preamble (non-bullet text before the first `- ` bullet) plus each top-level `- ` bullet. */
   function units(): { preamble: string; bullets: string[] } {
     const body = sectionBody(read(CH18), '18.7.6');
@@ -225,7 +225,7 @@ const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/
 const ch23Body = (): string => sectionOf(CH23, '23.2');
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
-describe(`#167 slice 4 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
+describe(`#167 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
   const NEEDLES = [
     join2("seeding that worktree's ", 'flow-state'),
     join2('seeding its ', 'flow-state'),
@@ -251,7 +251,7 @@ describe(`#167 slice 4 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause s
   });
 });
 
-describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, () => {
+describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
   it(`the ${SECTION}6 flow:openChild row and preload sketch carry no atStep`, () => {
     expect(openChildRow(), `atStep in the flow:openChild row (${RULE})`).not.toContain('atStep');
     expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
@@ -327,7 +327,7 @@ const themeASliceList = (): string[] => sectionOf(DESIGN, '4.4').split('\n');
 const SLICE_ENTRY = /^- \*\*A\d+/;
 const A1_CATALOG_SEED = /A1 must seed (the catalog )?through the app-state resolver|seeds the user-config `flows\/` catalog/g;
 
-describe(`#167 slice 5 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
+describe(`#167 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
   const NEEDLES = [
     join2('pickup ', 'seeding'),
     join2('pickup ', 'stamp'),
