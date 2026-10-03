@@ -1,0 +1,20 @@
+# §18.1/§18.7.1
+name: plan-only
+steps:
+  - id: groom
+    kind: loop
+    loop: groom-loop
+    loop_namespace: app
+    todo_template: ticket-grooming
+    inputs:
+      - name: ticket
+        type: github-ticket
+        required: true
+  - id: plan
+    kind: loop
+    loop: plan-loop
+    loop_namespace: app
+    todo_template: plan-loop-review
+  - id: finalize
+    kind: manual
+    todo_template: polish

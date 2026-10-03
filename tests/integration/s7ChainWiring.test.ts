@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { load } from 'js-yaml';
-import { resolveExampleLoopsV2Dir, resolveExampleFlowDir } from '../../src/main/exampleAssets';
+import { resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
@@ -303,7 +303,7 @@ interface ShippedFlow {
 }
 
 describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
-  const flowDir = resolveExampleFlowDir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+  const flowDir = resolveFeatureDevFlowDir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
   const flow = load(readFileSync(join(flowDir, 'flow.yaml'), 'utf8')) as ShippedFlow;
 
   it('keeps the name feature-dev', () => {

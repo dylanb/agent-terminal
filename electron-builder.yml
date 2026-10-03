@@ -18,8 +18,10 @@ extraResources:
     to: icon.png
   # The install-examples action (§18.1/§23.4/§27.8) reads the bundled trees at runtime; ship each under
   # the path its packaged resolver reads back (process.resourcesPath/example/<tree>, see exampleAssets).
-  - from: example/flow
-    to: example/flow
+  # The selectable flow catalog (§18.7.1), read back by resolveExampleFlowsDir; its feature-dev entry is
+  # also the global-fallback `flow` source (resolveFeatureDevFlowDir), so one tree ships both.
+  - from: example/flows
+    to: example/flows
   # The §27 (v2) def tree — the app-bundled resolution tier read by resolveExampleLoopsV2Dir.
   - from: example/loops-v2
     to: example/loops-v2

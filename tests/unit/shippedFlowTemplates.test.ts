@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { load } from 'js-yaml';
-import { resolveExampleFlowDir } from '../../src/main/exampleAssets';
+import { resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import {
   loadTodoTemplateFile,
   parseTodoTemplate,
@@ -15,7 +15,7 @@ import {
 // default that cannot resolve, and the install reports success either way. Every location here comes
 // from the reader's own resolvers, so a change to where templates live or what they are called moves
 // this test with it rather than leaving it guarding somewhere nothing looks.
-const flowDir = resolveExampleFlowDir({
+const flowDir = resolveFeatureDevFlowDir({
   packaged: false,
   appPath: path.resolve(__dirname, '..', '..'),
 });

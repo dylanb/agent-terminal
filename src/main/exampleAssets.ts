@@ -5,8 +5,18 @@ function bundleRoot(loc: BundleLocation): string {
   return loc.packaged ? loc.resourcesPath : loc.appPath;
 }
 
-export function resolveExampleFlowDir(loc: BundleLocation): string {
-  return path.join(bundleRoot(loc), 'example', 'flow');
+/** The bundled flow CATALOG tree (§18.1/§18.7.1) — a directory of per-flow-home entries the selectable-catalog
+ *  install seeds. The build step places it here (`exampleAssetsBuild`) and the install reads it back here
+ *  (CLAUDE.md writer↔reader rule). */
+export function resolveExampleFlowsDir(loc: BundleLocation): string {
+  return path.join(bundleRoot(loc), 'example', 'flows');
+}
+
+/** §18.1. The global-fallback `flow` destination seeds from this same path as the catalog's `feature-dev`
+ *  entry, so the two destinations cannot drift into shipping divergent bytes. */
+export const FEATURE_DEV_ID = 'feature-dev';
+export function resolveFeatureDevFlowDir(loc: BundleLocation): string {
+  return path.join(resolveExampleFlowsDir(loc), FEATURE_DEV_ID);
 }
 
 /** The bundled Claude Code slash commands — a sibling of the flow and loop trees, never nested in them. */

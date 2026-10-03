@@ -7,7 +7,7 @@ import { applyInstallExamples, exampleInstallDirs, type InstallDestination } fro
 import { loadFlowDefinitionLocalFirst, flowHomeDir } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 
-const BUNDLE_FLOW = path.resolve('example', 'flow');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 
 function walk(dir: string, base: string = dir): string[] {

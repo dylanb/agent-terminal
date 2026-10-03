@@ -875,6 +875,7 @@ export type CliInstallResult =
 /** §18.1/§23.4/§27.15. */
 export const INSTALL_DESTINATION_IDS = [
   'flow',
+  'flowCatalog',
   'appLoops',
   'commands',
 ] as const;

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlow, copyExampleLoopsV2, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
+import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
 import {
-  resolveExampleFlowDir,
+  resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
@@ -20,7 +20,7 @@ beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), 'ex-root-'));
   out = mkdtempSync(path.join(tmpdir(), 'ex-out-'));
 
-  const flowDir = path.join(root, 'example', 'flow');
+  const flowDir = path.join(root, 'example', 'flows', 'feature-dev');
   mkdirSync(path.join(flowDir, 'todo-templates'), { recursive: true });
   writeFileSync(path.join(flowDir, 'flow.yaml'), 'name: feature-dev\nsteps: []\n');
   writeFileSync(path.join(flowDir, 'todo-templates', 'a.md'), '# A\n- one\n');
@@ -40,17 +40,17 @@ afterEach(() => {
   rmSync(out, { recursive: true, force: true });
 });
 
-describe('copyExampleFlow — places the bundle where the unpackaged resolver reads it', () => {
-  it('copies example/flow to the path resolveExampleFlowDir reads for that out dir', () => {
-    const dest = copyExampleFlow(root, out);
-    expect(dest).toBe(resolveExampleFlowDir({ packaged: false, appPath: out }));
-    expect(readFileSync(path.join(dest, 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
+describe('copyExampleFlows — places the catalog bundle where the unpackaged resolver reads it', () => {
+  it('copies example/flows to the path resolveExampleFlowsDir reads for that out dir', () => {
+    const dest = copyExampleFlows(root, out);
+    expect(dest).toBe(resolveExampleFlowsDir({ packaged: false, appPath: out }));
+    expect(readFileSync(path.join(dest, 'feature-dev', 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
   });
 
   it('copies the whole todo-templates subtree, creating the destination dir', () => {
-    expect(existsSync(path.join(out, 'example', 'flow'))).toBe(false);
-    copyExampleFlow(root, out);
-    expect(readFileSync(path.join(out, 'example', 'flow', 'todo-templates', 'a.md'), 'utf8')).toContain('# A');
+    expect(existsSync(path.join(out, 'example', 'flows'))).toBe(false);
+    copyExampleFlows(root, out);
+    expect(readFileSync(path.join(out, 'example', 'flows', 'feature-dev', 'todo-templates', 'a.md'), 'utf8')).toContain('# A');
   });
 });
 
@@ -107,8 +107,8 @@ describe('a symlink in a committed bundle tree fails the build — it is never f
   });
 
   it('does not launder the link target into the bundle as a regular file', () => {
-    symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'example', 'flow', 'linked.md'));
-    expect(() => copyExampleFlow(root, out)).toThrow();
-    expect(existsSync(path.join(out, 'example', 'flow', 'linked.md'))).toBe(false);
+    symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'example', 'flows', 'feature-dev', 'linked.md'));
+    expect(() => copyExampleFlows(root, out)).toThrow();
+    expect(existsSync(path.join(out, 'example', 'flows', 'feature-dev', 'linked.md'))).toBe(false);
   });
 });
