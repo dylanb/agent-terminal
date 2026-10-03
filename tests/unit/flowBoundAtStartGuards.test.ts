@@ -9,9 +9,13 @@ import { join } from 'node:path';
 const SECTION = String.fromCharCode(0xa7);
 const RULE = `retired by ${SECTION}18.7.5 / D63, #167`;
 const SPEC_DIR = 'docs/spec';
+const CH06 = join(SPEC_DIR, '06-ipc-contract.md');
 const CH18 = join(SPEC_DIR, '18-flow-definitions-flow-yaml.md');
+const CH23 = join(SPEC_DIR, '23-multi-instance-and-epics.md');
+const CH24 = join(SPEC_DIR, '24-build-plan-ui-inwards.md');
 const CHANGELOG = join(SPEC_DIR, 'changelog.md');
 const ROOT_SPEC = 'terminal-web-ui-spec.md';
+const REQUIREMENTS = 'flow-management-requirements.md';
 
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
@@ -35,6 +39,13 @@ function sectionBody(text: string, num: string): string {
     body.push(line);
   }
   return body.join('\n').trim();
+}
+
+/** `sectionBody` of `file`, asserted present so a renamed or missing heading fails rather than passing vacuously. */
+function sectionOf(file: string, num: string): string {
+  const body = sectionBody(read(file), num);
+  expect(body.length, `${SECTION}${num} body not found`).toBeGreaterThan(0);
+  return body;
 }
 
 const specFilesExceptChangelog = (): string[] =>
@@ -69,9 +80,7 @@ describe(`#167 slice 3 — no ${SECTION}18 / spec clause requires or plans picku
   }
 
   it(`${SECTION}18.7 carries no stamp clause`, () => {
-    const body = sectionBody(read(CH18), '18.7');
-    expect(body.length, `${SECTION}18.7 body not found`).toBeGreaterThan(0);
-    const hits = body.split('\n').filter((l) => /\bstamp/i.test(l));
+    const hits = sectionOf(CH18, '18.7').split('\n').filter((l) => /\bstamp/i.test(l));
     expect(hits, `stamp clause (${RULE}) still in ${SECTION}18.7:\n${hits.join('\n')}`).toEqual([]);
   });
 });
@@ -101,8 +110,7 @@ describe(`#167 slice 3 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their number
 
 describe(`#167 slice 3 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, () => {
   it(`${SECTION}18.7.5 states the rule and that a ticket is untrusted input`, () => {
-    const body = lower(sectionBody(read(CH18), '18.7.5'));
-    expect(body.length, `${SECTION}18.7.5 body not found`).toBeGreaterThan(0);
+    const body = lower(sectionOf(CH18, '18.7.5'));
     expect(body).toContain('bound at start');
     expect(body).toContain('pickup binds the ticket');
     expect(body).toContain('untrusted');
@@ -114,9 +122,7 @@ describe(`#167 slice 3 — ${SECTION}18.7.5 states the flow is bound at Start (A
   });
 
   it(`${SECTION}18.7.5 carries no seed clause beyond its one historical mention`, () => {
-    const body = sectionBody(read(CH18), '18.7.5');
-    expect(body.length, `${SECTION}18.7.5 body not found`).toBeGreaterThan(0);
-    const hits = body
+    const hits = sectionOf(CH18, '18.7.5')
       .split('\n')
       .filter((l) => /seed/i.test(l.replace(new RegExp(join2('pickup-', 'seeding clause'), 'gi'), '')));
     expect(hits, `seed clause (${RULE}) still in ${SECTION}18.7.5:\n${hits.join('\n')}`).toEqual([]);
@@ -203,11 +209,6 @@ describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seedi
   });
 });
 
-const CH06 = join(SPEC_DIR, '06-ipc-contract.md');
-const CH23 = join(SPEC_DIR, '23-multi-instance-and-epics.md');
-const CH24 = join(SPEC_DIR, '24-build-plan-ui-inwards.md');
-const REQUIREMENTS = 'flow-management-requirements.md';
-
 /** The single line of `file` matching `pattern`; asserted unique so a missed or duplicated anchor fails. */
 function soleLine(file: string, pattern: RegExp): string {
   const hits = read(file)
@@ -220,11 +221,7 @@ function soleLine(file: string, pattern: RegExp): string {
 const openChildRow = (): string => soleLine(CH06, /^\|\s*`flow:openChild`/);
 const openChildSketch = (): string => soleLine(CH06, /^\s*openChild:/);
 const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/i);
-const ch23Body = (): string => {
-  const body = sectionBody(read(CH23), '23.2');
-  expect(body.length, `${SECTION}23.2 body not found`).toBeGreaterThan(0);
-  return body;
-};
+const ch23Body = (): string => sectionOf(CH23, '23.2');
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
 describe(`#167 slice 4 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
@@ -297,11 +294,12 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
     const version = (shape as RegExpExecArray)[1];
     const entry = changelogEntries().find((e) => e.startsWith(`**Changelog v${version}:**`));
     expect(entry, `no **Changelog v${version}:** entry for the flow:openChild row's shape`).toBeDefined();
+    const text = entry ?? '';
     expect(
-      (entry as string).includes(`${SECTION}23.2`) || (entry as string).includes('D63'),
+      text.includes(`${SECTION}23.2`) || text.includes('D63'),
       `the v${version} changelog entry cites neither ${SECTION}23.2 nor D63`,
     ).toBe(true);
-    expect(entry as string, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
+    expect(text, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
       '`flow:openChild`',
     );
   });
