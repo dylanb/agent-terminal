@@ -23,6 +23,7 @@ export interface FlowLifecycleDeps {
   forgetRunEntry(repoKey: string): void;
   recordTerminate(repoKey: string): void;
   clearTodos(repoKey: string): void;
+  clearSliceBrief(repoKey: string): void;
   clearMonitor(): void;
   flowChanged(): void;
   presentView(repoKey: string, view: FlowStateView): FlowStateView;
@@ -56,6 +57,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
     bestEffort(() => deps.forgetRunEntry(repoKey));
     bestEffort(() => deps.recordTerminate(repoKey));
     bestEffort(() => deps.clearTodos(repoKey));
+    bestEffort(() => deps.clearSliceBrief(repoKey));
     bestEffort(() => deps.clearMonitor());
     bestEffort(() => deps.flowChanged());
   };

@@ -276,7 +276,7 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
 // half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
 // re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
 // PRESERVING resolved inputs so the operator can fix the cause and re-advance; from the first step there is no
-// previous step, so it resets the run to never-started as a Terminate does (§18.7.4, v2.155). It is a no-op guard, not
+// previous step, so it resets the run to never-started as a Terminate does (§18.7.4, v2.161). It is a no-op guard, not
 // a throwing transition: it fires from an async pickup `.then()`, so a stale call (the flow already
 // moved on) must be inert rather than an unhandled rejection.
 describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)', () => {
@@ -346,7 +346,7 @@ describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)'
     expect(flow.revertStep('implement').status).toBe('done');
   });
 
-  it('resets a first-step rollback to never-started as a Terminate does, discarding resolved inputs (§18.7.4, v2.155)', () => {
+  it('resets a first-step rollback to never-started as a Terminate does, discarding resolved inputs (§18.7.4, v2.161)', () => {
     const FIRST_LOOP: FlowLoad = {
       ok: true,
       definition: {
@@ -1238,6 +1238,17 @@ describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
     const resumed = createFlowMachine(repeatLoad, createFlowStateStore(dir));
     expect(resumed.state().stepName).toBe('red');
     expect(resumed.state().status).toBe('in_progress');
+  });
+
+  it('names the step a slice restarts at, so a caller can tell a landed reopen from an inert one', () => {
+    const flow = createFlowMachine(repeatLoad, createFlowStateStore(dir));
+    expect(flow.sliceStartStep()).toBe('red');
+    const noRepeat: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'a', kind: 'manual' }, { id: 'b', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    expect(createFlowMachine(noRepeat, createFlowStateStore(dir)).sliceStartStep()).toBeNull();
   });
 
   it('is a no-op when the flow is not in progress', () => {

@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  clearSliceBrief,
+  readSliceBrief,
+  writeSliceBrief,
   APP_LOOP_STATE_SCHEMA,
   armInterrupt,
   clearAppLoopBootstrap,
@@ -941,6 +944,55 @@ describe('§28.5.3 — the changed-tests flag store, disjoint from the run-state
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
       expect(() => recordChangedTests(repo, 'green-slice1', ['tests/a.test.ts'])).toThrow();
       expect(existsSync(join(elsewhere, 'loop', 'changed-tests.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+// §28.4.2 — the back-to-RED slice brief is app-owned loop state in its OWN file, disjoint from the run-state
+// document: the RED/GREEN/refactor phases rewrite run-state wholesale while the brief must outlive all three.
+describe('§28.4.2 slice brief — persisted independently of the run-state document', () => {
+  const BRIEF = { slice: 2, fromStep: 'green', text: 'Cover the empty-input case the tests missed' };
+
+  it('reads back what was written, and nothing after it is cleared', () => {
+    expect(readSliceBrief(repo)).toBeNull();
+    writeSliceBrief(repo, BRIEF);
+    expect(readSliceBrief(repo)).toEqual(BRIEF);
+    clearSliceBrief(repo);
+    expect(readSliceBrief(repo)).toBeNull();
+  });
+
+  it('a wholesale run-state write neither clobbers an active brief nor resurrects a cleared one', () => {
+    writeSliceBrief(repo, BRIEF);
+    writeAppLoopState(repo, { ...RUN, turnKey: 'consolidate-plan', status: 'complete', round: 2 }, FIXED);
+    expect(readSliceBrief(repo)).toEqual(BRIEF);
+    clearSliceBrief(repo);
+    writeAppLoopState(repo, RUN, FIXED);
+    expect(readSliceBrief(repo)).toBeNull();
+  });
+
+  it('writing the brief leaves the run-state document byte-for-byte unchanged', () => {
+    writeAppLoopState(repo, RUN, FIXED);
+    const runState = readFileSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'), 'utf8');
+    writeSliceBrief(repo, BRIEF);
+    clearSliceBrief(repo);
+    expect(readFileSync(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'), 'utf8')).toBe(runState);
+  });
+
+  it('reads a malformed brief as none (CWE-20): a non-positive slice, a blank text, or a blank source step', () => {
+    for (const bad of [{ ...BRIEF, slice: 0 }, { ...BRIEF, slice: 1.5 }, { ...BRIEF, text: '  ' }, { ...BRIEF, fromStep: '' }]) {
+      writeSliceBrief(repo, bad);
+      expect(readSliceBrief(repo), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('refuses to write behind a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-brief-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => writeSliceBrief(repo, BRIEF)).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'slice-brief.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }

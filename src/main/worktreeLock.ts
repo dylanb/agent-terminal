@@ -1,6 +1,6 @@
 // §18.7.4 AC11 (CWE-367). The lockfile lives on the user's app-owned ground, never in the worktree itself, where a
 // hosted agent could plant one to wedge the gate. Only an unusable lock runs the critical section without the lock, an
-// accepted residual (§18.7.4, v2.156).
+// accepted residual (§18.7.4, v2.162).
 
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';

@@ -5,6 +5,7 @@ import {
   exampleRoundReport,
   failedReviewers,
   reportHasFailedReviewer,
+  roundReportProblems,
   roundReportWellFormed,
   type RoundReportSpec,
 } from '../../src/shared/roundReport';
@@ -112,6 +113,35 @@ describe('roundReportWellFormed — per-issue elements (AC6)', () => {
   it('accepts a well-formed issue under a `*` bullet (glyph variation is not malformation)', () => {
     const block = '* issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed: fixed it\n';
     expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
+
+  // Where a value sits is layout, not contract (§27.5 minimal-not-rigid): a value written as a nested list or a
+  // wrapped paragraph indented under its label is still that field's value.
+  it('accepts a FIXED issue whose what-changed is a nested list indented under the label', () => {
+    const block =
+      '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n' +
+      '    - `dom.ts` adds the shared predicate.\n    - `shell.ts` consults it.\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
+
+  it('accepts a reason wrapped onto indented lines under its label', () => {
+    const block = '- issue: a real defect\n  disposition: dismissed — invalid\n  reason:\n    the plan assigns it elsewhere\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
+
+  it('is still malformed when a FIXED issue labels what-changed but nothing is indented beneath it', () => {
+    const block = '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n\n  more prose\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('is still malformed when the only lines indented under what-changed are whitespace', () => {
+    const block = '- issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed:\n      \n      \n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('never borrows the next field as a value: an empty reason followed by what-changed stays empty', () => {
+    const block = '- issue: a real defect\n  disposition: dismissed — invalid\n  reason:\n  what-changed: nothing\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
   });
 });
 
@@ -222,5 +252,50 @@ describe('failed-reviewer marker + classifier (§27.5/AC7 — the signal the cle
 describe('the closed disposition set is spec-fixed', () => {
   it('is exactly the §27.5 four-value set', () => {
     expect(DISPOSITIONS).toEqual(['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human']);
+  });
+});
+
+// §27.5/§27.12 — the checker names WHAT is wrong, so the fixer (and a repair retry) can correct exactly that
+// instead of re-running the round. Every problem names the element it concerns; a well-formed report has none,
+// and the boolean predicate agrees with the list on every input.
+describe('roundReportProblems — names each defect (§27.5/§27.12)', () => {
+  const report = (body: string): string => `## summary\n\n## findings\n\n## disposition\n\n${body}`;
+
+  it('reports nothing for the canonical example', () => {
+    expect(roundReportProblems(exampleRoundReport(SPEC), SPEC)).toEqual([]);
+  });
+
+  it('names each missing section and each missing reviewer record', () => {
+    const problems = roundReportProblems('### review-principal\n\n_no findings_\n', SPEC);
+    expect(problems.join('\n')).toContain('## summary');
+    expect(problems.join('\n')).toContain('## disposition');
+    expect(problems.join('\n')).toContain('### review-security');
+    expect(problems.join('\n')).not.toContain('### review-principal');
+  });
+
+  it('names an off-list disposition with its line and quotes the allowed values', () => {
+    const r = report('### review-principal\n\n- issue: a thing\n  disposition: fixed (partially)\n  reason: r\n  what-changed: w\n\n### review-security\n\n_no findings_\n');
+    const problems = roundReportProblems(r, SPEC).join('\n');
+    expect(problems).toContain('fixed (partially)');
+    expect(problems).toMatch(/line \d+/);
+    for (const d of DISPOSITIONS) expect(problems).toContain(d);
+  });
+
+  it('names a fixed issue without what-changed, and an issue without a reason', () => {
+    const r = report('### review-principal\n\n- issue: one\n  disposition: fixed\n  reason: r\n\n- issue: two\n  disposition: dismissed — invalid\n\n### review-security\n\n_no findings_\n');
+    const problems = roundReportProblems(r, SPEC).join('\n');
+    expect(problems).toContain('what-changed');
+    expect(problems).toContain('reason');
+  });
+
+  it('names an issue recorded outside any reviewer record', () => {
+    const r = `## summary\n\n- issue: stray\n  disposition: fixed\n  reason: r\n  what-changed: w\n\n## findings\n\n## disposition\n\n### review-principal\n\n_no findings_\n\n### review-security\n\n_no findings_\n`;
+    expect(roundReportProblems(r, SPEC).join('\n')).toContain('outside');
+  });
+
+  it('agrees with roundReportWellFormed', () => {
+    for (const r of [exampleRoundReport(SPEC), '', report('### review-principal\n\n_no findings_\n')]) {
+      expect(roundReportWellFormed(r, SPEC)).toBe(roundReportProblems(r, SPEC).length === 0);
+    }
   });
 });

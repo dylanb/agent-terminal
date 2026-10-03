@@ -81,6 +81,7 @@ export type FlowStripDeps = Omit<
   | 'appGateDecision'
   | 'appRequestChanges'
   | 'appRedo'
+  | 'appBackToRed'
   | 'armInterrupt'
   | 'setTitle'
   | 'setActiveFlow'

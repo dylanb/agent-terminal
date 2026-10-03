@@ -278,6 +278,7 @@ function fakeGh(start = 500) {
   const events: string[] = [];
   let next = start;
   const gh: AppEpicPromotionGitHub = {
+    ensureLabel: async () => {},
     createIssue: async (title, body) => {
       next += 1;
       events.push(`create#${next} title=${title} body=${JSON.stringify(body)}`);
@@ -296,6 +297,7 @@ function failingGh(failCreateOn: number) {
   let next = 500;
   let creates = 0;
   const gh: AppEpicPromotionGitHub = {
+    ensureLabel: async () => {},
     createIssue: async (title, body) => {
       creates += 1;
       if (creates === failCreateOn) throw new Error('gh create failed');
@@ -482,5 +484,66 @@ describe('runEpicPromotion — resumable idempotency (§28.7 AC3)', () => {
     const { gh } = fakeGh();
     const store: EpicPromotionStore = { read: () => null, write: () => { throw new Error('ENOSPC'); } };
     await expect(runEpicPromotion(gh, REQUEST, store)).rejects.toThrow(/#501/);
+  });
+});
+
+// §28.7 — GitHub refuses to apply a label the repository does not have, so a repo without the promotion's labels
+// used to fail AFTER the first sub-ticket was created, stranding a half-promoted epic. This fake models that rule.
+function labelledGitHub(opts: { labels?: string[]; labelCreateFails?: boolean } = {}) {
+  const labels = new Set(opts.labels ?? []);
+  const issueLabels = new Map<number, Set<string>>();
+  const mutations: string[] = [];
+  let next = 500;
+  const gh: AppEpicPromotionGitHub = {
+    ensureLabel: async (label) => {
+      if (labels.has(label)) return;
+      if (opts.labelCreateFails) throw new Error('HTTP 403: Resource not accessible by integration');
+      labels.add(label);
+    },
+    createIssue: async () => {
+      next += 1;
+      issueLabels.set(next, new Set());
+      mutations.push(`create#${next}`);
+      return next;
+    },
+    addLabel: async (issue, label) => {
+      if (!labels.has(label)) throw new Error(`'${label}' not found`);
+      issueLabels.get(issue)?.add(label);
+      mutations.push(`label#${issue}`);
+    },
+    appendIssueBody: async (issue) => void mutations.push(`append#${issue}`),
+    closePr: async (pr) => void mutations.push(`closePr#${pr}`),
+  };
+  return { gh, labels, issueLabels, mutations };
+}
+
+describe('runEpicPromotion — the sub-ticket labels exist before any issue is created (§28.7)', () => {
+  it('creates the missing labels, then promotes the whole chain with every sub-ticket labelled', async () => {
+    const github = labelledGitHub({ labels: ['agent-loop/ready'] });
+    await runEpicPromotion(github.gh, REQUEST, memStore().store);
+    expect([...github.labels]).toEqual(expect.arrayContaining(['agent-loop/subticket', 'agent-loop/ready']));
+    for (const n of [501, 502]) {
+      expect([...(github.issueLabels.get(n) ?? [])].sort()).toEqual(['agent-loop/ready', 'agent-loop/subticket']);
+    }
+    expect(github.mutations).toContain('closePr#4242');
+  });
+
+  it('when a missing label cannot be created, asks the operator to create it and changes nothing on GitHub', async () => {
+    const github = labelledGitHub({ labels: ['agent-loop/ready'], labelCreateFails: true });
+    const { store, saved } = memStore();
+    const run = runEpicPromotion(github.gh, REQUEST, store);
+    await expect(run).rejects.toThrow('gh label create agent-loop/subticket');
+    await expect(run).rejects.toThrow(/HTTP 403/);
+    expect(github.mutations).toEqual([]);
+    expect(saved()).toBeNull();
+  });
+
+  it('resumes a promotion stranded by a missing label: labels it, never re-creates it, and finishes the chain', async () => {
+    const github = labelledGitHub({ labels: ['agent-loop/ready'] });
+    const { store } = memStore({ epic: 176, created: [{ index: 1, issue: 236, title: 'Slice one' }], trackingAppended: false, prClosed: false });
+    await runEpicPromotion(github.gh, REQUEST, store);
+    expect(github.mutations.filter((m) => m.startsWith('create#'))).toEqual(['create#501']);
+    expect(github.mutations).toContain('label#236');
+    expect(github.mutations).toContain('closePr#4242');
   });
 });

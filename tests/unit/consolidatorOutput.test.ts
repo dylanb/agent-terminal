@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONSOLIDATOR_VERDICTS,
+  consolidatorOutputProblems,
   consolidatorOutputWellFormed,
   exampleConsolidatorOutput,
   parseConsolidatorOutput,
@@ -97,5 +98,28 @@ describe('verdictCarriesReason — the persisted verdict/reason gate (reason iff
       'stop for a human': true,
     };
     for (const v of CONSOLIDATOR_VERDICTS) expect(verdictCarriesReason(v)).toBe(carries[v]);
+  });
+});
+
+// §27.6/§27.12 — the verdict checker names what is wrong, so a repair retry can fix exactly that.
+describe('consolidatorOutputProblems — names each defect (§27.6/§27.12)', () => {
+  it('reports nothing for each canonical example', () => {
+    for (const v of CONSOLIDATOR_VERDICTS) expect(consolidatorOutputProblems(exampleConsolidatorOutput(v, CATALOG), CATALOG)).toEqual([]);
+  });
+
+  it('names a missing verdict and quotes the allowed values', () => {
+    const problems = consolidatorOutputProblems('verdict: probably fine\n', CATALOG).join('\n');
+    for (const v of CONSOLIDATOR_VERDICTS) expect(problems).toContain(v);
+  });
+
+  it('names an `another round` with no roster, and a roster persona outside the catalog', () => {
+    expect(consolidatorOutputProblems('verdict: another round\n', CATALOG).join('\n')).toContain('roster');
+    expect(consolidatorOutputProblems('verdict: another round\nroster: review-plan-ghost\n', CATALOG).join('\n')).toContain('review-plan-ghost');
+  });
+
+  it('agrees with consolidatorOutputWellFormed', () => {
+    for (const t of ['', 'verdict: clean\n', 'verdict: another round\n', 'verdict: another round\nroster: review-plan-ghost\n']) {
+      expect(consolidatorOutputWellFormed(t, CATALOG)).toBe(consolidatorOutputProblems(t, CATALOG).length === 0);
+    }
   });
 });

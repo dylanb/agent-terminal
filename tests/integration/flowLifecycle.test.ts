@@ -8,6 +8,7 @@ import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/l
 import { createFlowManager, flowCatalogDir, flowHomeDir, type FlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createTodoStore } from '../../src/main/todoStore';
+import { clearSliceBrief, readSliceBrief, writeSliceBrief } from '../../src/main/appLoopState';
 import { readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
 import {
   createWorktreeLock,
@@ -83,6 +84,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       },
       recordTerminate: (k: string) => audit.recorder.recordTerminate(k),
       clearTodos: (k: string) => todos.clear(k),
+      clearSliceBrief: (k: string) => clearSliceBrief(k),
       clearMonitor: () => effects.monitorCleared++,
       flowChanged: () => effects.flowChanged++,
       presentView: (_k: string, v: FlowStateView): FlowStateView => ({ ...v, loopActivity: { kind: 'presented' } as unknown as FlowStateView['loopActivity'] }),
@@ -128,9 +130,10 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
   const presented = (view: FlowStateView): unknown => (view.loopActivity as unknown as { kind?: string } | undefined)?.kind;
 
   describe('terminate (the UI route)', () => {
-    it('a begun run is reset: flow.terminated in the audit run, todos cleared, the monitor cleared, and the strip told', () => {
+    it('a begun run is reset: flow.terminated in the audit run, todos cleared, the back-to-RED brief cleared, the monitor cleared, and the strip told', () => {
       const { wt, audit, todos, effects, lifecycle, begin } = rig();
       begin();
+      writeSliceBrief(wt, { slice: 1, fromStep: 's2', text: 'cover the empty input' });
 
       const result = lifecycle.terminate(wt);
 
@@ -139,6 +142,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(presented(result.view)).toBe('presented');
       expect(audit.eventTypes(wt)).toContain('flow.terminated');
       expect(todos.list(wt)).toEqual([]);
+      expect(readSliceBrief(wt)).toBeNull();
       expect(effects.monitorCleared).toBe(1);
       expect(effects.flowChanged).toBeGreaterThan(0);
       expect(effects.forgotten).toEqual([wt]);
@@ -162,10 +166,12 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       const before = manager.state(wt);
       audit.openRun(wt, before, { ...before, status: 'in_progress' });
       todos.add(wt, 'kept');
+      writeSliceBrief(wt, { slice: 1, fromStep: 's2', text: 'kept brief' });
 
       const result = lifecycle.terminate(wt);
 
       expect(result).toMatchObject({ outcome: 'refused', cause: 'not-begun' });
+      expect(readSliceBrief(wt)?.text).toBe('kept brief');
       expect(presented(result.view)).toBe('presented');
       expect(audit.eventTypes(wt)).not.toContain('flow.terminated');
       expect(todos.list(wt)).toHaveLength(1);

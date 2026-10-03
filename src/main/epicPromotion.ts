@@ -69,6 +69,9 @@ export const EPIC_TRACKING_MARKER = '<!-- agent-terminal:epic-tracking -->';
 /** The GitHub port the promotion executor drives — domain verbs, argv/stdin under the hood (the real adapter is
  *  appEpicPromotionGithub.ts), so the executor runs under a fake with no `gh`. */
 export interface AppEpicPromotionGitHub {
+  /** Make sure the repository has `label`, creating it when it is missing; rejects when it is missing and cannot
+   *  be created. */
+  ensureLabel(label: string): Promise<void>;
   /** Create a sub-ticket, returning its issue number. */
   createIssue(title: string, body: string): Promise<number>;
   /** Add a label to an issue. Idempotent (a label already present is a no-op), so it is safe to re-apply on
@@ -136,6 +139,14 @@ export async function runEpicPromotion(gh: AppEpicPromotionGitHub, request: Epic
   // without re-querying GitHub — a documented non-goal; the loop area is the pre-existing agent trust boundary.)
   if (promotionRecordStale(state.created, request.subTickets)) {
     throw new Error(promotionRecordStaleError(request.epic));
+  }
+  // GitHub refuses to apply a label the repository lacks, so a missing one would strand the epic half-promoted.
+  for (const label of [EPIC_SUBTICKET_LABEL, EPIC_READY_LABEL]) {
+    try {
+      await gh.ensureLabel(label);
+    } catch (e) {
+      throw new Error(`this repository has no "${label}" label and it could not be created (${errMsg(e)}) — create it with \`gh label create ${label}\`, then approve again; nothing was changed on GitHub`);
+    }
   }
   const issueByIndex = new Map(state.created.map((c) => [c.index, c.issue]));
   let preceding: number | null = null;
