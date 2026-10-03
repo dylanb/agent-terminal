@@ -2,10 +2,10 @@
 
 Derived from persona: impl-review-intent.
 
-Grade the diff against the ticket: every acceptance criterion traces to a test that would fail without
-the change, and nothing outside the ticket's scope rode along (sibling-scope creep). Honor the discovery
-exception — churn or friction fixed because this work surfaced it belongs here. Cite the AC and the test
-that grades it.
+Grade the diff against the ticket: every acceptance criterion traces to a test that would fail without the
+change, and nothing outside the ticket's scope rode along (sibling-scope creep). Where the repository's
+own scope rules allow it, churn or friction fixed because this work surfaced it belongs here. Cite the AC
+and the test that grades it.
 
 No acceptance criterion may be deferred, partially implemented, or left unwired. A "declared" or
 "called-out" deferral is NOT acceptable, so a "deferred to a future slice" note, a TODO/FIXME/NOTE admitting
@@ -22,4 +22,4 @@ prior-slice AC that is unfinished or regressed blocks this change too. Trace eac
 Raise a finding only where acting on it changes an observable outcome — a deferred, missing, or unwired AC,
 an AC with no failing-without-the-change test, or scope that rode along. An equal-quality rewording of an
 already-faithful, complete implementation is not a finding; flagging it only manufactures the next round's
-work (§27.6).
+work.

@@ -25,7 +25,7 @@ scriptable per turn.
 Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.
 Size the slices before enumerating them (see **Slice sizing** below). Enumerate the impl-slices in a
 `## Impl-slices` block so the plan-bundle gate can source their COUNT into the `slices` flow input that
-drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
+drives the impl-slice×N loop: each `### Impl-slice N — <title>` carries that slice's
 `Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs once after the loop and
 is NOT an `### Impl-slice` entry. Emit the block in this shape:
 
@@ -59,14 +59,14 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
 
 This is planning guidance for you alone; reviewers do not grade slice count or size.
 
-## Epic classification (§28.7)
+## Epic classification
 
 Judge whether the ticket is an **epic** — work that decomposes into more than one self-contained,
-independently-shippable sub-ticket at ticket granularity. When it is, add a `Classification: epic` line and a
-`## Sub-tickets` block that partitions the acceptance criteria across the slices with no gaps or overlap
-(reviewed by `tracer-slicer`). Each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
-the preceding slice it depends on, and the approved plan for that slice **verbatim** (it becomes the created
-sub-ticket's body), in this shape:
+independently-shippable sub-ticket at ticket granularity. When it is, add a `Classification: epic` line
+and a `## Sub-tickets` block that partitions the acceptance criteria across the slices with no gaps or
+overlap (reviewed by `tracer-slicer`). Each `### Sub-ticket N — <title>` block carries its slice's
+acceptance criteria, the preceding slice it depends on, and the approved plan for that slice **verbatim**
+(it becomes the created sub-ticket's body), in this shape:
 
 ```text
 Classification: epic
@@ -86,8 +86,8 @@ Depends on: #1
 Plan for slice 2: the thin vertical that delivers criterion 2 end to end.
 ```
 
-A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first, into the
-stacked sub-ticket chain and turns the epic into a tracking issue (§27.10 / §28.7).
+A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first,
+into the stacked sub-ticket chain and turns the epic into a tracking issue.
 
 ## Acceptance criteria are non-negotiable
 

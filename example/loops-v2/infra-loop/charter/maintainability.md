@@ -10,4 +10,4 @@ future change will actually pay.
 
 Raise a finding only where a future reader pays for its absence. When the artifact is spec or plan prose,
 density a human cannot scan is itself the maintainability defect — never push the text toward more
-cross-references or finer precision no reader needs; an equal-quality wording is not a finding (§27.6).
+cross-references or finer precision no reader needs; an equal-quality wording is not a finding.
