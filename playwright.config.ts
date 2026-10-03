@@ -4,6 +4,7 @@ import { resolveE2eWorkers } from './playwright.workers';
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  globalSetup: './tests/e2e/provisionElectron.ts',
   timeout: 60_000,
   // Worker count (serial in GitHub CI, parallel elsewhere) lives in resolveE2eWorkers.
   workers: resolveE2eWorkers(process.env, availableParallelism()),

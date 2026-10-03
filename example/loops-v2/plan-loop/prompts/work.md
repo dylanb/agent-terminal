@@ -1,9 +1,9 @@
 # plan-loop — work turn
 
-Produce an implementation plan for the linked issue, decomposed into tracer-bullet slices per
-`CLAUDE.md`. Name the architectural sketch, the affected contracts, the file-level change list, and
-the test strategy (RED-first, with the Playwright e2e that proves each slice). Emit the plan as the
-`plan` artifact.
+Produce an implementation plan for the linked issue, decomposed into tracer-bullet slices per the
+repository's agent context, guidance, standards, and rules files. Name the architectural sketch, the
+affected contracts, the file-level change list, and the test strategy (RED-first, with the end-to-end test
+that proves each slice). Emit the plan as the `plan` artifact.
 
 A slice exists so that it can be tested end to end on its own — not so that every piece that *could* be
 tested end to end gets a slice of its own. Plan **no more than 5 impl-slices** per ticket (a small ticket is
