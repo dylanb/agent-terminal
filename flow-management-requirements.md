@@ -235,6 +235,9 @@ the app does **not** centrally orchestrate an epic tree; **multi-instance + git 
 mechanism. [OPEN-15: does the app *assist* creating the N worktrees + launching instances, or is that
 manual? See round 6.] [OPEN-16: instances run in **git worktrees** — confirm the worktree model and where
 per-flow state lives relative to a worktree.]
+*(2026-09-29: reading "all steps of a flow run on each PR" as the child running the parent's flow is
+superseded by D63 — each child worktree runs the flow the operator chooses when they Start there. The
+N-worktree, N-instance model stands.)*
 
 **[D19 · 2026-06-16] GitHub tickets/PRs are markdown artifacts.** A GitHub ticket (and PR body) is **just
 markdown** and is shown in the **built-in viewer** like any other artifact. [OPEN-17: how the ticket/PR

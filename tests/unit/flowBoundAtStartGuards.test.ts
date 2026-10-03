@@ -311,4 +311,13 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
     expect(d63[0]).toContain('D22');
     expect(lower(d63[0])).toContain('supersede');
   });
+
+  it(`${REQUIREMENTS}'s D18, which ${SECTION}23.2 still cites, is annotated as superseded by D63`, () => {
+    const paragraphs = read(REQUIREMENTS).split(/\n\s*\n/);
+    const d18 = paragraphs.filter((p) => p.trimStart().startsWith('**[D18 · 2026-06-16]'));
+    expect(d18, `no single [D18 · 2026-06-16] entry in ${REQUIREMENTS}`).toHaveLength(1);
+    expect(d18[0], `D18 still reads as the child running the parent's flow (${RULE})`).toMatch(
+      /superseded by D63/i,
+    );
+  });
 });
