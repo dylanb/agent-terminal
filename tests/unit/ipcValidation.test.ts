@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { GATE_DECISION_OPTIONS, SESSION_ID } from '../../src/shared/ipc';
 import { TITLE_MAX } from '../../src/shared/statusBar';
 import {
@@ -10,6 +11,8 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidFlowSetTitle,
+  isValidFlowSetActiveFlow,
+  isValidFlowClearActiveFlow,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
@@ -156,6 +159,25 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     arr.repoKey = '/repo';
     arr.title = 'x';
     expect(isValidFlowSetTitle(arr)).toBe(false); // arrays are not records
+  });
+
+  it('accepts a flow:setActiveFlow naming a bounded catalog id for a safe repoKey (§18.7.2/§18.7.4)', () => {
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo', id: 'feature-dev' })).toBe(true);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo', id: 'x'.repeat(MAX_CATALOG_ID_LENGTH) })).toBe(true);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo', id: 'x'.repeat(MAX_CATALOG_ID_LENGTH + 1) })).toBe(false);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo', id: '' })).toBe(false);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo', id: 7 })).toBe(false);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: '/repo' })).toBe(false);
+    expect(isValidFlowSetActiveFlow({ sessionId: sid, repoKey: 'relative', id: 'feature-dev' })).toBe(false);
+    expect(isValidFlowSetActiveFlow({ sessionId: 'other', repoKey: '/repo', id: 'feature-dev' })).toBe(false);
+  });
+
+  it('accepts a flow:clearActiveFlow for a safe repoKey on the live session (§18.7.2/§18.7.4)', () => {
+    expect(isValidFlowClearActiveFlow({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidFlowClearActiveFlow({ sessionId: sid, repoKey: 'relative' })).toBe(false);
+    expect(isValidFlowClearActiveFlow({ sessionId: sid })).toBe(false);
+    expect(isValidFlowClearActiveFlow({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    expect(isValidFlowClearActiveFlow(null)).toBe(false);
   });
 
   it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {

@@ -8,7 +8,7 @@ import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 // directly (the retired engine's state.yaml→deriveLoopView derivation is gone); only the OS-notification surface is spied.
 
 const REPO = '/repo';
-const BASE: FlowStateView = { stepName: 'build', steps: ['build'], position: 1, total: 1, status: 'in_progress' };
+const BASE: FlowStateView = { stepName: 'build', runStarted: 'never-started' as const, steps: ['build'], position: 1, total: 1, status: 'in_progress' };
 
 const view = (status: string, iteration: number | undefined, humanNeeded: boolean): FlowStateView => {
   const loop: FlowLoopView = {

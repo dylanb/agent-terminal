@@ -32,6 +32,9 @@ export interface CatalogFixture {
   addEntry(catalogDir: string, id: string, opts?: CatalogEntryOptions): string;
   /** Replace entry `id`'s flow.yaml with a symlink to out-of-catalog content (CWE-59; AC4). */
   symlinkEntryFlowYaml(catalogDir: string, id: string): void;
+  /** Replace entry `id`'s flow.yaml with a DANGLING symlink — its target does not exist, so the entry cannot
+   *  be reduced to a real path (`unresolvable`), distinct from an escaping-but-real link (CWE-59/CWE-367). */
+  danglingEntryFlowYaml(catalogDir: string, id: string): void;
   /** Replace entry `id`'s todo-templates/ with a symlink to an out-of-catalog dir of .md files (AC4). */
   symlinkEntryTemplatesDir(catalogDir: string, id: string): void;
   /** Plant a catalog-root member that is NOT a directory — a symlink to out-of-catalog content (AC4). */
@@ -97,6 +100,13 @@ export function createCatalogFixture(): CatalogFixture {
       const flowYaml = join(entry, FLOW_DEF_FILE);
       rmSync(flowYaml, { force: true, recursive: true });
       symlinkSync(outsideFile('evil.yaml', 'name: evil\nsteps: []\n'), flowYaml);
+    },
+    danglingEntryFlowYaml(catalogDir, id) {
+      const entry = join(catalogDir, id);
+      mkdirSync(entry, { recursive: true });
+      const flowYaml = join(entry, FLOW_DEF_FILE);
+      rmSync(flowYaml, { force: true, recursive: true });
+      symlinkSync(join(outsideRoot(), `${planted++}-nonexistent-target.yaml`), flowYaml);
     },
     symlinkEntryTemplatesDir(catalogDir, id) {
       const entry = join(catalogDir, id);

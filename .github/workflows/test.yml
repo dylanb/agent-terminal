@@ -37,6 +37,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Fails the build on any code TODO/FIXME comment (local/no-todo-comments), catching a --no-verify
+      # bypass of the husky pre-commit hook before a deferral marker reaches the default branch.
+      - run: pnpm lint
+
       # The `browser` project launches Chromium through the playwright provider; without the binary
       # and its shared libraries the whole `pnpm test` run aborts before the node project reports.
       - run: pnpm exec playwright install --with-deps chromium

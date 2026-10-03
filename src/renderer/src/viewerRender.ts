@@ -45,9 +45,8 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   teardownView(into); // disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
-  // TODO(viewer): the catch degrades a chunk-load/render failure to raw text instead of a stuck
-  // ellipsis. Untestable — markdown-it/mermaid are import()-ed here (no seam), so neither vitest
-  // nor e2e can force the import to reject without a production seam added only for the test.
+  // untestable: the trailing catch's import()-reject degrade path can't be forced (markdown-it/mermaid are
+  // import()-ed with no seam) — §12 gap tracked in #153.
   void (async () => {
     const md = await getMarkdownIt();
     if (token !== tokenOf(into)) return;
@@ -91,8 +90,8 @@ export function renderCodeInto(
   teardownView(into); // §20.2
   into.classList.remove('md');
   into.textContent = '…';
-  // TODO(viewer): see renderMarkdownInto — the trailing catch degrades a CodeMirror chunk-load
-  // failure to raw text instead of a stuck ellipsis; untestable for the same import()-seam reason.
+  // untestable: the CodeMirror chunk-load catch's degrade path can't be forced (no import() seam) — see
+  // renderMarkdownInto; §12 gap tracked in #153.
   let editor: EditorViewT | null = null;
   let EV: typeof EditorViewT | null = null;
   let pending: number | null = null;

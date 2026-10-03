@@ -3,6 +3,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { recordDisposition } from '../../src/main/runDisposition';
 
 let app: ElectronApplication;
 let page: Page;
@@ -67,6 +68,7 @@ function seedLoopAtGateRepo(prefix: string): { dir: string; runStateFile: string
     'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
   );
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: in_progress\n');
+  recordDisposition(dir, { source: 'non-catalog' });
   const loopDir = join(dir, '.agent-terminal', 'loop');
   mkdirSync(loopDir, { recursive: true });
   const runStateFile = join(loopDir, 'run-state.yaml');

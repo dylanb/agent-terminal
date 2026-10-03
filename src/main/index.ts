@@ -35,6 +35,8 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidFlowSetTitle,
+  isValidFlowSetActiveFlow,
+  isValidFlowClearActiveFlow,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -71,7 +73,10 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
+import { createRunResolver } from './runResolver';
+import { createActiveFlowGate } from './activeFlowGate';
+import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
@@ -133,9 +138,7 @@ async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
-  // TODO(dylan): Electron exposes no getIcon() and app.dock is macOS-only, so neither the
-  // BrowserWindow.icon assignment below nor applyDockIcon has a Linux e2e — resolveWindowIconPath and
-  // applyDockIcon are unit-covered. Recorded gap.
+  // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
   applyDockIcon(app.dock, process.platform, iconLoc);
   const win = new BrowserWindow({
     width: 1280,
@@ -179,6 +182,7 @@ async function createWindow(): Promise<void> {
     total: 0,
     status: 'error',
     error: 'invalid flow request',
+    runStarted: 'indeterminate',
   });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
@@ -188,8 +192,7 @@ async function createWindow(): Promise<void> {
   // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
   // hidden native selection. Off darwin a minimal menu (keyboard zoom + fullscreen) is installed
   // instead — replacing Electron's default menu so its ⌘0 "Reset Zoom" can't preempt openSettings (§7.7).
-  // TODO(keymap): the menu-accelerator→IPC dispatch is macOS-only, so it has no Linux e2e; the pure
-  // template + install logic (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
+  // untestable off macOS (the menu-accelerator→IPC dispatch has no Linux e2e) — §12 gap tracked in #153.
   applyApplicationMenu(buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action })), Menu);
 
   // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
@@ -226,8 +229,8 @@ async function createWindow(): Promise<void> {
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
-  // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
-  // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
+  // untestable outside the §F e2e (the OSC-7 → cwd:changed → repo-list-swap loop needs real node-pty + bash)
+  // — §12 gap tracked in #153.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
@@ -240,9 +243,8 @@ async function createWindow(): Promise<void> {
   // §20.1: discovery resolves the base from local refs synchronously; the real gh PR base is refined
   // off-thread here and re-pulls the viewer when it differs. Warm on each watch burst too — a `git
   // checkout` produces no cwd change, so its working-tree writes are the only signal a branch switched;
-  // warmBaseRef is deduped per (root, branch) so repeat bursts never re-spawn gh. TODO(dylan): the
-  // gh-driven refresh is unprovokable in e2e (no live PR in CI) — warmBaseRef + createBaseWarmer are
-  // unit-covered; recorded gap.
+  // warmBaseRef is deduped per (root, branch) so repeat bursts never re-spawn gh.
+  // untestable in CI (the gh-driven base refresh is unprovokable with no live PR) — §12 gap tracked in #153.
   const warmBase = createBaseWarmer({
     root: () => gitRootOf(viewerCwd()),
     warm: (root) => warmBaseRef(root),
@@ -259,9 +261,8 @@ async function createWindow(): Promise<void> {
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
-  // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
-  // are tuned against bash/scripted echo; verify against a real Claude Code
-  // `[Pasted text]` placeholder + reply in the §F e2e (plan PR5) — recorded gap.
+  // untestable outside the §F e2e (watermark/selfInjectWindowMs are tuned against real agent echo + reply)
+  // — §12 gap tracked in #153.
   const suppressor = createInjectionSuppressor({
     cursorRow: () => shadow.reader.cursor().y,
     addMarker: (r) => shadow.addMarker(r),
@@ -531,8 +532,19 @@ async function createWindow(): Promise<void> {
       });
     },
   });
+  // §18.7.3 — the one authoritative flow-definition resolver every in-process consumer shares (via
+  // resolveActiveDefinition), so none can resolve a different flow from another (the shared-semantics /
+  // "parallel copies that agree today" rule). Its seams and the AC9 begun-run binding live in runResolver.ts,
+  // the one factory the integration tests drive too.
+  const resolveRun = createRunResolver(flowGlobalDir);
+  const resolveActiveDefinition = (repoKey: string): FlowLoad => resolveRun(repoKey).load;
+  // §18.7.4 AC11 — the one cross-process worktree lock that both flow:start and the active-flow write take.
+  const worktreeLock = createWorktreeLock({ lockRoot: worktreeLockRoot(flowGlobalDir) });
+  const activeFlowGate = createActiveFlowGate(worktreeLock);
+
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
+    loadDefinition: (repoKey) => resolveRun(repoKey),
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
     // §27.15 — the §27 (app-namespace) loop-view provider: resolve the bound app-def across the operator
     // and app-bundled tiers and produce its whole run-less/failure view. Tier roots are chosen by the
@@ -553,16 +565,14 @@ async function createWindow(): Promise<void> {
     root: auditRootDir(flowGlobalDir),
     now: () => new Date(),
     flowName: (repoKey) => {
-      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      const load = resolveActiveDefinition(repoKey);
       return load.ok ? load.definition.name : null;
     },
   });
 
-  // TODO(dylanb): §27.12 — after a relaunch this map is empty, so appGateGithub's verifyBootstrap takes its
-  // `bootstrap === null` early return and the gate's PR-identity check is silently skipped. The persisted
-  // document (readAppLoopBootstrap) cannot simply seed it: resolveAppGateRefs lets a bootstrap OVERRIDE the
-  // flow's own refs, and that document is repo-scoped rather than step-scoped, so a stale one retargets
-  // `gh pr ready` at another PR. Closing this needs the persisted identity bound to the step it bootstrapped.
+  // Security limitation (§27.12), tracked in #155: this map is runtime-seeded only, so after a relaunch
+  // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
+  // naive re-seed from the repo-scoped persisted bootstrap could retarget a destructive `gh pr ready`.
   const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
@@ -726,7 +736,7 @@ async function createWindow(): Promise<void> {
   // todoTemplate:instantiate (§6/§4.1): add a named template's items to the repo's todo list; a
   // missing flow/template is a no-op returning the unchanged list.
   const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
-    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return todoStore.list(repoKey);
     const md = loadTodoTemplateFile(todoTemplatesDir(load.flowDir), ref);
     if (md === null) return todoStore.list(repoKey);
@@ -757,7 +767,8 @@ async function createWindow(): Promise<void> {
   };
 
   terminateFlowLifecycle = (repoKey) => {
-    const after = flow.terminate(repoKey);
+    const { outcome, view: after } = flow.terminate(repoKey);
+    if (outcome === 'refused') return trackLoop(repoKey, withDerived(repoKey, after));
     currentFlowEntryTokens.delete(repoKey);
     trustedAppBootstraps.delete(repoKey);
     audit.recordTerminate(repoKey);
@@ -806,7 +817,7 @@ async function createWindow(): Promise<void> {
   // to tag a `github-ticket` value as a ticket association (§25.5). Empty when the definition or step
   // can't be resolved, so audit degrades to recording bare `input.resolved` events.
   const inputTypeMap = (repoKey: string): Record<string, string> => {
-    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return {};
     const step = load.definition.steps[flow.state(repoKey).position - 1];
     const map: Record<string, string> = {};
@@ -916,8 +927,6 @@ async function createWindow(): Promise<void> {
         onViewChanged: () => pushFlowChanged(),
         // §27.9/AC4 — the resume+done-watch preamble mirrors the flowAppRouteOut handler below; both drive a
         // §27 engine that is idle for this repoDir after a relaunch (there is no launch-time §27 resume).
-        // TODO(dylanb): the resume-if-not-active leg is deferred coverage, not an untestability exemption — a
-        // cold-relaunch-then-request-changes @ownapp test closes it.
         deliverFeedback: (repoDir, s, tk, feedback) => {
           if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
           armAppTurnDoneWatch(repoDir);
@@ -949,7 +958,7 @@ async function createWindow(): Promise<void> {
   // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
   const runAppGateDecision = createGuardedGateDecision({
     bindingOf: (repoKey, step) => {
-      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      const load = resolveActiveDefinition(repoKey);
       return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
     },
     refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
@@ -1146,9 +1155,14 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        return withoutTrustedBootstrap(m.repoKey, () =>
-          recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
+        // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
+        const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
+          withoutTrustedBootstrap(m.repoKey, () =>
+            recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
+          ),
         );
+        if (started.ok) return started.value;
+        return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
       },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
@@ -1175,16 +1189,11 @@ async function createWindow(): Promise<void> {
         isValidFlowRequest(m) && knownRepoKeys.has(m.repoKey)
           ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey))
           : flowRequestError(),
-      // Terminate (#26): inert from not_started / load-error (the control is absent there, AC2) — guard
-      // on the pre-state so a malformed/raced request never clears on an error flow. The audit write is
-      // best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per AC9/AC10
-      // nothing here signals the terminal process or touches external agent-loop engine state.
+      // Terminate (#26, §18.7.2 AC6): the flow manager refuses it, writing nothing, unless the run has begun.
+      // The audit write is best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per
+      // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        const before = flow.state(m.repoKey);
-        if (before.status !== 'in_progress' && before.status !== 'done') {
-          return trackLoop(m.repoKey, withDerived(m.repoKey, before));
-        }
         return terminateFlowLifecycle(m.repoKey);
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
@@ -1206,6 +1215,24 @@ async function createWindow(): Promise<void> {
         pushFlowChanged();
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
+      // §18.7.4 AC7/AC11 — the authoritative main-side write gate. A permitted write changes which flow leg 2
+      // resolves, so re-pull the strip to render it (§24.2.2).
+      [CH.flowSetActiveFlow]: (_e, m) => {
+        if (!isValidFlowSetActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
+          return { ok: false, reason: 'invalid flow:setActiveFlow request' };
+        }
+        const result = activeFlowGate.set(m.repoKey, m.id);
+        if (result.ok) pushFlowChanged();
+        return result;
+      },
+      [CH.flowClearActiveFlow]: (_e, m) => {
+        if (!isValidFlowClearActiveFlow(m) || !knownRepoKeys.has(m.repoKey)) {
+          return { ok: false, reason: 'invalid flow:clearActiveFlow request' };
+        }
+        const result = activeFlowGate.clear(m.repoKey);
+        if (result.ok) pushFlowChanged();
+        return result;
+      },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
       [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>
         isValidFlowGithubRef(m) ? githubRefs(m.repoKey, m.kind, m.number) : Promise.resolve(null),
@@ -1223,7 +1250,7 @@ async function createWindow(): Promise<void> {
       [CH.todoTemplateList]: (_e, m) => {
         if (!isValidTemplateList(m)) return { templates: [] };
         if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
-        const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
+        const load = resolveActiveDefinition(m.repoKey);
         const templates = load.ok ? listTodoTemplates(todoTemplatesDir(load.flowDir)) : [];
         const defaultRef = flow.state(m.repoKey).templateRef;
         return defaultRef ? { templates, defaultRef } : { templates };
@@ -1249,8 +1276,8 @@ async function createWindow(): Promise<void> {
           ),
         })),
       // Install bundled examples (§18.1/§23.4/§27.8): bundles resolve build-aware (packaged resources vs
-      // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
-      // loadFlowDefinitionLocalFirst, and the app loop definitions and commands land in the user-level
+      // the unpackaged app path); the flow lands in the GLOBAL flow home read back as the global fallback by
+      // resolveActiveDefinition, and the app loop definitions and commands land in the user-level
       // Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
       [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),

@@ -274,7 +274,6 @@ export async function runAppGateDecision(
       // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
       const label = typeof se.args.label === 'string' ? se.args.label : '';
       try {
-        // TODO(dylanb): capture the §28.5.1 phase-start snapshot from the phase lifecycle; empty until wired.
         const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
         if (result.outcome === 'committed') {
           // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
@@ -285,9 +284,8 @@ export async function runAppGateDecision(
           // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
           // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
           // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-          // same-branch baseline from a prior phase is NOT yet refused, so recovery there is a phase re-run, not
+          // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
           // an automatic block. Same in-executor best-effort shape as the `gh`/clear-polish side-effects above.
-          // TODO(dylanb): clear/slice-key the baseline per slice so a stale same-branch baseline blocks (#123).
           try {
             deps.recordBaseline(repoDir, result.branch, result.sha);
           } catch (e) {

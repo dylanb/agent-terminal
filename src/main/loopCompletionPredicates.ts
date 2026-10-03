@@ -47,7 +47,6 @@ export function createLoopCompletionPredicates(): LoopCompletionPredicates {
     resultBuildOutcome: (content) => (phaseResultWellFormed(content) ? parsePhaseResult(content).build : null),
     changedTestPaths: (query) => changedTestPathsFromCapabilities(query),
     workingTreeTestPaths: (query) => workingTreeTestPathsFromCapabilities(query),
-    // TODO(dylanb): wire recoverExitCode to the §27.11 session-log sweep when N7/#92 lands; null = unrecoverable.
     recoverExitCode: () => Promise.resolve(null),
   };
 }

@@ -94,11 +94,8 @@ export function wireSelection(
   // the buffer through scroll AND reflow, so a resize that re-wraps the transcript can't stale the
   // link (the §7.4 marker-anchoring guarantee). A marker trimmed out of scrollback disposes itself
   // → that capture reveals nothing (best-effort, §7.3).
-  //
-  // TODO(dylan): the marker layer (registerMarker/`.line` after reflow, scrollToLine + reveal
-  // decorations, getSelectionPosition on the double-click mouseup) needs a real terminal, so
-  // it is verified only in the §F e2e ('capture ↔ terminal cross-highlight', incl. its resize
-  // step), not under jsdom — recorded gap. The pure row→id matcher is unit-tested (reveal.ts).
+  // untestable under jsdom: the marker layer (registerMarker/scrollToLine/reveal, getSelectionPosition) needs
+  // a real terminal — verified in the §F e2e; §12 gap tracked in #153.
   const captureMarkers = new Map<string, { start: IMarker; end: IMarker }>();
   function disposeMarkers(id: string): void {
     const m = captureMarkers.get(id);

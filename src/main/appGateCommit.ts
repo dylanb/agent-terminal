@@ -83,7 +83,6 @@ export function createAppGateCommit(
 // commit.gpgSign=false` neutralizes gpg.program alongside the hooks/fsmonitor set. The `filter.*.clean` lever
 // (a repo `.gitattributes` + config driver run by `git add`) is an accepted residual — the agent already runs
 // the repo's own code in-turn, so `git add` is no new trust boundary (§28.3).
-// TODO(dylanb): clean-filter neutralization (a plumbing `hash-object --no-filters` stage) is deferred.
 function commitHardeningArgs(disabledHooks: string): string[] {
   return [...coreExecHardeningArgs(disabledHooks), '-c', 'commit.gpgSign=false'];
 }

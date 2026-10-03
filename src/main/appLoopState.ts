@@ -553,7 +553,7 @@ export function clearBaselineCommit(repoDir: string): void {
  *  — §28.4 makes RED/GREEN/refactor DISTINCT flow steps, so a step key would mismatch every cross-phase read;
  *  the branch is their one phase-stable slice identity. The frozen check refuses a DIFFERENT-branch baseline
  *  (another run); a stale SAME-branch baseline from a prior phase/slice is NOT yet refused — there is no clear()
- *  and the key is not per-slice — so it can be matched rather than blocking (TODO(dylanb) #123). */
+ *  and the key is not per-slice — so it can be matched rather than blocking; tracked in #123. */
 export function readBaselineCommit(repoDir: string): { branch: string; sha: string } | null {
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;

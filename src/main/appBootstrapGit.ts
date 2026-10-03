@@ -113,11 +113,6 @@ export function createRealAppBootstrapGit(
   };
   // One read, graded and used: a check over its own read of config leaves a window in which the value
   // the operation reaches is not the value the allow-list approved.
-  // TODO(dylanb): the destination is still config at operation time rather than the pushUrl/fetchUrl
-  // resolveGitHubRepository already validated against the pinned identity. Binding it there would make
-  // every fetch/push/ref-delete — including the offline rollback path — require a live `gh repo view`,
-  // and would refuse the non-GitHub remotes the port supports today. That is a design decision, not a
-  // local fix: it narrows this port to GitHub-only.
   const approvedOriginUrl = async (
     direction: OriginDirection,
   ): Promise<string> => {

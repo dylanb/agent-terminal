@@ -5,6 +5,7 @@ import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
+import { MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -27,6 +28,8 @@ import {
   type FlowRequestMsg,
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
+  type FlowSetActiveFlowMsg,
+  type FlowClearActiveFlowMsg,
   type FlowResolveAppBootstrapConflictMsg,
   type FlowResolveEpicPromotionMsg,
   type FlowGithubRefMsg,
@@ -178,6 +181,25 @@ export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
     typeof m.title === 'string' &&
     m.title.length <= TITLE_MAX
   );
+}
+
+/** flow:setActiveFlow — the catalog id the operator picked (§18.7.2/§18.7.4). Shape + bound only here
+ *  (CWE-1284); the started-ness gate (activeFlowGate) and the safe-catalog-ID check (writeActiveFlow) live
+ *  behind the write. */
+export function isValidFlowSetActiveFlow(m: unknown): m is FlowSetActiveFlowMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.id === 'string' &&
+    m.id.length > 0 &&
+    m.id.length <= MAX_CATALOG_ID_LENGTH
+  );
+}
+
+/** flow:clearActiveFlow (§18.7.2/§18.7.4) — shape only; the started-ness gate lives behind the write. */
+export function isValidFlowClearActiveFlow(m: unknown): m is FlowClearActiveFlowMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 /** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set;

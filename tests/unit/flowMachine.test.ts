@@ -13,7 +13,7 @@ const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-
 
 /** An in-memory store over a caller-owned progression slot. `write` replaces the whole document, as the
  *  real store's does, so a name absent from the written state is a name cleared — not one retained. */
-const memStore = (read: () => PersistedFlowState | null, set: (s: PersistedFlowState) => void): FlowStateStore => {
+const memStore = (read: () => PersistedFlowState | null, set: (s: PersistedFlowState) => void): Omit<FlowStateStore, 'clearProgression'> => {
   let named: string | null = null;
   return {
     read,

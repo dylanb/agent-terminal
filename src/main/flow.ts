@@ -10,7 +10,12 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
+import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
+import { worktreeStartedness } from './startedness';
+import { isSelectionLocked } from '../shared/flowStarted';
+import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
+import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
@@ -75,26 +80,35 @@ export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
   | { ok: false; error: string };
 
-const FLOW_HOME_SUBDIR = '.agent-terminal';
+export { FLOW_HOME_SUBDIR, flowHomeDir };
 
 /** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
- *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is below). */
+ *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is in flowHome.ts). */
 export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
-/** Where a root keeps its flow definition (§18.1/§23.4) — the resolver the install action writes through,
- *  so the seeded location and the location read back here cannot drift (CLAUDE.md writer↔reader rule). */
-export function flowHomeDir(root: string): string {
-  return path.join(root, FLOW_HOME_SUBDIR);
+/** Whether `root` holds a flow definition at its flow home — the single leg-1 presence gate the local-first
+ *  loader and the §18.7.3 resolver both read, so the "is a flow present here" boundary that decides which flow
+ *  runs cannot desync between them (CLAUDE.md shared-semantics). */
+export function hasFlowDefinition(root: string): boolean {
+  return existsSync(path.join(root, FLOW_REL));
 }
 
-const FLOWS_CATALOG_SUBDIR = 'flows';
+export const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
  *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
  *  enumerated location cannot drift (CLAUDE.md writer↔reader rule). */
 export function flowCatalogDir(root: string): string {
   return path.join(flowHomeDir(root), FLOWS_CATALOG_SUBDIR);
+}
+
+/** A catalog entry's definition file `<root>/.agent-terminal/flows/<id>/flow.yaml` — the one location the
+ *  A1 install seeds and A2's §18.7.6 resolver probes, so the write target and the read source derive from the
+ *  same resolver and cannot drift (CLAUDE.md writer↔reader rule). `id` is a raw path segment; the caller gates
+ *  it through the shared safe-catalog-id predicate before this is walked. */
+export function catalogEntryDefFile(root: string, id: string): string {
+  return path.join(flowCatalogDir(root), id, FLOW_DEF_FILE);
 }
 
 /** Validate a step's `inputs:` (§18.4); `required` defaults to false. Absent → []; a malformed entry
@@ -112,7 +126,13 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
 export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  const file = path.join(worktreeDir, FLOW_REL);
+  return loadFlowDefinitionFromFile(path.join(worktreeDir, FLOW_REL), FLOW_REL);
+}
+
+/** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
+ *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
+ *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
+export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
@@ -120,8 +140,8 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     // AC 4 reason-accuracy: ENOENT is genuinely "no flow.yaml"; any other errno (EISDIR from a directory
     // planted at the path, EACCES on a shared machine, ENOTDIR/ELOOP from a bad symlink) names what actually
     // failed rather than reporting the flow absent while it sits on disk. Both questions answered through errno.ts.
-    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
-    return { ok: false, error: `cannot read ${FLOW_REL}: ${errMsg(e)}` };
+    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
+    return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
 
   let doc: unknown;
@@ -205,16 +225,19 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
  * masked by the global. (Flow STATE, by contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  if (existsSync(path.join(localDir, FLOW_REL))) return loadFlowDefinition(localDir);
+  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
   // exists do we report the local (absent) error, so a bad value is never reported as a missing flow (§B.3).
-  if (existsSync(path.join(globalDir, FLOW_REL))) return loadFlowDefinition(globalDir);
+  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
+/** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
+export type MachineView = Omit<FlowStateView, 'runStarted'>;
+
 export interface FlowMachine {
-  state(): FlowStateView;
+  state(): MachineView;
   /** §28.4 D1 — the impl-slice the flow is on: 1 at first RED, +1 on each loop-back (the repeat step's
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
    *  re-entered RED writes fresh instead of resuming the prior slice. 1 for a flow with no repeat step. */
@@ -222,43 +245,43 @@ export interface FlowMachine {
   /** §28.4.2 — the step a slice restarts at (the repeat step's `back_to`), or null when the flow declares none. */
   sliceStartStep(): string | null;
   /** not_started → in_progress; throws on any other current status (inert in the error state). */
-  start(): FlowStateView;
+  start(): MachineView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
-  advance(): FlowStateView;
+  advance(): MachineView;
   /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
    *  ones are re-requested, and re-runs entry actions. Throws on any other status (inert on error). */
-  restart(): FlowStateView;
+  restart(): MachineView;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
-  undo(): FlowStateView;
+  undo(): MachineView;
   /** Roll a half-entered bootstrap step back one step when its async bootstrap failed (§27): in_progress
    *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
    *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
    *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
    *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
    *  or is not in_progress) returns the current view untouched rather than raising. */
-  revertStep(fromStepId: string): FlowStateView;
+  revertStep(fromStepId: string): MachineView;
   /** §28.4.2 in_progress → in_progress at the slice's RED step (the repeat step's `backTo`), re-running its
    *  entry actions and PRESERVING the slice count (`repeat_counts`) and resolved inputs — the human
    *  "back to RED" move that redoes the current impl-slice without consuming or adding one. A NO-OP GUARD,
    *  never a throw: inert unless in_progress with a repeat step whose target is at or before the current
    *  step, so a stale gate click cannot crash or jump the flow forward. */
-  reopenSlice(): FlowStateView;
+  reopenSlice(): MachineView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
-  terminate(): FlowStateView;
+  terminate(): MachineView;
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
-  provideInput(values: Record<string, string>): FlowStateView;
+  provideInput(values: Record<string, string>): MachineView;
   /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
    *  (unlike provideInput, which answers a step-entry prompt and re-enters). The plan-bundle approve gate uses
    *  it to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering plan-bundle would
    *  restart its loop. Legal only while a step is in_progress. */
-  resolveInputs(values: Record<string, string>): FlowStateView;
+  resolveInputs(values: Record<string, string>): MachineView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
    *  including the load-error state — the name describes the worktree, not the run, so a directory whose
    *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
-  setTitle(text: string): FlowStateView;
+  setTitle(text: string): MachineView;
 }
 
 /** Run a step's entry actions, given the flow's resolved typed inputs (§18.4). Returns a one-shot
@@ -277,12 +300,12 @@ export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
   load: FlowLoad,
-  store?: FlowStateStore,
+  store?: Omit<FlowStateStore, 'clearProgression'>,
   onEnter?: FlowEnterStep,
   readAppLoopView?: FlowReadAppLoopView,
 ): FlowMachine {
   if (!load.ok) {
-    const view = (): FlowStateView => {
+    const view = (): MachineView => {
       const named = store?.readTitle() ?? null;
       return {
         stepName: '',
@@ -292,7 +315,7 @@ export function createFlowMachine(
         status: 'error',
         // CWE-117/CWE-1007 (§16.3): the load-error message interpolates repo-authored content (a step id, a
         // kind:, a js-yaml snippet), so strip display-unsafe control chars ONCE over the whole composed
-        // message at the single place FlowStateView.error is populated (§B.3).
+        // message at the single place MachineView.error is populated (§B.3).
         error: stripDisplayControlChars(load.error),
         ...(named !== null ? { userTitle: named } : {}),
       };
@@ -395,9 +418,9 @@ export function createFlowMachine(
     return hasFlowRefs(refs) ? refs : undefined;
   };
 
-  const view = (): FlowStateView => {
+  const view = (): MachineView => {
     const step = current();
-    const base: FlowStateView = {
+    const base: MachineView = {
       stepName: step.id,
       steps: names,
       position: index + 1,
@@ -462,7 +485,7 @@ export function createFlowMachine(
 
   // Entry actions fire AFTER state is committed, on EVERY entry into a step (§24.2.3 T3); the notice
   // merges onto the transition view only. Completing the flow (`done`) enters no step.
-  const enter = (v: FlowStateView): FlowStateView => {
+  const enter = (v: MachineView): MachineView => {
     const r = onEnter?.(current(), inputs);
     if (!r) return v;
     return {
@@ -610,7 +633,7 @@ export interface FlowManager {
   sliceStartStep(repoKey: string): string | null;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
-  terminate(repoKey: string): FlowStateView;
+  terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
   /** §28.4.1 — merge programmatically-sourced inputs (e.g. the plan-bundle's `slices` count) WITHOUT
    *  re-entering the current step. Delegates to the machine keyed by `repoKey`. */
@@ -619,10 +642,16 @@ export interface FlowManager {
   setTitle(repoKey: string, text: string): FlowStateView;
 }
 
+/** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
+export type TerminateResult = { outcome: 'reset' | 'refused'; view: FlowStateView };
+
+/** What the definition seam returns (§18.1 load, §18.7.6 degrade reason, §18.7.3 AC9 binding). */
+export type ResolvedDefinition = ResolvedRunDefinition;
+
 export interface FlowManagerDeps {
   /** Global fallback dir for the DEFINITION only (§18.1); STATE is never global. */
   globalDir: string;
-  loadDefinition?: (localDir: string, globalDir: string) => FlowLoad;
+  loadDefinition?: (localDir: string, globalDir: string) => ResolvedDefinition;
   makeStore?: (repoKey: string) => FlowStateStore;
   /** Run a step's entry action (§18.6/§19.3). Todo templates instantiate on demand, not here. */
   onEnterStep?: FlowEnterStep;
@@ -633,42 +662,111 @@ export interface FlowManagerDeps {
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
-  const loadDef = deps.loadDefinition ?? loadFlowDefinitionLocalFirst;
+  const loadDef: (localDir: string, globalDir: string) => ResolvedDefinition =
+    deps.loadDefinition ??
+    ((localDir, globalDir) => ({
+      load: loadFlowDefinitionLocalFirst(localDir, globalDir),
+      binding: { source: 'non-catalog' },
+    }));
   const makeStore = deps.makeStore ?? createFlowStateStore;
   // Cache the machine AND a signature of the definition it was built from. The DEFINITION (flow.yaml)
   // is re-read on every access — like the §19.1 state re-read — and the machine is rebuilt only when
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  const machineFor = (repoKey: string): FlowMachine => {
-    const load = loadDef(repoKey, deps.globalDir);
-    const sig = JSON.stringify(load);
+  // The signature keys on load.load (the DEFINITION), not the whole resolved object, so a §18.7.6
+  // selectionReason change with an unchanged definition reuses the cached machine — the reason is spliced
+  // fresh onto each view below, never frozen in the cached view() closures (§18.7.4/CWE-841).
+  const machineFor = (
+    repoKey: string,
+  ): { machine: FlowMachine; selectionReason?: string; binding?: DispositionRead } => {
+    const resolved = loadDef(repoKey, deps.globalDir);
+    const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
-    if (cached && cached.sig === sig) return cached.machine;
+    if (cached && cached.sig === sig) {
+      return { machine: cached.machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+    }
     // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
     // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
     const machine = createFlowMachine(
-      load,
+      resolved.load,
       makeStore(repoKey),
       deps.onEnterStep,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
-    return machine;
+    return { machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
   };
+  // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
+  // call at the FlowManager boundary (the machine stays A2-unaware).
+  const decorate = (k: string, op: (m: FlowMachine) => MachineView): MachineView => {
+    const { machine, selectionReason } = machineFor(k);
+    const view = op(machine);
+    return selectionReason === undefined ? view : { ...view, selectionReason };
+  };
+  // §18.7.4 — read AFTER the operation's own marker write/clear, so the view reports the started-ness it left.
+  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({ ...view, runStarted: worktreeStartedness(k) });
+  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, decorate(k, op));
   return {
-    state: (k) => machineFor(k).state(),
-    start: (k) => machineFor(k).start(),
-    advance: (k) => machineFor(k).advance(),
-    restart: (k) => machineFor(k).restart(),
-    undo: (k) => machineFor(k).undo(),
-    reopenSlice: (k) => machineFor(k).reopenSlice(),
-    currentSlice: (k) => machineFor(k).currentSlice(),
-    sliceStartStep: (k) => machineFor(k).sliceStartStep(),
-    revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
-    terminate: (k) => machineFor(k).terminate(),
-    provideInput: (k, values) => machineFor(k).provideInput(values),
-    resolveInputs: (k, values) => machineFor(k).resolveInputs(values),
-    setTitle: (k, text) => machineFor(k).setTitle(text),
+    state: (k) => viewOf(k, (m) => m.state()),
+    start: (k) => {
+      // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
+      // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
+      // the start with a visible reason, leaving the run not_started.
+      const { machine, binding } = machineFor(k);
+      const begins = binding !== undefined && machine.state().status === 'not_started';
+      const hadMarker = readDisposition(k) === 'present';
+      if (begins) {
+        try {
+          recordDisposition(k, binding);
+        } catch (e) {
+          return withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
+        }
+      }
+      const view = decorate(k, (m) => m.start());
+      if (begins && !hadMarker && view.status !== 'in_progress') {
+        try {
+          clearDisposition(k);
+        } catch {
+          // Fail-closed: a surviving marker keeps the selection locked, never unlocked.
+        }
+      }
+      return withRunStarted(k, view);
+    },
+    advance: (k) => viewOf(k, (m) => m.advance()),
+    restart: (k) => viewOf(k, (m) => m.restart()),
+    undo: (k) => viewOf(k, (m) => m.undo()),
+    reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),
+    currentSlice: (k) => machineFor(k).machine.currentSlice(),
+    sliceStartStep: (k) => machineFor(k).machine.sliceStartStep(),
+    revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
+    terminate: (k) => {
+      // §18.7.2 AC6 — progression is reset BEFORE the begun marker is cleared: with the marker still present the
+      // run resolves its recorded source, and a run held at the §18.1 error (its source unverifiable) is reset
+      // through the store, so every begun run has a route back to not_started.
+      const { machine } = machineFor(k);
+      const status = machine.state().status;
+      try {
+        if (status === 'in_progress' || status === 'done') machine.terminate();
+        else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
+        else return { outcome: 'refused', view: viewOf(k, (m) => m.state()) };
+      } catch (e) {
+        return {
+          outcome: 'refused',
+          view: withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
+        };
+      }
+      let notice: string | undefined;
+      try {
+        clearDisposition(k);
+      } catch (e) {
+        notice = `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`;
+      }
+      const view = viewOf(k, (m) => m.state());
+      return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };
+    },
+    provideInput: (k, values) => viewOf(k, (m) => m.provideInput(values)),
+    resolveInputs: (k, values) => viewOf(k, (m) => m.resolveInputs(values)),
+    setTitle: (k, text) => viewOf(k, (m) => m.setTitle(text)),
   };
 }

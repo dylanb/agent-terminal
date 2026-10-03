@@ -481,7 +481,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       ...(unreadable.length > 0 ? [`declared input(s) present but unreadable — ${unreadable.join(', ')}`] : []),
       ...(stranded.length > 0 ? [`recorded input(s) no longer available — ${stranded.join(', ')}`] : []),
     ];
-    // TODO(dylan): Move chained-input advisories off flow:onLoopError.
     if (announces && notes.length > 0) deps.emitError(`${stepId}: ${notes.join('; ')}`);
     return chain.carried;
   };
@@ -1214,10 +1213,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       let ids: string[] = [];
       let inputs: ChainedInput[] = [];
-      // TODO(dylan): the record conflates "the entry decided not to carry this" with "the entry failed to
-      // carry it" — an input unreadable at chain-advance is excluded from `ids`, so no lever re-probes it once
-      // the operator fixes the permission the dialog named. Needs the attempted-but-unresolved ids persisted
-      // beside the carried ones; recovery today is a flow restart.
       if (entry === 'chain-advance') {
         inputs = chainFor(repoDir, stepId, r.def, { kind: 'advance' });
         ids = inputs.map((i) => i.id);

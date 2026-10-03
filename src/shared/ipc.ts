@@ -5,6 +5,7 @@ import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
+import type { StartednessSignal } from './flowStarted';
 
 export type SessionId = string;
 
@@ -51,6 +52,8 @@ export const CH = {
   flowTerminate: 'flow:terminate',
   flowProvideInput: 'flow:provideInput',
   flowSetTitle: 'flow:setTitle',
+  flowSetActiveFlow: 'flow:setActiveFlow',
+  flowClearActiveFlow: 'flow:clearActiveFlow',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -605,6 +608,16 @@ export interface FlowStateView {
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
    *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
+  /** §18.7.6 — the display-sanitized reason a per-worktree active-flow pointer selection DEGRADED to the
+   *  global fallback (an unknown/unsafe/unreadable pointer, or an entry escaping its catalog tier). Present
+   *  while the degraded selection runs (the strip paints it persistently, distinct from the one-shot
+   *  `notice`); absent when selection succeeded or the pointer is unset. Never carries the load `error`
+   *  reason — a degrade keeps the fallback running, so `status` is NOT `error`. */
+  selectionReason?: string;
+  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a
+   *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
+   *  through `isSelectionLocked` (shared/flowStarted.ts). */
+  runStarted: StartednessSignal;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
@@ -716,6 +729,26 @@ export interface FlowSetTitleMsg {
   repoKey: string;
   title: string;
 }
+
+/** flow:setActiveFlow request (§18.7.2/§18.7.4): the catalog `id` the operator picked for `repoKey`'s
+ *  worktree. Applied only while the run has never started (AC7). */
+export interface FlowSetActiveFlowMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  id: string;
+}
+
+/** flow:clearActiveFlow request (§18.7.2/§18.7.4): return `repoKey`'s worktree to the unset default. Gated like
+ *  flow:setActiveFlow. */
+export interface FlowClearActiveFlowMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+/** flow:setActiveFlow / flow:clearActiveFlow result (§18.7.4 AC7): the pointer was written or cleared, or the
+ *  write was refused with a human-readable `reason` — the run has begun, begun-ness is indeterminate (fail-closed), or the write
+ *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
+export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
 
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
  *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
@@ -1057,6 +1090,12 @@ export interface FlowApi {
    *  other flow:* calls, an unsafe or unregistered-repo target REJECTS rather than resolving to a benign
    *  error view (§22.3.1). */
   setTitle(repoKey: string, title: string): Promise<FlowStateView>;
+  /** Select the worktree's active flow (§18.7.2/§18.7.4). Permitted only while the run has never started;
+   *  once it has begun — or while begun-ness cannot be verified — the write is refused with a reason (AC7).
+   *  A3's picker mirrors this in its enable state, but this is the authoritative main-side gate. */
+  setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
+  /** Return the worktree to the unset default flow; gated exactly like `setActiveFlow`. */
+  clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

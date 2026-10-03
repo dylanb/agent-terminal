@@ -10,7 +10,7 @@ const REPO = '/repo';
 
 function loopView(loop: Partial<FlowLoopView> & { status: string; iteration: number }): FlowStateView {
   return {
-    stepName: 'build',
+    stepName: 'build', runStarted: 'never-started' as const,
     steps: ['build'],
     position: 1,
     total: 1,
@@ -18,7 +18,7 @@ function loopView(loop: Partial<FlowLoopView> & { status: string; iteration: num
     loop: { pr: null, branch: null, ready: false, humanNeeded: true, ...loop },
   };
 }
-const NON_LOOP: FlowStateView = { stepName: 's', steps: ['s'], position: 1, total: 1, status: 'in_progress' };
+const NON_LOOP: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'in_progress' };
 
 function harness(over: Partial<LoopNotifierDeps> = {}) {
   const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
@@ -47,7 +47,7 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
   it('omits the iteration segment from the body when no round has run (a §27 run-less failure)', () => {
     const { notifier, notify } = harness();
     const runLessFailure: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,

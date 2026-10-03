@@ -13,7 +13,7 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
   const byKey = new Map<string, FlowStatus>();
   const view = (repoKey: string): FlowStateView => {
     const status = byKey.get(repoKey) ?? initial;
-    return { stepName: `${repoKey}-step`, steps: [`${repoKey}-step`], position: 1, total: 1, status };
+    return { stepName: `${repoKey}-step`, runStarted: 'never-started' as const, steps: [`${repoKey}-step`], position: 1, total: 1, status };
   };
   return {
     state: vi.fn(async (repoKey: string) => view(repoKey)),
@@ -132,9 +132,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     strip.onRepoChanged('/repoB');
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoB'));
 
-    resolveB({ stepName: 'Repo B', steps: ['Repo B'], position: 1, total: 1, status: 'not_started', userTitle: 'B' });
+    resolveB({ stepName: 'Repo B', runStarted: 'never-started' as const, steps: ['Repo B'], position: 1, total: 1, status: 'not_started', userTitle: 'B' });
     await vi.waitFor(() => expect(stepName()).toBe('Repo B'));
-    resolveA({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started', userTitle: 'A' });
+    resolveA({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], position: 1, total: 1, status: 'not_started', userTitle: 'A' });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(stepName()).toBe('Repo B');
@@ -149,7 +149,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     strip.onRepoChanged('/repo');
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repo'));
     strip.dispose();
-    resolve({ stepName: 'Late', steps: ['Late'], position: 1, total: 1, status: 'not_started' });
+    resolve({ stepName: 'Late', runStarted: 'never-started' as const, steps: ['Late'], position: 1, total: 1, status: 'not_started' });
     await new Promise((r) => setTimeout(r, 0));
     expect(host.childElementCount).toBe(0);
   });
@@ -161,7 +161,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       ...fakeFlow(),
       state: vi.fn((repoKey: string) =>
         repoKey === '/repoA'
-          ? Promise.resolve({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started' as FlowStatus })
+          ? Promise.resolve({ stepName: 'Repo A', runStarted: 'never-started' as const, steps: ['Repo A'], position: 1, total: 1, status: 'not_started' as FlowStatus })
           : Promise.reject(new Error('repo B unavailable')),
       ),
       onStatusBar,
@@ -185,7 +185,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
-        stepName: 'plan',
+        stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
         position: 1,
         total: 1,
@@ -205,7 +205,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
-        stepName: 'plan',
+        stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
         position: 1,
         total: 1,
@@ -255,7 +255,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
-        stepName: 'plan',
+        stepName: 'plan', runStarted: 'never-started' as const,
         steps: ['plan'],
         position: 1,
         total: 1,
@@ -364,7 +364,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   });
 
   const inProgress = (notice?: string): FlowStateView => ({
-    stepName: '/repo-step',
+    stepName: '/repo-step', runStarted: 'never-started' as const,
     steps: ['/repo-step'],
     position: 1,
     total: 1,
@@ -481,7 +481,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: '/repo-step',
+          stepName: '/repo-step', runStarted: 'never-started' as const,
           steps: ['/repo-step'],
           position: 1,
           total: 1,
@@ -511,7 +511,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: '/repo-step',
+          stepName: '/repo-step', runStarted: 'never-started' as const,
           steps: ['/repo-step'],
           position: 1,
           total: 1,
@@ -544,7 +544,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'plan',
+          stepName: 'plan', runStarted: 'never-started' as const,
           steps: ['groom', 'plan', 'implement'],
           position: 2,
           total: 3,
@@ -584,7 +584,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['groom', 'build'],
           position: 2,
           total: 2,
@@ -617,7 +617,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
   it('omits the iteration read-out when no round has run (a §27 run-less view, absent iteration)', async () => {
     const runLess: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -646,7 +646,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -674,7 +674,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -702,7 +702,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'groom',
+          stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
           position: 1,
           total: 2,
@@ -730,7 +730,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'groom',
+          stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
           position: 1,
           total: 2,
@@ -767,7 +767,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -807,7 +807,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'groom',
+          stepName: 'groom', runStarted: 'never-started' as const,
           steps: ['groom', 'plan'],
           position: 1,
           total: 2,
@@ -842,7 +842,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const loopDeps = () => ({
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -940,7 +940,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const make = (status: string) => ({
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -980,7 +980,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   it('hands the loop mirror to the composition root via onPanelState, for the docked panel (§24.2.3 T2)', async () => {
     const seen: Array<{ status?: string; title: string }> = [];
     const loopView: FlowStateView = {
-      stepName: 'build',
+      stepName: 'build', runStarted: 'never-started' as const,
       steps: ['groom', 'build'],
       position: 2,
       total: 2,
@@ -1018,7 +1018,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const seen: Array<{ names: string[]; stepName: string }> = [];
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1059,7 +1059,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const onError = vi.fn();
     let submit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1091,7 +1091,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     // BEFORE emitting the prompt, or focus restores to <body> on close.
     let openerAtPrompt: Element | null = null;
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1125,7 +1125,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     // the value on the now-current (wrong) repo (§16.3).
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1164,7 +1164,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     // was in flight, the awaited view belongs to the old repo and must be dropped (§16.3).
     let resolveStart: (v: FlowStateView) => void = () => {};
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1202,7 +1202,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     let resolveProvide: (v: FlowStateView) => void = () => {};
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
-      stepName: 'plan',
+      stepName: 'plan', runStarted: 'never-started' as const,
       steps: ['plan'],
       position: 1,
       total: 1,
@@ -1246,7 +1246,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   it('keeps keyboard focus on the rail Loop read-out across a background state push (WCAG 2.4.3)', async () => {
     let fire = (): void => {};
     const loopView: FlowStateView = {
-      stepName: 'build',
+      stepName: 'build', runStarted: 'never-started' as const,
       steps: ['build'],
       position: 1,
       total: 1,
@@ -1295,7 +1295,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: '',
+          stepName: '', runStarted: 'never-started' as const,
           steps: [],
           position: 0,
           total: 0,
@@ -1413,11 +1413,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(terminate()).toBeNull();
     });
 
-    it('is absent in the load-error state (AC2)', async () => {
+    it('is absent in the load-error state of a never-started worktree (AC2)', async () => {
       const deps = {
         state: vi.fn(
           async (): Promise<FlowStateView> => ({
-            stepName: '',
+            stepName: '', runStarted: 'never-started' as const,
             steps: [],
             position: 0,
             total: 0,
@@ -1438,6 +1438,59 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
       expect(terminate()).toBeNull();
+    });
+
+    const heldRun = (runStarted: 'started' | 'indeterminate') => {
+      let held = true;
+      const view = (): FlowStateView =>
+        held
+          ? { stepName: '', runStarted, steps: [], position: 0, total: 0, status: 'error', error: "the run's progression state could not be verified" }
+          : { stepName: 'red', runStarted: 'never-started', steps: ['red'], position: 1, total: 1, status: 'not_started' };
+      return {
+        state: vi.fn(async () => view()),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(async () => {
+          held = false;
+          return view();
+        }),
+        provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
+        onStateChanged: noopSub,
+        onTerminate: vi.fn((_repoKey: string, confirm: () => void) => confirm()),
+      };
+    };
+
+    it.each(['started', 'indeterminate'] as const)(
+      'is offered on the load-error view of a begun run (runStarted %s), and confirming repaints to not_started',
+      async (runStarted) => {
+        const deps = heldRun(runStarted);
+        createFlowStrip(host, deps).onRepoChanged('/repo');
+        await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
+        expect(terminate()).not.toBeNull();
+
+        terminate()!.click();
+
+        await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+        await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      },
+    );
+
+    it('a refused Terminate on the load-error view shows its reason and keeps Terminate offered', async () => {
+      const deps = heldRun('started');
+      deps.terminate = vi.fn(async () => ({
+        ...(await deps.state()),
+        notice: 'The run could not be terminated: EACCES',
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+
+      terminate()!.click();
+
+      await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toBe('The run could not be terminated: EACCES'));
+      expect(terminate()).not.toBeNull();
     });
 
     it('routes activation to the confirmation seam with the current repo, before any terminate (AC3 staging)', async () => {
@@ -1569,7 +1622,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     it('keeps keyboard focus on the focused control across a derived-only push (1918/WCAG 2.4.3)', async () => {
       let activity: AgentState = 'active';
       const { deps, push } = passiveDeps(() => ({
-        stepName: 'build',
+        stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
         position: 1,
         total: 1,
@@ -1592,7 +1645,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     it('does not tear down the Terminate control on a derived-only push, so a captured opener stays valid (2475 AC13)', async () => {
       let done = 1;
       const { deps, push } = passiveDeps(() => ({
-        stepName: 'build',
+        stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
         position: 1,
         total: 1,
@@ -1613,7 +1666,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     it('updates the loop read-out iteration in place and keeps the same node across a live re-pull (§24.2.3 T2)', async () => {
       let iteration = 9;
       const { deps, push } = passiveDeps(() => ({
-        stepName: 'build',
+        stepName: 'build', runStarted: 'never-started' as const,
         steps: ['build'],
         position: 1,
         total: 1,
@@ -1637,7 +1690,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       const { deps, push } = passiveDeps(() =>
         withLoop
           ? {
-              stepName: 'build',
+              stepName: 'build', runStarted: 'never-started' as const,
               steps: ['build'],
               position: 1,
               total: 1,
@@ -1645,7 +1698,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
               loop: { status: 'impl-review', iteration: 1, pr: 1, branch: 'b', ready: false },
             }
           : {
-              stepName: 'build',
+              stepName: 'build', runStarted: 'never-started' as const,
               steps: ['build'],
               position: 1,
               total: 1,
@@ -1669,7 +1722,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       ...fakeFlow('in_progress'),
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
-          stepName: 'build',
+          stepName: 'build', runStarted: 'never-started' as const,
           steps: ['build'],
           position: 1,
           total: 1,
@@ -1683,5 +1736,65 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       strip.onRepoChanged('/repo');
       await strip.refresh();
     });
+  });
+});
+
+// A2 (#133) §18.7.6 — the display-sanitized degrade reason (a pointer selection that fell back to the default)
+// renders as a PERSISTENT element on the running flow view. It is NOT the load `error` (a degrade keeps the
+// fallback running, so status is not `error`) and NOT the one-shot `notice` (which clears on the next
+// transition) — so it must survive a passive re-pull.
+describe('flow selection-reason (§18.7.6 degrade)', () => {
+  const reasonView = (selectionReason?: string): FlowStateView => ({
+    stepName: 'fallback-step', runStarted: 'never-started' as const,
+    steps: ['fallback-step'],
+    position: 1,
+    total: 1,
+    status: 'not_started',
+    ...(selectionReason ? { selectionReason } : {}),
+  });
+
+  it('paints a persistent selection-reason element on a non-error running view', async () => {
+    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView('Selected flow "x" was not found; running the default flow instead.')) };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
+      'Selected flow "x" was not found; running the default flow instead.',
+    );
+    // The station rail still renders — a degrade runs the fallback flow, it does not error out.
+    expect(host.querySelector('.flow.vert')).not.toBeNull();
+    expect(host.querySelector('.flow-error')).toBeNull();
+  });
+
+  it('renders no selection-reason element when the view carries none', async () => {
+    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView(undefined)) };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow.vert')).not.toBeNull());
+    expect(host.querySelector('.flow-selection-reason')).toBeNull();
+  });
+
+  it('keeps the reason across a passive re-pull (persistent, unlike the one-shot notice)', async () => {
+    const strip = createFlowStrip(host, {
+      ...fakeFlow(),
+      state: vi.fn(async () => reasonView('Selected flow degraded; running the default flow instead.')),
+    });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
+    await strip.refresh();
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
+      'Selected flow degraded; running the default flow instead.',
+    );
+  });
+
+  it('updates the reason on a passive re-pull when it CHANGES over the same fallback definition', async () => {
+    // selectionReason is part of structuralSig, so a changed reason over an otherwise-identical view forces a
+    // render rather than the value-only patch path (patchInPlace never touches .flow-selection-reason). Without
+    // that sig line the stale reason would linger — this pins the repaint-on-change half of the behavior.
+    let reason = 'Selected flow "a" was not found; running the default flow instead.';
+    const strip = createFlowStrip(host, { ...fakeFlow(), state: vi.fn(async () => reasonView(reason)) });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')?.textContent).toBe(reason));
+    reason = 'Selected flow "b" was not found; running the default flow instead.';
+    await strip.refresh();
+    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(reason);
   });
 });

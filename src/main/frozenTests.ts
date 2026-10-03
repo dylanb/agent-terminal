@@ -285,8 +285,7 @@ export type WorkingTreeTestPathsResult =
  *  attempt including retries (not once, as on the S2 approve commit). It is the SAME lever the S2 commit
  *  side-effect documents-and-accepts (the agent already runs the repo's own code in-turn), so no NEW trust
  *  boundary — but the higher firing frequency is the novel delta. The `ls-files -o` arm lists names only (no
- *  hashing), so it is filter-free.
- *  TODO(dylanb): a plumbing `hash-object --no-filters` staging is the deferred full neutralization (§28.3). */
+ *  hashing), so it is filter-free. */
 export async function workingTreeTestPaths(query: {
   repoDir: string;
   testGlobs: readonly string[];

@@ -7,6 +7,7 @@
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
+import { isSelectionLocked } from '../../shared/flowStarted';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 
@@ -82,6 +83,8 @@ export type FlowStripDeps = Omit<
   | 'appBackToRed'
   | 'armInterrupt'
   | 'setTitle'
+  | 'setActiveFlow'
+  | 'clearActiveFlow'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
@@ -129,6 +132,9 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
   return JSON.stringify([
     state.status,
     state.status === 'error' ? state.error ?? '' : '',
+    // §18.7.6 — the persistent degrade reason is structural, so a change to it forces a repaint and an
+    // unchanged one across a passive re-pull leaves the node in place (not re-announced into role=status).
+    state.selectionReason ?? '',
     state.steps,
     state.position,
     !!state.loop,
@@ -290,6 +296,15 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     return button;
   }
 
+  function appendHeldNotices(): void {
+    for (const text of heldNotices) {
+      const notice = doc.createElement('div');
+      notice.className = 'flow-notice';
+      notice.textContent = text;
+      host.append(notice);
+    }
+  }
+
   function terminateButton(): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = 'flow-terminate pill';
@@ -332,6 +347,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       err.className = 'flow-error';
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
+      // §18.7.2 AC6 — a begun run held at the load error still has Terminate as its route back to not_started.
+      if (deps.onTerminate && isSelectionLocked(state.runStarted)) host.append(terminateButton());
+      appendHeldNotices();
       deps.onPanelState?.(null, ''); // no step → the docked panel clears + closes
       return;
     }
@@ -363,6 +381,16 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
     });
     host.append(rail);
+
+    // §18.7.6 — the active-flow pointer selection degraded to the default flow: a PERSISTENT reason on the
+    // running view (status is NOT `error` — the fallback runs), distinct from the one-shot `notice` below. The
+    // reason is display-sanitized by main before it crosses IPC, so it is set as textContent verbatim.
+    if (state.selectionReason) {
+      const reason = doc.createElement('div');
+      reason.className = 'flow-selection-reason';
+      reason.textContent = state.selectionReason;
+      host.append(reason);
+    }
 
     // §24.2.3 T2/T7: the loop read-out (loop steps) else the refs read-out (a ticket/PR on any step).
     if (state.loop) {
@@ -401,12 +429,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // asynchronous producer (the coordinator's §19.3 refusal) has one pending; the strip holds it across
     // passive re-pulls and clears it at the next transition. Each held notice renders its own line so a
     // migration notice and a later busy-refusal both show (neither drops the other).
-    for (const text of heldNotices) {
-      const notice = doc.createElement('div');
-      notice.className = 'flow-notice';
-      notice.textContent = text;
-      host.append(notice);
-    }
+    appendHeldNotices();
 
     // WCAG 2.4.3
     if (hadFocus && !host.contains(doc.activeElement)) {

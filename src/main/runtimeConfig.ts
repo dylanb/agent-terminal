@@ -1,6 +1,4 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
-// TODO(dylan): a per-agent profile table (D10) is the intended future seam to
-// replace these env lookups without touching call sites.
 
 const DEFAULTS = {
   quietMs: 1000,

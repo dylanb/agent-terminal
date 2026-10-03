@@ -4,7 +4,8 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { load } from 'js-yaml';
@@ -20,6 +21,10 @@ import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
+import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
+import { recordDisposition } from '../../src/main/runDisposition';
+import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -1957,6 +1962,227 @@ function seedFlowRepoWithEntry(
   return dir;
 }
 
+// A2 (#133) §18.7.3/§18.7.6 — the per-worktree active-flow pointer resolved END-TO-END on a real PTY: the
+// pointer (set through A2's own write primitive `writeActiveFlow`) selects which catalog flow a worktree runs;
+// a present local flow.yaml still wins (leg 1); and a pointer that fails selection degrades to the global
+// fallback with a VISIBLE, display-sanitized reason and never opens a tier-escaping redirect target (CWE-59,
+// the sentinel step never surfaces). @ownapp: launches its own Electron with APP_HOME_DIR at a seeded global
+// fallback so the degrade legs (leg 3) are deterministic.
+test('the active-flow pointer selects the catalog flow, local wins, and a bad pointer degrades with a visible reason (§18.7.3/§18.7.6)', { tag: '@ownapp' }, async () => {
+  const a2Dirs: string[] = [];
+  const flowYaml = (name: string, ...steps: string[]): string =>
+    `name: ${name}\nsteps:\n` + steps.map((s) => `  - id: ${s}\n    kind: manual\n`).join('');
+  const seedRepo = (prefix: string): string => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    a2Dirs.push(dir);
+    mkdirSync(join(dir, '.git'), { recursive: true }); // a git root ⇒ its own repo key (§16.3)
+    return dir;
+  };
+  const seedCatalogEntry = (root: string, id: string, name: string, ...steps: string[]): string => {
+    const dir = join(flowCatalogDir(root), id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, FLOW_DEF_FILE), flowYaml(name, ...steps));
+    return dir;
+  };
+  const reason = () => page.locator('#flow-strip .flow-selection-reason');
+  const flowError = () => page.locator('#flow-strip .flow-error');
+
+  // A real GLOBAL fallback (leg 3, §18.1) so a degrade has a flow to fall back to — APP_HOME_DIR relocates it.
+  const home = seedRepo('agent-term-e2e-a2-home-');
+  mkdirSync(flowHomeDir(home), { recursive: true });
+  writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), flowYaml('global-fallback', 'global-fallback-step'));
+
+  // AC1: a repo-local catalog entry the pointer selects, NO local flow.yaml → leg 2 runs the catalog flow.
+  const repoCat = seedRepo('agent-term-e2e-a2-cat-');
+  seedCatalogEntry(repoCat, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
+  writeActiveFlow(repoCat, 'cat-flow');
+
+  // AC2: the same pointer, but a present local flow.yaml wins (leg 1, back-compat), pointer ignored.
+  const repoLocal = seedRepo('agent-term-e2e-a2-local-');
+  seedCatalogEntry(repoLocal, 'cat-flow', 'cat-flow', 'cat-groom', 'cat-plan');
+  mkdirSync(flowHomeDir(repoLocal), { recursive: true });
+  writeFileSync(join(flowHomeDir(repoLocal), FLOW_DEF_FILE), flowYaml('local-only', 'local-step'));
+  writeActiveFlow(repoLocal, 'cat-flow');
+
+  // AC4: a pointer naming a catalog id absent from every tier → degrade to the fallback + a visible reason.
+  const repoBad = seedRepo('agent-term-e2e-a2-bad-');
+  writeActiveFlow(repoBad, 'missing-flow');
+
+  // AC5: a catalog entry whose flow.yaml is a symlink escaping the tier jail → degrade, and the redirected
+  // sentinel flow's step NEVER surfaces in the resolved definition (CWE-59).
+  const outside = seedRepo('agent-term-e2e-a2-outside-');
+  writeFileSync(join(outside, 'sentinel.yaml'), flowYaml('sentinel', 'SENTINEL-LEAK-STEP'));
+  const repoEscape = seedRepo('agent-term-e2e-a2-escape-');
+  mkdirSync(join(flowCatalogDir(repoEscape), 'evil'), { recursive: true });
+  symlinkSync(join(outside, 'sentinel.yaml'), join(flowCatalogDir(repoEscape), 'evil', FLOW_DEF_FILE));
+  writeActiveFlow(repoEscape, 'evil');
+
+  // AC7/§18.7.4 — an indeterminate (unparseable) flow-state progression WITH a present local flow.yaml: the
+  // started-ness gate holds the run at the §18.1 error BEFORE leg 1, so the local flow is never run and a
+  // begun/corrupt run's source cannot be swapped mid-run (CWE-841). This is the observable consequence of the
+  // index.ts runBinding wiring; drop that wiring and leg 1 runs corrupt-local-step instead of holding.
+  const repoCorrupt = seedRepo('agent-term-e2e-a2-corrupt-');
+  mkdirSync(flowHomeDir(repoCorrupt), { recursive: true });
+  writeFileSync(join(flowHomeDir(repoCorrupt), FLOW_DEF_FILE), flowYaml('local-only', 'corrupt-local-step'));
+  writeFileSync(join(flowHomeDir(repoCorrupt), 'flow-state.yaml'), '[unterminated flow sequence');
+
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_HOME_DIR: home },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // AC1 — the pointer selects the catalog flow.
+  await typeCommand(`cd "${repoCat}"`);
+  await expect(flowStepName()).toHaveText('cat-groom', { timeout: 10_000 });
+  await expect(flowStation(2).locator('.nm')).toHaveText('cat-plan');
+  await expect(reason()).toHaveCount(0); // a successful selection surfaces no reason
+
+  // AC2 — a present local flow.yaml wins regardless of the pointer.
+  await typeCommand(`cd "${repoLocal}"`);
+  await expect(flowStepName()).toHaveText('local-step', { timeout: 10_000 });
+  await expect(reason()).toHaveCount(0);
+
+  // AC4 — an unknown pointer degrades to the global fallback WITH a visible reason.
+  await typeCommand(`cd "${repoBad}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(reason()).toBeVisible();
+  await expect(reason()).toContainText('missing-flow');
+
+  // AC5 — a tier-escaping symlinked entry degrades, and the redirect target's step never surfaces.
+  await typeCommand(`cd "${repoEscape}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  await expect(reason()).toBeVisible();
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('SENTINEL-LEAK-STEP');
+
+  // AC7 — the indeterminate progression HOLDS at the §18.1 error; the present local flow.yaml is not run.
+  await typeCommand(`cd "${repoCorrupt}"`);
+  await expect(flowError()).toBeVisible({ timeout: 10_000 });
+  await expect(flowError()).toContainText('could not be verified');
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('corrupt-local-step');
+
+  // AC7 write gate (§18.7.4) — the operator's selection over the REAL flow:setActiveFlow seam (A2's fireable
+  // boundary; the picker is A3): permitted while never-started (pointer written, strip re-renders the picked
+  // flow), then REFUSED once the run has begun, with the pointer left byte-for-byte unchanged (AC8).
+  const repoWrite = seedRepo('agent-term-e2e-a2-write-');
+  seedCatalogEntry(repoWrite, 'flow-a', 'flow-a', 'a-step');
+  seedCatalogEntry(repoWrite, 'flow-b', 'flow-b', 'b-groom', 'b-plan');
+  await typeCommand(`cd "${repoWrite}"`);
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 }); // pointer unset → leg 3
+  const permit = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
+  expect(permit).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 }); // the write re-rendered the strip
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
+
+  await flowControl().click(); // Start → in_progress: the run has begun
+  await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+  const refuse = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite);
+  expect(refuse.ok).toBe(false);
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' }); // unchanged — the write was refused
+  // §18.7.4 — the raw durable started-ness rides the flow view (what A3's picker-enable classifies).
+  expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('started');
+
+  // AC6 — Terminate preserves the pointer (the same catalog flow still resolves) and re-enables a new selection.
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'value', id: 'flow-b' });
+  await expect(flowStepName()).toHaveText('b-groom');
+  expect((await page.evaluate((rk) => window.flow.state(rk), repoWrite)).runStarted).toBe('never-started');
+  expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-a'), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('a-step', { timeout: 10_000 });
+
+  // AC8 — clearing the selection returns the worktree to the silent global fallback.
+  expect(await page.evaluate((rk) => window.flow.clearActiveFlow(rk), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('global-fallback-step', { timeout: 10_000 });
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
+  await expect(reason()).toHaveCount(0);
+
+  // AC11 — a live peer (this test runner: alive, identity matching) holds the worktree lock: the pointer write
+  // and flow:start are both refused with a visible reason, and the pointer file is left untouched.
+  const lockFile = worktreeLockFile(worktreeLockRoot(home), repoWrite);
+  mkdirSync(dirname(lockFile), { recursive: true });
+  writeFileSync(lockFile, serializeLockHolder(currentLockHolder()));
+  const held = await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite);
+  expect(held.ok).toBe(false);
+  if (!held.ok) expect(held.reason).toContain('Another Agent Terminal window');
+  expect(readActiveFlow(repoWrite)).toEqual({ kind: 'unset' });
+  await flowControl().click(); // Start, while the peer holds the lock
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('Another Agent Terminal window', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Start');
+
+  // …and a lock left behind by a DEAD holder is reclaimed, so the worktree is never bricked.
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const deadPid = child.pid!;
+  child.kill('SIGKILL');
+  await once(child, 'exit');
+  writeFileSync(lockFile, serializeLockHolder({ pid: deadPid, startTime: 'long-gone' }));
+  expect(await page.evaluate((rk) => window.flow.setActiveFlow(rk, 'flow-b'), repoWrite)).toEqual({ ok: true });
+  await expect(flowStepName()).toHaveText('b-groom', { timeout: 10_000 });
+
+  for (const d of a2Dirs) rmSync(d, { recursive: true, force: true });
+});
+
+// A2 (#133) §18.7.3 AC9 — a begun catalog run is source-sticky across an app restart: after a relaunch it still
+// resolves the catalog entry it began on (a pointer tampered on disk mid-run is ignored), and when that entry is
+// later removed the run surfaces the §18.1 error state rather than swapping to the fallback. @ownapp: it
+// relaunches its own Electron to re-read the on-disk run state.
+test('a begun catalog run keeps its source across a relaunch, and a lost source is the §18.1 error (§18.7.3 AC9)', { tag: '@ownapp' }, async () => {
+  const dirs: string[] = [];
+  const mk = (prefix: string): string => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    dirs.push(dir);
+    return dir;
+  };
+  const flowYaml = (name: string, ...steps: string[]): string =>
+    `name: ${name}\nsteps:\n` + steps.map((st) => `  - id: ${st}\n    kind: manual\n`).join('');
+  const seedEntry = (root: string, id: string, ...steps: string[]): void => {
+    mkdirSync(join(flowCatalogDir(root), id), { recursive: true });
+    writeFileSync(join(flowCatalogDir(root), id, FLOW_DEF_FILE), flowYaml(id, ...steps));
+  };
+  const home = mk('agent-term-e2e-a2-sticky-home-');
+  mkdirSync(flowHomeDir(home), { recursive: true });
+  writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), flowYaml('global-fallback', 'global-fallback-step'));
+  const repo = mk('agent-term-e2e-a2-sticky-');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  seedEntry(repo, 'sticky', 'sticky-one', 'sticky-two');
+  seedEntry(repo, 'other', 'other-step');
+  writeActiveFlow(repo, 'sticky');
+  const launch = async (): Promise<void> => {
+    app = await electron.launch({
+      args: launchArgs(),
+      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_HOME_DIR: home },
+    });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await typeCommand(`cd "${repo}"`);
+  };
+
+  await launch();
+  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await flowControl().click(); // Start → the run begins on the catalog entry
+  await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+  await app.close();
+
+  writeActiveFlow(repo, 'other'); // the pointer changes on disk while the run is begun
+  await launch();
+  await expect(flowStepName()).toHaveText('sticky-one', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Advance');
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('other-step');
+  await app.close();
+
+  rmSync(join(flowCatalogDir(repo), 'sticky'), { recursive: true, force: true }); // the bound source is lost
+  await launch();
+  await expect(page.locator('#flow-strip .flow-error')).toBeVisible({ timeout: 10_000 });
+  const strip = await page.locator('#flow-strip').innerText();
+  expect(strip).not.toContain('global-fallback-step');
+  expect(strip).not.toContain('other-step');
+
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+
 test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', { tag: '@ownapp' }, async () => {
   // bash spawns in $HOME (§5); the flow follows the terminal cwd like todos (§16.3).
   const repo = seedFlowRepo('agent-term-e2e-flow-a-', 'groom-ticket');
@@ -2276,11 +2502,8 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
-// TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
-// RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
-// grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
-// failing in Podman against the single-destination installer. Recorded gap.
-
+// recorded gap: the install-examples cases below landed green-first (#40) so their RED can't be reconstructed
+// (every #41 assertion was added RED-first, observed failing in Podman) — tracked in #153.
 const installExamplesBtn = () => page.locator('#install-examples-view .kprofile button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');
 const installExamplesPrompt = () => page.locator('#install-examples-view .flow-modal');
@@ -5083,30 +5306,32 @@ test('a §27 loop step shows a Loop read-out that expands a docked panel reflect
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', { tag: '@ownapp' }, async () => {
-  // persist() throws when the write cannot land; the name-save path surfaces that, and so must a
-  // Start/Advance — a transition that silently no-ops leaves the user clicking into the void.
-  // `.agent-terminal` is a symlink: the flow.yaml behind it LOADS (readFileSync follows the link), but
-  // atomicWriteFileSync REFUSES a symlinked container, so Start's persist() throws.
-  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-'));
+test('a symlinked .agent-terminal degrades the flow to a blocking error and never runs the redirected definition (§18.7.4/CWE-59)', { tag: '@ownapp' }, async () => {
+  // §18.7.4/CWE-59 — a cloned or hosted repo can ship `<repo>/.agent-terminal` as a symlink to attacker-chosen
+  // ground (the same shape todoStore/activeFlowPointer/artifactTree already refuse). The §18.7.4 started-ness
+  // gate reads flow-state through the confined path, which does NOT follow a symlinked `.agent-terminal` anchor,
+  // so begun-ness is unverifiable → the run HOLDS at the §18.1 error and the redirected flow.yaml is never
+  // loaded or run. This supersedes §19.1's earlier use of a symlinked `.agent-terminal` as the "write cannot
+  // land" device: that transition-write surfacing + retryability is covered at the unit boundary
+  // (flowStrip.test.ts injects a throwing start()), and no real write-fail device is reachable in the
+  // rootless-Podman e2e without tripping this same read gate (container-root bypasses chmod; any read
+  // perturbation of flow-state trips the gate first). See changelog v2.156.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
-  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-real-'));
-  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: groom\n    kind: manual\n');
+  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-real-'));
+  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: REDIRECTED-SENTINEL-STEP\n    kind: manual\n');
   symlinkSync(real, join(repo, '.agent-terminal'));
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → persist() throws (symlinked container)
-
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 10_000 });
-  await expect(errorDialog).toContainText('Flow action failed');
-  await errorDialog.locator('.dismiss').click();
-  await expect(flowControl()).toBeEnabled(); // retryable, not stuck
+  const flowError = page.locator('#flow-strip .flow-error');
+  await expect(flowError).toBeVisible({ timeout: 10_000 });
+  await expect(flowError).toContainText('could not be verified');
+  // the redirected definition behind the symlink is never loaded or run into the view
+  expect(await page.locator('#flow-strip').innerText()).not.toContain('REDIRECTED-SENTINEL-STEP');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -5526,6 +5751,28 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   // AC9: the shell process was neither interrupted nor killed — it still runs commands.
   await typeCommand('echo still-alive-after-terminate');
   await expect(termRows()).toContainText('still-alive-after-terminate');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a begun run with no run record is held at the load error, and Terminate from that view returns it to Not started (§18.7.2 AC6)', { tag: '@ownapp' }, async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-held-', 'groom');
+  writeFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), 'step: groom\nstatus: in_progress\ntitle: Held run\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-held-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toBeVisible({ timeout: 10_000 });
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+
+  await expect(flowControl()).toHaveText('Start');
+  expect(load(readFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), 'utf8'))).toEqual({ title: 'Held run' });
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -6889,6 +7136,7 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   // Already ENTERED at plan-bundle (in_progress), so no Start click is needed — hence no pickup runs and no
   // trusted bootstrap is installed; the epic issue ref stays unresolvable.
   writeFileSync(join(at, 'flow-state.yaml'), 'step: plan-bundle\nstatus: in_progress\n');
+  recordDisposition(dir, { source: 'non-catalog' });
   writeFileSync(
     join(at, 'loop', 'run-state.yaml'),
     `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-bundle-loop\nstep: plan-bundle\nturn_key: consolidate-plan-bundle\nstatus: complete\nverdict: clean\nround: 1\n`,
