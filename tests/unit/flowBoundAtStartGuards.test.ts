@@ -16,13 +16,15 @@ const ROOT_SPEC = 'terminal-web-ui-spec.md';
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
 const join2 = (...parts: string[]): string => parts.join('');
+const headingPattern = (num: string, after: string): RegExp =>
+  new RegExp(`^(#{1,6})\\s+${num.replace(/\./g, '\\.')}${after}`);
+const changelogEntries = (): string[] => read(CHANGELOG).split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/);
 
 /** The body under the heading carrying `num`, at any level, up to the next heading of the same or a higher
  *  level. The heading line itself is excluded. */
 function sectionBody(text: string, num: string): string {
   const lines = text.split('\n');
-  const escaped = num.replace(/\./g, '\\.');
-  const head = new RegExp(`^(#{1,6})\\s+${escaped}(?![.\\d])`);
+  const head = headingPattern(num, '(?![.\\d])');
   const start = lines.findIndex((l) => head.test(l));
   if (start < 0) return '';
   const level = (head.exec(lines[start]) as RegExpExecArray)[1].length;
@@ -88,7 +90,7 @@ describe(`#167 slice 3 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their number
   it('each heading exists, in order, keeping its subject word', () => {
     const lines = read(CH18).split('\n');
     const positions = SUBJECTS.map(([num, subject]) => {
-      const i = lines.findIndex((l) => new RegExp(`^#{1,6}\\s+${num.replace(/\./g, '\\.')}\\s`).test(l));
+      const i = lines.findIndex((l) => headingPattern(num, '\\s').test(l));
       expect(i, `${SECTION}${num} heading missing`).toBeGreaterThanOrEqual(0);
       expect(lower(lines[i]), `${SECTION}${num} heading lost its subject "${subject}"`).toContain(subject);
       return i;
@@ -121,17 +123,14 @@ describe(`#167 slice 3 — ${SECTION}18.7.5 states the flow is bound at Start (A
   });
 
   it(`a changelog entry naming D63 and #167 cites ${SECTION}18.7.5 and the operator decision`, () => {
-    const entries = read(CHANGELOG).split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/);
-    const entry = entries.find((e) => e.includes('D63') && e.includes('#167'));
+    const entry = changelogEntries().find((e) => e.includes('D63') && e.includes('#167'));
     expect(entry, 'no changelog entry names both D63 and #167').toBeDefined();
     expect(entry as string).toContain(`${SECTION}18.7.5`);
     expect(lower(entry as string)).toContain('operator decision');
   });
 
   it('the historical v2.145 entry that introduced pickup seeding stays as written', () => {
-    const v2145 = read(CHANGELOG)
-      .split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/)
-      .find((e) => e.startsWith('**Changelog v2.145:**'));
+    const v2145 = changelogEntries().find((e) => e.startsWith('**Changelog v2.145:**'));
     expect(v2145, 'the v2.145 changelog entry is gone').toBeDefined();
     expect(v2145 as string).toContain(join2('**pickup ', 'seeding** (', SECTION, '18.7.5'));
     expect(v2145 as string).toContain(join2('A1', '–', 'A4'));
@@ -153,19 +152,20 @@ describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seedi
     return { preamble, bullets };
   }
 
-  const ANCHORS: ReadonlyArray<readonly [string, (u: string) => boolean]> = [
-    ['One pointer identity', (u) => u.includes('One pointer identity')],
-    ['Read-boundary field validation', (u) => u.includes('Read-boundary field validation')],
-    ['Per-tier confinement', (u) => u.includes('Per-tier confinement')],
-    ['Enumeration-read totality', (u) => u.includes('Enumeration-read totality')],
-    ['Reconcile the segment charset', (u) => u.includes('Reconcile the segment charset')],
-    ['Sanitize the refusal reason', (u) => u.includes('Sanitize the refusal reason')],
-    ['The display-sanitize treatment', (u) => u.includes('The display-sanitize treatment')],
-    ['The catalog *is* the library', (u) => u.includes('The catalog *is* the library')],
-    ['The catalog-listing seam', (u) => u.includes('The catalog-listing seam')],
-    ['Surface an unreadable-tier notice', (u) => u.includes('Surface an unreadable-tier notice')],
-    ['first-run writer', (u) => u.includes('*first-run* writer')],
-    ['structured-value write', (u) => u.includes('structured-value write') && u.includes('YAML emitter')],
+  /** Each gate is identified by every one of its needles appearing in a single bullet. */
+  const GATES: ReadonlyArray<readonly string[]> = [
+    ['One pointer identity'],
+    ['Read-boundary field validation'],
+    ['Per-tier confinement'],
+    ['Enumeration-read totality'],
+    ['Reconcile the segment charset'],
+    ['Sanitize the refusal reason'],
+    ['The display-sanitize treatment'],
+    ['The catalog *is* the library'],
+    ['The catalog-listing seam'],
+    ['Surface an unreadable-tier notice'],
+    ['*first-run* writer'],
+    ['structured-value write', 'YAML emitter'],
   ];
 
   it('the preamble is present and keeps confine-at-use regardless of provenance', () => {
@@ -174,9 +174,9 @@ describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seedi
     expect(preamble).toContain('regardless of provenance');
   });
 
-  for (const [name, matches] of ANCHORS) {
-    it(`exactly one ${SECTION}18.7.6 bullet is the "${name}" gate`, () => {
-      expect(units().bullets.filter(matches)).toHaveLength(1);
+  for (const needles of GATES) {
+    it(`exactly one ${SECTION}18.7.6 bullet is the "${needles[0]}" gate`, () => {
+      expect(units().bullets.filter((b) => needles.every((n) => b.includes(n)))).toHaveLength(1);
     });
   }
 
@@ -184,10 +184,6 @@ describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seedi
     const charset = units().bullets.find((b) => b.includes('Reconcile the segment charset')) ?? '';
     expect(charset).toContain('shared maximum');
     expect(charset).toContain('64');
-  });
-
-  it('the first-run writer survives', () => {
-    expect(units().bullets.some((b) => b.includes('first-run'))).toBe(true);
   });
 
   it('exactly the two seed-only bullets are gone', () => {
