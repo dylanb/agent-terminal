@@ -16,6 +16,7 @@ const CH24 = join(SPEC_DIR, '24-build-plan-ui-inwards.md');
 const CHANGELOG = join(SPEC_DIR, 'changelog.md');
 const ROOT_SPEC = 'terminal-web-ui-spec.md';
 const REQUIREMENTS = 'flow-management-requirements.md';
+const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
 
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
@@ -44,7 +45,7 @@ function sectionBody(text: string, num: string): string {
 /** `sectionBody` of `file`, asserted present so a renamed or missing heading fails rather than passing vacuously. */
 function sectionOf(file: string, num: string): string {
   const body = sectionBody(read(file), num);
-  expect(body.length, `${SECTION}${num} body not found`).toBeGreaterThan(0);
+  expect(body.length, `${file} ${SECTION}${num} body not found`).toBeGreaterThan(0);
   return body;
 }
 
@@ -322,7 +323,9 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
   });
 });
 
-const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
+const themeASliceList = (): string[] => sectionOf(DESIGN, '4.4').split('\n');
+const SLICE_ENTRY = /^- \*\*A\d+/;
+const A1_CATALOG_SEED = /A1 must seed (the catalog )?through the app-state resolver|seeds the user-config `flows\/` catalog/g;
 
 describe(`#167 slice 5 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
   const NEEDLES = [
@@ -354,20 +357,20 @@ describe(`#167 slice 5 — the design doc plans no pickup seeding or ticket-born
   it(`${DESIGN} plans no seeding beyond A1's catalog install`, () => {
     const hits = read(DESIGN)
       .split('\n')
-      .filter((l) => /\bseed/i.test(l.replace(/A1 must seed (the catalog )?through the app-state resolver|seeds the user-config `flows\/` catalog/g, '')));
+      .filter((l) => /\bseed/i.test(l.replace(A1_CATALOG_SEED, '')));
     expect(hits, `seed clause (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
   });
 
   it(`the design doc's Theme A slice list has no A4 entry`, () => {
-    const lines = sectionOf(DESIGN, '4.4').split('\n');
-    expect(lines.some((l) => /^- \*\*A\d+ —/.test(l)), 'Theme A slice list entries not found').toBe(true);
+    const lines = themeASliceList();
+    expect(lines.some((l) => SLICE_ENTRY.test(l)), 'Theme A slice list entries not found').toBe(true);
     const a4 = lines.filter((l) => l.startsWith('- **A4'));
     expect(a4.map((l) => l.slice(0, 120)), `A4 slice entry (${RULE})`).toEqual([]);
   });
 
   it(`the design doc's Theme A slice list records that A4 was dropped (#135)`, () => {
-    const lines = sectionOf(DESIGN, '4.4').split('\n');
-    const lastEntry = lines.map((l) => /^- \*\*A\d+/.test(l)).lastIndexOf(true);
+    const lines = themeASliceList();
+    const lastEntry = lines.map((l) => SLICE_ENTRY.test(l)).lastIndexOf(true);
     const notes = lines
       .slice(lastEntry + 1)
       .filter(
