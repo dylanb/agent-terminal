@@ -202,3 +202,101 @@ describe(`#167 slice 3 — ${SECTION}18.7.6's shared gates survive without seedi
     expect(offenders.map((u) => u.slice(0, 120)), RULE).toEqual([]);
   });
 });
+
+const CH06 = join(SPEC_DIR, '06-ipc-contract.md');
+const CH23 = join(SPEC_DIR, '23-multi-instance-and-epics.md');
+const CH24 = join(SPEC_DIR, '24-build-plan-ui-inwards.md');
+const REQUIREMENTS = 'flow-management-requirements.md';
+
+/** The single line of `file` matching `pattern`; asserted unique so a missed or duplicated anchor fails. */
+function soleLine(file: string, pattern: RegExp): string {
+  const hits = read(file)
+    .split('\n')
+    .filter((l) => pattern.test(l));
+  expect(hits, `expected exactly one line of ${file} matching ${pattern}`).toHaveLength(1);
+  return hits[0];
+}
+
+const openChildRow = (): string => soleLine(CH06, /^\|\s*`flow:openChild`/);
+const openChildSketch = (): string => soleLine(CH06, /^\s*openChild:/);
+const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/i);
+const ch23Body = (): string => {
+  const body = sectionBody(read(CH23), '23.2');
+  expect(body.length, `${SECTION}23.2 body not found`).toBeGreaterThan(0);
+  return body;
+};
+const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
+
+describe(`#167 slice 4 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
+  const NEEDLES = [
+    join2("seeding that worktree's ", 'flow-state'),
+    join2('seeding its ', 'flow-state'),
+    join2('seeds the ', 'expected'),
+  ];
+
+  for (const needle of NEEDLES) {
+    it(`no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 chapter contains "${needle}"`, () => {
+      const offenders = [CH06, CH23, CH24].filter((f) => lower(read(f)).includes(lower(needle)));
+      expect(offenders, `"${needle}" (${RULE}) still in:\n${offenders.join('\n')}`).toEqual([]);
+    });
+  }
+
+  it(`the ${SECTION}23.2 body, the ${SECTION}6 flow:openChild row and sketch, and the ${SECTION}24 launcher item use no form of "seed"`, () => {
+    const scoped: ReadonlyArray<readonly [string, string]> = [
+      [`${SECTION}23.2 body`, ch23Body()],
+      [`${SECTION}6 flow:openChild row`, openChildRow()],
+      [`${SECTION}6 openChild preload sketch`, openChildSketch()],
+      [`${SECTION}24 child-instance launcher item`, childLauncherItem()],
+    ];
+    const offenders = scoped.filter(([, text]) => /seed/i.test(text)).map(([where]) => where);
+    expect(offenders, `seed clause (${RULE}) still in:\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
+
+describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, () => {
+  it(`the ${SECTION}6 flow:openChild row and preload sketch carry no atStep`, () => {
+    expect(openChildRow(), `atStep in the flow:openChild row (${RULE})`).not.toContain('atStep');
+    expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
+  });
+
+  it(`${SECTION}23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
+    const body = lower(ch23Body());
+    expect(body).toContain('bound at start');
+    expect(body).toContain('where an ordinary start');
+  });
+
+  it(`${SECTION}23.2 no longer says the child runs the parent's flow`, () => {
+    expect(lower(ch23Body()), RULE).not.toContain('all steps of the flow run on each pr');
+  });
+
+  it(`no sentence of ${SECTION}23.2 or the ${SECTION}6 flow:openChild row cites D22 as authority for seeding`, () => {
+    const offenders = [...sentences(ch23Body()), ...sentences(openChildRow())].filter(
+      (s) => s.includes('D22') && /seed/i.test(s),
+    );
+    expect(offenders, `D22 cited for seeding (${RULE}):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it(`the ${SECTION}24 child-instance launcher item says the child's flow is bound at Start`, () => {
+    expect(lower(childLauncherItem())).toContain('bound at start');
+  });
+
+  it(`the ${SECTION}6 flow:openChild row's shape version has a changelog entry citing ${SECTION}23.2 or D63`, () => {
+    const shape = /shape v(\d+\.\d+)/.exec(openChildRow());
+    expect(shape, 'the flow:openChild row carries no "shape vX.Y" prefix').not.toBeNull();
+    const version = (shape as RegExpExecArray)[1];
+    const entry = changelogEntries().find((e) => e.startsWith(`**Changelog v${version}:**`));
+    expect(entry, `no **Changelog v${version}:** entry for the flow:openChild row's shape`).toBeDefined();
+    expect(
+      (entry as string).includes(`${SECTION}23.2`) || (entry as string).includes('D63'),
+      `the v${version} changelog entry cites neither ${SECTION}23.2 nor D63`,
+    ).toBe(true);
+  });
+
+  it(`${REQUIREMENTS} records D63 superseding D22's flow-state seeding`, () => {
+    const paragraphs = read(REQUIREMENTS).split(/\n\s*\n/);
+    const d63 = paragraphs.filter((p) => p.trimStart().startsWith('**[D63 · 2026-09-29]'));
+    expect(d63, `no single [D63 · 2026-09-29] entry in ${REQUIREMENTS}`).toHaveLength(1);
+    expect(d63[0]).toContain('D22');
+    expect(lower(d63[0])).toContain('supersede');
+  });
+});
