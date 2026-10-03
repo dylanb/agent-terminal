@@ -1,12 +1,8 @@
-// #167 doc guards: the flow is bound at Start and pickup then binds the ticket; no clause requires or plans a
-// ticket-borne flow stamp or pickup seeding of the pointer.
-
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const SECTION = String.fromCharCode(0xa7);
-const RULE = `retired by ${SECTION}18.7.5 / D63, #167`;
+const RULE = `retired by §18.7.5 / D63, #167`;
 const SPEC_DIR = 'docs/spec';
 const CH06 = join(SPEC_DIR, '06-ipc-contract.md');
 const CH18 = join(SPEC_DIR, '18-flow-definitions-flow-yaml.md');
@@ -19,13 +15,10 @@ const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
 
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
-const phrase = (...parts: string[]): string => parts.join('');
 const headingPattern = (num: string, after: string): RegExp =>
   new RegExp(`^(#{1,6})\\s+${num.replace(/\./g, '\\.')}${after}`);
 const changelogEntries = (): string[] => read(CHANGELOG).split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/);
 
-/** The body under the heading carrying `num`, at any level, up to the next heading of the same or a higher
- *  level. */
 function sectionBody(text: string, num: string): string {
   const lines = text.split('\n');
   const head = headingPattern(num, '(?![.\\d])');
@@ -44,7 +37,7 @@ function sectionBody(text: string, num: string): string {
 /** `sectionBody` of `file`, asserted present so a renamed or missing heading fails rather than passing vacuously. */
 function sectionOf(file: string, num: string): string {
   const body = sectionBody(read(file), num);
-  expect(body.length, `${file} ${SECTION}${num} body not found`).toBeGreaterThan(0);
+  expect(body.length, `${file} §${num} body not found`).toBeGreaterThan(0);
   return body;
 }
 
@@ -54,22 +47,22 @@ const specFilesExceptChangelog = (): string[] =>
     .map((f) => join(SPEC_DIR, f))
     .concat(ROOT_SPEC);
 
-describe(`#167 — no ${SECTION}18 / spec clause requires or plans pickup seeding or a ticket-borne stamp (AC 3)`, () => {
+describe(`#167 — no §18 / spec clause requires or plans pickup seeding or a ticket-borne stamp (AC 3)`, () => {
   const NEEDLES = [
-    phrase('Pickup see', 'ding (A4)'),
-    phrase('stamps the chosen ', 'selection'),
-    phrase("A4's ", 'seed'),
-    phrase('A4 ', 'seeds'),
-    phrase('A4 ', 'seed'),
-    phrase('pickup-', 'seeded'),
-    phrase('stamp', 'less'),
-    phrase('seed-', 'write'),
-    phrase('trusted-', 'seed'),
-    phrase('pick/', 'seed'),
-    phrase('A1', '–', 'A4'),
-    phrase('A0', '–', 'A4'),
-    phrase('pickup ', 'seeding'),
-    phrase('seed the ', 'pointer'),
+    'Pickup seeding (A4)',
+    'stamps the chosen selection',
+    "A4's seed",
+    'A4 seeds',
+    'A4 seed',
+    'pickup-seeded',
+    'stampless',
+    'seed-write',
+    'trusted-seed',
+    'pick/seed',
+    'A1–A4',
+    'A0–A4',
+    'pickup seeding',
+    'seed the pointer',
   ];
 
   for (const needle of NEEDLES) {
@@ -79,13 +72,13 @@ describe(`#167 — no ${SECTION}18 / spec clause requires or plans pickup seedin
     });
   }
 
-  it(`${SECTION}18.7 carries no stamp clause`, () => {
+  it(`§18.7 carries no stamp clause`, () => {
     const hits = sectionOf(CH18, '18.7').split('\n').filter((l) => /\bstamp/i.test(l));
-    expect(hits, `stamp clause (${RULE}) still in ${SECTION}18.7:\n${hits.join('\n')}`).toEqual([]);
+    expect(hits, `stamp clause (${RULE}) still in §18.7:\n${hits.join('\n')}`).toEqual([]);
   });
 });
 
-describe(`#167 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their numbers and subjects (AC 5)`, () => {
+describe(`#167 — §18.7.1–§18.7.7 keep their numbers and subjects (AC 5)`, () => {
   const SUBJECTS: ReadonlyArray<readonly [string, string]> = [
     ['18.7.1', 'catalog'],
     ['18.7.2', 'pointer'],
@@ -100,16 +93,16 @@ describe(`#167 — ${SECTION}18.7.1–${SECTION}18.7.7 keep their numbers and su
     const lines = read(CH18).split('\n');
     const positions = SUBJECTS.map(([num, subject]) => {
       const i = lines.findIndex((l) => headingPattern(num, '\\s').test(l));
-      expect(i, `${SECTION}${num} heading missing`).toBeGreaterThanOrEqual(0);
-      expect(lower(lines[i]), `${SECTION}${num} heading lost its subject "${subject}"`).toContain(subject);
+      expect(i, `§${num} heading missing`).toBeGreaterThanOrEqual(0);
+      expect(lower(lines[i]), `§${num} heading lost its subject "${subject}"`).toContain(subject);
       return i;
     });
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 });
 
-describe(`#167 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, () => {
-  it(`${SECTION}18.7.5 states the rule and that a ticket is untrusted input`, () => {
+describe(`#167 — §18.7.5 states the flow is bound at Start (AC 3)`, () => {
+  it(`§18.7.5 states the rule and that a ticket is untrusted input`, () => {
     const body = lower(sectionOf(CH18, '18.7.5'));
     expect(body).toContain('bound at start');
     expect(body).toContain('pickup binds the ticket');
@@ -117,33 +110,33 @@ describe(`#167 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, (
     expect(body).toContain('never select the flow');
     expect(
       body.indexOf('bound at start'),
-      `${SECTION}18.7.5 must state Start's binding before pickup's`,
+      `§18.7.5 must state Start's binding before pickup's`,
     ).toBeLessThan(body.indexOf('pickup binds the ticket'));
   });
 
-  it(`${SECTION}18.7.5 carries no seed clause beyond its one historical mention`, () => {
+  it(`§18.7.5 carries no seed clause beyond its one historical mention`, () => {
     const hits = sectionOf(CH18, '18.7.5')
       .split('\n')
-      .filter((l) => /seed/i.test(l.replace(new RegExp(phrase('pickup-', 'seeding clause'), 'gi'), '')));
-    expect(hits, `seed clause (${RULE}) still in ${SECTION}18.7.5:\n${hits.join('\n')}`).toEqual([]);
+      .filter((l) => /seed/i.test(l.replace(new RegExp('pickup-seeding clause', 'gi'), '')));
+    expect(hits, `seed clause (${RULE}) still in §18.7.5:\n${hits.join('\n')}`).toEqual([]);
   });
 
-  it(`a changelog entry naming D63 and #167 cites ${SECTION}18.7.5 and the operator decision`, () => {
+  it(`a changelog entry naming D63 and #167 cites §18.7.5 and the operator decision`, () => {
     const entry = changelogEntries().find((e) => e.includes('D63') && e.includes('#167'));
     expect(entry, 'no changelog entry names both D63 and #167').toBeDefined();
-    expect(entry as string).toContain(`${SECTION}18.7.5`);
+    expect(entry as string).toContain(`§18.7.5`);
     expect(lower(entry as string)).toContain('operator decision');
   });
 
   it('the historical v2.145 entry that introduced pickup seeding stays as written', () => {
     const v2145 = changelogEntries().find((e) => e.startsWith('**Changelog v2.145:**'));
     expect(v2145, 'the v2.145 changelog entry is gone').toBeDefined();
-    expect(v2145 as string).toContain(phrase('**pickup ', 'seeding** (', SECTION, '18.7.5'));
-    expect(v2145 as string).toContain(phrase('A1', '–', 'A4'));
+    expect(v2145 as string).toContain('**pickup seeding** (§18.7.5');
+    expect(v2145 as string).toContain('A1–A4');
   });
 });
 
-describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4)`, () => {
+describe(`#167 — §18.7.6's shared gates survive without seeding (AC 4)`, () => {
   function units(): { preamble: string; bullets: string[] } {
     const body = sectionBody(read(CH18), '18.7.6');
     const lines = body.split('\n');
@@ -174,12 +167,12 @@ describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4
 
   it('the preamble is present and keeps confine-at-use regardless of provenance', () => {
     const { preamble } = units();
-    expect(preamble.length, `${SECTION}18.7.6 preamble not found`).toBeGreaterThan(0);
+    expect(preamble.length, `§18.7.6 preamble not found`).toBeGreaterThan(0);
     expect(preamble).toContain('regardless of provenance');
   });
 
   for (const needles of GATES) {
-    it(`exactly one ${SECTION}18.7.6 bullet is the "${needles[0]}" gate`, () => {
+    it(`exactly one §18.7.6 bullet is the "${needles[0]}" gate`, () => {
       expect(units().bullets.filter((b) => needles.every((n) => b.includes(n)))).toHaveLength(1);
     });
   }
@@ -192,16 +185,16 @@ describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4
 
   it('exactly the two seed-only bullets are gone', () => {
     const { bullets } = units();
-    expect(bullets.length, `${SECTION}18.7.6 bullets not found`).toBeGreaterThan(0);
-    for (const lead of [phrase('Structured travel on the ', 'seed-write'), phrase('Argument-safe ', 'seed-write')]) {
+    expect(bullets.length, `§18.7.6 bullets not found`).toBeGreaterThan(0);
+    for (const lead of ['Structured travel on the seed-write', 'Argument-safe seed-write']) {
       expect(bullets.filter((b) => b.includes(lead)), `"${lead}" (${RULE})`).toEqual([]);
     }
   });
 
   it('no surviving unit, the preamble included, justifies itself by A4 or seeding', () => {
     const { preamble, bullets } = units();
-    expect(preamble.length, `${SECTION}18.7.6 preamble not found`).toBeGreaterThan(0);
-    expect(bullets.length, `${SECTION}18.7.6 bullets not found`).toBeGreaterThan(0);
+    expect(preamble.length, `§18.7.6 preamble not found`).toBeGreaterThan(0);
+    expect(bullets.length, `§18.7.6 bullets not found`).toBeGreaterThan(0);
     const offenders = [preamble, ...bullets].filter((u) => /A4/.test(u) || /seed/i.test(u));
     expect(offenders.map((u) => u.slice(0, 120)), RULE).toEqual([]);
   });
@@ -221,26 +214,26 @@ const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/
 const ch23Body = (): string => sectionOf(CH23, '23.2');
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
-describe(`#167 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
+describe(`#167 — no §6 / §23 / §24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
   const NEEDLES = [
-    phrase("seeding that worktree's ", 'flow-state'),
-    phrase('seeding its ', 'flow-state'),
-    phrase('seeds the ', 'expected'),
+    "seeding that worktree's flow-state",
+    'seeding its flow-state',
+    'seeds the expected',
   ];
 
   for (const needle of NEEDLES) {
-    it(`no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 chapter contains "${needle}"`, () => {
+    it(`no §6 / §23 / §24 chapter contains "${needle}"`, () => {
       const offenders = [CH06, CH23, CH24].filter((f) => lower(read(f)).includes(lower(needle)));
       expect(offenders, `"${needle}" (${RULE}) still in:\n${offenders.join('\n')}`).toEqual([]);
     });
   }
 
-  it(`the ${SECTION}23.2 body, the ${SECTION}6 flow:openChild row and sketch, and the ${SECTION}24 launcher item use no form of "seed"`, () => {
+  it(`the §23.2 body, the §6 flow:openChild row and sketch, and the §24 launcher item use no form of "seed"`, () => {
     const scoped: ReadonlyArray<readonly [string, string]> = [
-      [`${SECTION}23.2 body`, ch23Body()],
-      [`${SECTION}6 flow:openChild row`, openChildRow()],
-      [`${SECTION}6 openChild preload sketch`, openChildSketch()],
-      [`${SECTION}24 child-instance launcher item`, childLauncherItem()],
+      [`§23.2 body`, ch23Body()],
+      [`§6 flow:openChild row`, openChildRow()],
+      [`§6 openChild preload sketch`, openChildSketch()],
+      [`§24 child-instance launcher item`, childLauncherItem()],
     ];
     const offenders = scoped.filter(([, text]) => /seed/i.test(text)).map(([where]) => where);
     expect(offenders, `seed clause (${RULE}) still in:\n${offenders.join('\n')}`).toEqual([]);
@@ -248,44 +241,44 @@ describe(`#167 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a c
 });
 
 describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
-  it(`the ${SECTION}6 flow:openChild row and preload sketch carry no atStep`, () => {
+  it(`the §6 flow:openChild row and preload sketch carry no atStep`, () => {
     expect(openChildRow(), `atStep in the flow:openChild row (${RULE})`).not.toContain('atStep');
     expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
   });
 
-  it(`the ${SECTION}6 flow:openChild payload and preload sketch take only prRef — no renamed seeding field`, () => {
+  it(`the §6 flow:openChild payload and preload sketch take only prRef — no renamed seeding field`, () => {
     expect(openChildRow(), `flow:openChild payload (${RULE})`).toContain('`{sessionId, prRef} → {worktree, launched}`');
     expect(openChildSketch(), `openChild preload sketch (${RULE})`).toMatch(
       /openChild:\s*\(prRef\)\s*=>\s*ipcRenderer\.invoke\('flow:openChild',\s*\{\s*sessionId:\s*SID,\s*prRef\s*\}\)/,
     );
   });
 
-  it(`${SECTION}23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
+  it(`§23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
     const body = lower(ch23Body());
     expect(body).toContain('bound at start');
     expect(body).toContain('where an ordinary start');
   });
 
-  it(`${SECTION}23.2 states flow:openChild does not set the child worktree's flow selection or flow-state`, () => {
+  it(`§23.2 states flow:openChild does not set the child worktree's flow selection or flow-state`, () => {
     expect(lower(ch23Body()), RULE).toContain("does not set that worktree's flow selection or flow-state");
   });
 
-  it(`${SECTION}23.2 no longer says the child runs the parent's flow`, () => {
+  it(`§23.2 no longer says the child runs the parent's flow`, () => {
     expect(lower(ch23Body()), RULE).not.toContain('all steps of the flow run on each pr');
   });
 
-  it(`no sentence of ${SECTION}23.2 or the ${SECTION}6 flow:openChild row cites D22 as authority for seeding`, () => {
+  it(`no sentence of §23.2 or the §6 flow:openChild row cites D22 as authority for seeding`, () => {
     const offenders = [...sentences(ch23Body()), ...sentences(openChildRow())].filter(
       (s) => s.includes('D22') && /seed/i.test(s),
     );
     expect(offenders, `D22 cited for seeding (${RULE}):\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it(`the ${SECTION}24 child-instance launcher item says the child's flow is bound at Start`, () => {
+  it(`the §24 child-instance launcher item says the child's flow is bound at Start`, () => {
     expect(lower(childLauncherItem())).toContain('bound at start');
   });
 
-  it(`the ${SECTION}6 flow:openChild row's shape version has a changelog entry citing ${SECTION}23.2 or D63`, () => {
+  it(`the §6 flow:openChild row's shape version has a changelog entry citing §23.2 or D63`, () => {
     const shape = /shape v(\d+\.\d+)/.exec(openChildRow());
     expect(shape, 'the flow:openChild row carries no "shape vX.Y" prefix').not.toBeNull();
     const version = (shape as RegExpExecArray)[1];
@@ -293,8 +286,8 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
     expect(entry, `no **Changelog v${version}:** entry for the flow:openChild row's shape`).toBeDefined();
     const text = entry ?? '';
     expect(
-      text.includes(`${SECTION}23.2`) || text.includes('D63'),
-      `the v${version} changelog entry cites neither ${SECTION}23.2 nor D63`,
+      text.includes(`§23.2`) || text.includes('D63'),
+      `the v${version} changelog entry cites neither §23.2 nor D63`,
     ).toBe(true);
     expect(text, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
       '`flow:openChild`',
@@ -309,7 +302,7 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
     expect(lower(d63[0])).toContain('supersede');
   });
 
-  it(`${REQUIREMENTS}'s D18, which ${SECTION}23.2 still cites, is annotated as superseded by D63`, () => {
+  it(`${REQUIREMENTS}'s D18, which §23.2 still cites, is annotated as superseded by D63`, () => {
     const paragraphs = read(REQUIREMENTS).split(/\n\s*\n/);
     const d18 = paragraphs.filter((p) => p.trimStart().startsWith('**[D18 · 2026-06-16]'));
     expect(d18, `no single [D18 · 2026-06-16] entry in ${REQUIREMENTS}`).toHaveLength(1);
@@ -325,15 +318,15 @@ const A1_CATALOG_SEED = /A1 must seed (the catalog )?through the app-state resol
 
 describe(`#167 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
   const NEEDLES = [
-    phrase('pickup ', 'seeding'),
-    phrase('pickup ', 'stamp'),
-    phrase('Selection at ', 'pickup'),
-    phrase('A1', '–', 'A4'),
-    phrase('A0', '–', 'A4'),
-    phrase('A1', '–', 'A5'),
-    phrase('pointer is ', 'seeded'),
-    phrase('stamps the chosen ', 'flow'),
-    phrase('selecting this ', 'flow'),
+    'pickup seeding',
+    'pickup stamp',
+    'Selection at pickup',
+    'A1–A4',
+    'A0–A4',
+    'A1–A5',
+    'pointer is seeded',
+    'stamps the chosen flow',
+    'selecting this flow',
   ];
 
   for (const needle of NEEDLES) {
@@ -370,21 +363,21 @@ describe(`#167 — the design doc plans no pickup seeding or ticket-borne flow s
     const notes = lines
       .slice(lastEntry + 1)
       .filter(
-        (l) => /\bA4\b/.test(l) && /\bdropped\b/i.test(l) && l.includes('#135') && l.includes(`${SECTION}18.7.5`),
+        (l) => /\bA4\b/.test(l) && /\bdropped\b/i.test(l) && l.includes('#135') && l.includes(`§18.7.5`),
       );
     expect(
       notes,
-      `no line after the Theme A slice list says A4 was dropped, citing #135 and ${SECTION}18.7.5 (${RULE})`,
+      `no line after the Theme A slice list says A4 was dropped, citing #135 and §18.7.5 (${RULE})`,
     ).toHaveLength(1);
   });
 
-  it(`the design doc's ${SECTION}4.2 item 4 says the flow is selected at Start and pickup binds the ticket`, () => {
+  it(`the design doc's §4.2 item 4 says the flow is selected at Start and pickup binds the ticket`, () => {
     const item4 = sectionOf(DESIGN, '4.2')
       .split('\n')
       .filter((l) => l.startsWith('4. **'));
-    expect(item4, `expected exactly one ${SECTION}4.2 item 4`).toHaveLength(1);
-    expect(item4[0], `${SECTION}4.2 item 4 must become "Selection at Start" (${RULE})`).toContain('Selection at Start');
-    expect(lower(item4[0]), `${SECTION}4.2 item 4 must say pickup binds the ticket (${RULE})`).toContain(
+    expect(item4, `expected exactly one §4.2 item 4`).toHaveLength(1);
+    expect(item4[0], `§4.2 item 4 must become "Selection at Start" (${RULE})`).toContain('Selection at Start');
+    expect(lower(item4[0]), `§4.2 item 4 must say pickup binds the ticket (${RULE})`).toContain(
       'pickup binds the ticket',
     );
   });

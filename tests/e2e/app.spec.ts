@@ -1907,8 +1907,8 @@ const TICKET_NAMING_Y: ServedTicket = {
   labels: [`flow/${FLOW_Y_ID}`],
 };
 
-// The launch env that makes seedFakeGhGit's gh answer `issue view <ticket.number>` from `ticket`, whatever the
-// --json fields or -q/--jq filter. Spread `env` into the app's env alongside FAKE_GHGIT_LOG; the caller removes `dir`.
+// The launch env that makes seedFakeGhGit's gh answer `issue view <ticket.number>` from `ticket`. Spread `env` into
+// the app's env alongside FAKE_GHGIT_LOG; the caller removes `dir`.
 function seedServedTicket(ticket: ServedTicket): { dir: string; env: Record<string, string> } {
   const dir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ticket-'));
   const file = (name: keyof typeof SERVED_TICKET_FILES): string => join(dir, SERVED_TICKET_FILES[name]);
@@ -7606,11 +7606,11 @@ test('seedEpicChainRepo binds the repo to a catalog entry carrying the example f
   rmSync(home, { recursive: true, force: true });
 });
 
-// Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
-// gate for the caller to inspect/act on.
 const EPIC_GATE_WAIT = { start: 10_000, gate: 90_000, step: 30_000 } as const;
 const EPIC_GATE_DRIVE_MS = EPIC_GATE_WAIT.start + 2 * EPIC_GATE_WAIT.gate + EPIC_GATE_WAIT.step;
 
+// Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
+// gate for the caller to inspect/act on.
 async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
