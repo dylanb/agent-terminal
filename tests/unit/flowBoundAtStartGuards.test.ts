@@ -321,3 +321,92 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
     );
   });
 });
+
+const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
+
+describe(`#167 slice 5 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
+  const NEEDLES = [
+    join2('pickup ', 'seeding'),
+    join2('pickup ', 'stamp'),
+    join2('Selection at ', 'pickup'),
+    join2('A1', '–', 'A4'),
+    join2('A0', '–', 'A4'),
+    join2('A1', '–', 'A5'),
+    join2('pointer is ', 'seeded'),
+    join2('stamps the chosen ', 'flow'),
+    join2('selecting this ', 'flow'),
+  ];
+
+  for (const needle of NEEDLES) {
+    it(`${DESIGN} does not contain "${needle}"`, () => {
+      const hits = read(DESIGN)
+        .split('\n')
+        .filter((l) => lower(l).includes(lower(needle)));
+      expect(hits, `"${needle}" (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
+    });
+  }
+
+  it(`${DESIGN} carries no stamp clause`, () => {
+    const hits = read(DESIGN).split('\n').filter((l) => /\bstamp/i.test(l));
+    expect(hits, `stamp clause (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
+  });
+
+  it(`${DESIGN} plans no seeding beyond A1's catalog install`, () => {
+    const hits = read(DESIGN)
+      .split('\n')
+      .filter((l) => /\bseed/i.test(l.replace(/A1 must seed (the catalog )?through the app-state resolver|seeds the user-config `flows\/` catalog/g, '')));
+    expect(hits, `seed clause (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
+  });
+
+  it(`the design doc's Theme A slice list has no A4 entry`, () => {
+    const lines = sectionOf(DESIGN, '4.4').split('\n');
+    expect(lines.some((l) => /^- \*\*A\d+ —/.test(l)), 'Theme A slice list entries not found').toBe(true);
+    const a4 = lines.filter((l) => l.startsWith('- **A4'));
+    expect(a4.map((l) => l.slice(0, 120)), `A4 slice entry (${RULE})`).toEqual([]);
+  });
+
+  it(`the design doc's Theme A slice list records that A4 was dropped (#135)`, () => {
+    const lines = sectionOf(DESIGN, '4.4').split('\n');
+    const lastEntry = lines.map((l) => /^- \*\*A\d+/.test(l)).lastIndexOf(true);
+    const notes = lines
+      .slice(lastEntry + 1)
+      .filter(
+        (l) => /\bA4\b/.test(l) && /\bdropped\b/i.test(l) && l.includes('#135') && l.includes(`${SECTION}18.7.5`),
+      );
+    expect(
+      notes,
+      `no line after the Theme A slice list says A4 was dropped, citing #135 and ${SECTION}18.7.5 (${RULE})`,
+    ).toHaveLength(1);
+  });
+
+  it(`the design doc's ${SECTION}4.2 item 4 says the flow is selected at Start and pickup binds the ticket`, () => {
+    const item4 = sectionOf(DESIGN, '4.2')
+      .split('\n')
+      .filter((l) => l.startsWith('4. **'));
+    expect(item4, `expected exactly one ${SECTION}4.2 item 4`).toHaveLength(1);
+    expect(item4[0], `${SECTION}4.2 item 4 must become "Selection at Start" (${RULE})`).toContain('Selection at Start');
+    expect(lower(item4[0]), `${SECTION}4.2 item 4 must say pickup binds the ticket (${RULE})`).toContain(
+      'pickup binds the ticket',
+    );
+  });
+
+  it(`the design doc's header still lists as many divergences as it says it does`, () => {
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const text = read(DESIGN);
+    const stated = /\b(\w+) statements below diverge/i.exec(text);
+    expect(stated, 'header divergence count not found').not.toBeNull();
+    const bullets = text.split('\n').filter((l) => l.startsWith('> - **'));
+    expect(bullets.length, `header says "${stated?.[0]}"`).toBe(WORDS.indexOf(lower(stated?.[1] ?? '')));
+  });
+
+  it(`the design doc's B5 epic-path entry says each sub-ticket's flow is picked at Start`, () => {
+    const b5 = sectionOf(DESIGN, '5.7')
+      .split('\n')
+      .filter((l) => l.startsWith('- **B5 —'));
+    expect(b5, 'expected exactly one B5 entry in the Theme B slice list').toHaveLength(1);
+    expect(b5[0], `B5 must say each sub-ticket's flow is picked at Start (${RULE})`).toMatch(
+      /\bpick(?:s|ed)? at Start\b/,
+    );
+    expect(b5[0], `B5 must not tie the flow to pickup (${RULE})`).not.toMatch(/\bpickup\b/i);
+  });
+});
