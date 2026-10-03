@@ -259,10 +259,21 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
     expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
   });
 
+  it(`the ${SECTION}6 flow:openChild payload and preload sketch take only prRef — no renamed seeding field`, () => {
+    expect(openChildRow(), `flow:openChild payload (${RULE})`).toContain('`{sessionId, prRef} → {worktree, launched}`');
+    expect(openChildSketch(), `openChild preload sketch (${RULE})`).toMatch(
+      /openChild:\s*\(prRef\)\s*=>\s*ipcRenderer\.invoke\('flow:openChild',\s*\{\s*sessionId:\s*SID,\s*prRef\s*\}\)/,
+    );
+  });
+
   it(`${SECTION}23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
     const body = lower(ch23Body());
     expect(body).toContain('bound at start');
     expect(body).toContain('where an ordinary start');
+  });
+
+  it(`${SECTION}23.2 states flow:openChild does not set the child worktree's flow selection or flow-state`, () => {
+    expect(lower(ch23Body()), RULE).toContain("does not set that worktree's flow selection or flow-state");
   });
 
   it(`${SECTION}23.2 no longer says the child runs the parent's flow`, () => {
@@ -290,6 +301,9 @@ describe(`#167 slice 4 — epic child worktrees are bound at Start too (AC 6)`, 
       (entry as string).includes(`${SECTION}23.2`) || (entry as string).includes('D63'),
       `the v${version} changelog entry cites neither ${SECTION}23.2 nor D63`,
     ).toBe(true);
+    expect(entry as string, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
+      '`flow:openChild`',
+    );
   });
 
   it(`${REQUIREMENTS} records D63 superseding D22's flow-state seeding`, () => {

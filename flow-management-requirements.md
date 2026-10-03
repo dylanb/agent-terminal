@@ -3,17 +3,18 @@
 > **Retired-engine note (as of 2026-07-30, post-N8):** this companion describes the app in the present tense as a management layer over the **external `agent-loop` engine** — `.agent-loop/state.yaml`, LoopDef yaml, injected `/agent-loop-*` slash-command gates. That engine (spec §26) is **retired**; the shipped engine is the in-app §27 loop engine. This document is left standing as history — its `agent-loop` mechanics are dated, not current.
 
 **Document status:** Rationale companion (interview complete). Folded into the spec 2026-06-16.
-**Relationship to existing docs:** The **normative** design is now in `terminal-web-ui-spec.md` **§17–§24** (v2.27); capture changes in **§15/§16** (v2.27). **The spec is authoritative on any conflict.** This document is retained as the **intent + decisions-log companion** — it records *why* (D1–D40) behind the spec's *what*.
+**Relationship to existing docs:** The **normative** design is now in `terminal-web-ui-spec.md` **§17–§24** (v2.27); capture changes in **§15/§16** (v2.27). **The spec is authoritative on any conflict.** This document is retained as the **intent + decisions-log companion** — it records *why* (D1–D40, plus D63) behind the spec's *what*.
 
 > **Reconciled 2026-06-16 (spec v2.27).** The interview is complete: every open (OPEN-1…OPEN-25) is resolved
 > or deferred (OPEN-10 → user testing). The architecture/data-model (was §8), implementation breakdown (was
 > §9), and first slice (was §10) have been **promoted into the spec** and are summarized here only as
-> pointers — see §8/§9/§10 below. **§1 Intent**, **§7 Decisions log (D1–D40)**, and the resolved **§6** are
+> pointers — see §8/§9/§10 below. **§1 Intent**, **§7 Decisions log (D1–D40, plus D63)**, and the resolved **§6** are
 > kept as the durable rationale. When updating the design, change the spec first, then back-fill a decision
 > here if the *why* is new.
 >
 > Map: D1–D4 → spec §17 · D5/D18/D21/D22/D23 → §23 · D3/D10/D13/D14/D15/D29/D30/D34/D37/D38 → §18 ·
 > D1/D2/D7/D9/D11/D31/D32/D33 → §19 · D8/D19/D24/D25/D35 → §20 · D12/D38/D39 → §21 · D6/D17/D26/D27/D28/D36/D40 → §22.
+> D63 (added 2026-09-29; D41–D62 are the retired loop-engine block) → §18.7.5/§23.2.
 
 ---
 
@@ -124,7 +125,7 @@ All numbered opens are now **resolved or explicitly deferred** — none block th
 > The two-layer ownership, on-disk layout, `flow.yaml` shape, IPC additions, and reuse map that used to live
 > here are now **normative in `terminal-web-ui-spec.md`**: ownership → §17.2, reuse map → §17.3, `flow.yaml` +
 > on-disk paths → §18.1, IPC channels (`flow:*` / `viewer:*` / `todoTemplate:*` / `capture:last`) → §6 (table)
-> and §18–§21. Rationale for each choice remains in §7 (D1–D40) below.
+> and §18–§21. Rationale for each choice remains in §7 (D1–D40, plus D63) below.
 
 ## 9. Implementation breakdown → **promoted to spec §24**
 
@@ -252,6 +253,8 @@ clobbering agent-loop state.
 opening epic children: for each child PR it creates the **git worktree** for that branch and launches a new
 instance — crucially **seeding that worktree's flow-state** so the new instance **resumes at the correct
 step** of the flow. (The app must get flow state into the right state for each PR.)
+*(2026-09-29: the flow-state seeding is superseded by D63 — a child's flow is bound at Start. The worktree
+and instance-launch assist stands.)*
 
 **[D23 · 2026-06-16] Flow state lives in the worktree, per-branch (resolves OPEN-16).** Each worktree/branch
 carries its own `<worktree>/.agent-terminal/flow.yaml` (the **instantiated definition**) and
@@ -396,3 +399,11 @@ button + the single current captured report (with findings); actions = **Add to 
 report) and **Insert / Insert & submit** (§16.2). Reached via the overlay hotkey (Ctrl/Cmd+K — D36) from any
 view, sitting next to the todos it feeds. Chosen over a separate capture overlay (two surfaces to learn) and
 a standalone capture view (not worth a top-level view).
+
+**[D63 · 2026-09-29] A flow is bound to a worktree at Start, never from a ticket (supersedes D22's
+flow-state seeding).** The operator picks the flow for a worktree and presses Start, which binds it; pickup
+then binds the ticket to that already-bound worktree. A ticket's title, body and labels are untrusted,
+attacker-authorable input, so they never select a flow. Epic child worktrees follow the same rule: the app
+creates the child worktree and launches its instance (D22), and the child's flow is bound when the operator
+Starts there. Continuing one ticket across worktrees is the operator's responsibility; the app does not
+carry the flow across. Operator decision 2026-09-29 (#135 closed won't-do, #167). Spec: §18.7.5, §23.2.
