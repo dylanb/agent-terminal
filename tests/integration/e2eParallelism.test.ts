@@ -1,4 +1,7 @@
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { availableParallelism } from 'node:os';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveE2eWorkers } from '../../playwright.workers';
 import config from '../../playwright.config';
@@ -41,5 +44,14 @@ describe('playwright.config wiring', () => {
 
   it('enables fullyParallel so workers split a single spec', () => {
     expect(config.fullyParallel).toBe(true);
+  });
+});
+
+describe('playwright.config provisions Electron before workers start', () => {
+  it('runs a global setup that leaves the Electron executable present', async () => {
+    expect(config.globalSetup).toBeTruthy();
+    const setup = (await import(resolve(__dirname, '..', '..', String(config.globalSetup)))) as { default: () => unknown };
+    await setup.default();
+    expect(existsSync(createRequire(__filename)('electron') as string)).toBe(true);
   });
 });
