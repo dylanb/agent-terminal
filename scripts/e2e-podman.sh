@@ -8,7 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE=agent-terminal-e2e
-VOLUME=agent-terminal-e2e-node_modules
+# One node_modules volume per checkout: every run installs and force-rebuilds node-pty into it, so a volume
+# shared between worktrees lets one run's rebuild swap native modules under another run's live Electron
+# launches, whose windows then never open.
+VOLUME="agent-terminal-e2e-node_modules-$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
 FILTER="${1:-}"
 
 # Electron + Chromium + Xvfb need more than the 2 GiB default podman machine. Warn loudly
@@ -17,6 +20,11 @@ mem_mib="$(podman machine inspect --format '{{.Resources.Memory}}' 2>/dev/null |
 if [ "${mem_mib:-0}" -lt 8192 ]; then
   echo "WARNING: podman machine has ${mem_mib} MiB RAM; Electron e2e needs >= 8 GiB." >&2
   echo "  Fix once: podman machine stop && podman machine set --memory 8192 --cpus 6 && podman machine start" >&2
+fi
+
+if [ -n "${E2E_PRINT_VOLUME:-}" ]; then
+  echo "$VOLUME"
+  exit 0
 fi
 
 podman build -t "$IMAGE" -f e2e/Containerfile .

@@ -30,6 +30,13 @@ podman machine start
 - The repo source is bind-mounted; `node_modules` is a **named volume** so the
   macOS-built native modules (node-pty) never shadow the Linux ones. node-pty is rebuilt
   for the container's Electron ABI on each run.
+- The volume is **per checkout** (`agent-terminal-e2e-node_modules-<hash of the path>`), so
+  worktrees can run the suite at the same time. A shared volume let one run's install and
+  forced rebuild replace node-pty under another run's Electron launches, and those tests
+  failed with a `firstWindow` timeout. `E2E_PRINT_VOLUME=1 ./scripts/e2e-podman.sh` prints
+  this checkout's volume name. Remove the volume of a deleted worktree with
+  `podman volume rm <name>`, or the old shared one with
+  `podman volume rm agent-terminal-e2e-node_modules`.
 - The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
   `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
   exits and mask the result (see `e2e/entrypoint.sh`).
