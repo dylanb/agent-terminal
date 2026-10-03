@@ -1,6 +1,5 @@
 // #167 doc guards: the flow is bound at Start and pickup then binds the ticket; no clause requires or plans a
-// ticket-borne flow stamp or pickup seeding of the pointer. Needles are built from split literals and the
-// constructed `SECTION` glyph so this file never matches its own phrase list.
+// ticket-borne flow stamp or pickup seeding of the pointer.
 
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -20,13 +19,13 @@ const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
 
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
-const join2 = (...parts: string[]): string => parts.join('');
+const phrase = (...parts: string[]): string => parts.join('');
 const headingPattern = (num: string, after: string): RegExp =>
   new RegExp(`^(#{1,6})\\s+${num.replace(/\./g, '\\.')}${after}`);
 const changelogEntries = (): string[] => read(CHANGELOG).split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/);
 
 /** The body under the heading carrying `num`, at any level, up to the next heading of the same or a higher
- *  level. The heading line itself is excluded. */
+ *  level. */
 function sectionBody(text: string, num: string): string {
   const lines = text.split('\n');
   const head = headingPattern(num, '(?![.\\d])');
@@ -57,20 +56,20 @@ const specFilesExceptChangelog = (): string[] =>
 
 describe(`#167 — no ${SECTION}18 / spec clause requires or plans pickup seeding or a ticket-borne stamp (AC 3)`, () => {
   const NEEDLES = [
-    join2('Pickup see', 'ding (A4)'),
-    join2('stamps the chosen ', 'selection'),
-    join2("A4's ", 'seed'),
-    join2('A4 ', 'seeds'),
-    join2('A4 ', 'seed'),
-    join2('pickup-', 'seeded'),
-    join2('stamp', 'less'),
-    join2('seed-', 'write'),
-    join2('trusted-', 'seed'),
-    join2('pick/', 'seed'),
-    join2('A1', '–', 'A4'),
-    join2('A0', '–', 'A4'),
-    join2('pickup ', 'seeding'),
-    join2('seed the ', 'pointer'),
+    phrase('Pickup see', 'ding (A4)'),
+    phrase('stamps the chosen ', 'selection'),
+    phrase("A4's ", 'seed'),
+    phrase('A4 ', 'seeds'),
+    phrase('A4 ', 'seed'),
+    phrase('pickup-', 'seeded'),
+    phrase('stamp', 'less'),
+    phrase('seed-', 'write'),
+    phrase('trusted-', 'seed'),
+    phrase('pick/', 'seed'),
+    phrase('A1', '–', 'A4'),
+    phrase('A0', '–', 'A4'),
+    phrase('pickup ', 'seeding'),
+    phrase('seed the ', 'pointer'),
   ];
 
   for (const needle of NEEDLES) {
@@ -125,7 +124,7 @@ describe(`#167 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, (
   it(`${SECTION}18.7.5 carries no seed clause beyond its one historical mention`, () => {
     const hits = sectionOf(CH18, '18.7.5')
       .split('\n')
-      .filter((l) => /seed/i.test(l.replace(new RegExp(join2('pickup-', 'seeding clause'), 'gi'), '')));
+      .filter((l) => /seed/i.test(l.replace(new RegExp(phrase('pickup-', 'seeding clause'), 'gi'), '')));
     expect(hits, `seed clause (${RULE}) still in ${SECTION}18.7.5:\n${hits.join('\n')}`).toEqual([]);
   });
 
@@ -139,13 +138,12 @@ describe(`#167 — ${SECTION}18.7.5 states the flow is bound at Start (AC 3)`, (
   it('the historical v2.145 entry that introduced pickup seeding stays as written', () => {
     const v2145 = changelogEntries().find((e) => e.startsWith('**Changelog v2.145:**'));
     expect(v2145, 'the v2.145 changelog entry is gone').toBeDefined();
-    expect(v2145 as string).toContain(join2('**pickup ', 'seeding** (', SECTION, '18.7.5'));
-    expect(v2145 as string).toContain(join2('A1', '–', 'A4'));
+    expect(v2145 as string).toContain(phrase('**pickup ', 'seeding** (', SECTION, '18.7.5'));
+    expect(v2145 as string).toContain(phrase('A1', '–', 'A4'));
   });
 });
 
 describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4)`, () => {
-  /** The preamble (non-bullet text before the first `- ` bullet) plus each top-level `- ` bullet. */
   function units(): { preamble: string; bullets: string[] } {
     const body = sectionBody(read(CH18), '18.7.6');
     const lines = body.split('\n');
@@ -159,7 +157,6 @@ describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4
     return { preamble, bullets };
   }
 
-  /** Each gate is identified by every one of its needles appearing in a single bullet. */
   const GATES: ReadonlyArray<readonly string[]> = [
     ['One pointer identity'],
     ['Read-boundary field validation'],
@@ -196,7 +193,7 @@ describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4
   it('exactly the two seed-only bullets are gone', () => {
     const { bullets } = units();
     expect(bullets.length, `${SECTION}18.7.6 bullets not found`).toBeGreaterThan(0);
-    for (const lead of [join2('Structured travel on the ', 'seed-write'), join2('Argument-safe ', 'seed-write')]) {
+    for (const lead of [phrase('Structured travel on the ', 'seed-write'), phrase('Argument-safe ', 'seed-write')]) {
       expect(bullets.filter((b) => b.includes(lead)), `"${lead}" (${RULE})`).toEqual([]);
     }
   });
@@ -210,7 +207,6 @@ describe(`#167 — ${SECTION}18.7.6's shared gates survive without seeding (AC 4
   });
 });
 
-/** The single line of `file` matching `pattern`; asserted unique so a missed or duplicated anchor fails. */
 function soleLine(file: string, pattern: RegExp): string {
   const hits = read(file)
     .split('\n')
@@ -227,9 +223,9 @@ const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
 describe(`#167 — no ${SECTION}6 / ${SECTION}23 / ${SECTION}24 clause seeds a child's flow selection or flow-state (AC 6)`, () => {
   const NEEDLES = [
-    join2("seeding that worktree's ", 'flow-state'),
-    join2('seeding its ', 'flow-state'),
-    join2('seeds the ', 'expected'),
+    phrase("seeding that worktree's ", 'flow-state'),
+    phrase('seeding its ', 'flow-state'),
+    phrase('seeds the ', 'expected'),
   ];
 
   for (const needle of NEEDLES) {
@@ -329,15 +325,15 @@ const A1_CATALOG_SEED = /A1 must seed (the catalog )?through the app-state resol
 
 describe(`#167 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
   const NEEDLES = [
-    join2('pickup ', 'seeding'),
-    join2('pickup ', 'stamp'),
-    join2('Selection at ', 'pickup'),
-    join2('A1', '–', 'A4'),
-    join2('A0', '–', 'A4'),
-    join2('A1', '–', 'A5'),
-    join2('pointer is ', 'seeded'),
-    join2('stamps the chosen ', 'flow'),
-    join2('selecting this ', 'flow'),
+    phrase('pickup ', 'seeding'),
+    phrase('pickup ', 'stamp'),
+    phrase('Selection at ', 'pickup'),
+    phrase('A1', '–', 'A4'),
+    phrase('A0', '–', 'A4'),
+    phrase('A1', '–', 'A5'),
+    phrase('pointer is ', 'seeded'),
+    phrase('stamps the chosen ', 'flow'),
+    phrase('selecting this ', 'flow'),
   ];
 
   for (const needle of NEEDLES) {

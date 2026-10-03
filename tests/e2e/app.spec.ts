@@ -3536,9 +3536,8 @@ test('seedPickupCatalogEntry writes a global catalog entry whose second step is 
   rmSync(home, { recursive: true, force: true });
 });
 
-// #167 AC 1 (§18.7.5) — pickup binds the ticket to a worktree whose flow was bound at Start; a ticket that names
-// another flow (prose, a `flow:` line, a label) never chooses it. Each bounded wait below is named so the test's
-// budget is the sum of its longest stalled path (a mutant's red is a named assertion, never a test timeout).
+// #167 AC 1 (§18.7.5). The budget covers the longest stalled path so a mutant's red is a named assertion, never a
+// test timeout.
 const FLOW_X_ID = 'flow-x-pinned';
 const FLOW_X_STEPS = ['x-groom', 'pickup', 'x-review', 'x-ship'];
 const FLOW_Y_STEPS = ['y-alpha', 'y-beta'];
@@ -3588,8 +3587,7 @@ async function enterPickupStep(message: string): Promise<void> {
   await expect(inputModal(), message).toBeVisible({ timeout: PIN_WAIT.ui });
 }
 
-// Enter the served ticket at the pickup step, then wait for pickup's outcome on disk: `pr: 4242` once it
-// completed, or the shim's close marker once a stale job was compensated.
+// Pickup's outcome on disk: `pr: 4242` once it completed, or the shim's close marker once a stale job was compensated.
 async function pickUpServedTicket(repo: string, logFile: string): Promise<void> {
   await enterPickupStep('the pickup step asks for the ticket');
   await inputModal().locator('.field input').fill(TICKET_NAMING_Y.number);
@@ -7804,7 +7802,7 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
     }
   }
   for (const line of createLines) {
-    for (const needle of Object.values(EPIC_X)) expect.soft(line, `no sub-ticket title records ${needle}`).not.toContain(needle);
+    for (const needle of Object.values(EPIC_X)) expect.soft(line, `no sub-ticket 'gh issue create' call records ${needle}`).not.toContain(needle);
   }
 
   await app.close();
