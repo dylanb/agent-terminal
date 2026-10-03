@@ -67,6 +67,7 @@ export const CH = {
   flowAppGateDecision: 'flow:appGateDecision',
   flowAppRequestChanges: 'flow:appRequestChanges',
   flowAppRedo: 'flow:appRedo',
+  flowAppBackToRed: 'flow:appBackToRed',
   flowArmInterrupt: 'flow:armInterrupt',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
@@ -818,6 +819,18 @@ export interface FlowAppRedoMsg {
   instruction: string;
 }
 
+/** flow:appBackToRed request (§28.4.2): the operator's back-to-RED decision for `repoKey`, carrying the
+ *  `step`+`turnKey` identity it acts on (§6) and the `brief` the reopened slice's RED, GREEN and refactor turns
+ *  are handed (empty = a plain reopen). Two-way like appRedo: the reply is whether the flow is back at RED, so
+ *  the composer holds open and keeps the brief when the reopen does not land. */
+export interface FlowAppBackToRedMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  turnKey: string;
+  brief: string;
+}
+
 /** flow:armInterrupt request (§27.9/AC9): the operator arms the queued interrupt for a §27 loop step. It
  *  carries the identity of the `step` it acts on (§6) — the receiver arms that step's interrupt, never one
  *  derived from ambient state — so an arm for one step can never fire against another. One-way; the consolidator
@@ -1142,6 +1155,10 @@ export interface FlowApi {
    *  whether the work turn re-entered, so the redo composer holds open until it confirms — a drop (runner
    *  mid-turn / gate raced out) never discards the human's instruction. */
   appRedo(repoKey: string, step: string, turnKey: string, instruction: string): Promise<boolean>;
+  /** §28.4.2 — send `repoKey`'s current slice back to RED from the gate at `step`+`turnKey` (§6), carrying the
+   *  `brief` its RED, GREEN and refactor turns are handed (empty = a plain reopen). Resolves whether the flow is
+   *  back at RED, so the composer holds open and keeps the brief when it is not. */
+  appBackToRed(repoKey: string, step: string, turnKey: string, brief: string): Promise<boolean>;
   /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
    *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel
    *  re-pulls via flow:onStateChanged when the resulting state lands. */

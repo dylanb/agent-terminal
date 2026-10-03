@@ -194,28 +194,33 @@ test('resizing the window resizes the PTY (tput cols follows)', async () => {
     .not.toBe(before);
 });
 
-test('selection survives focus changes and draws the app-owned highlight', async () => {
+test('selection survives focus changes on the native highlight, with no app-owned decoration (§7.0/§7.1)', async () => {
   await typeCommand('seq 1 100; echo select-me-marker');
   await expect(termRows()).toContainText('select-me-marker');
 
   const rowBox = await selectRowContaining('select-me-marker');
 
   // Absolute-coordinate check: with 100 lines scrolled, viewport-relative math would mis-place this.
-  const deco = page.locator('.xterm-decoration').first();
-  await expect(deco).toBeVisible();
-  const decoBox = (await deco.boundingBox())!;
-  expect(Math.abs(decoBox.y + decoBox.height / 2 - (rowBox.y + rowBox.height / 2))).toBeLessThan(
-    rowBox.height,
-  );
+  const rect = page.locator('.xterm-selection div').first();
+  await expect(rect).toBeVisible();
+  const rectBox = (await rect.boundingBox())!;
+  expect(Math.abs(rectBox.y + rectBox.height / 2 - (rowBox.y + rowBox.height / 2))).toBeLessThan(rowBox.height);
+  await expect(page.locator('.xterm-decoration')).toHaveCount(0);
 
-  // Focus independence (§7.0): clicking into the docked action window must not clear it.
+  // Focus independence (§7.0): clicking into the docked action window must not clear it, and the
+  // blurred selection still paints visibly blue — not the transparent inactive colour.
   await page.locator('#drawer').click();
-  await expect(deco).toBeVisible();
+  await expect(rect).toBeVisible();
+  const [r, , b, a = 1] = (await rect.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .match(/[\d.]+/g)!
+    .map(Number);
+  expect(a).toBeGreaterThan(0.3);
+  expect(b).toBeGreaterThan(r + 60);
 
   // Explicit clear (Escape while a selection is active) is the only way it goes away (§7.5.1).
-  await page.locator('.xterm-screen').click();
+  await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.xterm-decoration')).toHaveCount(0);
+  await expect(page.locator('.xterm-selection div')).toHaveCount(0);
 });
 
 test('the native selection highlight is visible live mid-drag, before mouseup (§7.1)', async () => {
@@ -315,10 +320,10 @@ test('Escape clears an active selection but passes through to the agent otherwis
 
   // Selection active → Escape clears it and is NOT sent to the shell (§7.5.1).
   await selectRowContaining('esc-target-row');
-  await expect(page.locator('.xterm-decoration')).not.toHaveCount(0);
-  await page.locator('.xterm-screen').click();
+  await expect(page.locator('.xterm-selection div')).not.toHaveCount(0);
+  await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.xterm-decoration')).toHaveCount(0);
+  await expect(page.locator('.xterm-selection div')).toHaveCount(0);
 
   // No selection → Escape passes through to the shell; cat -v renders the ESC byte as ^[.
   await typeCommand('cat -v');
@@ -349,11 +354,9 @@ test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.
   ).toHaveCount(1);
 });
 
-// The OS clipboard is one per display, shared by every parallel worker under the harness's single Xvfb, so
-// a test that writes it races any test that reads it. Every clipboard test lives here, run in order on one worker.
-test.describe('clipboard', () => {
-  test.describe.configure({ mode: 'default' });
-
+// Every worker drives the same Xvfb display, so they share one OS clipboard: a clipboard test in one
+// worker overwrites the value another is polling for. Serial mode pins these to a single worker.
+test.describe.serial('OS clipboard', () => {
   test('the copy chord writes the terminal selection to the OS clipboard (§7.7)', async () => {
     // On Linux the resolved profile is PC-style → copy is Ctrl+Shift+C (the suite runs on Linux,
     // like the Control+1/2/3 tests). The selection is the app-owned one (§7), set by the drag.
@@ -448,8 +451,8 @@ test.describe('clipboard', () => {
   });
 
   test('native selection + copy work on the alternate screen buffer (§7.4)', async () => {
-    // On the alt buffer registerMarker/registerDecoration return undefined, so the app-owned
-    // PERSISTENT highlight + cross-highlight reveal are unavailable (§7.4, accepted). But the drag
+    // On the alt buffer registerMarker/registerDecoration return undefined, so the cross-highlight
+    // reveal is unavailable (§14, accepted). But the drag
     // gesture, text extraction, and copy all ride xterm's native selection, which is buffer-agnostic
     // — so "select and capture" still works. If getSelection() threw on the alt buffer (the §7.3
     // risk), onSelectionChange would bail and the app-owned model would stay empty, so copy would
@@ -1860,6 +1863,12 @@ function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): 
     // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
     // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
+    // §28.7 — the repo's labels live one per line in a sink: `label list` reports them, `label create` adds one
+    // (or fails under FAKE_GH_LABEL_CREATE_FAIL), and under FAKE_GH_STRICT_LABELS an `--add-label` of an
+    // agent-loop/* label the repo lacks fails as real GitHub does.
+    'if [ "$1" = "label" ] && [ "$2" = "list" ]; then out="["; sep=""; while IFS= read -r l; do out="$out$sep{\\"name\\":\\"$l\\"}"; sep=","; done < <(cat "$FAKE_GHGIT_LOG.labels" 2>/dev/null); echo "$out]"; exit 0; fi\n' +
+    'if [ "$1" = "label" ] && [ "$2" = "create" ]; then if [ -n "$FAKE_GH_LABEL_CREATE_FAIL" ]; then echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; fi; echo "$3" >> "$FAKE_GHGIT_LOG.labels"; exit 0; fi\n' +
+    'if [ -n "$FAKE_GH_STRICT_LABELS" ] && [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-label" ] && [[ "$5" = agent-loop/* ]] && ! grep -qxF "$5" "$FAKE_GHGIT_LOG.labels" 2>/dev/null; then echo "could not add label: \'$5\' not found" >&2; exit 1; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
     // Label edits: keep the single last-write sink (the pickup tests read it) AND append per-issue so every
     // sub-ticket's label set is independently assertable.
@@ -3045,7 +3054,8 @@ function seedFakeAgentV2(
     buildOutcome?: BuildOutcome;
     touchTest?: boolean;
     // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
-    review?: 'full' | 'omit-persona' | 'none' | 'failed';
+    // `omit-then-repair` writes the omitting report first; on the §27.12 repair prompt it writes the full report.
+    review?: 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair';
     // Round-2 review report kind (multi-round runs), default `full`.
     review2?: 'full' | 'failed';
     // The consolidator output per round (index = round-1); each is the FULL verdict file content. Absent →
@@ -3113,13 +3123,13 @@ function seedFakeAgentV2(
                 : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
-  const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
+  const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
   const r2B64 = (opts.review2 ?? 'full') === 'failed' ? FAILED_REPORT_B64 : FULL_REPORT_B64;
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
   // reports/2.md, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =
     'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
-    `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; ` +
+    `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; [ -f .agent-terminal/repairing ] && RB='${FULL_REPORT_B64}'; ` +
     'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
   // §28.5.3 — a REFACTOR loop's review ROUND additionally writes the round-keyed phase-result the gate reads
   // ({report ∧ passed}, softer than GREEN — no build line) and makes a behavior-preserving change so the approve
@@ -3156,6 +3166,10 @@ function seedFakeAgentV2(
     `  ${logInjected}` +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    (reviewKind === 'omit-then-repair'
+      ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; ${writeReportRoundAware} ;;\n`
+      : '') +
+    '    *"ELECTRON_RUN_AS_NODE=1 "*) mkdir -p .agent-terminal; { eval "ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }"; printf "exit=%s\\n" "$?"; } >> .agent-terminal/checker-log 2>&1 ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
     `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;\n` +
     `    *turn-done:${reviewKey}*) ${reviewAct} ;;\n` +
@@ -3269,6 +3283,46 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: complete');
   expect(readIf(join(repo, '.agent-terminal', 'review-runs')).length).toBe(2); // Accept never re-injected the review turn
   expect(readFileSync(appReport1(repo), 'utf8')).toBe(malformed); // the malformed report is kept, malformation included
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
+// record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
+// app binary) and sees pass before signalling; the round then completes and the loop moves on.
+test('a §27 malformed round report is retried as a repair naming the problem; the bundled checker passes the fix and the round completes (§27.12)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-repair-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-repair-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-repair-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'omit-then-repair', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // The round completes on the repaired report and the loop chains the consolidator — never an error.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('turn_key: consolidate-plan');
+  expect(readIf(appRunState(repo))).not.toContain('status: error');
+
+  const injectedLog = readIf(join(repo, '.agent-terminal', 'injected-log'));
+  expect(injectedLog).toContain('This is a REPAIR of the round-1 report');
+  expect(injectedLog).toContain(`### ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
+  expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
+
+  // The agent ran the checker the prompt handed it: it passed the repaired report.
+  const checkerLog = readIf(join(repo, '.agent-terminal', 'checker-log'));
+  expect(checkerLog, injectedLog.split('\n').filter((l) => l.includes('ELECTRON_RUN_AS_NODE')).join('\n')).toContain('OK: .agent-terminal/loop/reports/1.md');
+  expect(checkerLog).toContain('exit=0');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -5261,7 +5315,7 @@ test('a symlinked .agent-terminal degrades the flow to a blocking error and neve
   // land" device: that transition-write surfacing + retryability is covered at the unit boundary
   // (flowStrip.test.ts injects a throwing start()), and no real write-fail device is reachable in the
   // rootless-Podman e2e without tripping this same read gate (container-root bypasses chmod; any read
-  // perturbation of flow-state trips the gate first). See changelog v2.150.
+  // perturbation of flow-state trips the gate first). See changelog v2.156.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-real-'));
@@ -5719,6 +5773,35 @@ test('a begun run with no run record is held at the load error, and Terminate fr
 
   await expect(flowControl()).toHaveText('Start');
   expect(load(readFileSync(join(flowHomeDir(repo), 'flow-state.yaml'), 'utf8'))).toEqual({ title: 'Held run' });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+// §28.4.2 — a back-to-RED brief belongs to the run it was written in: Terminate abandons the run, so a restarted
+// flow's slice 1 must never be handed the abandoned run's brief.
+test('Terminate clears a pending back-to-RED slice brief (§28.4.2)', { tag: '@ownapp' }, async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-brief-', 'groom');
+  const briefFile = join(repo, '.agent-terminal', 'loop', 'slice-brief.yaml');
+  mkdirSync(dirname(briefFile), { recursive: true });
+  writeFileSync(briefFile, 'schema_version: 1\nslice: 1\nfrom_step: green\nbrief: cover the empty input\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-brief-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  expect(existsSync(briefFile)).toBe(true);
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start');
+  await expect.poll(() => existsSync(briefFile), { timeout: 10_000 }).toBe(false);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -6693,7 +6776,7 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {}): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logInjected?: boolean } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
@@ -6709,7 +6792,8 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
-    red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
+    // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
+    red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
     green: `printf '%s\\n' 'export const feat = 2;' > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), '"${RES:-' + art + '/green-result.md}"')}; ${done('work-green')}`,
     refactor: done('work-refactor'),
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
@@ -6737,6 +6821,7 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
+    (opts.logInjected ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n' : '') +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
@@ -6751,10 +6836,10 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number } = {
 
 // A real-git repo carrying the SHIPPED feature-dev flow.yaml, entered at its first loop `groom`; bootstrap
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
-function seedFullTddChainRepo(prefix: string): string {
+function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   const { dir } = seedFlowRepoBase(prefix, {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
-    flowState: 'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    flowState: `step: ${startStep}\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n`,
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
   return dir;
@@ -6926,6 +7011,11 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
   await expect(backToRed).toHaveText('Back to RED'); // the readable label
   await backToRed.click();
+  // The composer opens; submitting it empty is a plain reopen (the brief is optional).
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('.confirm').click();
+  await expect(composer).toHaveCount(0, { timeout: 15_000 });
 
   // §28.4.2 — the flow jumped BACKWARD to the slice's RED step (the repeat step's back_to), still in progress;
   // it did NOT advance to refactor. reopenSlice moves the flow only backward-or-self, never forward.
@@ -6947,6 +7037,81 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
       { timeout: 15_000 },
     )
     .toBeGreaterThanOrEqual(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.2 — Back to RED with a brief, end to end: the composer opens from the GREEN gate, its brief rides the
+// reopen, and every RED / GREEN / refactor turn of the reopened slice is handed it (work prompts and fixers);
+// approving refactor ends the slice and clears it, so the next loop's prompt carries no brief.
+test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN and refactor turns, then clears it', { tag: '@ownapp' }, async () => {
+  const repo = seedFullTddChainRepo('agent-term-e2e-redbrief-', 'red'); // the slice phases are all this test needs
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir, { logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  const openGate = async (): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  };
+  const approveStep = async (step: string): Promise<void> => {
+    await openGate();
+    // A redone phase can leave nothing new to commit; that benign notice must not block the next gate.
+    const notice = page.locator('#flow-error-host .flow-modal');
+    if ((await notice.count()) > 0) await notice.locator('.dismiss').click();
+    const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+    await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+    await approveBtn.click();
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+  };
+
+  await approveStep('red');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
+
+  const BRIEF = 'Cover the empty-input case the tests missed';
+  await openGate();
+  await loopPanel().locator('[data-gate-option="back-to-red"]').click();
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('textarea').fill(BRIEF);
+  await composer.locator('.confirm').click();
+  await expect(composer).toHaveCount(0, { timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: red');
+
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  const briefFile = join(repo, '.agent-terminal', 'loop', 'slice-brief.yaml');
+  const logAtReopen = log().length;
+  await approveStep('red');
+  await approveStep('green');
+  await approveStep('refactor');
+  expect(existsSync(briefFile)).toBe(false); // the slice ended → the brief is cleared
+
+  const since = log().slice(logAtReopen);
+  // Each phase's WORK prompt and its review-and-fix FIXER prompt carried the brief after the reopen.
+  for (const key of ['work-red', 'review-red', 'work-green', 'review-green', 'work-refactor', 'review-refactor']) {
+    const at = since.indexOf(`turn-done:${key}`);
+    expect(at, key).toBeGreaterThan(-1);
+    const promptStart = since.lastIndexOf('turn-done:', at - 1);
+    expect(since.slice(promptStart < 0 ? 0 : promptStart, at), key).toContain(BRIEF);
+  }
+  // The loop after the slice (integration-slice) is handed no brief.
+  const afterSlice = since.slice(since.lastIndexOf('turn-done:consolidate-refactor'));
+  await expect.poll(() => log().slice(logAtReopen).includes('turn-done:work-integration-slice'), { timeout: 90_000 }).toBe(true);
+  expect(log().slice(logAtReopen + since.length - afterSlice.length)).not.toContain(BRIEF);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -7153,7 +7318,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   seedEpicChainAgent(binDir, 2);
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, FAKE_GH_STRICT_LABELS: '1' }, // a repo with none of the promotion's labels
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -7182,6 +7347,8 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
     expect(readIf(`${logFile}.issue-label.${n}`)).toContain('agent-loop/ready');
   }
   expect(readIf(`${logFile}.issue-assignee`)).not.toContain('501'); // no sub-ticket assigned (uniform siblings)
+  // The repo had none of the labels: the promotion created them before labelling any sub-ticket.
+  expect(readIf(`${logFile}.labels`).split('\n')).toEqual(expect.arrayContaining(['agent-loop/subticket', 'agent-loop/ready']));
 
   // The epic became a tracking issue: its original body preserved as a prefix, the checklist appended.
   const epicBody = readIf(`${logFile}.issue-body.176`);
@@ -7190,6 +7357,36 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
 
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported for the operator to create, before anything reaches GitHub', { tag: '@ownapp' }, async () => {
+  const repo = seedEpicChainRepo('agent-term-e2e-epicLbl-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicLbl-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicLbl-bin-', { realCommitOps: true });
+  seedEpicChainAgent(binDir, 2);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, FAKE_GH_STRICT_LABELS: '1', FAKE_GH_LABEL_CREATE_FAIL: '1' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await driveToEpicPlanBundleGate(repo);
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  const preview = page.getByRole('alertdialog');
+  await expect(preview).toBeVisible({ timeout: 15_000 });
+  const mutationsBeforeConfirm = ghPromotionMutations(logFile);
+  await preview.locator('.pill.danger.confirm').click();
+
+  await expect(page.getByRole('alertdialog').filter({ hasText: 'gh label create agent-loop/subticket' })).toBeVisible({ timeout: 30_000 });
+  expect(ghPromotionMutations(logFile)).toEqual(mutationsBeforeConfirm);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'))).toBe(false);
+  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // the gate stays re-decidable
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

@@ -36,7 +36,7 @@ function def(over: Partial<LoopDefV2>): LoopDefV2 {
     reviewers: [],
     consolidator: '/abs/prompts/consolidate.md',
     boundaries: [],
-    report: { sections: ['summary'] },
+    report: { sections: ['summary'], polish: 'fix' },
     gate: [],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],

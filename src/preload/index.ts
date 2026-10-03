@@ -195,6 +195,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowAppRequestChanges, { sessionId: SESSION_ID, repoKey, step, turnKey, feedback }) as Promise<boolean>,
   appRedo: (repoKey, step, turnKey, instruction) =>
     ipcRenderer.invoke(CH.flowAppRedo, { sessionId: SESSION_ID, repoKey, step, turnKey, instruction }) as Promise<boolean>,
+  appBackToRed: (repoKey, step, turnKey, brief) =>
+    ipcRenderer.invoke(CH.flowAppBackToRed, { sessionId: SESSION_ID, repoKey, step, turnKey, brief }) as Promise<boolean>,
   armInterrupt: (repoKey, step) => ipcRenderer.send(CH.flowArmInterrupt, { sessionId: SESSION_ID, repoKey, step }),
 };
 

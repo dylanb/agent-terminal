@@ -242,6 +242,8 @@ export interface FlowMachine {
    *  `repeat_counts`, default 1). The orchestrator keys each slice's result artifact off this so a
    *  re-entered RED writes fresh instead of resuming the prior slice. 1 for a flow with no repeat step. */
   currentSlice(): number;
+  /** §28.4.2 — the step a slice restarts at (the repeat step's `back_to`), or null when the flow declares none. */
+  sliceStartStep(): string | null;
   /** not_started → in_progress; throws on any other current status (inert in the error state). */
   start(): MachineView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
@@ -321,6 +323,7 @@ export function createFlowMachine(
     return {
       state: view,
       currentSlice: () => 1, // an error-state flow (no definition) has no slices
+      sliceStartStep: () => null,
       start: view,
       advance: view,
       restart: view,
@@ -502,6 +505,7 @@ export function createFlowMachine(
       const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
+    sliceStartStep: () => steps.find((s) => s.repeat)?.repeat?.backTo ?? null,
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -625,6 +629,8 @@ export interface FlowManager {
   /** §28.4 D1 — the impl-slice a repo's flow is on (default 1). The orchestrator keys each slice's result
    *  artifact off this so a re-entered RED writes fresh. Delegates to the machine keyed by `repoKey`. */
   currentSlice(repoKey: string): number;
+  /** §28.4.2 — the step a repo's slice restarts at, or null. Delegates to the machine keyed by `repoKey`. */
+  sliceStartStep(repoKey: string): string | null;
   /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
@@ -732,6 +738,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     undo: (k) => viewOf(k, (m) => m.undo()),
     reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
+    sliceStartStep: (k) => machineFor(k).machine.sliceStartStep(),
     revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
     terminate: (k) => {
       // §18.7.2 AC6 — progression is reset BEFORE the begun marker is cleared: with the marker still present the

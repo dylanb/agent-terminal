@@ -358,7 +358,7 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  refuses on the absent baseline (fail toward firing, §28.5.1).
  *  `source-slices-failed` records an approve whose best-effort §28.4.1 impl-slice-count sourcing threw — recorded
  *  distinctly and never aborting the advance, since the count safely degrades to 1 (a single-slice run). */
-export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed' | 'baseline-record-failed' | 'source-slices-failed' | 'epic-promotion-preview';
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-skipped' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed' | 'baseline-record-failed' | 'source-slices-failed' | 'clear-brief-failed' | 'epic-promotion-preview';
 
 const GATE_DETAIL_MAX = 200;
 
@@ -386,6 +386,8 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
       return `§27 gate ${option} baseline-record failed: ${d}`;
     case 'source-slices-failed':
       return `§28 gate ${option} source-slices failed: ${d}`;
+    case 'clear-brief-failed':
+      return `§28 gate ${option} clear-brief failed: ${d}`;
     case 'epic-promotion-preview':
       return `§28 gate ${option} epic-promotion preview raised`;
   }

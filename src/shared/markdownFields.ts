@@ -24,3 +24,27 @@ export function fieldValue(line: string, label: string): string | null {
   if (idx < 0) return null;
   return t.slice(0, idx).trim() === label ? t.slice(idx + 1).trim() : null;
 }
+
+function indentOf(line: string): number {
+  let k = 0;
+  while (k < line.length && (line[k] === ' ' || line[k] === '\t')) k++;
+  return k;
+}
+
+/** The `label:` field starting at `lines[start]`, or null when that line is not the field. A label with nothing
+ *  after its colon takes its value from the non-blank lines indented deeper than it (a nested list or a wrapped
+ *  paragraph), bullet-stripped and joined by a space; `end` is the index just past the last line consumed. */
+export function fieldBlock(lines: readonly string[], start: number, label: string): { value: string; end: number } | null {
+  const inline = fieldValue(lines[start], label);
+  if (inline === null) return null;
+  if (inline !== '') return { value: inline, end: start + 1 };
+  const depth = indentOf(lines[start]);
+  const parts: string[] = [];
+  let end = start + 1;
+  for (; end < lines.length; end++) {
+    const t = lines[end].trim();
+    if (t === '' || indentOf(lines[end]) <= depth) break;
+    parts.push(stripLeadingBullet(t));
+  }
+  return { value: parts.join(' '), end };
+}

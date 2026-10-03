@@ -231,6 +231,20 @@ if (flowStripHost) {
               redoComposer.render({ step }, dispatch);
             }
           : undefined,
+        // §28.4.2 — Back to RED opens the same composer as request-changes, framed for an optional slice brief; its
+        // submit dispatches the two-way decision and the composer holds open until the flow is back at RED.
+        composeBackToRed: feedbackComposer
+          ? (step, turnKey) => {
+              const key = repo.repoKey();
+              if (!key) return;
+              const dispatch = (brief: string): Promise<boolean> => window.flow.appBackToRed(key, step, turnKey, brief);
+              void window.monitor
+                .todoList(key)
+                .then((todos) => todos.filter((t) => t.status !== 'done').map((t) => ({ id: t.id, text: t.text })))
+                .catch(() => [] as Array<{ id: string; text: string }>)
+                .then((todos) => feedbackComposer.render({ step, todos, purpose: 'back-to-red' }, dispatch));
+            }
+          : undefined,
         armInterrupt: (step) => {
           const key = repo.repoKey();
           if (key) window.flow.armInterrupt(key, step);

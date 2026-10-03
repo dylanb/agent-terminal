@@ -255,3 +255,37 @@ describe('feedback composer — compose-with-agent vs submit-as-is (§19.4 / AC4
     expect(submit.mock.calls[0][0]).toContain(TODOS[0].text);
   });
 });
+
+// §28.4.2 — the same composer opened for Back to RED: it names the slice redo, and the brief is OPTIONAL — an
+// empty submit dispatches a plain reopen instead of refusing. The two-way hold-open contract is unchanged.
+describe('feedback composer — the back-to-red variant (§28.4.2)', () => {
+  const backToRed = (over: Partial<{ step: string; todos: { id: string; text: string }[] }> = {}) => ({ ...open(over), purpose: 'back-to-red' as const });
+
+  it('names the reopen and the phases the brief reaches', () => {
+    createFeedbackComposer(host).render(backToRed({ step: 'green' }), vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    expect(dialog.querySelector('h3')?.textContent).toContain('RED');
+    expect(dialog.textContent).toMatch(/RED, GREEN and refactor/);
+    expect(submitBtn().textContent).toBe('Back to RED');
+  });
+
+  it('submits an empty brief as a plain reopen rather than refusing', async () => {
+    const submit = vi.fn(() => Promise.resolve(true));
+    createFeedbackComposer(host).render(backToRed({ todos: [] }), submit);
+    submitBtn().click();
+    await flush();
+    expect(submit).toHaveBeenCalledWith('');
+    expect(host.querySelector('.flow-modal')).toBeNull(); // delivered → closed
+  });
+
+  it('carries the typed brief and keeps it on a drop', async () => {
+    const submit = vi.fn(() => Promise.resolve(false));
+    createFeedbackComposer(host).render(backToRed({ todos: [] }), submit);
+    textarea().value = 'Cover the empty-input case';
+    textarea().dispatchEvent(new Event('input'));
+    submitBtn().click();
+    await flush();
+    expect(submit).toHaveBeenCalledWith('Cover the empty-input case');
+    expect(textarea().value).toBe('Cover the empty-input case'); // held open with the brief intact
+  });
+});

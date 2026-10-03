@@ -2,15 +2,15 @@
 
 ### 7.0 Why a custom selection mechanism
 
-xterm.js's built-in selection is the browser's native selection: it is tied to DOM focus and is cleared whenever focus moves elsewhere or the user clicks another element. For this app the selection must instead be a **first-class application state** that:
+The selection must behave as **application state** that:
 
-- **survives focus changes** — clicking the Send/Capture buttons, typing in the terminal, or clicking into the monitor pane must not erase it;
-- is **owned, rendered, and cleared by the app**, so it can later be created/inspected/manipulated programmatically (e.g. the monitor pane highlighting the region a capture came from), not just by mouse;
-- can outlive any single gesture and, eventually, allow more than one persistent highlight.
+- **survives focus changes** — clicking into the action window or another pane must not erase it;
+- is readable by the app as extracted text (Copy, §7.7) and clearable by the app (Escape, §7.5.1);
+- never looks cleared while the app still treats it as active, or vice versa.
 
-The mechanism below delivers this. It keeps an app-owned model in buffer coordinates and **renders the persistent highlight itself** using xterm.js decorations. xterm's native selection highlight is **left on while the terminal is focused** — it paints the live drag per-frame, the one thing the disposed-and-recreated decoration cannot do mid-gesture — and is **suppressed only on blur** (`selectionInactiveBackground` transparent), so off-focus the decoration is the sole highlight and the two never double-tint (§7.1). The drag *gesture* is still detected through xterm (so we inherit its correct cell hit-testing and wrapped-line handling), but the *selection state* is entirely ours and is never auto-cleared on blur.
+The mechanism below delivers this. **xterm's native selection is the only highlight** (v2.150): in the pinned 5.5.0 it survives blur and paints with `selectionInactiveBackground`, which is set to the same `SEL_COLOR` as `selectionBackground`, so the selection reads identically focused or not (§7.1). The app keeps a model of the selection's extracted text (§7.2) that **follows xterm's selection**: xterm itself clears the selection on typing into the terminal, on a click in it, and on a normal↔alt buffer switch, and each of those clears the model too, so Copy and the Escape rule (§7.5.1) never act on a selection the user can no longer see. The drag *gesture* and the highlight both come from xterm (its cell hit-testing, wrapped-line handling, and per-frame paint); the app-owned decoration layer that previously drew a persistent highlight was **removed in v2.150** — it re-created one marker per selected row on every scroll and never released them, so a long-lived selection under a noisy agent pegged the renderer (§14).
 
-> **Recommended (Option A — below):** app-owned model + decoration rendering, gesture sourced from xterm. Lowest risk, reuses xterm's hit-testing.
+> **Current (Option A — below):** an app-owned text model over xterm's native selection and highlight. Lowest risk, reuses xterm's hit-testing and paint.
 > **Option B (deferred, §11):** a transparent pointer-capture overlay with our own pixel→cell mapping and drag state, depending on xterm for *nothing*. Needed when we must select on the **alternate screen buffer** (full-screen TUIs — which includes Codex's TUI, so this lands sooner than v1.2 assumed), support multiple simultaneous selections, or define gestures xterm doesn't provide.
 
 ### 7.1 Base terminal setup
@@ -25,12 +25,11 @@ const term = new Terminal({
   fontSize: 14,
   cursorBlink: true,
   scrollback: 5000,
-  allowProposedApi: true,                 // buffer/marker/decoration access
+  allowProposedApi: true,                 // buffer/marker/decoration access (§16.8 reveal)
   theme: {
-    // Focused selection paints the live drag (xterm's per-frame hit-testing); blurred selection
-    // is transparent so the persistent app-owned decoration is the sole off-focus highlight (§7.1).
-    selectionBackground: SEL_COLOR,                  // shared with the decoration, exported by §7.4
-    selectionInactiveBackground: 'rgba(0,0,0,0)',
+    // xterm's native selection is the only highlight, focused or blurred (§7.0).
+    selectionBackground: SEL_COLOR,
+    selectionInactiveBackground: SEL_COLOR,
   },
 });
 const fit = new FitAddon();
@@ -66,16 +65,16 @@ const selection = {
   text:  '',
   baseY: 0,            // buffer.active.baseY at gesture time — coordinate-era stamp (§7.3)
   bufferType: 'normal', // buffer the gesture happened on: 'normal' | 'alternate'
-  decorations: [], // IDecoration[] currently drawn
 };
 ```
 
-### 7.3 Capturing the gesture (focus-independent)
+### 7.3 Capturing the gesture (follows xterm's selection)
 
-We drive the model from xterm's drag, but we deliberately **ignore the "selection cleared" signal** that fires on blur — that is exactly the browser-focus coupling we are removing. Only a non-empty selection updates the model; clearing is explicit (§7.5.1).
+We drive the model from xterm's selection. A non-empty selection updates the model; an **empty** one — xterm clearing its own selection on typing, a click, or a buffer switch — **clears** the model, so the model never outlives the highlight the user sees (v2.150; previously empty changes were ignored because the app painted its own persistent highlight).
 
 ```js
 term.onSelectionChange(() => {
+  if (!term.hasSelection()) { clearModel(); return; }   // xterm cleared it — so do we
   let range, text;
   try {
     range = term.getSelectionPosition();       // IBufferRange | undefined (absolute buffer coords)
@@ -83,7 +82,7 @@ term.onSelectionChange(() => {
   } catch {
     return;   // alt-buffer / mid-swap extraction edge cases must never crash the renderer
   }
-  if (!range || text.length === 0) return;     // IGNORE blur-clears: focus independence
+  if (!range || text.length === 0) return;
 
   selection.active = true;
   selection.start = { x: range.start.x, y: range.start.y };
@@ -91,59 +90,18 @@ term.onSelectionChange(() => {
   selection.text  = text;                              // extracted NOW — the durable payload
   selection.baseY = term.buffer.active.baseY;          // coordinate-era stamp
   selection.bufferType = term.buffer.active.type;      // 'normal' | 'alternate'
-  renderSelection();                           // re-draw our own highlight live during drag
 });
 ```
 
 > **Verify on integration:** confirm whether `getSelectionPosition()` returns *absolute* buffer rows (including scrollback) or viewport-relative rows in your pinned xterm.js version, and convert once in this function if needed. Everything downstream assumes absolute rows. Also verify that `getSelection()` / `getSelectionPosition()` behave sanely on the **alternate buffer** and across a normal↔alt swap mid-gesture — historical xterm.js versions have had surprises here; the `try/catch` above is the backstop, not the plan.
 
-> **Coordinate drift under output bursts:** absolute rows are stable only until scrollback overflows — once rows trim off the top (a noisy agent can do this *between* the drag and a later Send/Capture click, or even mid-drag), every stored index points at different content. This is why the model treats the **text extracted at gesture time** as the durable payload — coordinates are never used to re-extract text at click time — and stamps `baseY`/`bufferType` so consumers can tell which coordinate era a range belongs to. (The rendered highlight is unaffected: decorations are marker-anchored and move with their lines, dying naturally when trimmed — §7.4.)
+> **Coordinate drift under output bursts:** absolute rows are stable only until scrollback overflows — once rows trim off the top (a noisy agent can do this *between* the drag and a later Send/Capture click, or even mid-drag), every stored index points at different content. This is why the model treats the **text extracted at gesture time** as the durable payload — coordinates are never used to re-extract text at click time — and stamps `baseY`/`bufferType` so consumers can tell which coordinate era a range belongs to. (The highlight is xterm's own, which adjusts for trims itself — §7.4.)
 
-### 7.4 Rendering the highlight (our own, persistent)
+### 7.4 The highlight (xterm's native selection)
 
-Render the selection as xterm.js **decorations** — one per line (not one tall decoration; multi-row backgrounds render incorrectly, xterm.js #4855). A decoration is anchored to a `marker` (a buffer line that scrolls with content), so the highlight stays glued to the right text as output scrolls, and persists across focus changes because it is part of the terminal's render layer, not the DOM selection.
+The app draws **no highlight of its own** (v2.150). xterm paints the selection in `SEL_COLOR` (`rgba(80, 140, 255, 0.7)`, ≥3:1 against the terminal background, WCAG 1.4.11) whether or not the terminal is focused (§7.1), adjusts it as scrollback trims, and draws it on the **alternate buffer** too — so full-screen TUIs (Claude Code 2.x, Codex) now get a visible selection, which the removed decoration layer could not provide there.
 
-```js
-const SEL_COLOR = 'rgba(80, 140, 255, 0.35)';  // translucent so text stays legible
-
-function clearDecorations() {
-  for (const d of selection.decorations) d.dispose();
-  selection.decorations = [];
-}
-
-// Convert an absolute buffer row to a marker at that row.
-function markerAtRow(absRow) {
-  const buf = term.buffer.active;
-  const cursorAbs = buf.baseY + buf.cursorY;
-  return term.registerMarker(absRow - cursorAbs);   // offset relative to cursor row
-}
-
-function renderSelection() {
-  clearDecorations();
-  if (!selection.active) return;
-
-  const cols = term.cols;
-  const { start, end } = selection;
-
-  for (let row = start.y; row <= end.y; row++) {
-    const x     = row === start.y ? start.x : 0;
-    const xEnd  = row === end.y   ? end.x   : cols;
-    const width = Math.max(1, xEnd - x);
-
-    const marker = markerAtRow(row);
-    if (!marker) continue;                         // off-buffer / trimmed
-    const deco = term.registerDecoration({ marker, x, width, height: 1 });
-    if (!deco) continue;                           // undefined on ALT buffer — see caveat
-    deco.onRender((el) => { el.style.backgroundColor = SEL_COLOR; });
-    selection.decorations.push(deco);
-  }
-}
-
-// Re-anchor highlight when the user scrolls the viewport.
-term.onScroll(() => renderSelection());
-```
-
-> **Alt-buffer caveat:** `registerDecoration()` / `registerMarker()` return `undefined` while the **alternate screen buffer** is active. Full-screen TUI agents (Claude Code 2.x, Codex, vim/htop) run there: the drag still populates the model and **select / capture / copy still work** via xterm's native selection (`getSelectionPosition()` returns a valid range and `getSelection()` the text on the alt buffer in the pinned 5.5.0 — text extraction needs no decorations), but the app-owned **persistent** highlight and the **cross-highlight reveal** won't draw until Option B (§11). The monitor pane's `altScreen` indicator (§9) tells the user which regime they're in.
+> **Marker hygiene (applies to the §16.8 reveal, the remaining decoration user):** disposing an `IDecoration` does **not** dispose the marker it was registered on — the marker stays in the buffer, subscribed to its trim/insert/delete events, until its line trims out of scrollback. Every marker the renderer registers must therefore be disposed explicitly (disposing the marker disposes its decoration). The reveal disposes its markers when its highlight clears, including markers whose decoration was refused on the alt buffer.
 
 ### 7.5 Sending selection as input (bracketed-paste aware)
 
@@ -187,13 +145,11 @@ function cleanSelectionText() {
 ### 7.5.1 Clear and lifecycle
 
 ```js
-// Explicit clear — the ONLY way the selection goes away.
+// Explicit clear — Escape while a selection is active. (xterm's own clears — typing, a click, a
+// buffer switch — reach the model through §7.3.)
 function clearSelection() {
-  selection.active = false;
-  selection.start = selection.end = null;
-  selection.text = '';
-  clearDecorations();
-  term.clearSelection();          // also drop xterm's native selection (visible while focused, §7.1)
+  clearModel();
+  term.clearSelection();
 }
 // Escape (while a selection is active) is the only clear affordance — there is no toolbar button (§7.5.1, v2.132).
 term.attachCustomKeyEventHandler((e) => {
@@ -229,9 +185,9 @@ Design constraints:
 
 ### 7.6 Design decisions
 
-- **The model — not the DOM — is the source of truth.** This is what makes the selection independent of browser focus. Native xterm selection paints only the live drag (focused) and is suppressed on blur; it is **never read at send time** — the model is (§7.1).
-- **Ignore empty `onSelectionChange` events.** They are the blur-clears we are decoupling from. A new non-empty drag replaces the model; only §7.5.1 clears it.
-- **Per-line, height-1 decorations** styled via `onRender` with an `rgba` tint. Avoids the multi-row-background bug and keeps underlying text legible. (`IDecorationOptions.backgroundColor` only accepts opaque `#RRGGBB`, so translucency is applied on the element instead.)
+- **xterm's native selection is the highlight; the model holds the text.** The text is extracted at gesture time and is what Copy reads (§7.3). The native highlight survives focus changes in the pinned xterm (§7.1).
+- **Empty `onSelectionChange` events clear the model.** They are xterm clearing its own selection (typing, a click, a buffer switch); the model follows so Escape passes through to the agent whenever no selection is visible (§7.5.1).
+- **No app-drawn selection decorations** (removed v2.150). The per-row decorations re-created a marker per row on every scroll and leaked them (§7.4 marker hygiene).
 - **Trim trailing whitespace, drop one trailing newline** before sending or capturing — avoids stray padding and prevents auto-submitting the command.
 - **Send as a paste, honoring bracketed-paste mode.** Required for multi-line selections to land correctly in Claude Code/Codex/REPLs instead of part-executing. We never force the mode on or off; we honor the running app's choice (with `ignoreBracketedPasteMode` as a manual override).
 - **Capture and send are independent, non-destructive actions** on the same selection. Capture is the manual stand-in for the future semantic capture pipeline; it exercises the identical `monitor:capture → monitor:event` plumbing.
