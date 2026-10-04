@@ -236,6 +236,118 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(onStatusBar).toHaveBeenCalledWith(IDLE_STATUS_BAR, null);
   });
 
+  it('hands every view it receives to onView, tagged with the repo it came from (A3 T8b fan-out)', async () => {
+    const onView = vi.fn();
+    const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onView).toHaveBeenCalledWith('/repo', expect.objectContaining({ stepName: '/repo-step' })));
+  });
+
+  it('a throwing onView listener never stops the strip painting or pushing the status bar', async () => {
+    const onStatusBar = vi.fn();
+    const onView = vi.fn(() => {
+      throw new Error('picker broke');
+    });
+    const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView, onStatusBar });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onView).toHaveBeenCalled());
+    await vi.waitFor(() => expect(host.textContent).toContain('/repo-step'));
+    expect(onStatusBar).toHaveBeenCalledWith(expect.anything(), '/repo');
+    await strip.refresh();
+    expect(host.textContent).toContain('/repo-step');
+  });
+
+  it('tells onView (null, null) when it goes idle: leaving a repo, and a refresh with no repo', async () => {
+    const onView = vi.fn();
+    const strip = createFlowStrip(host, { ...fakeFlow('not_started'), onView });
+    strip.onRepoChanged('/a');
+    await vi.waitFor(() => expect(onView).toHaveBeenCalledWith('/a', expect.anything()));
+
+    onView.mockClear();
+    strip.onRepoChanged('/b');
+    expect(onView.mock.calls[0]).toEqual([null, null]);
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/b', expect.anything()));
+
+    onView.mockClear();
+    strip.onRepoChanged(null);
+    expect(onView).toHaveBeenCalledWith(null, null);
+
+    onView.mockClear();
+    await strip.refresh();
+    expect(onView.mock.calls).toEqual([[null, null]]);
+  });
+
+  it('never hands onView a late view for a repo it has left, nor any view after dispose', async () => {
+    // The picker trusts onView's repoKey as the worktree a pick writes to, so a stale view would aim the write
+    // at the repo the terminal already left.
+    const onView = vi.fn();
+    const pending = new Map<string, (v: FlowStateView) => void>();
+    const viewOf = (repoKey: string): FlowStateView => ({
+      stepName: `${repoKey}-step`, steps: [`${repoKey}-step`], position: 1, total: 1, status: 'not_started', runStarted: 'never-started',
+    });
+    const deps = {
+      ...fakeFlow('not_started'),
+      state: vi.fn((repoKey: string) => new Promise<FlowStateView>((res) => pending.set(repoKey, res))),
+      onView,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/a');
+    strip.onRepoChanged('/b');
+    pending.get('/b')!(viewOf('/b'));
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/b', expect.objectContaining({ stepName: '/b-step' })));
+
+    pending.get('/a')?.(viewOf('/a'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onView.mock.calls.filter((c) => c[0] === '/a')).toEqual([]);
+    expect(onView).toHaveBeenLastCalledWith('/b', expect.anything());
+
+    onView.mockClear();
+    void strip.refresh();
+    strip.dispose();
+    pending.get('/b')?.(viewOf('/b'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onView.mock.calls.filter((c) => c[0] !== null)).toEqual([]);
+  });
+
+  it('hands a transition result to onView (Start)', async () => {
+    const onView = vi.fn();
+    createFlowStrip(host, { ...fakeFlow('not_started'), onView }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/repo', expect.objectContaining({ status: 'in_progress' })));
+  });
+
+  it('hands a transition result to onView (Terminate)', async () => {
+    const onView = vi.fn();
+    const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+    createFlowStrip(host, { ...fakeFlow('in_progress'), onView, onTerminate }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-terminate')).not.toBeNull());
+    host.querySelector<HTMLButtonElement>('.flow-terminate')!.click();
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/repo', expect.objectContaining({ status: 'not_started' })));
+  });
+
+  it('hands a re-pulled view to onView when only its startedness changed', async () => {
+    const onView = vi.fn();
+    let runStarted: FlowStateView['runStarted'] = 'never-started';
+    let fire: () => void = () => {};
+    const deps = {
+      ...fakeFlow('not_started'),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ stepName: 's', steps: ['s'], position: 1, total: 1, status: 'not_started', runStarted })),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+      onView,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/repo', expect.objectContaining({ runStarted: 'never-started' })));
+
+    runStarted = 'started';
+    fire();
+
+    await vi.waitFor(() => expect(onView).toHaveBeenLastCalledWith('/repo', expect.objectContaining({ runStarted: 'started' })));
+  });
+
   // WCAG 2.1 SC 4.1.3. The host is `role=status`, which is an implicitly ATOMIC live region — a partial
   // text patch would still re-announce the WHOLE strip. The strip patches individual nodes (status,
   // iteration, cost, phrase), so it must mark its own host non-atomic or the patch buys nothing.
@@ -1736,65 +1848,5 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       strip.onRepoChanged('/repo');
       await strip.refresh();
     });
-  });
-});
-
-// A2 (#133) §18.7.6 — the display-sanitized degrade reason (a pointer selection that fell back to the default)
-// renders as a PERSISTENT element on the running flow view. It is NOT the load `error` (a degrade keeps the
-// fallback running, so status is not `error`) and NOT the one-shot `notice` (which clears on the next
-// transition) — so it must survive a passive re-pull.
-describe('flow selection-reason (§18.7.6 degrade)', () => {
-  const reasonView = (selectionReason?: string): FlowStateView => ({
-    stepName: 'fallback-step', runStarted: 'never-started' as const,
-    steps: ['fallback-step'],
-    position: 1,
-    total: 1,
-    status: 'not_started',
-    ...(selectionReason ? { selectionReason } : {}),
-  });
-
-  it('paints a persistent selection-reason element on a non-error running view', async () => {
-    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView('Selected flow "x" was not found; running the default flow instead.')) };
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
-    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
-      'Selected flow "x" was not found; running the default flow instead.',
-    );
-    // The station rail still renders — a degrade runs the fallback flow, it does not error out.
-    expect(host.querySelector('.flow.vert')).not.toBeNull();
-    expect(host.querySelector('.flow-error')).toBeNull();
-  });
-
-  it('renders no selection-reason element when the view carries none', async () => {
-    const deps = { ...fakeFlow(), state: vi.fn(async () => reasonView(undefined)) };
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow.vert')).not.toBeNull());
-    expect(host.querySelector('.flow-selection-reason')).toBeNull();
-  });
-
-  it('keeps the reason across a passive re-pull (persistent, unlike the one-shot notice)', async () => {
-    const strip = createFlowStrip(host, {
-      ...fakeFlow(),
-      state: vi.fn(async () => reasonView('Selected flow degraded; running the default flow instead.')),
-    });
-    strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')).not.toBeNull());
-    await strip.refresh();
-    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(
-      'Selected flow degraded; running the default flow instead.',
-    );
-  });
-
-  it('updates the reason on a passive re-pull when it CHANGES over the same fallback definition', async () => {
-    // selectionReason is part of structuralSig, so a changed reason over an otherwise-identical view forces a
-    // render rather than the value-only patch path (patchInPlace never touches .flow-selection-reason). Without
-    // that sig line the stale reason would linger — this pins the repaint-on-change half of the behavior.
-    let reason = 'Selected flow "a" was not found; running the default flow instead.';
-    const strip = createFlowStrip(host, { ...fakeFlow(), state: vi.fn(async () => reasonView(reason)) });
-    strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-selection-reason')?.textContent).toBe(reason));
-    reason = 'Selected flow "b" was not found; running the default flow instead.';
-    await strip.refresh();
-    expect(host.querySelector('.flow-selection-reason')!.textContent).toBe(reason);
   });
 });

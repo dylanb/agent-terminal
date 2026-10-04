@@ -6,6 +6,7 @@ import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
 import type { StartednessSignal } from './flowStarted';
+import type { HeldRunView } from './runHold';
 
 export type SessionId = string;
 
@@ -54,6 +55,8 @@ export const CH = {
   flowSetTitle: 'flow:setTitle',
   flowSetActiveFlow: 'flow:setActiveFlow',
   flowClearActiveFlow: 'flow:clearActiveFlow',
+  flowListCatalog: 'flow:listCatalog',
+  flowRebindHeldRun: 'flow:rebindHeldRun',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -608,16 +611,12 @@ export interface FlowStateView {
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer opens
    *  its modal and answers via `flow:provideInput`. Transition-driven — never part of `state()`. */
   prompt?: FlowPrompt;
-  /** §18.7.6 — the display-sanitized reason a per-worktree active-flow pointer selection DEGRADED to the
-   *  global fallback (an unknown/unsafe/unreadable pointer, or an entry escaping its catalog tier). Present
-   *  while the degraded selection runs (the strip paints it persistently, distinct from the one-shot
-   *  `notice`); absent when selection succeeded or the pointer is unset. Never carries the load `error`
-   *  reason — a degrade keeps the fallback running, so `status` is NOT `error`. */
-  selectionReason?: string;
-  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a
-   *  first-step revertStep shows `status: 'not_started'` while the run stays `'started'`. Classify it only
-   *  through `isSelectionLocked` (shared/flowStarted.ts). */
+  /** §18.7.4 — the RAW durable run started-ness, distinct from (and never) the load-maskable `status`: a reset
+   *  whose run record could not be removed shows `status: 'not_started'` while the run stays `'started'`.
+   *  Classify it only through `isSelectionLocked` (shared/flowStarted.ts). */
   runStarted: StartednessSignal;
+  /** §18.7.3 */
+  runHold?: HeldRunView;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
@@ -749,6 +748,62 @@ export interface FlowClearActiveFlowMsg {
  *  write was refused with a human-readable `reason` — the run has begun, begun-ness is indeterminate (fail-closed), or the write
  *  faulted. A refused write leaves the prior on-disk selection byte-for-byte unchanged (§18.7.2 AC8). */
 export type ActiveFlowWriteResult = { ok: true } | { ok: false; reason: string };
+
+/** §18.7.6 */
+export interface FlowListCatalogMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+export const CATALOG_ORIGINS = ['repo', 'global'] as const;
+export type CatalogOrigin = (typeof CATALOG_ORIGINS)[number];
+
+export type FlowCatalogEntry =
+  | { available: true; id: string; origin: CatalogOrigin }
+  | { available: false; label: string; origin: CatalogOrigin; reason: string };
+
+/** §18.7.2/§18.7.3 — the worktree's active-flow pointer as the picker reflects it: no pick, a pick, or a set pick
+ *  that cannot be used (which refuses the run, so it is never shown as the default). */
+export type FlowCatalogSelection = { kind: 'unset' } | { kind: 'value'; id: string } | { kind: 'invalid' };
+
+/** §18.1 / §18.7.6 */
+export interface FlowCatalogListing {
+  entries: FlowCatalogEntry[];
+  tierNotices: { origin: CatalogOrigin; notice: string }[];
+  selection: FlowCatalogSelection;
+  /** Empty unless the worktree's run is held; otherwise every recovery choice, in the order the picker lists them. */
+  recoveryOutcomes: RecoveryOutcomeOf[];
+}
+
+export type FlowCatalogListResult = { ok: true; listing: FlowCatalogListing } | { ok: false; reason: string };
+
+/** §18.7.3 */
+export type RebindChoice = { origin: 'local' } | { origin: CatalogOrigin; id: string } | { origin: 'fallback' };
+
+/** §18.7.3 */
+export type RecoveryOutcome = 'resumes' | 'ends';
+
+export type RecoveryOutcomeOf =
+  | { choice: RebindChoice; outcome: RecoveryOutcome }
+  | { choice: RebindChoice; outcome: 'unavailable'; reason: string };
+
+/** §18.7.3 / §6 — consent to end the run names the held step (as the flow view shows it) the operator confirmed
+ *  ending, so the consent never ends a run held anywhere else. */
+export type StepMissingConsent = 'refuse' | { endRunHeldAt: string };
+
+/** §18.7.3 */
+export type RebindResult =
+  | { ok: true; outcome: 'resumed' }
+  | { ok: true; outcome: 'terminated'; notice?: string }
+  | { ok: false; reason: string };
+
+/** §6 */
+export interface FlowRebindHeldRunMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  choice: RebindChoice;
+  ifStepMissing: StepMissingConsent;
+}
 
 /** The human's gate-decision option set the §27 gate owns (§27.9/§27.15): the option picked at a
  *  data-driven awaiting-human gate, mirroring the LoopDef `human_options` the gate offers. One runtime
@@ -1096,6 +1151,10 @@ export interface FlowApi {
   setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
   /** Return the worktree to the unset default flow; gated exactly like `setActiveFlow`. */
   clearActiveFlow(repoKey: string): Promise<ActiveFlowWriteResult>;
+  /** §18.7.6 */
+  listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
+  /** §18.7.3 */
+  rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

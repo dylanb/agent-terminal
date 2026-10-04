@@ -13,8 +13,9 @@
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { FLOW_DEF_FILE } from '../../src/main/flow';
+import { dirname, join } from 'node:path';
+import yaml from 'js-yaml';
+import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE, type FlowInputDef } from '../../src/main/flow';
 import { todoTemplatesDir } from '../../src/main/todoTemplate';
 
 export interface CatalogEntryOptions {
@@ -30,6 +31,14 @@ export interface CatalogFixture {
    *  `catalogDir`. `id` is the entry directory name VERBATIM — pass an unsafe or over-long name to drive the
    *  installer's catalog-id refusal (AC6); the fixture never sanitizes it. Returns the entry dir. */
   addEntry(catalogDir: string, id: string, opts?: CatalogEntryOptions): string;
+  /** `inputs` is keyed by step id (§18.4). */
+  addEntryWithSteps(catalogDir: string, id: string, stepIds: string[], inputs?: Record<string, FlowInputDef[]>): string;
+  /** Make `root`'s catalog tier (`<root>/.agent-terminal/flows`) a regular file: enumerating it fails with
+   *  ENOTDIR, the root-safe unreadable-tier device (a chmod is a no-op as root). `root` is a worktree or an app
+   *  home. Returns the tier path. */
+  makeUnreadableTier(root: string): string;
+  /** Delete `<home>/.agent-terminal` — the first-run global home. */
+  removeGlobalHome(home: string): void;
   /** Replace entry `id`'s flow.yaml with a symlink to out-of-catalog content (CWE-59; AC4). */
   symlinkEntryFlowYaml(catalogDir: string, id: string): void;
   /** Replace entry `id`'s flow.yaml with a DANGLING symlink — its target does not exist, so the entry cannot
@@ -93,6 +102,26 @@ export function createCatalogFixture(): CatalogFixture {
         for (const ref of refs) writeFileSync(join(templates, `${ref}.md`), TEMPLATE_MD(ref));
       }
       return entry;
+    },
+    addEntryWithSteps(catalogDir, id, stepIds, inputs) {
+      const entry = join(catalogDir, id);
+      mkdirSync(entry, { recursive: true });
+      const steps = stepIds.map((stepId) => {
+        const declared = inputs?.[stepId];
+        return declared ? { id: stepId, kind: 'manual', inputs: declared } : { id: stepId, kind: 'manual' };
+      });
+      writeFileSync(join(entry, FLOW_DEF_FILE), yaml.dump({ name: id, steps }));
+      return entry;
+    },
+    makeUnreadableTier(root) {
+      const tier = flowCatalogDir(root);
+      rmSync(tier, { recursive: true, force: true });
+      mkdirSync(dirname(tier), { recursive: true });
+      writeFileSync(tier, 'a regular file where the catalog tier directory belongs\n');
+      return tier;
+    },
+    removeGlobalHome(home) {
+      rmSync(flowHomeDir(home), { recursive: true, force: true });
     },
     symlinkEntryFlowYaml(catalogDir, id) {
       const entry = join(catalogDir, id);

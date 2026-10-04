@@ -285,10 +285,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .flow-undo { margin-top:8px; color:var(--dim); }
 .flowstrip .flow-error { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--danger); }
 /* §19.3 busy refusal / one-shot transient notice — caution, not a hard load error (no mockup). */
-.flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
-/* §18.7.6 — the active-flow pointer selection degraded to the default flow: a persistent caution, not a hard
-   load error (the fallback runs). */
-.flowstrip .flow-selection-reason { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
+.flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; overflow-wrap:anywhere; }
 /* §24.2.3 T2 — the read-only loop read-out (design/shell/loop-flow.html). The rail shows a
    COMPACT Loop read-out (a 3-tone status pill + iteration) that opens the docked panel; the full
    loop read-out lives in that panel. */
@@ -593,3 +590,22 @@ button:hover { border-color:var(--dim); }
 .flowstrip .flow-terminate:hover { border-color:var(--danger); }
 .pill.danger { background:var(--danger); color:var(--danger-on); border-color:transparent; }
 .pill.danger:hover { border-color:transparent; }
+
+/* §18.7.4 */
+.flowpicker { position:relative; display:flex; flex-direction:column; gap:6px; }
+.flowpicker:not(:has(.flow-picker-trigger)) { margin-bottom:0; padding-bottom:0; border-bottom:0; }
+.flowpicker .flow-picker-trigger { align-self:flex-start; }
+.flowpicker .pill { max-width:100%; height:auto; min-height:34px; padding-block:6px; white-space:normal; overflow-wrap:anywhere; text-align:left; }
+.flowpicker .flow-picker-list { list-style:none; margin:0; padding:4px; border:1px solid var(--hair); border-radius:7px; background:var(--bg); max-height:240px; overflow:auto; }
+.flowpicker .flow-picker-option { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline; padding:5px 7px; border-radius:5px; cursor:pointer; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; }
+.flowpicker .flow-picker-option:hover { background:var(--hair2); }
+.flowpicker .flow-picker-option:focus-visible { outline:2px solid var(--signal-text); outline-offset:-2px; }
+.flowpicker .flow-picker-option[aria-selected="true"] { border-left:2px solid var(--signal-text); }
+.flowpicker .flow-picker-option[aria-disabled="true"] { cursor:default; }
+.flowpicker .flow-picker-origin { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
+.flowpicker .flow-picker-reason { flex-basis:100%; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
+.flowpicker .flow-picker-clear { align-self:flex-start; }
+.flowpicker .flow-picker-notice { margin:0; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
+.flowpicker .flow-picker-lock { margin:0; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
+.flowpicker .flow-picker-alert { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--danger); line-height:1.35; overflow-wrap:anywhere; }
+.flowpicker .flow-picker-alert:empty { min-height:0; margin:0; }

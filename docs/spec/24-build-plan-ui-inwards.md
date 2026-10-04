@@ -73,7 +73,7 @@ Everything below is real backing logic that Phase 1 mocks or omits. Each becomes
 - [ ] **GitHub bridge** (§20.3) — prefer written artifacts; `gh` refresh; fallback to artifact when offline.
 - [ ] **Todo templates** (§21.2) — markdown-list parse, named + file templates; headings ignored, sub-bullets folded.
 - [ ] **Layout config system** (§22.4) — load `~/.config/agent-terminal/layout.json`; a config change relocates a widget with no widget-code change. (Phase 1 keeps widgets placement-agnostic but ships a hardcoded layout.)
-- [ ] **Worktree + child-instance launcher** (§23.2) — `flow:openChild`; child launch seeds the expected `flow-state.yaml` at the right step.
+- [ ] **Worktree + child-instance launcher** (§23.2) — `flow:openChild` creates the child worktree and launches its instance; the child's flow is bound at Start (§23.2).
 - [ ] **Cross-instance guard** (§23.3) — second open on the same repo+branch (or PR) warns.
 - [ ] **Flow-author skill** (§18.5) — separate deliverable; a skill, not app code.
 

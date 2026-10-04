@@ -4,11 +4,19 @@ import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
 import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
-import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import type {
+  ActiveFlowWriteResult,
+  DestRelativePath,
+  FlowCatalogListing,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+} from '../../src/shared/ipc';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
 import { createConfirmDialog } from '../../src/renderer/src/confirmDialog';
 import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstrapConflict';
+import { createFlowPicker, type FlowPicker } from '../../src/renderer/src/flowPicker';
+import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -80,6 +88,42 @@ async function tabToProbe(el: HTMLElement): Promise<void> {
   if (document.activeElement !== el) throw new Error('probe did not take keyboard focus');
   if (!el.matches(':focus-visible')) throw new Error('probe focused but :focus-visible did not match');
 }
+
+/** The real picker in the rail, showing a never-started worktree whose listing has the selected flow, a second
+ *  available flow, and one unavailable entry, and whose pointer writes are all refused. */
+async function mountPicker(
+  tierNotices: FlowCatalogListing['tierNotices'] = [],
+): Promise<{ host: HTMLElement; picker: FlowPicker; show: (...args: FlowViewArgs) => void }> {
+  const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
+  let show: ((...args: FlowViewArgs) => void) | undefined;
+  const listing: FlowCatalogListing = {
+    entries: [
+      { available: true, id: 'flow-a', origin: 'repo' },
+      { available: true, id: 'flow-b', origin: 'global' },
+      { available: false, label: 'flow-x', origin: 'repo', reason: 'escapes its tier' },
+    ],
+    tierNotices,
+    selection: { kind: 'value', id: 'flow-a' },
+  };
+  const refused = async (): Promise<ActiveFlowWriteResult> => ({ ok: false, reason: 'Could not save the selection' });
+  const picker = createFlowPicker(host, {
+    onView: (cb) => {
+      show = cb;
+      return () => {};
+    },
+    listCatalog: async () => ({ ok: true, listing }),
+    select: refused,
+    clearSelection: refused,
+  });
+  show!('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'not_started', runStarted: 'never-started' });
+  await vi.waitFor(() => expect(host.querySelector('.flow-picker-trigger')?.textContent).toBe('Flow: flow-a'));
+  return { host, picker, show: show! };
+}
+const optionNamed = (host: HTMLElement, name: string): HTMLElement => {
+  const opt = [...host.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.dataset.flowKey === name);
+  if (!opt) throw new Error(`no option for ${name}`);
+  return opt;
+};
 
 for (const theme of ['light', 'dark'] as const) {
   describe(`${theme} theme`, () => {
@@ -253,6 +297,145 @@ for (const theme of ['light', 'dark'] as const) {
         const box = row.querySelector('input') as HTMLElement;
         await tabToProbe(box);
         expect(contrast(focusRing(box), paintedBgBehindRing(box))).toBeGreaterThanOrEqual(3);
+      });
+    });
+
+    // §18.7.4 picker option: its ring is inset (negative offset), so it paints on the option's OWN fill,
+    // which the pointer darkens on hover while a keyboard user may still be standing on it.
+    describe('flow picker option ring and selected marker contrast (WCAG 2.1 SC 1.4.11 / 2.4.7)', () => {
+      for (const hovered of [false, true]) {
+        it(`the focused, selected option's ring and marker clear 3:1${hovered ? ' while hovered' : ''}`, async () => {
+          const { host, picker } = await mountPicker();
+          await tabToProbe(host.querySelector<HTMLElement>('.flow-picker-trigger')!);
+          await userEvent.keyboard('{Enter}');
+          const el = await vi.waitFor(() => {
+            const opt = host.querySelector<HTMLElement>('[role="option"][aria-selected="true"]');
+            if (!opt || document.activeElement !== opt) throw new Error('the selected option did not take focus');
+            return opt;
+          });
+          expect(el.matches(':focus-visible')).toBe(true);
+          if (hovered) await userEvent.hover(el);
+          const cs = getComputedStyle(el);
+          expect(parseFloat(cs.outlineOffset)).toBeLessThan(0);
+          const fill = paintedBg(el);
+          expect(contrast(ringOver(cs.outlineColor, paintedAlpha(el), fill), fill)).toBeGreaterThanOrEqual(3);
+          expect(contrast(parse(cs.borderLeftColor), fill)).toBeGreaterThanOrEqual(3);
+          picker.dispose();
+        });
+      }
+    });
+
+    describe('flow picker text contrast (WCAG 1.4.3 AA)', () => {
+      for (const hovered of [false, true]) {
+        it(`the origin label, unavailable reason and alert clear 4.5:1${hovered ? ' on a hovered row' : ''}`, async () => {
+          const { host, picker } = await mountPicker();
+          const trigger = host.querySelector<HTMLElement>('.flow-picker-trigger')!;
+          trigger.click();
+          (await vi.waitFor(() => optionNamed(host, 'flow-b'))).click();
+          await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).not.toBe(''));
+          host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+          const row = await vi.waitFor(() => optionNamed(host, 'flow-x'));
+          if (hovered) await userEvent.hover(row);
+          for (const el of [
+            row.querySelector('.flow-picker-origin')!,
+            row.querySelector('.flow-picker-reason')!,
+            host.querySelector('[role="alert"]')!,
+          ]) {
+            expect(el, 'the picker renders this text').not.toBeNull();
+            expect(contrast(fg(el), paintedBg(el)), el.className).toBeGreaterThanOrEqual(4.5);
+          }
+          picker.dispose();
+        });
+      }
+    });
+
+    describe('flow picker recovery outcome label contrast (WCAG 1.4.3 AA)', () => {
+      for (const hovered of [false, true]) {
+        it(`each row's "resumes the run" / "ends the run" label clears 4.5:1${hovered ? ' on a hovered row' : ''}`, async () => {
+          const host = mount('<div class="rail"><div class="blk flowpicker"></div></div>').querySelector<HTMLElement>('.flowpicker')!;
+          let show: ((...args: FlowViewArgs) => void) | undefined;
+          const listing: FlowCatalogListing = {
+            entries: [
+              { available: true, id: 'flow-a', origin: 'repo' },
+              { available: true, id: 'flow-b', origin: 'global' },
+            ],
+            tierNotices: [],
+            selection: { kind: 'unset' },
+            recoveryOutcomes: [
+              { choice: { origin: 'repo', id: 'flow-a' }, outcome: 'resumes' },
+              { choice: { origin: 'global', id: 'flow-b' }, outcome: 'ends' },
+            ],
+          };
+          const picker = createFlowPicker(host, {
+            onView: (cb) => {
+              show = cb;
+              return () => {};
+            },
+            listCatalog: async () => ({ ok: true, listing }),
+            select: async () => ({ ok: true }),
+            clearSelection: async () => ({ ok: true }),
+            rebindHeldRun: async () => ({ ok: false, reason: 'no' }),
+            confirmEndRun: () => {},
+          });
+          show!('/repo', {
+            stepName: '', steps: [], position: 0, total: 0, status: 'error', error: 'held', runStarted: 'started',
+            runHold: { hold: 'record-missing', step: 's2', status: 'in_progress' },
+          });
+          await vi.waitFor(() => expect(host.querySelector('.flow-picker-recover')?.getAttribute('aria-disabled')).not.toBe('true'));
+          host.querySelector<HTMLElement>('.flow-picker-recover')!.click();
+          for (const key of ['repo:flow-a', 'global:flow-b']) {
+            const row = await vi.waitFor(() => optionNamed(host, key));
+            if (hovered) await userEvent.hover(row);
+            const label = [...row.querySelectorAll<HTMLElement>('span')].find((e) => /resumes the run|ends the run/.test(e.textContent ?? ''));
+            expect(label, `${key} shows its outcome`).toBeDefined();
+            expect(contrast(fg(label!), paintedBg(label!)), key).toBeGreaterThanOrEqual(4.5);
+          }
+          picker.dispose();
+        });
+      }
+    });
+
+    describe('flow picker tier notice contrast (WCAG 1.4.3 AA)', () => {
+      it('an unreadable-tier notice clears 4.5:1 in the open list', async () => {
+        const notice = 'Could not read the repo flows directory: ENOTDIR';
+        const { host, picker } = await mountPicker([{ origin: 'repo', notice }]);
+        host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+        const el = await vi.waitFor(() => {
+          const shown = [...host.querySelectorAll<HTMLElement>('*')].filter(
+            (e) => (e.textContent ?? '').includes(notice) && e.closest('[role="option"]') === null &&
+              ![...e.children].some((c) => (c.textContent ?? '').includes(notice)),
+          );
+          if (shown.length === 0) throw new Error('the open list renders no tier notice');
+          return shown[0]!;
+        });
+        expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
+      });
+    });
+
+    describe('flow picker lock reason and "use the default" contrast (WCAG 1.4.3 AA)', () => {
+      it('the "use the default" label clears 4.5:1 in the open list', async () => {
+        const { host, picker } = await mountPicker();
+        host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+        const clear = await vi.waitFor(() => {
+          const el = host.querySelector<HTMLElement>('.flow-picker-clear');
+          if (!el) throw new Error('the open list offers no "use the default"');
+          return el;
+        });
+        expect(contrast(fg(clear), paintedBg(clear))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
+      });
+
+      it('the lock reason clears 4.5:1 on the rail', async () => {
+        const { host, picker, show } = await mountPicker();
+        show('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'in_progress', runStarted: 'started' });
+        const lock = await vi.waitFor(() => {
+          const el = host.querySelector<HTMLElement>('.flow-picker-lock');
+          if (!el) throw new Error('the locked picker shows no lock reason');
+          return el;
+        });
+        expect(contrast(fg(lock), paintedBg(lock))).toBeGreaterThanOrEqual(4.5);
+        picker.dispose();
       });
     });
 
@@ -782,5 +965,100 @@ describe('flow strip rail geometry (§B.10a — Reflow 1.4.10 / Resize 1.4.4)', 
     expect(cs.fontSize).toBe('11px'); // the group's size, never the .car chevron's 8px
     expect(cs.whiteSpace).toBe('nowrap');
     expect(cs.flexShrink).toBe('0');
+  });
+});
+
+// UI-STANDARDS §4.1/§4.4 — the picker's alert host lives inside `.flowpicker`, so the idle picker (no
+// worktree shown, no trigger) may collapse its rail chrome but must never be taken out of rendering.
+describe('the idle flow picker keeps its live region rendered (UI-STANDARDS §4, WCAG 4.1.3)', () => {
+  it('collapses to nothing without display:none on the empty alert region or any ancestor', () => {
+    document.body.innerHTML = '<div class="rail"><div class="blk flowpicker"></div></div>';
+    const host = document.querySelector<HTMLElement>('.flowpicker')!;
+    const picker = createFlowPicker(host, {
+      onView: () => () => {},
+      listCatalog: () => new Promise(() => {}),
+      select: () => new Promise(() => {}),
+      clearSelection: () => new Promise(() => {}),
+    });
+    const alert = host.querySelector<HTMLElement>('[role="alert"]')!;
+
+    for (let n: HTMLElement | null = alert; n; n = n.parentElement) {
+      expect(getComputedStyle(n).display, n.className || n.tagName).not.toBe('none');
+    }
+    expect(host.getBoundingClientRect().height).toBe(0);
+    expect(getComputedStyle(host).borderBottomWidth).toBe('0px');
+    picker.dispose();
+  });
+});
+
+// WCAG 1.4.10 / 1.4.4 — no picker control's label is clipped or overflows the 200px rail, even for a 64-char id.
+describe('the flow picker fits the rail without clipping its labels (WCAG 1.4.10)', () => {
+  it('the trigger, "use the default" and the recover control each show their whole label inside the rail', async () => {
+    const longId = 'feature-dev-with-review-and-a-very-long-descriptive-flow-name-xyz';
+    document.body.innerHTML = '<div class="rail" style="width:200px;height:600px"><div class="blk flowpicker"></div></div>';
+    const rail = document.querySelector<HTMLElement>('.rail')!;
+    const host = rail.querySelector<HTMLElement>('.flowpicker')!;
+    let show: ((...args: FlowViewArgs) => void) | undefined;
+    const listing: FlowCatalogListing = {
+      entries: [{ available: true, id: longId, origin: 'global' }],
+      tierNotices: [],
+      selection: { kind: 'value', id: longId },
+    };
+    const picker = createFlowPicker(host, {
+      onView: (cb) => {
+        show = cb;
+        return () => {};
+      },
+      listCatalog: async () => ({ ok: true, listing }),
+      select: async () => ({ ok: true }),
+      clearSelection: async () => ({ ok: true }),
+      rebindHeldRun: async () => ({ ok: false, reason: 'no' }),
+    });
+    const railBox = (): { left: number; right: number } => {
+      const r = rail.getBoundingClientRect();
+      const cs = getComputedStyle(rail);
+      return { left: r.left + parseFloat(cs.paddingLeft), right: r.right - parseFloat(cs.paddingRight) };
+    };
+    const expectWhole = (el: HTMLElement | null, name: string): void => {
+      expect(el, name).not.toBeNull();
+      expect(el!.scrollWidth, `${name} clips its label`).toBeLessThanOrEqual(el!.clientWidth);
+      expect(el!.getBoundingClientRect().right, `${name} overflows the rail`).toBeLessThanOrEqual(railBox().right + 0.5);
+    };
+
+    show!('/repo', { stepName: 'a1', steps: ['a1'], position: 1, total: 1, status: 'not_started', runStarted: 'never-started' });
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-trigger')?.textContent).toBe(`Flow: ${longId}`));
+    host.querySelector<HTMLElement>('.flow-picker-trigger')!.click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-clear')).not.toBeNull());
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-trigger'), 'trigger');
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-clear'), 'use the default');
+
+    show!('/repo', {
+      stepName: '', steps: [], position: 0, total: 0, status: 'error', error: 'held', runStarted: 'started',
+      runHold: { hold: 'record-missing', step: 's2', status: 'in_progress' },
+    });
+    await vi.waitFor(() => expect(host.querySelector('.flow-picker-recover')).not.toBeNull());
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-trigger'), 'locked trigger');
+    expectWhole(host.querySelector<HTMLElement>('.flow-picker-recover'), 'recover');
+    picker.dispose();
+  });
+});
+
+// WCAG 1.4.10 — the unidentified-holder remedy names a lockfile path the user must act on; an unbroken path token
+// wraps inside the 200px rail rather than running off its edge behind a sideways scroll.
+describe('a lock refusal naming a lockfile path wraps inside the rail (WCAG 1.4.10)', () => {
+  const lockFile = `/Users/someone/.agent-terminal/flows/locks/worktree-${'a1b2c3d4'.repeat(8)}.lock`;
+  it.each([
+    ['the flow strip notice', '<div class="flowstrip"><div class="flow-notice"></div></div>', '.flow-notice'],
+    ['the flow picker alert', '<div class="blk flowpicker"><div class="flow-picker-alert" role="alert"></div></div>', '.flow-picker-alert'],
+  ])('%s keeps the whole path inside the rail', (_name, inner, selector) => {
+    document.body.innerHTML = `<div class="rail" style="width:200px;height:600px">${inner}</div>`;
+    const rail = document.querySelector<HTMLElement>('.rail')!;
+    const el = rail.querySelector<HTMLElement>(selector)!;
+    el.textContent = `If no other Agent Terminal window is working in this worktree, delete ${lockFile} and try again.`;
+    const railRight = rail.getBoundingClientRect().right - parseFloat(getComputedStyle(rail).paddingRight);
+
+    expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth);
+    expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(railRight + 0.5);
+    expect(rail.scrollWidth).toBeLessThanOrEqual(rail.clientWidth);
   });
 });

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createFlowMachine, MAX_SLICES, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 import type { FlowLoopView } from '../../src/shared/ipc';
+import { MAX_ECHOED_LOAD_ERROR_LENGTH } from '../../src/shared/controlChars';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.
@@ -274,7 +275,8 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
 // §18.3 / §27 — a bootstrap that fails after its step was entered must not strand the flow on a
 // half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
 // re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
-// PRESERVING resolved inputs so the operator can fix the cause and re-advance. It is a no-op guard, not
+// PRESERVING resolved inputs so the operator can fix the cause and re-advance; from the first step there is no
+// previous step, so it resets the run to never-started as a Terminate does (§18.7.4, v2.161). It is a no-op guard, not
 // a throwing transition: it fires from an async pickup `.then()`, so a stale call (the flow already
 // moved on) must be inert rather than an unhandled rejection.
 describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)', () => {
@@ -344,7 +346,7 @@ describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)'
     expect(flow.revertStep('implement').status).toBe('done');
   });
 
-  it('reverts a first-step loop to not_started (no previous step), a recoverable state', () => {
+  it('resets a first-step rollback to never-started as a Terminate does, discarding resolved inputs (§18.7.4, v2.161)', () => {
     const FIRST_LOOP: FlowLoad = {
       ok: true,
       definition: {
@@ -353,10 +355,19 @@ describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)'
       },
       flowDir: '/tmp/f/.agent-terminal',
     };
-    const flow = createFlowMachine(FIRST_LOOP);
-    flow.start(); // in_progress on the only (loop) step
-    const v = flow.revertStep('plan');
-    expect(v.status).toBe('not_started'); // Start re-enters the step and re-fires pickup
+    const dir = mkdtempSync(join(tmpdir(), 'flow-revert-first-'));
+    try {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+      const flow = createFlowMachine(FIRST_LOOP, store);
+      const v = flow.revertStep('plan');
+      expect(v.status).toBe('not_started');
+      const persisted = createFlowStateStore(dir).read();
+      expect(persisted?.status).toBe('not_started');
+      expect(persisted?.inputs ?? {}).toEqual({});
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1269,5 +1280,19 @@ describe('flow machine reopen-slice / manual back-to-RED (§28.4.2)', () => {
   it('is inert on a load-error machine', () => {
     const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
     expect(flow.reopenSlice().status).toBe('error');
+  });
+});
+
+// §18.7.6 (CWE-116/400) — a load error interpolates repo-authored text (a step id, a kind:, a YAML snippet), so
+// the error view echoes it display-safe and length-bounded.
+describe('flow state machine — the load-error echo (§18.7.6)', () => {
+  it('bounds and sanitizes a load error carrying hostile repo-authored text', () => {
+    const hostile = `flow.yaml step "${'s'.repeat(5000)}‍‮" has an unknown kind`;
+
+    const error = createFlowMachine({ ok: false, error: hostile }).state().error ?? '';
+
+    expect(error).toMatch(/flow\.yaml step/);
+    expect(error).not.toMatch(/[‍‮]/u);
+    expect(error.length).toBeLessThanOrEqual(MAX_ECHOED_LOAD_ERROR_LENGTH);
   });
 });

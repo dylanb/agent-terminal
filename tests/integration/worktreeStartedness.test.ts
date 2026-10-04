@@ -156,6 +156,13 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
     expect(worktreeStartedness(wt)).toBe('indeterminate');
   });
 
-  // The composed AC7 pins — revertStep-stays-locked and the gated write refusal — live in
-  // startednessRevertLocked.test.ts and activeFlowGate.test.ts.
+  it("reports 'indeterminate' for a schema-invalid progression even when the run-disposition marker is present (§18.7.4 case ii)", () => {
+    const wt = fx.makeWorktree('a3-startedness-bad-status-marker');
+    fx.writeFlowStateRaw(wt, 'step: plan\nstatus: error\n');
+    fx.writeRunRecord(wt, { source: 'non-catalog' });
+    expect(worktreeStartedness(wt)).toBe('indeterminate');
+  });
+
+  // The composed AC7 pins — revertStep and the run record, and the gated write refusal — live in
+  // revertStepRunRecord.test.ts and activeFlowGate.test.ts.
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
@@ -42,7 +42,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     expect(runName(resolve(wt).load)).toBe('flow-x'); // the begun run ignores the change
   });
 
-  it('re-Starting a catalog run after a first-step revertStep keeps its catalog binding, never rebinding it non-catalog (CWE-841)', () => {
+  it('a re-Start after a first-step revertStep resolves the still-set pointer afresh, binding its catalog entry', () => {
     const wt = fx.makeWorktree('a2-restart-after-revert');
     const globalDir = fx.makeWorktree('a2-restart-after-revert-global');
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] }); // a fallback exists to swap TO
@@ -52,31 +52,62 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
-    mgr.revertStep(wt, 'x-step'); // first-step rollback → not_started; the begun marker survives
+    mgr.revertStep(wt, 'x-step'); // first-step rollback → never-started; the pointer still names flow-x
     mgr.start(wt); // the documented recovery
 
     expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'repo', id: 'flow-x' });
     expect(mgr.state(wt).steps).toEqual(['x-step', 'x-next']);
   });
 
-  it.each([
-    ['unset', (_wt: string): void => {}],
-    ['degraded', (wt: string): void => writeActiveFlow(wt, 'missing-flow')],
-  ])('a run begun on the global fallback (pointer %s) never consults a pointer set later', (_label, seedPointer) => {
+  it('a run begun on the global fallback never consults a pointer set later', () => {
     const wt = fx.makeWorktree('a2-begun-fallback');
     const globalDir = fx.makeWorktree('a2-begun-fallback-global');
     fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
-    seedPointer(wt);
     const resolve = createRunResolver(globalDir);
     const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
 
     mgr.start(wt);
-    mgr.revertStep(wt, 'g-step');
-    rmSync(join(flowHomeDir(wt), 'active-flow.yaml'), { force: true });
     writeActiveFlow(wt, 'flow-x');
 
     expect(mgr.state(wt).steps).toEqual(['g-step']);
+  });
+
+  it("AC18: a pick over a present local flow.yaml is what Start runs and binds, and it survives a relaunch", () => {
+    const wt = fx.makeWorktree('a3-pick-over-local');
+    const globalDir = fx.makeWorktree('a3-pick-over-local-global');
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
+    seedEntry(globalDir, 'flow-g', 'flow-g', 'g-step', 'g-next');
+    writeActiveFlow(wt, 'flow-g');
+    const resolve = createRunResolver(globalDir);
+    const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
+
+    const started = mgr.start(wt);
+
+    expect(started.status).toBe('in_progress');
+    expect(started.steps).toEqual(['g-step', 'g-next']);
+    expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'flow-g' });
+
+    const relaunchedResolve = createRunResolver(globalDir);
+    const relaunched = createFlowManager({ globalDir, loadDefinition: (repoKey) => relaunchedResolve(repoKey) });
+    expect(relaunched.state(wt).steps).toEqual(['g-step', 'g-next']);
+    expect(relaunched.state(wt).status).toBe('in_progress');
+  });
+
+  it('an unusable pick cannot be started on the local flow or the global fallback', () => {
+    const wt = fx.makeWorktree('a2-refused-pick');
+    const globalDir = fx.makeWorktree('a2-refused-pick-global');
+    fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g-step'] });
+    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l-step'] });
+    writeActiveFlow(wt, 'missing-flow');
+    const resolve = createRunResolver(globalDir);
+    const mgr = createFlowManager({ globalDir, loadDefinition: (repoKey) => resolve(repoKey) });
+
+    const view = mgr.start(wt);
+
+    expect(view.status).toBe('error');
+    expect(view.error).toContain('missing-flow');
+    expect(mgr.state(wt).runStarted).toBe('never-started');
   });
 
   it('a begun GLOBAL-tier catalog run keeps resolving its global entry after a same-named repo entry appears (§18.7.3)', () => {
@@ -131,11 +162,11 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   it('a run begun from a local flow.yaml never consults the pointer for its lifetime', () => {
     const wt = fx.makeWorktree('a2-swap-local');
     const globalDir = fx.makeWorktree('a2-swap-local-global');
-    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['local-step'] }); // leg 1 wins
+    fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['local-step'] }); // no pointer set → leg 2 (local) wins
     seedEntry(wt, 'flow-x', 'flow-x', 'x-step');
     const resolve = createRunResolver(globalDir);
 
-    const fresh = resolve(wt); // never-started → leg 1 local, binds non-catalog
+    const fresh = resolve(wt); // never-started → leg 2 local, binds non-catalog
     expect(runName(fresh.load)).toBe('local-only');
     recordDisposition(wt, fresh.binding ?? { source: 'non-catalog' });
 
@@ -144,7 +175,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   });
 
   it('a begun run with NO recorded disposition marker holds at the §18.1 error, never re-resolving the live legs (CWE-841)', () => {
-    // A leg-1 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
+    // A leg-2 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
     const wt = fx.makeWorktree('a2-begun-no-marker');
     const globalDir = fx.makeWorktree('a2-begun-no-marker-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });
@@ -155,7 +186,7 @@ describe('run-scoped source binding — a begun run never swaps its source (§18
   });
 
   it('a begun run whose PRESENT disposition marker is corrupt still holds at the §18.1 error, never deferring to the live legs (CWE-841)', () => {
-    // A leg-1 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
+    // A leg-2 local flow.yaml is present so a wrongful defer to the live legs would resolve it (load.ok).
     const wt = fx.makeWorktree('a2-corrupt-marker');
     const globalDir = fx.makeWorktree('a2-corrupt-marker-global');
     fx.writeFlowHome(wt, { name: 'local-only', stepIds: ['build'] });

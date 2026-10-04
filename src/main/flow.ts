@@ -10,14 +10,17 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import { clearDisposition, readDisposition, recordDisposition } from './runDisposition';
+import { clearDisposition, leftoverRecordRemedy, readDisposition, readRunBinding, recordDisposition } from './runDisposition';
 import { worktreeStartedness } from './startedness';
+import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
-import { stripDisplayControlChars } from '../shared/controlChars';
+import { readBoundedNoFollow } from './boundedRead';
+import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
@@ -87,11 +90,22 @@ export { FLOW_HOME_SUBDIR, flowHomeDir };
 export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
-/** Whether `root` holds a flow definition at its flow home — the single leg-1 presence gate the local-first
- *  loader and the §18.7.3 resolver both read, so the "is a flow present here" boundary that decides which flow
+/** Whether `root` holds a flow definition at its flow home — the single presence gate the local-first loader
+ *  and the §18.7.6 catalog listing both read, so the "is a flow present here" boundary that decides which flow
  *  runs cannot desync between them (CLAUDE.md shared-semantics). */
 export function hasFlowDefinition(root: string): boolean {
-  return existsSync(path.join(root, FLOW_REL));
+  return existsSync(flowDefinitionFile(root));
+}
+
+/** The flow-home definition file under `root` — the one location the local and global-fallback loaders, the
+ *  presence gate, and a fallback-bound run all read (CLAUDE.md writer↔reader rule). */
+export function flowDefinitionFile(root: string): string {
+  return path.join(root, FLOW_REL);
+}
+
+/** §19.1 / §18.7.3 */
+export function resumesAt(definition: FlowDefinition, step: string): boolean {
+  return definition.steps.some((s) => s.id === step);
 }
 
 export const FLOWS_CATALOG_SUBDIR = 'flows';
@@ -126,7 +140,7 @@ function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
 export function loadFlowDefinition(worktreeDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(path.join(worktreeDir, FLOW_REL), FLOW_REL);
+  return loadFlowDefinitionFromFile(flowDefinitionFile(worktreeDir), FLOW_REL);
 }
 
 /** Read & validate the flow.yaml at `file` against §18.1 — the shared read+validate core the home-root loader
@@ -143,7 +157,32 @@ export function loadFlowDefinitionFromFile(file: string, relLabel: string = file
     if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
     return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
   }
+  return parseFlowDefinition(raw, file);
+}
 
+export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
+
+/** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
+ *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
+export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+  const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
+  if (read.ok) return parseFlowDefinition(read.text, file);
+  switch (read.cause) {
+    case 'absent':
+      return { ok: false, error: `no flow.yaml found at ${file}` };
+    case 'over-cap':
+      return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
+    case 'unreadable':
+      return {
+        ok: false,
+        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+      };
+    default:
+      return read.cause satisfies never;
+  }
+}
+
+function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
   try {
     doc = yaml.load(raw);
@@ -234,7 +273,7 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
 }
 
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
-export type MachineView = Omit<FlowStateView, 'runStarted'>;
+export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
 export interface FlowMachine {
   state(): MachineView;
@@ -313,10 +352,10 @@ export function createFlowMachine(
         position: 0,
         total: 0,
         status: 'error',
-        // CWE-117/CWE-1007 (§16.3): the load-error message interpolates repo-authored content (a step id, a
-        // kind:, a js-yaml snippet), so strip display-unsafe control chars ONCE over the whole composed
+        // CWE-117/CWE-1007 (§16.3, §18.7.6): the load-error message interpolates repo-authored content (a step
+        // id, a kind:, a js-yaml snippet), so it is made display-safe and bounded ONCE over the whole composed
         // message at the single place MachineView.error is populated (§B.3).
-        error: stripDisplayControlChars(load.error),
+        error: displaySafeEcho(load.error, MAX_ECHOED_LOAD_ERROR_LENGTH),
         ...(named !== null ? { userTitle: named } : {}),
       };
     };
@@ -378,9 +417,8 @@ export function createFlowMachine(
     repeatCounts = Object.create(null);
     const persisted = store.read();
     if (persisted) {
-      const i = names.indexOf(persisted.step);
-      if (i >= 0) {
-        index = i;
+      if (resumesAt(def, persisted.step)) {
+        index = names.indexOf(persisted.step);
         status = persisted.status;
       }
       if (persisted.inputs) inputs = { ...persisted.inputs };
@@ -556,7 +594,10 @@ export function createFlowMachine(
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
       else {
-        status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+        // §18.7.4 (v2.161)
+        status = 'not_started';
+        inputs = {};
+        repeatCounts = Object.create(null);
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -631,7 +672,8 @@ export interface FlowManager {
   currentSlice(repoKey: string): number;
   /** §28.4.2 — the step a repo's slice restarts at, or null. Delegates to the machine keyed by `repoKey`. */
   sliceStartStep(repoKey: string): string | null;
-  /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
+  /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27); from the first step,
+   *  reset the run to never-started as a Terminate does (§18.7.4), throwing when its run record cannot be removed. */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): TerminateResult;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
@@ -643,9 +685,12 @@ export interface FlowManager {
 }
 
 /** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
-export type TerminateResult = { outcome: 'reset' | 'refused'; view: FlowStateView };
+export type TerminateResult =
+  | { outcome: 'reset'; view: FlowStateView }
+  | { outcome: 'refused'; cause: 'not-begun'; view: FlowStateView }
+  | { outcome: 'refused'; cause: 'failed'; reason: string; view: FlowStateView };
 
-/** What the definition seam returns (§18.1 load, §18.7.6 degrade reason, §18.7.3 AC9 binding). */
+/** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
 export interface FlowManagerDeps {
@@ -661,6 +706,10 @@ export interface FlowManagerDeps {
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
 }
 
+function displaySafeHold(hold: HeldRunView): HeldRunView {
+  return offersHeldRunRecovery(hold) ? { ...hold, step: shownHeldStep(hold.step) } : hold;
+}
+
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const loadDef: (localDir: string, globalDir: string) => ResolvedDefinition =
     deps.loadDefinition ??
@@ -674,17 +723,12 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  // The signature keys on load.load (the DEFINITION), not the whole resolved object, so a §18.7.6
-  // selectionReason change with an unchanged definition reuses the cached machine — the reason is spliced
-  // fresh onto each view below, never frozen in the cached view() closures (§18.7.4/CWE-841).
-  const machineFor = (
-    repoKey: string,
-  ): { machine: FlowMachine; selectionReason?: string; binding?: DispositionRead } => {
+  const machineFor = (repoKey: string): { machine: FlowMachine; binding?: DispositionRead } => {
     const resolved = loadDef(repoKey, deps.globalDir);
     const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
     if (cached && cached.sig === sig) {
-      return { machine: cached.machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+      return { machine: cached.machine, binding: resolved.binding };
     }
     // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
     // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
@@ -695,18 +739,18 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
-    return { machine, selectionReason: resolved.selectionReason, binding: resolved.binding };
+    return { machine, binding: resolved.binding };
   };
-  // §18.7.6 — decorate every view the manager returns with the resolver's degrade reason, spliced FRESH per
-  // call at the FlowManager boundary (the machine stays A2-unaware).
-  const decorate = (k: string, op: (m: FlowMachine) => MachineView): MachineView => {
-    const { machine, selectionReason } = machineFor(k);
-    const view = op(machine);
-    return selectionReason === undefined ? view : { ...view, selectionReason };
-  };
+  const machineView = (k: string, op: (m: FlowMachine) => MachineView): MachineView => op(machineFor(k).machine);
   // §18.7.4 — read AFTER the operation's own marker write/clear, so the view reports the started-ness it left.
-  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({ ...view, runStarted: worktreeStartedness(k) });
-  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, decorate(k, op));
+  const withRunStarted = (k: string, view: MachineView): FlowStateView => ({
+    ...view,
+    runStarted: worktreeStartedness(k),
+    runHold: displaySafeHold(heldRunOf(k)),
+  });
+  const viewOf = (k: string, op: (m: FlowMachine) => MachineView): FlowStateView => withRunStarted(k, machineView(k, op));
+  const stateWithNotice = (k: string, notice: string): FlowStateView =>
+    withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
     start: (k) => {
@@ -715,15 +759,23 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       // the start with a visible reason, leaving the run not_started.
       const { machine, binding } = machineFor(k);
       const begins = binding !== undefined && machine.state().status === 'not_started';
+      // §18.7.2 — a record a reset could not remove would block the record write below, so it is retried here.
+      if (begins && runRecordRead(k) === 'unreadable') {
+        try {
+          clearDisposition(k);
+        } catch (e) {
+          return stateWithNotice(k, leftoverRecordRemedy(k, e));
+        }
+      }
       const hadMarker = readDisposition(k) === 'present';
       if (begins) {
         try {
           recordDisposition(k, binding);
         } catch (e) {
-          return withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be started: ${errMsg(e)}` });
+          return stateWithNotice(k, `The run could not be started: ${errMsg(e)}`);
         }
       }
-      const view = decorate(k, (m) => m.start());
+      const view = machineView(k, (m) => m.start());
       if (begins && !hadMarker && view.status !== 'in_progress') {
         try {
           clearDisposition(k);
@@ -739,7 +791,35 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     reopenSlice: (k) => viewOf(k, (m) => m.reopenSlice()),
     currentSlice: (k) => machineFor(k).machine.currentSlice(),
     sliceStartStep: (k) => machineFor(k).machine.sliceStartStep(),
-    revertStep: (k, fromStepId) => viewOf(k, (m) => m.revertStep(fromStepId)),
+    revertStep: (k, fromStepId) => {
+      // §18.7.4 (v2.161) — a first-step rollback resets the run to never-started, so its record goes too, and first:
+      // a failed removal leaves the run in_progress, where Terminate is offered and retries it. `machine` is taken
+      // before the removal: without its record a begun catalog run resolves as held, so re-resolving afterwards
+      // would reset a different machine.
+      const { machine } = machineFor(k);
+      const at = machine.state();
+      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId) {
+        return viewOf(k, (m) => m.revertStep(fromStepId));
+      }
+      const record = readRunBinding(k);
+      try {
+        clearDisposition(k);
+      } catch (e) {
+        throw new Error(`the run record could not be removed: ${errMsg(e)}`);
+      }
+      try {
+        return withRunStarted(k, machine.revertStep(fromStepId));
+      } catch (e) {
+        cache.delete(k);
+        if (record === null) throw e;
+        try {
+          recordDisposition(k, record);
+        } catch (restore) {
+          throw new Error(`${errMsg(e)}; the run record could not be restored: ${errMsg(restore)}`);
+        }
+        throw e;
+      }
+    },
     terminate: (k) => {
       // §18.7.2 AC6 — progression is reset BEFORE the begun marker is cleared: with the marker still present the
       // run resolves its recorded source, and a run held at the §18.1 error (its source unverifiable) is reset
@@ -749,18 +829,19 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       try {
         if (status === 'in_progress' || status === 'done') machine.terminate();
         else if (status === 'error' && isSelectionLocked(worktreeStartedness(k))) makeStore(k).clearProgression();
-        else return { outcome: 'refused', view: viewOf(k, (m) => m.state()) };
+        else return { outcome: 'refused', cause: 'not-begun', view: viewOf(k, (m) => m.state()) };
       } catch (e) {
-        return {
-          outcome: 'refused',
-          view: withRunStarted(k, { ...decorate(k, (m) => m.state()), notice: `The run could not be terminated: ${errMsg(e)}` }),
-        };
+        const reason = displaySafeEcho(`The run could not be terminated: ${errMsg(e)}`, MAX_ECHOED_REASON_LENGTH);
+        return { outcome: 'refused', cause: 'failed', reason, view: stateWithNotice(k, reason) };
       }
       let notice: string | undefined;
       try {
         clearDisposition(k);
       } catch (e) {
-        notice = `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`;
+        notice = displaySafeEcho(
+          `The run was reset, but a new flow cannot be selected until its run record is removed: ${errMsg(e)}`,
+          MAX_ECHOED_REASON_LENGTH,
+        );
       }
       const view = viewOf(k, (m) => m.state());
       return { outcome: 'reset', view: notice === undefined ? view : { ...view, notice } };

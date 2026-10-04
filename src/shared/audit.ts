@@ -406,6 +406,7 @@ export type AppBootstrapAuditKind =
   | 'wipe'
   | 'decline'
   | 'rollback'
+  | 'rollback-failed'
   | 'stale';
 
 export function appBootstrapAuditExit(kind: AppBootstrapAuditKind): number | null {
@@ -416,6 +417,7 @@ export function appBootstrapAuditExit(kind: AppBootstrapAuditKind): number | nul
       return 0;
     case 'failure':
     case 'rollback':
+    case 'rollback-failed':
       return 1;
     case 'start':
     case 'conflict':
@@ -441,6 +443,8 @@ export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, 
       return `§27 bootstrap ${step} wipe declined${suffix}`;
     case 'rollback':
       return `§27 bootstrap ${step} rolled back${suffix}`;
+    case 'rollback-failed':
+      return `§27 bootstrap ${step} rollback failed${suffix}`;
     case 'stale':
       return `§27 bootstrap ${step} stale${suffix}`;
   }

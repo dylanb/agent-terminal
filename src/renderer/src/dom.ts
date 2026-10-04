@@ -14,6 +14,15 @@ export function captureFocusReturn(el: HTMLElement): () => void {
   };
 }
 
+/** WCAG 2.4.3. A popup whose focus this misses has its Escape taken by the shell, which closes the loop panel
+ *  or exits full screen behind the still-open popup. */
+export function focusedPopupOwnsEscape(doc: Document): boolean {
+  const el = doc.activeElement;
+  if (!el) return false;
+  if (el.closest('[role="listbox"], [aria-haspopup="listbox"][aria-expanded="true"]') != null) return true;
+  return el.parentElement?.querySelector(':scope > [aria-haspopup="listbox"][aria-expanded="true"]') != null;
+}
+
 /** Capture whether focus is inside `container`, and return a restorer to run after its subtree is
  *  rebuilt: it focuses the element `resolve()` yields (resolved at restore time, so it may be freshly
  *  built) only if focus was inside at capture and has not since moved away (WCAG 2.4.3). */

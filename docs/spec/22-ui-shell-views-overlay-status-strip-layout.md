@@ -67,6 +67,7 @@ sequenceDiagram
 ### 22.4 Layout is data, not code (D17/D28/D36)
 
 - The UI is built from **placement-agnostic widgets** (terminal, viewer, file tree, todos, capture, gate panel, status strip, overlay) positioned by a **layout config** at `~/.config/agent-terminal/layout.json`: which view holds which widgets, what the overlay shows, the hotkeys. **No runtime drag-dock** in v1 — changing layout = editing config, not rewriting widgets. This is a **first-class architectural constraint** (clean widget boundaries), not a nice-to-have.
+- **The flow picker (§18.7.4, v2.166) is a placement-agnostic widget** like the others: its default placement is the rail block directly below the flow status strip, and it acts on the worktree the strip is showing (it follows the strip's view, never an ambient worktree), so relocating it changes where it renders, not what it selects.
 - Hotkey defaults: **Ctrl/Cmd+1/2** (views) + **Ctrl/Cmd+9** (overlay) + **Ctrl/Cmd+0** (Settings), remappable via the config (⌘3 was retired with view 3, v2.132; the overlay/Settings chords moved off ⌘K / ⌘, to the digit set in v2.139, §24.1C).
 
 ---

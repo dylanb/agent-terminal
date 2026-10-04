@@ -486,6 +486,9 @@ describe('§27 bootstrap audit vocabulary', () => {
     expect(appBootstrapAuditCmd('decline', 'plan', 'plan-loop/issue-78')).toContain('wipe declined');
     expect(appBootstrapAuditCmd('wipe', 'plan')).not.toBe(appBootstrapAuditCmd('decline', 'plan'));
     expect(appBootstrapAuditCmd('rollback', 'plan')).not.toBe(appBootstrapAuditCmd('failure', 'plan'));
+    expect(appBootstrapAuditCmd('rollback-failed', 'plan', 'EACCES')).not.toMatch(/rolled back/);
+    expect(appBootstrapAuditCmd('rollback-failed', 'plan', 'EACCES')).toContain('EACCES');
+    expect(appBootstrapAuditExit('rollback-failed')).toBe(1);
     expect(appBootstrapAuditCmd('stale', 'plan')).not.toBe(appBootstrapAuditCmd('success', 'plan'));
   });
 

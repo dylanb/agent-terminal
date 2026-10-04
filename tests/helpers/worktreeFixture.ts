@@ -16,6 +16,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import { flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
+import { activeFlowPointerFile } from '../../src/main/activeFlowPointer';
+import type { DispositionRead } from '../../src/main/resolveRunDefinition';
 
 const FLOW_STATE_FILE = 'flow-state.yaml';
 
@@ -44,7 +47,7 @@ export interface WorktreeFixture {
   nonexistentWorktree(prefix: string): string;
   /** Remove an existing worktree's `.agent-terminal/` (the AC10 "rmSync the root first" variant). */
   removeAgentTerminalDir(dir: string): void;
-  /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-1 local, or leg-3 global fallback on a global root). */
+  /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-2 local, or leg-3 global fallback on a global root). */
   writeFlowHome(dir: string, def: FlowDefInput): string;
   /** Seed a valid progression at the flow-state path. */
   writeFlowState(dir: string, state: FlowStateInput): string;
@@ -59,6 +62,23 @@ export interface WorktreeFixture {
    *  whole-path resolution catches it; mirrors loopArtifacts.ts's plantAppStateParentSymlink. Requires no
    *  pre-existing `.agent-terminal` (use makeFirstRunWorktree / removeAgentTerminalDir). */
   plantAgentTerminalDirEscape(dir: string, target: string): string;
+  /** A begun run's disposition + source binding. */
+  writeRunRecord(dir: string, binding: DispositionRead): string;
+  /** Seed exactly `contents` at the run-record path. Garbage reads as a present record with no binding — the
+   *  AC13 held leg, not the AC17 indeterminate one. */
+  writeRunRecordRaw(dir: string, contents: string): string;
+  /** Replace the run record with a symlink to `target` — an AC13 held leg (unreadable by link), not an AC17
+   *  indeterminate one, although A2's raw record-presence read calls it indeterminate. */
+  plantRunRecordSymlink(dir: string, target: string): string;
+  /** Replace the run record with a non-empty directory: a present record with no binding — an AC13 held leg. */
+  plantRunRecordDirectory(dir: string): string;
+  /** The record-missing leg. */
+  removeRunRecord(dir: string): void;
+  /** Replace whatever is at the active-flow pointer path with a non-empty directory, so the pointer write
+   *  fails. Root-safe, unlike a chmod (a no-op as root under Podman). */
+  plantPointerDirectory(dir: string): string;
+  /** Seed exactly `raw` at the active-flow pointer path — hostile or arbitrary pointer text. */
+  writePointer(dir: string, raw: string): string;
   /** A temp dir outside every worktree — the redirect target for escape planters and sentinel flows. */
   outsideDir(prefix: string): string;
   /** Remove every temp dir this fixture created. */
@@ -74,6 +94,13 @@ export function createWorktreeFixture(): WorktreeFixture {
   const write = (file: string, contents: string): string => {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents);
+    return file;
+  };
+
+  const plantNonEmptyDir = (file: string): string => {
+    rmSync(file, { recursive: true, force: true });
+    mkdirSync(file, { recursive: true });
+    writeFileSync(join(file, 'occupant'), 'occupies the path\n');
     return file;
   };
 
@@ -126,6 +153,32 @@ export function createWorktreeFixture(): WorktreeFixture {
       const link = flowHomeDir(dir);
       symlinkSync(target, link);
       return link;
+    },
+    writeRunRecord(dir, binding) {
+      recordDisposition(dir, binding);
+      return runDispositionFile(dir);
+    },
+    writeRunRecordRaw(dir, contents) {
+      return write(runDispositionFile(dir), contents);
+    },
+    plantRunRecordSymlink(dir, target) {
+      const file = runDispositionFile(dir);
+      mkdirSync(dirname(file), { recursive: true });
+      rmSync(file, { recursive: true, force: true });
+      symlinkSync(target, file);
+      return file;
+    },
+    plantRunRecordDirectory(dir) {
+      return plantNonEmptyDir(runDispositionFile(dir));
+    },
+    removeRunRecord(dir) {
+      rmSync(runDispositionFile(dir), { recursive: true, force: true });
+    },
+    plantPointerDirectory(dir) {
+      return plantNonEmptyDir(activeFlowPointerFile(dir));
+    },
+    writePointer(dir, raw) {
+      return write(activeFlowPointerFile(dir), raw);
     },
     outsideDir(prefix) {
       const dir = mkdtempSync(join(tmpdir(), `${prefix}-`));
