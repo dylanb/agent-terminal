@@ -437,6 +437,26 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(true); // the modal owns Escape; the panel stays open
     });
 
+    it('leaves Escape to an open listbox that holds focus, and takes it back once focus leaves (WCAG 2.4.3)', () => {
+      shell.openLoopPanel();
+      const list = document.body.appendChild(document.createElement('ul'));
+      list.setAttribute('role', 'listbox');
+      const opt = list.appendChild(document.createElement('li'));
+      opt.setAttribute('role', 'option');
+      opt.tabIndex = -1;
+      opt.focus();
+      const reached: boolean[] = [];
+      opt.addEventListener('keydown', () => reached.push(true));
+
+      opt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      expect(reached).toEqual([true]);
+
+      list.remove();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
     it('syncLoopReadout re-syncs the rail read-out aria-expanded to the docked state', () => {
       const loopstat = document.querySelector('.loopstat') as HTMLElement;
       shell.openLoopPanel();

@@ -4,7 +4,15 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { parseTodoTemplate, isTodoTemplateFile, todoTemplatesDir } from '../../src/main/todoTemplate';
-import { FLOW_DEF_FILE } from '../../src/main/flow';
+import {
+  catalogEntryDefFile,
+  flowCatalogDir,
+  flowHomeDir,
+  FLOW_DEF_FILE,
+  loadFlowDefinitionFromFile,
+} from '../../src/main/flow';
+import { readDirEntries } from '../../src/main/dirEntries';
+import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFixture';
 
@@ -151,5 +159,63 @@ describe('catalog fixture builder — hermetic teardown', () => {
     expect(existsSync(catalog)).toBe(false);
     expect(existsSync(outside)).toBe(false);
     fx = createCatalogFixture(); // afterEach cleanup() needs a live fixture; this one tracks nothing
+  });
+});
+
+// A3 (#134) — the catalog devices the picker listing and held-run recovery tests plant, each proven against the
+// production reader it feeds (loadFlowDefinitionFromFile, readDirEntries).
+describe('catalog fixture builder — A3 listing and recovery devices', () => {
+  const wtFx = createWorktreeFixture();
+  afterEach(() => wtFx.cleanup());
+
+  it('addEntryWithSteps writes an entry whose flow loads with exactly those step ids', () => {
+    fx = createCatalogFixture();
+    const root = wtFx.makeWorktree('a3-cat-steps');
+    const entry = fx.addEntryWithSteps(flowCatalogDir(root), 'flow-b', ['s1', 's2', 's3']);
+    expect(entry).toBe(join(flowCatalogDir(root), 'flow-b'));
+    const load = loadFlowDefinitionFromFile(catalogEntryDefFile(root, 'flow-b'));
+    if (!load.ok) throw new Error(load.error);
+    expect(load.definition.name).toBe('flow-b');
+    expect(load.definition.steps.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
+    expect(load.definition.steps.every((s) => s.kind === 'manual')).toBe(true);
+  });
+
+  it('addEntryWithSteps declares per-step inputs the loader reads back', () => {
+    fx = createCatalogFixture();
+    const root = wtFx.makeWorktree('a3-cat-inputs');
+    fx.addEntryWithSteps(flowCatalogDir(root), 'flow-pr', ['review', 'merge'], {
+      review: [{ name: 'pr', type: 'string', required: true }],
+    });
+    const load = loadFlowDefinitionFromFile(catalogEntryDefFile(root, 'flow-pr'));
+    if (!load.ok) throw new Error(load.error);
+    expect(load.definition.steps[0].inputs).toEqual([{ name: 'pr', type: 'string', required: true }]);
+    expect(load.definition.steps[1].inputs ?? []).toEqual([]);
+  });
+
+  it('makeUnreadableTier turns a tier into a regular file, so enumerating it throws rather than reading empty', () => {
+    fx = createCatalogFixture();
+    const root = wtFx.makeWorktree('a3-cat-unreadable');
+    fx.addEntry(flowCatalogDir(root), 'flow-a');
+    const tier = fx.makeUnreadableTier(root);
+    expect(tier).toBe(flowCatalogDir(root));
+    expect(lstatSync(tier).isFile()).toBe(true);
+    expect(() => readDirEntries(tier)).toThrow();
+  });
+
+  it('makeUnreadableTier also plants over a root with no .agent-terminal yet', () => {
+    fx = createCatalogFixture();
+    const root = wtFx.makeFirstRunWorktree('a3-cat-unreadable-first');
+    const tier = fx.makeUnreadableTier(root);
+    expect(lstatSync(tier).isFile()).toBe(true);
+    expect(() => readDirEntries(tier)).toThrow();
+  });
+
+  it('removeGlobalHome deletes the app home, so the global tier enumerates as absent (first run), not unreadable', () => {
+    fx = createCatalogFixture();
+    const home = wtFx.makeWorktree('a3-cat-home');
+    fx.addEntry(flowCatalogDir(home), 'flow-a');
+    fx.removeGlobalHome(home);
+    expect(existsSync(flowHomeDir(home))).toBe(false);
+    expect(readDirEntries(flowCatalogDir(home))).toEqual([]);
   });
 });

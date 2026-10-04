@@ -18,6 +18,8 @@ import {
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
   type ActiveFlowWriteResult,
+  type FlowCatalogListResult,
+  type RebindResult,
   type GithubRef,
   type MonitorApi,
   type ViewerApi,
@@ -134,6 +136,10 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowSetActiveFlow, { sessionId: SESSION_ID, repoKey, id }) as Promise<ActiveFlowWriteResult>,
   clearActiveFlow: (repoKey) =>
     ipcRenderer.invoke(CH.flowClearActiveFlow, { sessionId: SESSION_ID, repoKey }) as Promise<ActiveFlowWriteResult>,
+  listCatalog: (repoKey) =>
+    ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
+  rebindHeldRun: (repoKey, choice, ifStepMissing) =>
+    ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice, ifStepMissing }) as Promise<RebindResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);

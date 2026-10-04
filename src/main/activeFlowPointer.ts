@@ -1,5 +1,5 @@
 // A2 (#133) §18.7.2 — the per-worktree active-flow pointer's own disjoint file
-// (<worktree>/.agent-terminal/active-flow.yaml), the store the resolver's leg-2 pointer() seam reads and
+// (<worktree>/.agent-terminal/active-flow.yaml), the store the resolver's pointer() seam reads and
 // writeActiveFlow persists. Disjoint from flow-state.yaml so a wholesale progression write can never clobber
 // it and vice-versa (§18.7.2 own-file; the AC8 non-clobber invariant).
 
@@ -10,7 +10,7 @@ import { atomicWriteFileSync } from './atomicFile';
 import { readBoundedNoFollow } from './boundedRead';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
-import { stripDisplayControlChars } from '../shared/controlChars';
+import { displaySafeEcho } from '../shared/controlChars';
 import { type PointerRead } from './resolveRunDefinition';
 
 export const ACTIVE_FLOW_FILE = 'active-flow.yaml';
@@ -29,22 +29,13 @@ export function activeFlowPointerFile(worktreeDir: string): string {
 
 const confinedPointerFile = (worktreeDir: string): string | null => flowHomeLeaf(worktreeDir, ACTIVE_FLOW_FILE);
 
-const UNREADABLE_REASON = 'The selected flow could not be read; running the default flow instead.';
-const UNREADABLE: PointerRead = { kind: 'degrade', reason: UNREADABLE_REASON };
+const UNREADABLE_REASON = 'The selected flow could not be read; pick another flow or use the default.';
+const UNREADABLE: PointerRead = { kind: 'invalid', reason: UNREADABLE_REASON };
 
-// §18.7.6 (CWE-116/117/1007/400) — stripDisplayControlChars deliberately keeps the U+200C/U+200D joiners for
-// legitimate shaping; an echoed rejected catalog id has no legitimate joiner, so they are stripped here too.
-const JOINERS = new RegExp('[\\u200C\\u200D]', 'gu');
-
-/** §18.7.6 (CWE-116/117/1007/400) — the rejected value FAILED the safe-id gate, so it may carry
- *  control/bidi/zero-width/BOM/joiner bytes and run to the file cap. Display-sanitize and length-bound it here,
- *  where it is echoed into the human-facing reason, so every downstream sink (the flow view, any §25 audit leg)
- *  receives a display-safe value and the ipc.ts `selectionReason` contract holds. */
-const displaySafeId = (value: string): string =>
-  stripDisplayControlChars(value).replace(JOINERS, '').slice(0, MAX_CATALOG_ID_LENGTH);
+const displaySafeId = (value: string): string => displaySafeEcho(value, MAX_CATALOG_ID_LENGTH);
 
 const invalidIdReason = (value: string): string =>
-  `Selected flow "${displaySafeId(value)}" is not a valid flow id; running the default flow instead.`;
+  `Selected flow "${displaySafeId(value)}" is not a valid flow id; pick another flow or use the default.`;
 
 /** Persist `id` as the worktree's active-flow selection, written as a structured value never
  *  string-concatenated (CWE-78). Throws when `id` fails the gate readActiveFlow applies, or when the pointer
@@ -59,22 +50,23 @@ export function writeActiveFlow(worktreeDir: string, id: string): void {
   }
 }
 
-/** Return the worktree to the unset default — best-effort; an absent file is already the cleared state. */
+/** Return the worktree to the unset default — best-effort; an absent file is already the cleared state. A
+ *  non-file at the pointer path is removed too, or a refused pick would have no route out (operator decision
+ *  2026-09-25, #134); the gate's read-back reports a removal that did not land. */
 export function clearActiveFlow(worktreeDir: string): void {
   const file = confinedPointerFile(worktreeDir);
   if (file === null) return;
   try {
-    rmSync(file, { force: true });
+    rmSync(file, { recursive: true, force: true });
   } catch {
-    // `force` covers ENOENT; a non-file (EISDIR) or locked container (EPERM) at the path must not throw into
-    // the caller — an unset selection is already the recovered state (CLAUDE.md best-effort; cf. clearTurnDone).
+    // A partial removal must not throw into the caller; activeFlowGate's read-back surfaces it.
   }
 }
 
-/** §18.7.6 — read the pointer as the resolver's leg-2 producer. Only a genuine ENOENT is `unset`; a
+/** §18.7.6 — read the pointer as the resolver's pointer() producer. Only a genuine ENOENT is `unset`; a
  *  confinement escape of the pointer's own path, a non-ENOENT errno, an unparseable/non-scalar node, or a
- *  value failing the shared safe-catalog-ID gate degrades VISIBLY with a reason (never silently swaps the
- *  operator's selection, and never opens a redirect target). */
+ *  value failing the shared safe-catalog-ID gate is `invalid` with a reason, which refuses the run (never
+ *  silently swaps the operator's selection, and never opens a redirect target). */
 export function readActiveFlow(worktreeDir: string): PointerRead {
   const file = confinedPointerFile(worktreeDir);
   if (file === null) return UNREADABLE;
@@ -87,6 +79,6 @@ export function readActiveFlow(worktreeDir: string): PointerRead {
     return UNREADABLE;
   }
   if (typeof doc !== 'string') return UNREADABLE;
-  if (!isSafeCatalogId(doc)) return { kind: 'degrade', reason: invalidIdReason(doc) };
+  if (!isSafeCatalogId(doc)) return { kind: 'invalid', reason: invalidIdReason(doc) };
   return { kind: 'value', id: doc };
 }

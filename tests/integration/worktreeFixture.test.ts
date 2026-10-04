@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { relative, isAbsolute, join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { loadFlowDefinition, flowHomeDir } from '../../src/main/flow';
 import { CAN_SYMLINK } from '../helpers/loopArtifacts';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
+import { readDisposition, readRunBinding, runDispositionFile } from '../../src/main/runDisposition';
+import { activeFlowPointerFile, readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
 
 // The A2 (#133) worktree fixture claims to build the on-disk worktree states the started-ness matrix and the
 // three-leg resolver tests drive. This proves each builder against the REAL production readers (createFlowStateStore,
@@ -39,7 +41,7 @@ describe('worktree fixture — deterministic on-disk states over real production
     expect(existsSync(flowHomeDir(wt))).toBe(false);
   });
 
-  it('writeFlowHome seeds a flow.yaml that loadFlowDefinition accepts with the given name and step ids (leg 1 / leg 3)', () => {
+  it('writeFlowHome seeds a flow.yaml that loadFlowDefinition accepts with the given name and step ids (leg 2 / leg 3)', () => {
     const wt = fx.makeWorktree('home');
     fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['alpha', 'beta'] });
     const load = loadFlowDefinition(wt);
@@ -125,5 +127,94 @@ describe('worktree fixture — deterministic on-disk states over real production
     local.cleanup();
     expect(existsSync(wt)).toBe(false);
     expect(existsSync(outside)).toBe(false);
+  });
+});
+
+// A3 (#134) — the run-record and pointer devices the held-run and picker tests plant. Each device is proven by
+// what the PRODUCTION readers make of it (readDisposition / readRunBinding / readActiveFlow / writeActiveFlow),
+// so a device that drifts from the shape it claims to plant fails here, not in a slice test's false green.
+describe('worktree fixture — run-record and pointer devices (A3 #134)', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+
+  it('writeRunRecord writes a record the production reader reads back as present with the same binding', () => {
+    const wt = fx.makeWorktree('a3-record');
+    const file = fx.writeRunRecord(wt, { source: 'catalog', tier: 'global', id: 'flow-b' });
+    expect(file).toBe(runDispositionFile(wt));
+    expect(readDisposition(wt)).toBe('present');
+    expect(readRunBinding(wt)).toEqual({ source: 'catalog', tier: 'global', id: 'flow-b' });
+  });
+
+  it('writeRunRecord also seeds a first-run worktree (no .agent-terminal yet)', () => {
+    const wt = fx.makeFirstRunWorktree('a3-record-first-run');
+    fx.writeRunRecord(wt, { source: 'non-catalog' });
+    expect(readRunBinding(wt)).toEqual({ source: 'non-catalog' });
+  });
+
+  it('writeRunRecordRaw with garbage reads as a present record whose binding cannot be verified', () => {
+    const wt = fx.makeWorktree('a3-record-garbage');
+    const contents = 'source: [unterminated\n';
+    const file = fx.writeRunRecordRaw(wt, contents);
+    expect(readFileSync(file, 'utf8')).toBe(contents);
+    expect(readDisposition(wt)).toBe('present');
+    expect(readRunBinding(wt)).toBeNull();
+  });
+
+  it.skipIf(!CAN_SYMLINK)('plantRunRecordSymlink makes the record unreadable: presence indeterminate, no binding', () => {
+    const wt = fx.makeWorktree('a3-record-link');
+    const outside = fx.outsideDir('a3-record-link-target');
+    const target = join(outside, 'record.yaml');
+    writeFileSync(target, 'schema_version: 1\nsource: non-catalog\n');
+    fx.writeRunRecord(wt, { source: 'non-catalog' });
+    const file = fx.plantRunRecordSymlink(wt, target);
+    expect(lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(readDisposition(wt)).toBe('indeterminate');
+    expect(readRunBinding(wt)).toBeNull();
+  });
+
+  it('plantRunRecordDirectory makes the record a non-empty directory: present, no binding', () => {
+    const wt = fx.makeWorktree('a3-record-dir');
+    fx.writeRunRecord(wt, { source: 'non-catalog' });
+    const file = fx.plantRunRecordDirectory(wt);
+    expect(statSync(file).isDirectory()).toBe(true);
+    expect(readdirSync(file).length).toBeGreaterThan(0);
+    expect(readDisposition(wt)).toBe('present');
+    expect(readRunBinding(wt)).toBeNull();
+  });
+
+  it('removeRunRecord leaves the record absent, and is a no-op when there is none', () => {
+    const wt = fx.makeWorktree('a3-record-missing');
+    fx.writeRunRecord(wt, { source: 'non-catalog' });
+    fx.removeRunRecord(wt);
+    expect(readDisposition(wt)).toBe('absent');
+    fx.removeRunRecord(wt);
+    expect(readDisposition(wt)).toBe('absent');
+  });
+
+  it('plantPointerDirectory replaces a written pointer with a non-empty directory the pointer write cannot replace', () => {
+    const wt = fx.makeWorktree('a3-pointer-dir');
+    writeActiveFlow(wt, 'flow-a');
+    const file = fx.plantPointerDirectory(wt);
+    expect(file).toBe(activeFlowPointerFile(wt));
+    expect(statSync(file).isDirectory()).toBe(true);
+    expect(readdirSync(file).length).toBeGreaterThan(0);
+    expect(readActiveFlow(wt).kind).toBe('invalid');
+    expect(() => writeActiveFlow(wt, 'flow-b')).toThrow();
+    expect(statSync(file).isDirectory()).toBe(true);
+  });
+
+  it('writePointer plants exactly the given text, which the production reader rejects when it is not a safe id', () => {
+    const wt = fx.makeWorktree('a3-pointer-raw');
+    const hostile = `"evil\u202e\u200b\u0007${'x'.repeat(100)}"\n`;
+    const file = fx.writePointer(wt, hostile);
+    expect(file).toBe(activeFlowPointerFile(wt));
+    expect(readFileSync(file, 'utf8')).toBe(hostile);
+    expect(readActiveFlow(wt).kind).toBe('invalid');
+  });
+
+  it('writePointer with a safe id reads back as that selection', () => {
+    const wt = fx.makeFirstRunWorktree('a3-pointer-safe');
+    fx.writePointer(wt, 'flow-a\n');
+    expect(readActiveFlow(wt)).toEqual({ kind: 'value', id: 'flow-a' });
   });
 });

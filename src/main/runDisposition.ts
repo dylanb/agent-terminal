@@ -2,20 +2,20 @@
 // (<worktree>/.agent-terminal/run-disposition.yaml). Its PRESENCE is the durable "run has begun" marker that
 // gates a new active-flow selection (worktreeStartedness/§18.7.4 AC7); its CONTENTS are the run-scoped source
 // binding a begun run re-resolves instead of the live pointer (§18.7.3 AC9), so a begun run never silently
-// switches which tier/entry supplies its definition (CWE-841). Recorded when a run transitions to in_progress
-// and cleared only by a Terminate, so it survives a first-step revertStep that rolls the display status back to
-// not_started. Disjoint from flow-state.yaml (own-file) so a wholesale progression write can neither clobber
-// nor resurrect it (§18.7.2, the AC8 non-clobber invariant).
+// switches which tier/entry supplies its definition (CWE-841). Disjoint from flow-state.yaml (own-file) so a
+// wholesale progression write can neither clobber nor resurrect it (§18.7.2, the AC8 non-clobber invariant).
 
 import path from 'node:path';
 import { lstatSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { readBoundedNoFollow } from './boundedRead';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isRecord } from './yamlRecord';
 import { isSafeCatalogId } from '../shared/pathSegment';
+import { CATALOG_ORIGINS } from '../shared/ipc';
+import { displaySafeEcho, MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_PATH_LENGTH } from '../shared/controlChars';
 import type { CatalogTier, DispositionRead } from './resolveRunDefinition';
 
 export const RUN_DISPOSITION_FILE = 'run-disposition.yaml';
@@ -26,7 +26,7 @@ export const RUN_DISPOSITION_SCHEMA = 1;
  *  attacker-sized document. */
 export const MAX_DISPOSITION_FILE_BYTES = 4096;
 
-const CATALOG_TIERS: ReadonlySet<CatalogTier> = new Set(['repo', 'global']);
+const CATALOG_TIERS: ReadonlySet<CatalogTier> = new Set(CATALOG_ORIGINS);
 
 function isCatalogTier(v: unknown): v is CatalogTier {
   return typeof v === 'string' && (CATALOG_TIERS as ReadonlySet<string>).has(v);
@@ -51,23 +51,43 @@ export type DispositionPresence = 'absent' | 'present' | 'indeterminate';
 export function recordDisposition(worktreeDir: string, binding: DispositionRead): void {
   const file = confinedDispositionFile(worktreeDir);
   if (file === null) throw new Error('run-disposition path is unresolvable');
-  const doc =
-    binding.source === 'catalog'
-      ? { schema_version: RUN_DISPOSITION_SCHEMA, source: 'catalog', tier: binding.tier, id: binding.id }
-      : { schema_version: RUN_DISPOSITION_SCHEMA, source: 'non-catalog' };
-  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+  if (!atomicWriteFileSync(file, yaml.dump(dispositionDoc(binding)))) {
     throw new Error(`cannot write run-disposition: ${path.dirname(file)} is not a real directory`);
   }
 }
 
-/** Clear the marker at Terminate; an absent file is already the cleared state. Throws when the marker cannot be
- *  removed, so the Terminate that re-enables selection (§18.7.2 AC6) is refused rather than leaving the worktree
- *  locked with no retry (CWE-703). */
+function dispositionDoc(binding: DispositionRead): Record<string, unknown> {
+  switch (binding.source) {
+    case 'catalog':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'catalog', tier: binding.tier, id: binding.id };
+    case 'non-catalog':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'non-catalog' };
+    case 'fallback':
+      return { schema_version: RUN_DISPOSITION_SCHEMA, source: 'fallback' };
+    default:
+      return binding satisfies never;
+  }
+}
+
+/** Clear the marker at Terminate or a first-step rollback; an absent file is already the cleared state. Throws when
+ *  the marker cannot be removed, so the reset that re-enables selection (§18.7.2 AC6/§18.7.4) is refused rather than
+ *  leaving the worktree locked with no retry (CWE-703). */
 export function clearDisposition(worktreeDir: string): void {
   const file = confinedDispositionFile(worktreeDir);
   if (file === null) throw new Error('run-disposition path is unresolvable');
   // `recursive` so a directory planted at the leaf (which readDisposition reads 'present') is cleared too.
   rmSync(file, { recursive: true, force: true });
+}
+
+/** §18.7.2 / §18.7.6 — why Start cannot remove a record a reset left behind, naming the file to delete. */
+export function leftoverRecordRemedy(worktreeDir: string, cause: unknown): string {
+  const file = runDispositionFile(worktreeDir);
+  const shown = displaySafeEcho(file, MAX_ECHOED_PATH_LENGTH);
+  const target = shown === file ? file : `the file ${RUN_DISPOSITION_FILE} in this worktree's ${path.basename(path.dirname(file))} directory`;
+  return displaySafeEcho(
+    `The run could not be started: the previous run's record could not be removed. Delete ${target}, then press Start again. (${errMsg(cause)})`,
+    MAX_ECHOED_LOCK_REASON_LENGTH,
+  );
 }
 
 /** §18.7.4 — read the marker's presence, fail-closed: any unverifiable read — a confinement escape of its own
@@ -108,6 +128,7 @@ export function readRunBinding(worktreeDir: string): DispositionRead | null {
 function parseRunBinding(doc: unknown): DispositionRead | null {
   if (!isRecord(doc)) return null;
   if (doc.source === 'non-catalog') return { source: 'non-catalog' };
+  if (doc.source === 'fallback') return { source: 'fallback' };
   if (doc.source === 'catalog' && isCatalogTier(doc.tier) && typeof doc.id === 'string' && isSafeCatalogId(doc.id)) {
     return { source: 'catalog', tier: doc.tier, id: doc.id };
   }

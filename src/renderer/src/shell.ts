@@ -6,7 +6,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
-import { captureSubtreeFocus } from './dom';
+import { captureSubtreeFocus, focusedPopupOwnsEscape } from './dom';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
@@ -183,6 +183,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // ⌘/Ctrl+1/2) before they reach the shell, so they must be intercepted ahead of any focused
   // descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && focusedPopupOwnsEscape(doc)) return;
     if (e.key === 'Escape' && fullscreen) {
       if (modalIsOpen()) return; // a dialog over the viewer owns Escape (WCAG 2.4.3)
       e.preventDefault();

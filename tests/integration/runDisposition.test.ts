@@ -16,8 +16,8 @@ import {
 const NON_CATALOG = { source: 'non-catalog' } as const;
 
 // A2 (#133) §18.7.2/§18.7.4 — the run-disposition own-file marker whose presence worktreeStartedness composes to
-// keep a new active-flow selection locked across a first-step revertStep. The AC7 revert-lock RED
-// (startednessRevertLocked.test.ts) reaches only the record→present→'started' path; these pin the fail-closed
+// keep a new active-flow selection locked once a run has begun. The revertStep pins (revertStepRunRecord.test.ts)
+// reach only the record lifecycle through the FlowManager; these pin the fail-closed
 // read branches, the record/clear lifecycle the FlowManager wires (start records, terminate clears), and the
 // AC8 own-file non-clobber invariant.
 

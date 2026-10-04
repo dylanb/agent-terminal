@@ -4,36 +4,38 @@
 import path from 'node:path';
 import {
   FLOW_DEF_FILE,
-  hasFlowDefinition,
   loadFlowDefinition,
-  loadFlowDefinitionFromFile,
+  loadUntrustedFlowDefinition,
   loadFlowDefinitionLocalFirst,
   type FlowLoad,
 } from './flow';
 import { type StartednessSignal } from '../shared/flowStarted';
+import { type CatalogOrigin } from '../shared/ipc';
 
-/** §18.7.2 read of the per-worktree active-flow pointer that the resolver's leg 2 consults. */
+/** §18.7.2 read of the per-worktree active-flow pointer, which the resolver consults first. */
 export type PointerRead =
   | { kind: 'unset' }
   | { kind: 'value'; id: string }
-  | { kind: 'degrade'; reason: string };
+  | { kind: 'invalid'; reason: string };
 
 /** §18.7.6 the two catalog tiers a pointer-named id can resolve within (per-repo untrusted, or app-owned global). */
-export type CatalogTier = 'repo' | 'global';
+export type CatalogTier = CatalogOrigin;
 
 /** §18.7.6 per-tier resolution of a pointer-named catalog id to its on-disk entry directory. */
 export type CatalogResolution =
   | { ok: true; tier: CatalogTier; flowDir: string }
   | { ok: false; cause: 'unknown' | 'escapes' | 'unresolvable' };
 
-type CatalogDegradeCause = Extract<CatalogResolution, { ok: false }>['cause'];
+type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
 
 /** §18.7.3 — the run-scoped source binding a begun run resolves instead of the live pointer. A validated closed
  *  disposition (its field-local validation is the read boundary's): a catalog run carries the tier it was bound
- *  to plus its id; a non-catalog run carries neither and keeps the live local↔global chain. */
+ *  to plus its id; a non-catalog run carries neither and keeps the live local↔global chain; a fallback run
+ *  (written only by held-run recovery) loads the global fallback alone. */
 export type DispositionRead =
   | { source: 'catalog'; tier: CatalogTier; id: string }
-  | { source: 'non-catalog' };
+  | { source: 'non-catalog' }
+  | { source: 'fallback' };
 
 /** §18.7.3/§18.7.4 — the run's binding state, folded so a begun run that IS bound carries its source: the
  *  'started' variant requires a disposition, so a supplied binding cannot wire started-ness half-way and fall
@@ -52,9 +54,8 @@ export interface ResolveRunDefinitionDeps {
 
 export interface ResolvedRunDefinition {
   load: FlowLoad;
-  selectionReason?: string;
   /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
-   *  re-resolves the SAME source rather than the live pointer. Absent only on a hold (load not ok). */
+   *  re-resolves the SAME source rather than the live pointer. Absent on a refused pick or a held begun run. */
   binding?: DispositionRead;
 }
 
@@ -62,7 +63,7 @@ export type ResolveRunDefinition = (localDir: string, globalDir: string) => Reso
 
 export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
   return (localDir, globalDir) => {
-    // §18.7.4 / §18.7.3 / CWE-841 — a begun run's source is decided before every leg, not only the pointer: an
+    // §18.7.4 / §18.7.3 / CWE-841 — a begun run's source is decided before any source is consulted: an
     // unverifiable progression may be a begun catalog run, and re-resolving (to the pointer, or to a
     // mid-run-added local flow.yaml) would swap its bound source out from under it. The binding carries its
     // disposition with the 'started' signal, so a begun run can never fall through to live re-resolution.
@@ -79,19 +80,14 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
           binding satisfies never;
       }
     }
-    if (hasFlowDefinition(localDir)) {
-      return { load: loadFlowDefinition(localDir), binding: { source: 'non-catalog' } };
-    }
-    const fallback = (): FlowLoad => loadFlowDefinitionLocalFirst(localDir, globalDir);
     const pointer = deps.pointer();
     switch (pointer.kind) {
       case 'unset':
-        return { load: fallback(), binding: { source: 'non-catalog' } };
-      case 'degrade':
+        return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: { source: 'non-catalog' } };
+      case 'invalid':
         // §18.7.6 / CWE-116/117 — the reason is display-sanitized at its source (the pointer read strips and
-        // bounds the echoed rejected value), so the resolver forwards it as-is: one strip at the source, with
-        // no second copy here to diverge from it.
-        return withDegradeReason(fallback(), pointer.reason);
+        // bounds the echoed rejected value), so the resolver forwards it as-is.
+        return { load: { ok: false, error: pointer.reason } };
       case 'value': {
         const entry = deps.catalogEntry(pointer.id);
         if (entry.ok) {
@@ -100,40 +96,37 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
             binding: { source: 'catalog', tier: entry.tier, id: pointer.id },
           };
         }
-        return withDegradeReason(fallback(), catalogDegradeReason(pointer.id, entry.cause));
+        return { load: { ok: false, error: catalogRefusal(pointer.id, entry.cause) } };
       }
       default:
         pointer satisfies never;
-        return { load: fallback(), binding: { source: 'non-catalog' } };
+        return { load: { ok: false, error: 'the selected flow could not be read' } };
     }
   };
 }
 
-/** §18.7.6 — a degrade reason rides only a RUNNING fallback: when the fallback itself fails to load, the degrade
- *  is subsumed by the §18.1 load error, so the reason is dropped. Upholds the `FlowStateView.selectionReason`
- *  invariant (ipc.ts) — never carried with `status: 'error'` — that the renderer's error branch relies on. */
-function withDegradeReason(load: FlowLoad, reason: string): ResolvedRunDefinition {
-  // A degrade always ran a non-catalog fallback (leg 1 local or leg 3 global), so a begun run binds non-catalog.
-  const binding: DispositionRead = { source: 'non-catalog' };
-  return load.ok ? { load, selectionReason: reason, binding } : { load, binding };
-}
-
-/** §18.7.6 degrade taxonomy. */
-const CATALOG_DEGRADE_DETAIL: Record<CatalogDegradeCause, string> = {
+/** §18.7.6 refusal taxonomy. */
+const CATALOG_REFUSAL_DETAIL: Record<CatalogRefusalCause, string> = {
   unknown: 'was not found in the catalog',
   escapes: 'resolves outside its catalog directory',
   unresolvable: 'could not be read',
 };
 
-function catalogDegradeReason(id: string, cause: CatalogDegradeCause): string {
-  return `Selected flow "${id}" ${CATALOG_DEGRADE_DETAIL[cause]}; running the default flow instead.`;
+/** §18.7.6 */
+export function catalogRefusalReason(cause: Exclude<CatalogRefusalCause, 'unknown'>): string {
+  return CATALOG_REFUSAL_DETAIL[cause];
+}
+
+function catalogRefusal(id: string, cause: CatalogRefusalCause): string {
+  return `Selected flow "${id}" ${CATALOG_REFUSAL_DETAIL[cause]}; pick another flow or use the default.`;
 }
 
 function loadCatalogEntryDefinition(flowDir: string): FlowLoad {
-  return loadFlowDefinitionFromFile(path.join(flowDir, FLOW_DEF_FILE));
+  return loadUntrustedFlowDefinition(path.join(flowDir, FLOW_DEF_FILE));
 }
 
-function resolveBoundSource(
+/** §18.7.3 */
+export function resolveBoundSource(
   disposition: DispositionRead,
   catalogEntry: (id: string, tier?: CatalogTier) => CatalogResolution,
   localDir: string,
@@ -149,6 +142,8 @@ function resolveBoundSource(
     }
     case 'non-catalog':
       return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: disposition };
+    case 'fallback':
+      return { load: loadFlowDefinition(globalDir), binding: disposition };
     default:
       // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
       // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.

@@ -1675,7 +1675,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       ['/repo', 'failure', 'plan', 'draft PR creation failed'],
       [
         '/repo',
-        'rollback',
+        'rollback-failed',
         'plan',
         'draft PR creation failed; could not roll back step plan: ENOSPC while persisting rollback',
       ],
@@ -1896,6 +1896,36 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
 
     expect(x.rollbackStep).toHaveBeenCalledWith(expect.objectContaining({ stepId: 'plan' }));
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('a declined wipe whose rollback succeeds is audited as rolled back, never as a failed rollback (§25)', async () => {
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: target() }));
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', false, target());
+
+    expect(x.audit).toHaveBeenCalledWith('/repo', 'rollback', 'plan', 'operator declined branch wipe');
+    expect(x.audit.mock.calls.map((call) => call[1])).not.toContain('rollback-failed');
+    expect(x.emitError).not.toHaveBeenCalled();
+  });
+
+  it('a declined wipe whose rollback throws is audited as a failed rollback, never as rolled back, and surfaced (§25)', async () => {
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: target() }));
+    const x = conflictCoordinator(run);
+    x.rollbackStep.mockImplementation(() => {
+      throw new Error('the run record could not be removed: EACCES');
+    });
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', false, target());
+
+    const reason = 'could not roll back step plan after a declined wipe: the run record could not be removed: EACCES';
+    expect(x.audit).toHaveBeenCalledWith('/repo', 'rollback-failed', 'plan', reason);
+    expect(x.audit.mock.calls.map((call) => call[1])).not.toContain('rollback');
+    expect(x.emitError).toHaveBeenCalledWith({ repoDir: '/repo', stepId: 'plan', reason });
   });
 
   it('confirming re-runs the same job with the exact named wipe target', async () => {

@@ -5,6 +5,8 @@ import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
+import type { FlowViewArgs } from './flowView';
+import { createFlowPicker } from './flowPicker';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -255,8 +257,25 @@ if (flowStripHost) {
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost, { onFocusLost: landFocus }) : undefined;
+  // §22.3 / §22.4 — a second flow:state caller would consume the one-shot pending notice meant for the strip.
+  const viewListeners = new Set<(...args: FlowViewArgs) => void>();
+  const pickerHost = document.getElementById('flow-picker');
+  if (pickerHost) createFlowPicker(pickerHost, {
+    onView: (cb) => {
+      viewListeners.add(cb);
+      return () => viewListeners.delete(cb);
+    },
+    listCatalog: (key) => window.flow.listCatalog(key),
+    select: (key, id) => window.flow.setActiveFlow(key, id),
+    clearSelection: (key) => window.flow.clearActiveFlow(key),
+    rebindHeldRun: (key, choice, ifStepMissing) => window.flow.rebindHeldRun(key, choice, ifStepMissing),
+    confirmEndRun: (key, proceed, restoreFocusTo) => requestTerminate?.(key, proceed, restoreFocusTo),
+  });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
+    onView: (...args) => {
+      for (const listener of [...viewListeners]) listener(...args);
+    },
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
     onPanelState: (loop, title, refs) => {
       syncDockedPanel(loop, title, refs, {
@@ -290,6 +309,7 @@ if (flowStripHost) {
           return (
             active !== null &&
             (flowStripHost.contains(active) ||
+              (pickerHost?.contains(active) ?? false) ||
               (confirmHost?.contains(active) ?? false))
           );
         },

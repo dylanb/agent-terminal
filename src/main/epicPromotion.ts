@@ -8,6 +8,7 @@ import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared
 import { errMsg } from './errno';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
+import type { LifecycleTerminateResult } from './flowLifecycle';
 
 // The plan is free-form agent prose read synchronously; cap it so a runaway artifact cannot block (CWE-400).
 const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
@@ -205,7 +206,7 @@ export interface EpicPromotionCoordinatorDeps {
   persistAccept(repoDir: string, loop: string, step: string, turnKey: string): void;
   /** Stand the epic flow down (flow.terminate). Best-effort after the persist: a failure here leaves the gate
    *  accepted but not stood down, recoverable, and must not read as a promotion failure. */
-  terminateFlow(repoDir: string): void;
+  terminateFlow(repoDir: string): LifecycleTerminateResult;
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(repoDir: string, reason: string): void;
   onViewChanged(): void;
@@ -314,7 +315,10 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       // Best-effort — the accept persisted, so a terminate failure is recorded, never surfaced as a promotion
       // failure (the gate view never renders again once accepted).
       try {
-        deps.terminateFlow(repoDir);
+        const terminated = deps.terminateFlow(repoDir);
+        if (terminated.outcome === 'refused' && terminated.cause !== 'not-begun') {
+          deps.audit(repoDir, `§28 epic-promotion terminate failed: ${terminated.reason}`, 1);
+        }
       } catch (e) {
         deps.audit(repoDir, `§28 epic-promotion terminate failed: ${errMsg(e)}`, 1);
       }

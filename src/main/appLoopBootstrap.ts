@@ -499,7 +499,7 @@ export function createAppLoopBootstrapCoordinator(
       emitError(job, reason);
     } catch (e) {
       const combined = `${reason}; could not roll back step ${job.stepId}: ${errMsg(e)}`;
-      audit(job, 'rollback', combined);
+      audit(job, 'rollback-failed', combined);
       emitError(job, combined);
     }
   };
@@ -835,7 +835,7 @@ export function createAppLoopBootstrapCoordinator(
       audit(job, 'rollback', 'operator declined branch wipe');
     } catch (e) {
       const reason = `could not roll back step ${job.stepId} after a declined wipe: ${errMsg(e)}`;
-      audit(job, 'rollback', reason);
+      audit(job, 'rollback-failed', reason);
       emitError(job, reason);
     }
   };
