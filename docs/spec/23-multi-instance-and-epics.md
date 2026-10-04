@@ -4,9 +4,10 @@
 
 - **One flow per app instance**; concurrency is achieved by **running many instances**, each driving its own terminal session, repo/branch/PR, and agent-loop chain. No in-app multi-flow dashboard.
 
-### 23.2 Epics = N instances over N worktrees (D18/D22/D23)
+### 23.2 Epics = N instances over N worktrees (D18/D22/D23/D63)
 
-- When a loop step produces N PRs (an epic), **all steps of the flow run on each PR** — each PR becomes its **own flow** in its **own git worktree** on its PR branch. There is no going back, so ancestry isn't tracked. The app **assists**: for each child PR it creates the worktree and launches a new instance, **seeding that worktree's flow-state** at the correct step (`flow:openChild`). Per-flow state lives in the worktree (§19.1).
+- When a loop step produces N PRs (an epic), each child PR runs in its **own git worktree** on its PR branch, under a flow the operator chooses when they press Start there (§18.7.5). There is no going back, so ancestry isn't tracked. The app **assists** (D22): for each child PR, `flow:openChild` creates the worktree and launches a new instance. It does not set that worktree's flow selection or flow-state. Per-flow state lives in the worktree (§19.1).
+- The child's flow is **bound at Start**, when the operator Starts a run in that worktree, like any worktree (§18.7.5, D63). That run begins where an ordinary Start of the chosen flow begins.
 
 ### 23.3 Cross-instance guard (D21)
 

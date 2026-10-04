@@ -10,8 +10,7 @@ export function isSafePathSegment(s: string): boolean {
   return SAFE_SEGMENT.test(s);
 }
 
-/** §18.7.6 (CWE-20): the one shared catalog-ID length bound — A1 install, A2 resolve, and A4 seed import
- *  this single constant so the number cannot drift across slices. */
+/** §18.7.6 (CWE-20). */
 export const MAX_CATALOG_ID_LENGTH = 64;
 
 /** §18.7.6. The entry directory name becomes a path segment the resolver later walks; if the installer and
