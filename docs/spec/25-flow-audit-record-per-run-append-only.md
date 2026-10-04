@@ -98,7 +98,7 @@ Every event carries an ISO-8601 UTC `ts`.
 - `todo.text` — `{ id, text }` after an edit.
 - `todo.deleted` — `{ id }`.
 
-**Phase 2 — loop integration:** `input.resolved` `{ name, value }` (one per resolved step input), `ticket.assoc` `{ ticket }` (a `github-ticket` input resolving to a positive integer), `pr.assoc` `{ pr }` (from the loop engine's run state), `loop.status` `{ from, to }` and `loop.iteration` `{ n }` (diffed from the loop engine's run state on each observation; the first observation records the entry status with `from` empty), `command` `{ source, cmd, exit }` (a flow-injected bootstrap correlated with its OSC-133 command span), `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`, taken on each loop status change).
+**Phase 2 — loop integration:** `input.resolved` `{ name, value }` (one per resolved step input), `ticket.assoc` `{ ticket }` (a `github-ticket` input resolving to a positive integer), `pr.assoc` `{ pr }` (from the loop engine's run state), `loop.status` `{ from, to }` and `loop.iteration` `{ n }` (diffed from the loop engine's run state on each observation; the first observation records the entry status with `from` empty), `command` `{ source, cmd, exit }` (a flow-injected bootstrap correlated with its OSC-133 command span), `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`, taken on each loop status change). Every §27.9 gate-decision `command` entry an engine-decided gate operation writes (its decision and each effect-outcome entry) carries an engine-decided mark, and one without it is human-decided (a human decision's entry is unchanged); an `auto` halt records every reason that holds (§27.9.1 N9b.9).
 
 ### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
 
