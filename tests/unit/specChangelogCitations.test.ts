@@ -108,7 +108,7 @@ function gitEnv(): NodeJS.ProcessEnv {
 }
 
 function git(repoRoot: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: repoRoot, env: gitEnv(), encoding: 'utf8' });
+  return execFileSync('git', args, { cwd: repoRoot, env: gitEnv(), encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
 }
 
 function readOnDiskSpecs(repoRoot: string): SpecTexts {
@@ -291,6 +291,55 @@ describe('the pre-entry anchor in a git history', () => {
       else process.env.GIT_INDEX_FILE = saved;
       rmSync(outer, { recursive: true, force: true });
     }
+  });
+
+  it('a committed spec file larger than the default child-process output buffer still resolves', () => {
+    seed();
+    write(`${SPEC_DIR}/99-fixture.md`, `## 99. Fixture\n### 99.3 Doomed\n${'x'.repeat(2 * 1024 * 1024)}\n`);
+    commit('grow');
+    write(`${SPEC_DIR}/99-fixture.md`, '## 99. Fixture\n');
+    write(CHANGELOG, '> **Changelog v9.1:** §99.3 removed.\n\n> **Changelog v9.0:** §99.3 added.\n');
+    commit('delete');
+    expect(unresolvedInNewestEntry(repo as string)).toEqual([]);
+  });
+
+  it('an entry first committed in a merge resolution, which git log -S cannot find, fails loudly', () => {
+    seed();
+    git(repo as string, ['checkout', '-q', '-b', 'side']);
+    write(CHANGELOG, '> **Changelog v9.0:** §99.3 added, side.\n');
+    commit('side');
+    git(repo as string, ['checkout', '-q', '-']);
+    write(CHANGELOG, '> **Changelog v9.0:** §99.3 added, main.\n');
+    commit('main');
+    expect(() => git(repo as string, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', 'side'])).toThrow();
+    write(CHANGELOG, '> **Changelog v9.1:** §99.3 kept.\n\n> **Changelog v9.0:** §99.3 added.\n');
+    commit('merge');
+    expect(() => unresolvedInNewestEntry(repo as string)).toThrow(/no commit introduces/);
+  });
+
+  function seedItems(): void {
+    repo = mkdtempSync(path.join(tmpdir(), 'spec-citations-'));
+    git(repo, ['init', '-q']);
+    write(`${SPEC_DIR}/99-fixture.md`, '## 99. Fixture\n\n1. first\n2. second\n');
+    write(CHANGELOG, '> **Changelog v9.0:** §99 added.\n');
+    commit('base');
+  }
+
+  it('a numbered item a committed entry deletes resolves against the spec before that entry', () => {
+    seedItems();
+    write(`${SPEC_DIR}/99-fixture.md`, '## 99. Fixture\n\n1. first\n');
+    write(CHANGELOG, '> **Changelog v9.1:** §99.2 removed.\n\n> **Changelog v9.0:** §99 added.\n');
+    commit('entry');
+    write(CHANGELOG, '> **Changelog v9.1:** §99.2 removed, reworded.\n\n> **Changelog v9.0:** §99 added.\n');
+    commit('reword');
+    expect(unresolvedInNewestEntry(repo as string)).toEqual([]);
+  });
+
+  it('a numbered item an uncommitted entry deletes resolves against the committed spec', () => {
+    seedItems();
+    write(`${SPEC_DIR}/99-fixture.md`, '## 99. Fixture\n\n1. first\n');
+    write(CHANGELOG, '> **Changelog v9.1:** §99.2 removed; §99.3 too.\n\n> **Changelog v9.0:** §99 added.\n');
+    expect(unresolvedInNewestEntry(repo as string)).toEqual(['99.3']);
   });
 
   it('an uncommitted entry recording a deletion resolves against the committed spec', () => {
