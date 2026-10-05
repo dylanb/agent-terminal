@@ -7288,6 +7288,10 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
 
 // ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
 const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
+// A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the
+// global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
+const CHAIN_LOOP_MS = 15_000;
+const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
 const CHAIN_ROSTERS: Record<string, string[]> = {
   groom: ['review-plan-intent'],
   'plan-bundle': ['review-plan-principal', 'review-plan-intent', 'review-plan-tracer-slicer'],
@@ -7375,6 +7379,7 @@ function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
 }
 
 test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(8));
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-fulltdd-bin-', { realCommitOps: true });
@@ -7437,6 +7442,7 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
 // → sourceSliceCount → flow.resolveInputs; then flow.currentSlice → enterAppLoop → the engine (slice-keyed
 // artifact + clearBaseline).
 test('§28.4 D1+D2+D3 — the polished plan sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(10));
   const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
@@ -7505,6 +7511,7 @@ test('§28.4 D1+D2+D3 — the polished plan sources the impl-slice count, and th
 // as a §25 flow re-entry. This is the wiring the reopenSlice() transition was built for (loop-panel button →
 // flow:appGateDecision → runAppGateDecision → reopenSlice → the flow machine), on a real chain, real phase gate.
 test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice RED step, without advancing', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(7));
   const repo = seedFullTddChainRepo('agent-term-e2e-backtored-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
