@@ -41,6 +41,7 @@ boundaries:
     message: Keep the plan and the ticket.
 report:
   sections: [summary, findings, disposition]
+  polish: defer
 gate:
   - option: approve
     side_effects:

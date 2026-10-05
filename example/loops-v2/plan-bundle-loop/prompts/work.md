@@ -14,6 +14,12 @@ e2e), in RED-first order, with injection seams named for the domain concept the 
 The smallest correct design that satisfies the ticket — the files, seams, and contracts it touches, and
 the shared definitions it single-sources.
 
+Write the plan at the altitude of contracts and intent: the files and modules touched, the seams, the
+contracts two surfaces read (shapes, names, persisted formats), and the behavior each slice must produce.
+Leave function bodies, algorithms, internal helper signatures and library mechanics to the implementation,
+where they are reviewed against real code. State each rule once and reference it elsewhere rather than
+restating it.
+
 ## Infrastructure plan
 
 The deterministic test infrastructure the slices need — the harness, fakes, and fixtures — hermetic and
@@ -95,3 +101,6 @@ slice that implements it, and the final integration slice must wire every AC int
 explicitly records that wiring a non-goal. The only way an AC leaves scope is explicit, prior operator
 permission (a non-goal recorded in the ticket, or a split into an already-filed sub-ticket of the same epic);
 never self-defer an AC to "a later slice" without it.
+
+Equally, add nothing beyond what the ticket requires: no behavior, hardening, or structure the acceptance
+criteria and the repo's stated standards do not call for.

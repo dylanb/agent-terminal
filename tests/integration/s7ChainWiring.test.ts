@@ -55,7 +55,7 @@ export const CHAIN: readonly LoopRow[] = [
   {
     name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: true,
     consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
-    polish: 'fix',
+    polish: 'defer',
     personas: [
       ...PLAN_LANES.map(plan),
       authored('review-plan-test-architect', 'test-architect'),
