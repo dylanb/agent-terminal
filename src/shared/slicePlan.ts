@@ -1,9 +1,10 @@
 // §28.4.1 — the impl-slice grammar: the plan-bundle's slice-plan enumerates the RED/GREEN impl-slices of ONE
-// ticket, and the plan-bundle approve gate sources their COUNT into the `slices` flow input the refactor step's
-// loop-back reads (§28.4.1). An impl-slice is a RED/GREEN unit inside one ticket's slice-plan (§28.2 P2a)
-// — DISTINCT from an epic-slice (a sub-ticket, §28.7). CLAUDE.md composed-prompt-is-a-writer: one writer (the
-// plan-bundle recipe) and readers (the gate-time derivation, the tests) share this one definition, so a token
-// change moves them together; the predicate grades the MINIMAL contract, never a rigid layout.
+// ticket, and each planning approve gate (plan-bundle, then plan-polish) sources their COUNT into the `slices`
+// flow input the refactor step's loop-back reads (§28.4.1). An impl-slice is a RED/GREEN unit inside one
+// ticket's slice-plan (§28.2 P2a) — DISTINCT from an epic-slice (a sub-ticket, §28.7). CLAUDE.md
+// composed-prompt-is-a-writer: writers (the plan-bundle recipe, and the plan-polish recipe that must keep its
+// tokens) and readers (the gate-time derivation, the tests) share this one definition, so a token change moves
+// them together; the predicate grades the MINIMAL contract, never a rigid layout.
 
 /** The grammar tokens `parseSlicePlan`, `slicePlanWellFormed`, and `exampleSlicePlan` all read from, so the
  *  parser and the writer cannot desync on a token's spelling. `## Impl-slices` is disjoint from §28.7's

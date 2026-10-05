@@ -915,11 +915,10 @@ async function createWindow(): Promise<void> {
         runCommitSideEffect: createRealAppGateCommit(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
-        // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
-        // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
-        // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
-        // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
-        // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
+        // §28.4.1/§28.8.1 — every approve whose def declares the `plan` output re-sources `slices`, the last one
+        // winning: in feature-dev that is the plan-polish approve, so the polished plan decides the count the
+        // refactor loop-back reads. resolveInputs sets the input WITHOUT re-entering the step (re-entering a
+        // planning step here would restart its loop).
         sourceSliceCount: (repoDir, def) => {
           const planBinding = def.outputs.find((o) => o.id === 'plan');
           if (planBinding === undefined) return;

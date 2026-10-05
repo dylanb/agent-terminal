@@ -13,6 +13,11 @@ over anything the method says:
 - **Report in the plan.** Write the method's three-part report (Polished autonomously / Needs your call /
   Re-review?) as a `## Polish report` section at the end of the plan, above the completion marker. Replace
   any earlier polish report rather than adding a second one. Never stop to ask a question.
+- **Machine-read plan tokens are binding.** The engine parses these out of the plan to fan out an epic and to
+  count impl-slices, so keep every one exactly as written, with its numbering, and never demote it to
+  illustrative: `Classification:`, `## Sub-tickets`, `### Sub-ticket`, `Depends on:`, `## Impl-slices`,
+  `### Impl-slice`, and `Acceptance criteria:`. Keep the `## Polish report` section after these blocks,
+  never inside one.
 - **Acceptance criteria stay whole.** No acceptance criterion may be deferred, narrowed, or dropped by the
   polish; a change that would do so is a "Needs your call" item, never an edit.
 - **Re-review is automatic.** The review rounds that follow this turn re-check the polished plan, so

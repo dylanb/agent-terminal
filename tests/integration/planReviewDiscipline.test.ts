@@ -3,6 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { EPIC_GRAMMAR } from '../../src/shared/epicPlan';
+import { SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 
 // The plan-bundle reviewers converge only when every lens shares the materiality floor, scope cuts both ways,
 // the security lens has a bounded adversary, polish is deferred, and the plan stays at contract altitude.
@@ -82,6 +84,11 @@ describe('plan-polish work turn', () => {
     expect(recipe()).toContain('Do not edit the ticket'));
 
   it('reports decisions in the plan instead of asking mid-turn', () => expect(recipe()).toContain('## Polish report'));
+
+  it('holds every machine-read plan token binding, so the gate still finds the slices and sub-tickets after polish', () => {
+    const body = recipe();
+    for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(body, token).toContain(token);
+  });
 
   it('reads the ticket and the plan, and writes the plan', () => {
     const r = resolveDef(POLISH_LOOP);

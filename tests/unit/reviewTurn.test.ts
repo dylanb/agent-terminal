@@ -175,9 +175,6 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   });
 });
 
-// §27.6/§27.8 — a loop whose def defers polish: the fixer dismisses polish-only findings as out of scope so a
-// polish-only round changes nothing and reaches `clean`; a later loop in the flow that fixes polish re-reviews
-// the same work and fixes them there. A def that fixes polish carries no such clause.
 describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
   const req = (polish?: 'fix' | 'defer') => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),

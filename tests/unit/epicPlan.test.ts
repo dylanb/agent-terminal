@@ -89,6 +89,15 @@ describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as au
     expect(parsed?.subTickets[1].body).toContain('PLAN-SLICE-TWO: tear the widget down.');
   });
 
+  it('ends the last sub-ticket at the next `## ` section, so a section after the block never reaches an issue body', () => {
+    const plan = `${exampleEpicPlan(2)}\n## Polish report\n\nNeeds your call: an operator-only note.\n`;
+    const parsed = parseEpicPlan(plan);
+    expect(parsed?.subTickets).toHaveLength(2);
+    expect(parsed?.subTickets[1].body).not.toContain('Polish report');
+    expect(parsed?.subTickets[1].body).not.toContain('an operator-only note');
+    expect(parsed?.subTickets[1].body).toContain('Plan for slice 2');
+  });
+
   it('preserves authored order and does not deduplicate indices (§27.10 "copied as authored")', () => {
     // A malformed authoring — out of order and a repeated index — is copied as-is, not silently reordered or
     // collapsed; the plan gate + the human judge the split, the parser does not correct it.

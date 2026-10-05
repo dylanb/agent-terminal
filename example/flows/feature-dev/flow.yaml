@@ -28,8 +28,8 @@ steps:
     loop_namespace: app
     todo_template: impl-loop-review
   # impl-slice×N (§28.2/§28.4): red→green→refactor repeats once per impl-slice. The refactor step's
-  # `repeat` loops back to `red` `slices`-many times (§28.4 loop-back primitive). Until the plan-bundle
-  # phase resolves the `slices` input from the slice-plan, the count defaults to 1 — a single slice, the
+  # `repeat` loops back to `red` `slices`-many times (§28.4 loop-back primitive). Until a planning
+  # step resolves the `slices` input from the slice-plan, the count defaults to 1 — a single slice, the
   # prior behavior — so the directive is inert, never a broken multi-slice chain.
   - id: red
     kind: loop

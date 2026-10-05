@@ -313,8 +313,8 @@ export interface FlowMachine {
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): MachineView;
   /** §28.4.1 — merge programmatically-sourced inputs and persist them WITHOUT re-entering the current step
-   *  (unlike provideInput, which answers a step-entry prompt and re-enters). The plan-bundle approve gate uses
-   *  it to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering plan-bundle would
+   *  (unlike provideInput, which answers a step-entry prompt and re-enters). A planning approve gate uses it
+   *  to resolve the `slices` count for the DOWNSTREAM refactor step, where re-entering the planning step would
    *  restart its loop. Legal only while a step is in_progress. */
   resolveInputs(values: Record<string, string>): MachineView;
   /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,

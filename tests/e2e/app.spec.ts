@@ -7301,7 +7301,7 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logInjected?: boolean } = {}): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; polishedSlices?: number; logInjected?: boolean } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
@@ -7316,7 +7316,10 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logI
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
-    'plan-polish': `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
+    // §28.8.1 — with `polishedSlices` the polish turn rewrites the slice block, so a test can tell which gate's count won.
+    'plan-polish': opts.polishedSlices
+      ? `${decode(b64(`# plan\n\n${exampleSlicePlan(opts.polishedSlices)}\n${completionMarker('plan-bundle')}\n${completionMarker('plan-polish')}\n`), `${art}/plan.md`)}; ${done('work-plan-polish')}`
+      : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
     red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
@@ -7425,18 +7428,19 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
 });
 
 // §28.4 D1+D2+D3 — end to end: the whole impl-slice×N chain. (D3) The plan-bundle writes a `## Impl-slices`
-// block with 2 entries and the plan-bundle approve gate SOURCES that count into the `slices` input (no manual
-// seed) — driving the refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
+// block with 1 entry, the plan-polish turn rewrites it to 2, and each planning approve gate SOURCES its plan's
+// count into the `slices` input (no manual seed) — the later, polished count winning (§28.8.1) and driving the
+// refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
 // artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice 1's
 // product. (D2/#123) The slice-2 RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
-// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: plan-bundle gate
+// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: planning gate
 // → sourceSliceCount → flow.resolveInputs; then flow.currentSlice → enterAppLoop → the engine (slice-keyed
 // artifact + clearBaseline).
-test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+test('§28.4 D1+D2+D3 — the polished plan sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
   const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir, { implSlices: 2 }); // the plan-bundle plans 2 impl-slices
+  seedFullTddChainAgent(binDir, { implSlices: 1, polishedSlices: 2 }); // plan-bundle plans 1 impl-slice; polish makes it 2
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7462,9 +7466,10 @@ test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the 
   // `slices` is 2 — loops back to RED for slice 2 (rather than falling through to integration-slice).
   await approveStep('groom');
   await approveStep('plan-bundle');
+  // §28.4 D3 — each planning gate SOURCES its plan's ## Impl-slices count into `slices` (no manual seed): 1 from the
+  // draft, then 2 from the polished plan, which is what drives the loop-back to slice 2 below.
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
   await approveStep('plan-polish');
-  // §28.4 D3 — the plan-bundle gate SOURCED the impl-slice count (2) from the plan's ## Impl-slices block into the
-  // `slices` flow input (no manual seed); this is what drives the loop-back to slice 2 below.
   expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
   await approveStep('infra');
   await approveStep('red');
@@ -8044,7 +8049,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
-  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-polish.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-polish');
@@ -8085,7 +8090,7 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   await expect(page.getByRole('alertdialog').filter({ hasText: 'partial promotion' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
-  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-polish.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-polish');
