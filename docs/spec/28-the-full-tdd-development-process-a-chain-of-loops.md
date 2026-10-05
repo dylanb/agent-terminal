@@ -169,7 +169,7 @@ The vocabulary is portable **by construction** — it names the *category* of ou
 | go test | `--- FAIL` + assertion line | `build failed`, `undefined:` |
 | cargo test | `assertion failed` (an `assert!` panic) | `error[E…]`, `could not compile`, a non-assertion panic |
 
-**(c) The agent writes the outcome into a result file whose *shape* the engine validates** — exactly like the round report. The agent classifies (marks its own homework, §27.5's N5a risk); the engine bounds it with the exit-code direction from (a); the **raw captured output is versioned next to the classification**; and the `red-authenticity` reviewer plus the human gate are the backstop for a misclassified assertion-vs-compile (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2, see N9b.10). This is the same three-part bound §27.5 already accepts — a structural machine check, a versioned auditable artifact, and the human gate.
+**(c) The agent writes the outcome into a result file whose *shape* the engine validates** — exactly like the round report. The agent classifies (marks its own homework, §27.5's N5a risk); the engine bounds it with the exit-code direction from (a); the **raw captured output is versioned next to the classification**; and the `red-authenticity` reviewer plus the human gate are the backstop for a misclassified assertion-vs-compile (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2 and its override scope). This is the same three-part bound §27.5 already accepts — a structural machine check, a versioned auditable artifact, and the human gate.
 
 #### 28.5.3 Completion clauses slot into §27.12(b) — not a parallel system
 
@@ -196,8 +196,8 @@ The outcome vocabulary is single-sourced in **`src/shared/phaseOutcome.ts`**, co
 
 #### 28.5.6 Honest boundary and limits (P5d)
 
-- **Frozen-tests is fully machine and fully portable; pass/fail *direction* is machine-bounded and portable; assertion-vs-compile *reason* is agent-classified and human-backstopped** (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2, see N9b.10). That residue cannot be made pure-machine across all frameworks without shipping per-runner adapters; §27's answer to exactly this shape is classify-and-backstop, not interpret.
-- A repo with **no machine-runnable tests** degrades to frozen-tests + agent classification + human gate (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2, see N9b.10) — still coherent.
+- **Frozen-tests is fully machine and fully portable; pass/fail *direction* is machine-bounded and portable; assertion-vs-compile *reason* is agent-classified and human-backstopped** (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2 and its override scope). That residue cannot be made pure-machine across all frameworks without shipping per-runner adapters; §27's answer to exactly this shape is classify-and-backstop, not interpret.
+- A repo with **no machine-runnable tests** degrades to frozen-tests + agent classification + human gate (on a step whose `gate_authority: auto` is honoured, §27.9.1 N9b.2 and its override scope) — still coherent.
 - **Flakiness** stays the human gate's problem, not this predicate's — which is the reason for the P8 timing decision: a targeted subset per GREEN turn, the full Podman e2e only at the integration gate and polish.
 
 ### 28.6 Personas — reuse, repurpose, create (P6)
@@ -238,7 +238,7 @@ Each sub-ticket then runs the per-ticket chain (§28.2) — but, per §27.10, a 
 
 ### 28.8 Decisions settled (P8)
 
-1. **Gate granularity → one `plan-bundle-loop`.** The per-ticket planning steps (test plan, tech plan, infra plan, review-and-iterate, slice breakdown) collapse into a **single planning loop**: its work turn produces all four planning files, its review-and-fix cycle *is* the "review all the above, iterate" step, and it has **one** human gate. One human gate **by default**; a step whose `gate_authority: auto` is honoured (§27.9.1 N9b.2) is the §27.9.1 operator override (N9b.10). The §27.9 interrupt model lets the operator let it run and step in when needed.
+1. **Gate granularity → one `plan-bundle-loop`.** The per-ticket planning steps (test plan, tech plan, infra plan, review-and-iterate, slice breakdown) collapse into a **single planning loop**: its work turn produces all four planning files, its review-and-fix cycle *is* the "review all the above, iterate" step, and it has **one** human gate. One human gate **by default**; a step whose `gate_authority: auto` is honoured (§27.9.1 N9b.2) is the §27.9.1 operator override (its "Override scope"). The §27.9 interrupt model lets the operator let it run and step in when needed.
 2. **Epic planning → per sub-ticket** (P7a): the epic plan owns only the coarse decomposition; each sub-ticket plans its own seams.
 3. **Frozen-tests → detect-and-escalate, not a hard gate** (P5a): the machine *detects* a changed test file and flags it to `regression-guard`, which recommends a course of action to the human at the gate — detection is machine, disposition is persona + human.
 4. **Full-suite timing → targeted per turn, full e2e at gates.** RED/GREEN/refactor predicates run the slice's targeted + affected tests; the **full Podman `_electron` e2e** runs only at the integration-slice gate and final polish — matching CLAUDE.md's "full suite before *done*", where *done* is the ticket's end, not every micro-phase.

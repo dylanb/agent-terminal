@@ -142,6 +142,30 @@ export function lifecycleEvents(kind: TransitionKind, before: FlowLike, after: F
   return events;
 }
 
+/** The step each event (re)enters, per what `lifecycleEvents` writes; `null` for a non-entering event. A
+ *  `flow.status` to `in_progress` directly followed by a `step.entered` is one Restart that enters that
+ *  `step.entered`'s step, not the step the run had stopped on. */
+function enteredSteps(events: AuditEvent[]): (string | null)[] {
+  let current: string | null = null;
+  return events.map((e, i) => {
+    if (e.type === 'flow.started' || e.type === 'step.entered') return (current = e.step);
+    if (e.type === 'flow.status' && e.to === 'in_progress' && events[i + 1]?.type !== 'step.entered') return current;
+    return null;
+  });
+}
+
+/** The events of `step`'s last (re)entry window: after the last event that (re)enters `step`, up to the next
+ *  event that enters another step. Throws when nothing enters `step`, so an empty read is never mistaken for
+ *  "the step ran and recorded none". */
+export function stepWindowEvents(events: AuditEvent[], step: string): AuditEvent[] {
+  const entered = enteredSteps(events);
+  const start = entered.lastIndexOf(step);
+  if (start === -1) throw new Error(`no audit event enters step "${step}"`);
+  const rest = entered.slice(start + 1);
+  const end = rest.findIndex((s) => s !== null && s !== step);
+  return events.slice(start + 1, end === -1 ? undefined : start + 1 + end);
+}
+
 /** The single event a flow Terminate produces (#26 / §25): a timestamped `flow.terminated`, distinct
  *  from the lifecycle transitions, from which the reconstructed timeline reads not_started again. */
 export function terminateEvents(ts: string): AuditEvent[] {

@@ -15,6 +15,7 @@ import {
   reconstructTimeline,
   reviewRoundAuditCmd,
   serializeDoc,
+  stepWindowEvents,
   terminateEvents,
   todoEvents,
   type AuditEvent,
@@ -50,6 +51,11 @@ describe('audit path derivation (§25.2)', () => {
     expect(p.startsWith(repoDir + path.sep)).toBe(true);
     expect(p.includes('..')).toBe(false);
     expect(path.dirname(p)).toBe(repoDir);
+  });
+  it('two Starts in one repo at timestamps in different seconds resolve to two distinct files', () => {
+    const first = auditFilePath('/root', '/a/b/repo', 'feature-dev', new Date('2026-06-23T10:00:01.900Z'));
+    const second = auditFilePath('/root', '/a/b/repo', 'feature-dev', new Date('2026-06-23T10:00:02.100Z'));
+    expect(first).not.toBe(second);
   });
 });
 
@@ -545,5 +551,78 @@ describe('§27 round number flows through loopEvents without coalescing to zero 
       serializeDoc({ ts: T, type: 'loop.iteration', n: 1 }) +
       serializeDoc({ ts: T, type: 'loop.status', from: 'working', to: 'error' });
     expect(reconstructTimeline(stream).loop).toEqual({ status: 'error', iteration: 1 });
+  });
+});
+
+describe('stepWindowEvents — the events of a step\'s last (re)entry window', () => {
+  const inProg = (stepName: string) => ({ status: 'in_progress' as const, stepName });
+  const done = (stepName: string) => ({ status: 'done' as const, stepName });
+  const notStarted = { status: 'not_started' as const, stepName: '' };
+  const gate = (cmd: string, ts = 'T'): AuditEvent => ({ ts, type: 'command', source: 'gate', cmd, exit: 0 });
+  const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
+  const read = (events: AuditEvent[]) =>
+    parseAuditStream([header, ...events].map(serializeDoc).join('')).events;
+  const gateCmds = (events: AuditEvent[]) =>
+    events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
+
+  it("finds a single-step run's gate commands by its first step, which Start enters with no step.entered", () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('decision approve'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['decision approve']);
+  });
+
+  it('scopes a two-step run to each step', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('red gate'),
+      ...lifecycleEvents('advance', inProg('red'), inProg('green'), 'T2'),
+      gate('green gate'),
+      ...lifecycleEvents('advance', inProg('green'), done('green'), 'T3'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['red gate']);
+    expect(gateCmds(stepWindowEvents(events, 'green'))).toEqual(['green gate']);
+  });
+
+  it('keeps only the restarted run after a Restart from done', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('first run'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+      ...lifecycleEvents('restart', done('red'), inProg('red'), 'T3'),
+      gate('restarted run'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['restarted run']);
+  });
+
+  it('a Restart from done that re-enters the first step leaves the last step its earlier window', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      ...lifecycleEvents('advance', inProg('red'), inProg('green'), 'T2'),
+      gate('green gate'),
+      ...lifecycleEvents('advance', inProg('green'), done('green'), 'T3'),
+      ...lifecycleEvents('restart', done('green'), inProg('red'), 'T4'),
+      gate('restarted red'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'green'))).toEqual(['green gate']);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['restarted red']);
+  });
+
+  it('an Undo from done re-enters the step it stays on', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('before undo'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+      ...lifecycleEvents('undo', done('red'), inProg('red'), 'T3'),
+      gate('after undo'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['after undo']);
+  });
+
+  it('throws naming a step no boundary enters, so an empty read never satisfies a "none" assertion', () => {
+    const events = read([...lifecycleEvents('start', notStarted, inProg('red'), 'T1'), gate('g')]);
+    expect(() => stepWindowEvents(events, 'refactor')).toThrow(/refactor/);
   });
 });
