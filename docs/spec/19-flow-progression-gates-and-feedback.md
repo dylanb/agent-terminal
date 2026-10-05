@@ -7,7 +7,7 @@
 
 ### 19.2 Advance is user-driven, with a not-ready warning (D31)
 
-- The flow **never auto-advances**. The app detects whether the current step's gate is satisfied and surfaces an **"Advance to <next step>"** control (status strip). Advancing on an unsatisfied gate **warns** ("not ready — <reason>") but **proceeds** (human override). `flow:advance` returns the new state with a `ready` flag; on entry it runs the next step's entry actions (§18.3/§18.6).
+- The flow **never auto-advances** (for a §27 loop step the gate decision advances the flow, and on a step whose `gate_authority: auto` is honoured (§27.9.1 N9b.2) the engine makes it — superseded per §27.14). The app detects whether the current step's gate is satisfied and surfaces an **"Advance to <next step>"** control (status strip). Advancing on an unsatisfied gate **warns** ("not ready — <reason>") but **proceeds** (human override). `flow:advance` returns the new state with a `ready` flag; on entry it runs the next step's entry actions (§18.3/§18.6).
 
 ### 19.3 Gate driver & the running-process refusal (D2/D32)
 
