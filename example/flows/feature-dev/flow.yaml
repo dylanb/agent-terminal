@@ -17,6 +17,11 @@ steps:
     loop: plan-bundle-loop
     loop_namespace: app
     todo_template: plan-loop-review
+  - id: plan-polish
+    kind: loop
+    loop: plan-polish-loop
+    loop_namespace: app
+    todo_template: plan-loop-review
   - id: infra
     kind: loop
     loop: infra-loop

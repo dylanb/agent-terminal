@@ -2,7 +2,7 @@
 
 > **Status:** requirements, drafted **v2.144** from the `plan.md` design. **This is the full-TDD development process expressed on the §27 engine — §27.1's proof-of-generality turned into payoff.** §27.1 built three loops (`groom` / `plan` / `impl`) as the *same loop shape* over different data so a plan/impl assumption could never be hardcoded into the orchestrator; this section spends that generality by chaining more links of the same shape. Decisions are **P1–P8**.
 >
-> **The process expressed here** — for the epic: create epic → tracer-bullet slices → sub-tickets; for each ticket: groom → plan-bundle → build the deterministic infrastructure → RED/GREEN slices → an integration slice → polish; for each slice, a commit between each phase: RED tests → GREEN implementation → review-and-refactor.
+> **The process expressed here** — for the epic: create epic → tracer-bullet slices → sub-tickets; for each ticket: groom → plan-bundle → plan-polish → build the deterministic infrastructure → RED/GREEN slices → an integration slice → polish; for each slice, a commit between each phase: RED tests → GREEN implementation → review-and-refactor.
 >
 > **The engine core does not change.** The whole process is a **longer chain of the loop the engine already runs** (`work-once → review-and-fix → consolidate → human-gate`, §27.3) over a different artifact at each link (§27.10 chaining). §28 adds only three bounded engine changes (P3–P5) and a body of **content** — five reviewer charters and a handful of work recipes, authored in the same style as the charters already in `example/loops-v2/`.
 >
@@ -23,7 +23,8 @@ Each box is one instance of the §27.3 loop shape. Arrows are the §27.10 `input
 flowchart TD
   RAW["raw GitHub issue"] --> GROOM["groom-loop<br/>(exists)"]
   GROOM -->|"groomed ticket"| PLAN["plan-bundle-loop<br/>(extends plan-loop)"]
-  PLAN -->|"planning bundle:<br/>test-plan + tech-plan<br/>+ infra-plan + slice-plan"| EPICQ{"classified<br/>an epic?"}
+  PLAN -->|"planning bundle:<br/>test-plan + tech-plan<br/>+ infra-plan + slice-plan"| PPOLISH["plan-polish-loop<br/>polish, then full-catalog review"]
+  PPOLISH -->|"polished plan"| EPICQ{"classified<br/>an epic?"}
   EPICQ -->|"yes"| PROMO["epic promotion<br/>(reuses §27.10)<br/>fan out to sub-tickets"]
   PROMO -->|"each sub-ticket:<br/>reconstruct groomed ticket +<br/>epic plan (skip groom, §27.10),<br/>then plan its own seams"| PLAN
   EPICQ -->|"no"| INFRA["infra-loop<br/>(new, impl-shaped)<br/>build the test harness"]
@@ -209,7 +210,8 @@ The code-producing loops need almost nothing new — the 12 impl and 6 plan pers
 | Loop | Work recipe (author) | Review catalog | New charters |
 |---|---|---|---|
 | **groom-loop** | exists | `intent` (exists) | none |
-| **plan-bundle-loop** | new: author the four-file bundle | all 6 plan personas + 3 new | `test-architect`, `determinism`, `tracer-slicer` |
+| **plan-bundle-loop** | new: author the four-file bundle | plan `principal`, `intent` + `tracer-slicer`; defers polish | `tracer-slicer` |
+| **plan-polish-loop** | new: polish the plan in place (the plan-polish method, verbatim) | all 6 plan personas + 3 new; fixes polish | `test-architect`, `determinism` |
 | **infra-loop** | new: build harness / fakes / fixtures | impl `tests`, `security`, `taint`, `reliability`, `maintainability`, `conventions`, `architecture` + `determinism` | (`determinism` shared) |
 | **RED loop** | new: author failing tests | impl `tests`, `intent` + `red-authenticity` | `red-authenticity` |
 | **GREEN loop** | new: implement to pass | the full impl-12 + `regression-guard` | `regression-guard` |
@@ -238,7 +240,7 @@ Each sub-ticket then runs the per-ticket chain (§28.2) — but, per §27.10, a 
 
 ### 28.8 Decisions settled (P8)
 
-1. **Gate granularity → one `plan-bundle-loop`.** The per-ticket planning steps (test plan, tech plan, infra plan, review-and-iterate, slice breakdown) collapse into a **single planning loop**: its work turn produces all four planning files, its review-and-fix cycle *is* the "review all the above, iterate" step, and it has **one** human gate. One human gate **by default**; a step whose `gate_authority: auto` is honoured (§27.9.1 N9b.2) is the §27.9.1 operator override (N9b.10). The §27.9 interrupt model lets the operator let it run and step in when needed.
+1. **Gate granularity → two planning loops, `plan-bundle-loop` then `plan-polish-loop`** (amended v2.172, operator decision 2026-10-05; originally one loop). The per-ticket planning steps (test plan, tech plan, infra plan, slice breakdown) are authored by `plan-bundle-loop`, whose review checks only that the draft is complete and well-sliced (`principal`, `intent`, `tracer-slicer`) and defers polish (§27.8). `plan-polish-loop` then polishes the plan in place and runs the full plan catalog over the polished text; its review-and-fix cycle *is* the "review all the above, iterate" step, so a polish that needs another review gets it in that loop's own rounds — no flow loop-back is added. Each loop has one human gate. The publishing and promotion side-effects (mark the PR ready, §28.7 epic promotion) sit on `plan-polish-loop`'s gate alone, so they act on the polished plan. The §27.9 interrupt model lets the operator let both run and step in when needed.
 2. **Epic planning → per sub-ticket** (P7a): the epic plan owns only the coarse decomposition; each sub-ticket plans its own seams.
 3. **Frozen-tests → detect-and-escalate, not a hard gate** (P5a): the machine *detects* a changed test file and flags it to `regression-guard`, which recommends a course of action to the human at the gate — detection is machine, disposition is persona + human.
 4. **Full-suite timing → targeted per turn, full e2e at gates.** RED/GREEN/refactor predicates run the slice's targeted + affected tests; the **full Podman `_electron` e2e** runs only at the integration-slice gate and final polish — matching CLAUDE.md's "full suite before *done*", where *done* is the ticket's end, not every micro-phase.

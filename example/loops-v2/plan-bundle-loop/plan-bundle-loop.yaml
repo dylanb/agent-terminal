@@ -7,26 +7,8 @@ reviewers:
   - persona: review-plan-principal
     charter: charter/principal.md
     tools: [Read, Grep, Glob]
-  - persona: review-plan-security
-    charter: charter/security.md
-    tools: [Read, Grep, Glob, Bash]
-  - persona: review-plan-architecture
-    charter: charter/architecture.md
-    tools: [Read, Grep, Glob]
   - persona: review-plan-intent
     charter: charter/intent.md
-    tools: [Read, Grep, Glob]
-  - persona: review-plan-maintainability
-    charter: charter/maintainability.md
-    tools: [Read, Grep, Glob]
-  - persona: review-plan-contracts
-    charter: charter/contracts.md
-    tools: [Read, Grep, Glob]
-  - persona: review-plan-test-architect
-    charter: charter/test-architect.md
-    tools: [Read, Grep, Glob]
-  - persona: review-plan-determinism
-    charter: charter/determinism.md
     tools: [Read, Grep, Glob]
   - persona: review-plan-tracer-slicer
     charter: charter/tracer-slicer.md
@@ -44,11 +26,6 @@ report:
   polish: defer
 gate:
   - option: approve
-    side_effects:
-      - kind: gh
-        action: mark-ready
-      - kind: promote
-        artifact: plan
   - option: request-changes
   - option: redo
   - option: polish

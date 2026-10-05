@@ -175,9 +175,9 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   });
 });
 
-// §27.6/§27.8 — a per-slice loop whose def defers polish: the fixer dismisses polish-only findings as out of
-// scope so a polish-only round changes nothing and reaches `clean`; the integration-slice sweep reviews the
-// whole ticket diff with the full catalog and fixes them there. A def that fixes polish carries no such clause.
+// §27.6/§27.8 — a loop whose def defers polish: the fixer dismisses polish-only findings as out of scope so a
+// polish-only round changes nothing and reaches `clean`; a later loop in the flow that fixes polish re-reviews
+// the same work and fixes them there. A def that fixes polish carries no such clause.
 describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
   const req = (polish?: 'fix' | 'defer') => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
@@ -188,10 +188,14 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
     doneRelPath: '.agent-terminal/loop/turn-done',
     ...(polish !== undefined ? { polish } : {}),
   });
-  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i;
+  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i;
 
   it('tells the fixer to dismiss polish-only findings as out of scope when the def defers polish', () => {
     expect(composeReviewAndFixPrompt(req('defer'))).toMatch(deferClause);
+  });
+
+  it('names no particular later loop, since more than one loop defers to different ones', () => {
+    expect(composeReviewAndFixPrompt(req('defer'))).not.toMatch(/integration-slice/i);
   });
 
   it('carries no deferral clause when the def fixes polish', () => {

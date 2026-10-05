@@ -38,14 +38,15 @@ type RecipeRow =
   | { kind: 'plain'; file: string };
 
 const NEW_CHARTERS: readonly CharterRow[] = [
-  { file: 'plan-bundle-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
-  { file: 'plan-bundle-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
+  { file: 'plan-polish-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
+  { file: 'plan-polish-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
   { file: 'plan-bundle-loop/charter/tracer-slicer.md', persona: 'review-plan-tracer-slicer', marker: 'Thin-but-complete' },
   { file: 'red-loop/charter/red-authenticity.md', persona: 'impl-review-red-authenticity', marker: 'Fails for the right reason' },
   { file: 'green-loop/charter/regression-guard.md', persona: 'impl-review-regression-guard', marker: 'No vacuous green' },
 ];
 
-const isPlanningCharter = (c: CharterRow): boolean => c.file.startsWith('plan-bundle-loop/charter/');
+const isPlanningCharter = (c: CharterRow): boolean =>
+  c.file.startsWith('plan-bundle-loop/charter/') || c.file.startsWith('plan-polish-loop/charter/');
 const isPhaseCharter = (c: CharterRow): boolean => c.persona.startsWith('impl-review-');
 
 const NEW_RECIPES: readonly RecipeRow[] = [
@@ -271,8 +272,8 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect(charter).toContain(EPIC_GRAMMAR.subTicketsHeading); // '## Sub-tickets' — the epic exception
   });
 
-  it('the approve gate declares the promote side-effect naming the plan artifact', () => {
-    const r = resolveLoopDefV2('plan-bundle-loop', { tiers, repoDir });
+  it('the plan-polish approve gate declares the promote side-effect naming the plan artifact', () => {
+    const r = resolveLoopDefV2('plan-polish-loop', { tiers, repoDir });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const approve = r.def.gate.find((g) => g.option === 'approve');

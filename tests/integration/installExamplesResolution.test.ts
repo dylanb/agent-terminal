@@ -89,7 +89,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
 });
 
 describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)', () => {
-  it('installs the full-TDD chain groom → plan-bundle → infra → red → green → refactor → integration-slice on the app namespace', () => {
+  it('installs the full-TDD chain groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice on the app namespace', () => {
     applyInstallExamples(dirs, []);
 
     const loaded = loadFlowDefinitionLocalFirst(repo, home);
@@ -112,6 +112,13 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         id: 'plan-bundle',
         kind: 'loop',
         loop: 'plan-bundle-loop',
+        loopNamespace: 'app',
+        todoTemplate: 'plan-loop-review',
+      },
+      {
+        id: 'plan-polish',
+        kind: 'loop',
+        loop: 'plan-polish-loop',
         loopNamespace: 'app',
         todoTemplate: 'plan-loop-review',
       },

@@ -49,18 +49,25 @@ const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintain
 const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-loop', charter: `plan-loop/charter/${lane}.md` } });
 const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'impl-loop', charter: `impl-loop/charter/${lane}.md` } });
 const fromPlanBundle = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-bundle-loop', charter: `plan-bundle-loop/charter/${lane}.md` } });
+const fromPlanPolish = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const authored = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md` });
 
 export const CHAIN: readonly LoopRow[] = [
   {
-    name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: true,
+    name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: [], pickup: true,
     consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
     polish: 'defer',
+    personas: [plan('principal'), plan('intent'), authored('review-plan-tracer-slicer', 'tracer-slicer')],
+  },
+  {
+    name: 'plan-polish-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: false,
+    consolidateSource: 'plan-loop', input: PLAN_INPUT, output: null,
+    polish: 'fix',
     personas: [
       ...PLAN_LANES.map(plan),
       authored('review-plan-test-architect', 'test-architect'),
       authored('review-plan-determinism', 'determinism'),
-      authored('review-plan-tracer-slicer', 'tracer-slicer'),
+      fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer'),
     ],
   },
   {
@@ -69,7 +76,7 @@ export const CHAIN: readonly LoopRow[] = [
     polish: 'defer',
     personas: [
       ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
-      fromPlanBundle('review-plan-determinism', 'determinism'),
+      fromPlanPolish('review-plan-determinism', 'determinism'),
     ],
   },
   {
@@ -103,8 +110,8 @@ function charterExists(rel: string): boolean {
 }
 
 describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
-  it('describes exactly the six new loops with distinct names', () => {
-    expect(CHAIN.length).toBe(6);
+  it('describes exactly the seven new loops with distinct names', () => {
+    expect(CHAIN.length).toBe(7);
     const names = CHAIN.map((l) => l.name);
     expect(new Set(names).size).toBe(names.length);
   });
@@ -162,7 +169,7 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
   });
 });
 
-const WIRED = ['plan-bundle-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
+const WIRED = ['plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
 
 const REPO_DIR = resolve(__dirname, '..', '..');
 const resolveDef = (name: string) => resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir: REPO_DIR });
@@ -188,7 +195,7 @@ describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
     expect(catalogPersonas(mustResolve(name)).slice().sort()).toEqual(row.personas.map((p) => p.persona).sort());
   });
 
-  it('declares the manifest polish policy (per-slice loops defer to the integration-slice sweep)', () => {
+  it('declares the manifest polish policy (a deferring loop is re-reviewed by a later polish-fixing loop)', () => {
     expect(mustResolve(name).report.polish).toBe(row.polish);
   });
 
@@ -289,6 +296,7 @@ const EXPECTED_FLOW: Array<[string, string, string | null]> = [
   ['preparation', 'manual', null],
   ['groom', 'loop', 'groom-loop'],
   ['plan-bundle', 'loop', 'plan-bundle-loop'],
+  ['plan-polish', 'loop', 'plan-polish-loop'],
   ['infra', 'loop', 'infra-loop'],
   ['red', 'loop', 'red-loop'],
   ['green', 'loop', 'green-loop'],
@@ -310,7 +318,7 @@ describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
     expect(flow.name).toBe('feature-dev');
   });
 
-  it('chains groom → plan-bundle → infra → red → green → refactor → integration-slice in order', () => {
+  it('chains groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice in order', () => {
     expect(flow.steps.map((s) => [s.id, s.kind, s.loop ?? null])).toEqual(EXPECTED_FLOW);
   });
 
@@ -322,11 +330,14 @@ describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
   });
 
   // §28.8.1 (C-AC2)
-  it('presents a single planning gate between groom and infra', () => {
+  it('plans in two loops between groom and infra, the plan-polish gate alone publishing and promoting the plan', () => {
     const ids = flow.steps.map((s) => s.id);
     const between = flow.steps.slice(ids.indexOf('groom') + 1, ids.indexOf('infra'));
-    expect(between.filter((s) => s.kind === 'loop').map((s) => s.loop)).toEqual(['plan-bundle-loop']);
-    expect(mustResolve('plan-bundle-loop').gate.filter((g) => g.option === 'approve').length).toBe(1);
+    expect(between.filter((s) => s.kind === 'loop').map((s) => s.loop)).toEqual(['plan-bundle-loop', 'plan-polish-loop']);
+    const approveKinds = (loop: string) =>
+      mustResolve(loop).gate.filter((g) => g.option === 'approve').flatMap((g) => g.sideEffects.map((se) => se.kind));
+    expect(approveKinds('plan-bundle-loop')).toEqual([]);
+    expect(approveKinds('plan-polish-loop').slice().sort()).toEqual(['gh', 'promote']);
   });
 });
 

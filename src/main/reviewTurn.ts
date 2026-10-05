@@ -182,11 +182,11 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   if (req.polish === 'defer') {
     lines.push(
       '',
-      'This loop DEFERS POLISH to the integration-slice sweep, which re-reviews the whole ticket diff with every',
-      'lens. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
+      'This loop DEFERS POLISH to a later loop in its flow, which re-reviews this work with a catalog that fixes',
+      'polish. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
       'contract another surface reads: a rename, comment wording or trimming, de-duplicating logic that already',
       `behaves identically, style or convention conformance — is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
-      '`polish — deferred to the integration-slice sweep`, NEVER `fixed` in this loop. A round whose only',
+      '`polish — deferred to a later loop`, NEVER `fixed` in this loop. A round whose only',
       'findings are polish therefore changes nothing.',
     );
   }
