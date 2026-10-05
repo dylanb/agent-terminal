@@ -6,6 +6,7 @@ import {
   exampleEpicPlan,
   isEpicPlan,
   parseEpicPlan,
+  POLISH_REPORT_HEADING,
 } from '../../src/shared/epicPlan';
 
 // §28.7 — the epic-plan classification grammar: a serialized vocabulary with one writer (the plan-bundle work
@@ -89,8 +90,16 @@ describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as au
     expect(parsed?.subTickets[1].body).toContain('PLAN-SLICE-TWO: tear the widget down.');
   });
 
-  it('ends the last sub-ticket at the next `## ` section, so a section after the block never reaches an issue body', () => {
-    const plan = `${exampleEpicPlan(2)}\n## Polish report\n\nNeeds your call: an operator-only note.\n`;
+  it('keeps a `## ` heading inside a sub-ticket body, since the body is the slice plan copied verbatim', () => {
+    const plan = exampleEpicPlan(2).replace('Plan for slice 1', '## Test plan\n\nslice 1 tests after the heading\n\nPlan for slice 1');
+    const body = parseEpicPlan(plan)?.subTickets[0].body ?? '';
+    expect(body).toContain('## Test plan');
+    expect(body).toContain('slice 1 tests after the heading');
+    expect(body).toContain('Plan for slice 1');
+  });
+
+  it('ends the last sub-ticket at the polish report, so the report never reaches an issue body', () => {
+    const plan = `${exampleEpicPlan(2)}\n${POLISH_REPORT_HEADING}\n\nNeeds your call: an operator-only note.\n`;
     const parsed = parseEpicPlan(plan);
     expect(parsed?.subTickets).toHaveLength(2);
     expect(parsed?.subTickets[1].body).not.toContain('Polish report');

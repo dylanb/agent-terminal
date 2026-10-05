@@ -90,8 +90,8 @@ export function slicePlanWellFormed(planText: string): boolean {
   );
 }
 
-/** The impl-slice count the plan-bundle sources into the `slices` input (§28.4.1). A well-formed slice-plan
- *  yields its entry count; an absent or malformed block yields 1 — a single-slice run exactly as before, so a
+/** The impl-slice count each planning approve gate sources into the `slices` input (§28.4.1). A well-formed
+ *  slice-plan yields its entry count; an absent or malformed block yields 1 — a single-slice run as before, so a
  *  plan that never authored the block (or authored it wrongly) never drives a half-working multi-slice chain
  *  (the flow additionally clamps to [1, MAX_SLICES], CWE-770). The integration slice runs once AFTER the loop
  *  as its own flow step and is deliberately NOT part of this count. */
