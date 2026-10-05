@@ -61,7 +61,7 @@ function parseSubTicketHeading(line: string): { index: number; title: string } |
 }
 
 /** Parse an epic plan into its ordered sub-ticket blocks (each from its heading to the next, the polish report, or
- *  EOF), or null when the plan is not an epic. Lenient — `epicPlanWellFormed` is what gates; blocks are kept in authored order,
+ *  EOF; nothing after the polish report is read), or null when the plan is not an epic. Lenient — `epicPlanWellFormed` is what gates; blocks are kept in authored order,
  *  neither deduplicated nor reordered (§27.10 "copied as authored"). */
 export function parseEpicPlan(planText: string): { subTickets: EpicSubTicket[] } | null {
   if (!isEpicPlan(planText)) return null;
@@ -78,11 +78,7 @@ export function parseEpicPlan(planText: string): { subTickets: EpicSubTicket[] }
       current = { index: heading.index, title: heading.title, body: [] };
       continue;
     }
-    if (line.trim() === POLISH_REPORT_HEADING) {
-      flush();
-      current = null;
-      continue;
-    }
+    if (line.trim() === POLISH_REPORT_HEADING) break;
     if (current !== null) current.body.push(line);
   }
   flush();

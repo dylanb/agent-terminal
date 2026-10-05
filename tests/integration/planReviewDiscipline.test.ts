@@ -6,8 +6,6 @@ import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { EPIC_GRAMMAR, POLISH_REPORT_HEADING } from '../../src/shared/epicPlan';
 import { SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 
-// The plan-bundle reviewers converge only when every lens shares the materiality floor, scope cuts both ways,
-// the security lens has a bounded adversary, polish is deferred, and the plan stays at contract altitude.
 const SOURCE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
 const LOOP = 'plan-bundle-loop';
 const POLISH_LOOP = 'plan-polish-loop';
@@ -37,7 +35,7 @@ const SCOPE_MARKER = 'beyond what the ticket requires';
 const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
 
-describe('plan-bundle review discipline', () => {
+describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   for (const f of charters) {
     it(`${f} carries the materiality floor`, () => expect(read(f)).toContain(MATERIALITY_MARKER));
     it(`${f} treats additions beyond the ticket as a finding`, () => expect(read(f)).toContain(SCOPE_MARKER));

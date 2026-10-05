@@ -98,6 +98,12 @@ describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as au
     expect(body).toContain('Plan for slice 1');
   });
 
+  it('reads nothing after the polish report, so a report naming a sub-ticket heading never opens a block', () => {
+    const plan = `${exampleEpicPlan(2)}\n${POLISH_REPORT_HEADING}\n\n### Sub-ticket 2 — Slice 2 of the feature\n- tightened its AC wording\n`;
+    expect(parseEpicPlan(plan)?.subTickets.map((t) => t.index)).toEqual([1, 2]);
+    expect(epicPlanWellFormed(plan)).toBe(true);
+  });
+
   it('ends the last sub-ticket at the polish report, so the report never reaches an issue body', () => {
     const plan = `${exampleEpicPlan(2)}\n${POLISH_REPORT_HEADING}\n\nNeeds your call: an operator-only note.\n`;
     const parsed = parseEpicPlan(plan);

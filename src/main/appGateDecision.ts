@@ -306,7 +306,8 @@ export async function runAppGateDecision(
   }
 
   // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
-  // loop-back reads the plan-decided count. Best-effort: a failure degrades to the count-1 default (never aborts).
+  // loop-back reads the plan-decided count. Best-effort: on a failure the previously sourced count (or the
+  // count-1 default) stands, and the advance is never aborted.
   try {
     deps.sourceSliceCount(repoDir, r.def);
   } catch (e) {
