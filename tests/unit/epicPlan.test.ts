@@ -6,6 +6,7 @@ import {
   exampleEpicPlan,
   isEpicPlan,
   parseEpicPlan,
+  POLISH_REPORT_HEADING,
 } from '../../src/shared/epicPlan';
 
 // §28.7 — the epic-plan classification grammar: a serialized vocabulary with one writer (the plan-bundle work
@@ -87,6 +88,29 @@ describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as au
     // the first block's body must NOT bleed into the second slice's text
     expect(parsed?.subTickets[0].body).not.toContain('PLAN-SLICE-TWO');
     expect(parsed?.subTickets[1].body).toContain('PLAN-SLICE-TWO: tear the widget down.');
+  });
+
+  it('keeps a `## ` heading inside a sub-ticket body, since the body is the slice plan copied verbatim', () => {
+    const plan = exampleEpicPlan(2).replace('Plan for slice 1', '## Test plan\n\nslice 1 tests after the heading\n\nPlan for slice 1');
+    const body = parseEpicPlan(plan)?.subTickets[0].body ?? '';
+    expect(body).toContain('## Test plan');
+    expect(body).toContain('slice 1 tests after the heading');
+    expect(body).toContain('Plan for slice 1');
+  });
+
+  it('reads nothing after the polish report, so a report naming a sub-ticket heading never opens a block', () => {
+    const plan = `${exampleEpicPlan(2)}\n${POLISH_REPORT_HEADING}\n\n### Sub-ticket 2 — Slice 2 of the feature\n- tightened its AC wording\n`;
+    expect(parseEpicPlan(plan)?.subTickets.map((t) => t.index)).toEqual([1, 2]);
+    expect(epicPlanWellFormed(plan)).toBe(true);
+  });
+
+  it('ends the last sub-ticket at the polish report, so the report never reaches an issue body', () => {
+    const plan = `${exampleEpicPlan(2)}\n${POLISH_REPORT_HEADING}\n\nNeeds your call: an operator-only note.\n`;
+    const parsed = parseEpicPlan(plan);
+    expect(parsed?.subTickets).toHaveLength(2);
+    expect(parsed?.subTickets[1].body).not.toContain('Polish report');
+    expect(parsed?.subTickets[1].body).not.toContain('an operator-only note');
+    expect(parsed?.subTickets[1].body).toContain('Plan for slice 2');
   });
 
   it('preserves authored order and does not deduplicate indices (§27.10 "copied as authored")', () => {

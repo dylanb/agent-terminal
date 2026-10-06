@@ -13,3 +13,7 @@ two surfaces read, or whether the next reader can follow the artifact. A citatio
 more-precise one would not change the meaning, an equal-quality rewording, or a defensible authoring choice
 the ticket does not require is not a finding; flagging it only drives a rewrite that manufactures the next
 round's work (§27.6).
+
+Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
+behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for
+is itself a finding — ask for it to be cut, never extended.

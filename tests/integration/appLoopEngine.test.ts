@@ -523,13 +523,13 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     defResult = resolved({ ...fileDef(), report: { sections: ['summary'], polish: 'defer' } });
     const engine = makeEngine();
     driveToReviewInjected(engine);
-    expect(injected[injected.length - 1]).toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
+    expect(injected[injected.length - 1]).toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i);
   });
 
   it('§27.8 — a def that fixes polish injects no deferral clause', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
-    expect(injected[injected.length - 1]).not.toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
+    expect(injected[injected.length - 1]).not.toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i);
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {

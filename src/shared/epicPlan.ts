@@ -1,9 +1,14 @@
-// §28.7 — the epic-plan classification grammar. §93 / CLAUDE.md composed-prompt-is-a-writer: one writer (the
-// plan-bundle recipe) and readers (the gate-time derivation, the promotion executor, the tests) share this one
-// definition, so if a token here changes, writer and readers move together. Grades the MINIMAL contract, never a
+// §28.7 — the epic-plan classification grammar. §93 / CLAUDE.md composed-prompt-is-a-writer: writers (the
+// plan-bundle recipe, and the plan-polish recipe that must keep its tokens and appends POLISH_REPORT_HEADING) and
+// readers (the gate-time derivation, the promotion executor, the tests) share this one definition, so if a token
+// here changes, writers and readers move together. Grades the MINIMAL contract, never a
 // rigid layout; §27.10 — the app never parses the epic's own ACs (the agent partitions them; the body is verbatim).
 
 export const EPIC_CLASSIFICATION = 'epic';
+
+/** §28.8.1 — the section the plan-polish turn appends after every machine-read block. It ends a sub-ticket block,
+ *  so operator-facing polish notes never reach a sub-ticket's issue body. */
+export const POLISH_REPORT_HEADING = '## Polish report';
 
 /** The grammar tokens `parseEpicPlan`, `epicPlanWellFormed`, and `exampleEpicPlan` all read from, so the parser
  *  and the writer cannot desync on a token's spelling. */
@@ -55,8 +60,8 @@ function parseSubTicketHeading(line: string): { index: number; title: string } |
   return { index: Number(m[1]), title: headingTitle(m[2]) };
 }
 
-/** Parse an epic plan into its ordered sub-ticket blocks (each from its heading to the next / EOF), or null when
- *  the plan is not an epic. Lenient — `epicPlanWellFormed` is what gates; blocks are kept in authored order,
+/** Parse an epic plan into its ordered sub-ticket blocks (each from its heading to the next, the polish report, or
+ *  EOF; nothing after the polish report is read), or null when the plan is not an epic. Lenient — `epicPlanWellFormed` is what gates; blocks are kept in authored order,
  *  neither deduplicated nor reordered (§27.10 "copied as authored"). */
 export function parseEpicPlan(planText: string): { subTickets: EpicSubTicket[] } | null {
   if (!isEpicPlan(planText)) return null;
@@ -73,6 +78,7 @@ export function parseEpicPlan(planText: string): { subTickets: EpicSubTicket[] }
       current = { index: heading.index, title: heading.title, body: [] };
       continue;
     }
+    if (line.trim() === POLISH_REPORT_HEADING) break;
     if (current !== null) current.body.push(line);
   }
   flush();

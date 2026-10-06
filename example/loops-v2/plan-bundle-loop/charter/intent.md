@@ -18,3 +18,7 @@ Raise a finding only where acting on it changes an observable outcome — an AC 
 silently narrowed. A citation already correct where a more-precise one would not change the meaning, or an
 equal-quality rewording of an already-faithful clause, is not a finding; flagging it only manufactures the
 next round's work (§27.6).
+
+Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
+behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for
+is itself a finding — ask for it to be cut, never extended.

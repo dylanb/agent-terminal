@@ -2656,9 +2656,9 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  // 9 flow steps (preparation, groom, plan-bundle, infra, red, green, refactor, integration-slice,
-  // finalize) render as 11 stations — the Not-started and Completed caps bracket the steps.
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(11, {
+  // 10 flow steps (preparation, groom, plan-bundle, plan-polish, infra, red, green, refactor, integration-slice,
+  // finalize) render as 12 stations — the Not-started and Completed caps bracket the steps.
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(12, {
     timeout: 10_000,
   });
   await expect(flowStepName()).toHaveText('preparation');
@@ -7288,9 +7288,14 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
 
 // ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
 const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
+// A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the
+// global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
+const CHAIN_LOOP_MS = 15_000;
+const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
 const CHAIN_ROSTERS: Record<string, string[]> = {
   groom: ['review-plan-intent'],
-  'plan-bundle': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
+  'plan-bundle': ['review-plan-principal', 'review-plan-intent', 'review-plan-tracer-slicer'],
+  'plan-polish': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
   infra: [...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
   red: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'],
   green: [...CHAIN_IMPL12, 'impl-review-regression-guard'],
@@ -7300,7 +7305,7 @@ const CHAIN_ROSTERS: Record<string, string[]> = {
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files.
-function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logInjected?: boolean } = {}): void {
+function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; polishedSlices?: number; logInjected?: boolean } = {}): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
@@ -7315,6 +7320,10 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logI
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
+    // §28.8.1 — with `polishedSlices` the polish turn rewrites the slice block, so a test can tell which gate's count won.
+    'plan-polish': opts.polishedSlices
+      ? `${decode(b64(`# plan\n\n${exampleSlicePlan(opts.polishedSlices)}\n${completionMarker('plan-bundle')}\n${completionMarker('plan-polish')}\n`), `${art}/plan.md`)}; ${done('work-plan-polish')}`
+      : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
     red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
@@ -7332,7 +7341,7 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; logI
   const consolidateArm = (step: string): string =>
     `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
 
-  const steps = ['groom', 'plan-bundle', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
+  const steps = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
   const cases = steps
     .flatMap((s) => [
       `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,
@@ -7369,7 +7378,8 @@ function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   return dir;
 }
 
-test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
+test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(8));
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-fulltdd-bin-', { realCommitOps: true });
@@ -7400,7 +7410,8 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   };
 
   await approveStep('groom'); // gate is gh update-issue-body (no commit); its groomed-ticket feeds plan-bundle
-  await approveStep('plan-bundle', 'groomed-ticket'); // gate is gh mark-ready; its plan feeds every downstream loop
+  await approveStep('plan-bundle', 'groomed-ticket'); // no side-effect; its plan feeds plan-polish
+  await approveStep('plan-polish', 'plan'); // gate is gh mark-ready; the polished plan feeds every downstream loop
   await approveStep('infra', 'plan');
   await approveStep('red', 'plan'); // §28.5.1 — the frozen baseline is recorded on the branch here
   await approveStep('green', 'plan'); // slice D — the branch-keyed baseline is FOUND across the step
@@ -7422,18 +7433,20 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
 });
 
 // §28.4 D1+D2+D3 — end to end: the whole impl-slice×N chain. (D3) The plan-bundle writes a `## Impl-slices`
-// block with 2 entries and the plan-bundle approve gate SOURCES that count into the `slices` input (no manual
-// seed) — driving the refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
+// block with 1 entry, the plan-polish turn rewrites it to 2, and each planning approve gate SOURCES its plan's
+// count into the `slices` input (no manual seed) — the later, polished count winning (§28.8.1) and driving the
+// refactor loop-back twice. (D1) The re-entered slice-2 RED writes its OWN per-slice result
 // artifact (`red-result.slice-2.md`), distinct from slice 1's `red-result.md`, rather than resuming slice 1's
 // product. (D2/#123) The slice-2 RED entry CLEARS slice 1's baseline, so a stale same-branch baseline cannot leak
-// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: plan-bundle gate
+// into slice 2's frozen check. The per-slice file is surfaced in the loop viewer (#126). Wiring: planning gate
 // → sourceSliceCount → flow.resolveInputs; then flow.currentSlice → enterAppLoop → the engine (slice-keyed
 // artifact + clearBaseline).
-test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+test('§28.4 D1+D2+D3 — the polished plan sources the impl-slice count, and the loop-back re-entered RED starts a fresh slice (its own artifact + a cleared baseline), surfaced in the viewer', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(10));
   const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir, { implSlices: 2 }); // the plan-bundle plans 2 impl-slices
+  seedFullTddChainAgent(binDir, { implSlices: 1, polishedSlices: 2 }); // plan-bundle plans 1 impl-slice; polish makes it 2
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7459,8 +7472,10 @@ test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the 
   // `slices` is 2 — loops back to RED for slice 2 (rather than falling through to integration-slice).
   await approveStep('groom');
   await approveStep('plan-bundle');
-  // §28.4 D3 — the plan-bundle gate SOURCED the impl-slice count (2) from the plan's ## Impl-slices block into the
-  // `slices` flow input (no manual seed); this is what drives the loop-back to slice 2 below.
+  // §28.4 D3 — each planning gate SOURCES its plan's ## Impl-slices count into `slices` (no manual seed): 1 from the
+  // draft, then 2 from the polished plan, which is what drives the loop-back to slice 2 below.
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
+  await approveStep('plan-polish');
   expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
   await approveStep('infra');
   await approveStep('red');
@@ -7496,6 +7511,7 @@ test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the 
 // as a §25 flow re-entry. This is the wiring the reopenSlice() transition was built for (loop-panel button →
 // flow:appGateDecision → runAppGateDecision → reopenSlice → the flow machine), on a real chain, real phase gate.
 test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice RED step, without advancing', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(7));
   const repo = seedFullTddChainRepo('agent-term-e2e-backtored-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
@@ -7524,6 +7540,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   // Drive the chain to the GREEN phase gate: groom → plan-bundle → infra → red → (advance to) green.
   await approveStep('groom');
   await approveStep('plan-bundle');
+  await approveStep('plan-polish');
   await approveStep('infra');
   await approveStep('red');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
@@ -7643,7 +7660,7 @@ test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN 
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §28.7 / #124 Slice 2 — a repo seeded DIRECTLY at the plan-bundle epic gate whose flow declares NO github-ticket
+// §28.7 / #124 Slice 2 — a repo seeded DIRECTLY at the plan-polish epic gate whose flow declares NO github-ticket
 // input on any step, so computeRefs yields refs.ticket === null → refs.epic === null at the gate. Seeded statically
 // (never driven live): a live pickup would call acceptBootstrap and install a trusted bootstrap whose issue would
 // then supply refs.ticket, defeating the unresolvable-epic-issue reproduction. No bootstrap.yaml on disk. The gate
@@ -7655,15 +7672,15 @@ function seedEpicNoTicketGateRepo(prefix: string, subTickets = 2): string {
   mkdirSync(join(at, 'loop', 'artifacts'), { recursive: true });
   writeFileSync(
     join(at, 'flow.yaml'),
-    'name: epic-no-ticket\nsteps:\n  - id: plan-bundle\n    kind: loop\n    loop: plan-bundle-loop\n    loop_namespace: app\n  - id: done\n    kind: manual\n',
+    'name: epic-no-ticket\nsteps:\n  - id: plan-polish\n    kind: loop\n    loop: plan-polish-loop\n    loop_namespace: app\n  - id: done\n    kind: manual\n',
   );
   // Already ENTERED at plan-bundle (in_progress), so no Start click is needed — hence no pickup runs and no
   // trusted bootstrap is installed; the epic issue ref stays unresolvable.
-  writeFileSync(join(at, 'flow-state.yaml'), 'step: plan-bundle\nstatus: in_progress\n');
+  writeFileSync(join(at, 'flow-state.yaml'), 'step: plan-polish\nstatus: in_progress\n');
   recordDisposition(dir, { source: 'non-catalog' });
   writeFileSync(
     join(at, 'loop', 'run-state.yaml'),
-    `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-bundle-loop\nstep: plan-bundle\nturn_key: consolidate-plan-bundle\nstatus: complete\nverdict: clean\nround: 1\n`,
+    `schema_version: ${APP_LOOP_STATE_SCHEMA}\nloop: plan-polish-loop\nstep: plan-polish\nturn_key: consolidate-plan-polish\nstatus: complete\nverdict: clean\nround: 1\n`,
   );
   writeFileSync(join(at, 'loop', 'artifacts', 'plan.md'), `${exampleEpicPlan(subTickets)}\n`);
   return dir;
@@ -7698,7 +7715,7 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-polish');
   // §25 — no preview event is pinned NON-vacuously at the unit + integration layers (this reconstruction path
   // Starts no flow, so it opens no audit run to read); the observable gate outcomes above are the e2e's job.
 
@@ -7708,9 +7725,9 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// ---- §28.7 S8 — the epic overlay: an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate ----
-// A focused fake-agent driving groom → plan-bundle, whose plan-bundle work arm writes an EPIC-classified plan
-// (exampleEpicPlan — the one authored grammar). Reused by the S8 slices; each drives to the plan-bundle gate.
+// ---- §28.7 S8 — the epic overlay: an epic-classified plan surfaces its sub-ticket split at the plan-polish gate ----
+// A focused fake-agent driving groom → plan-bundle → plan-polish, whose plan-bundle work arm writes an EPIC-classified plan
+// (exampleEpicPlan — the one authored grammar). Reused by the S8 slices; each drives to the plan-polish gate.
 function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
@@ -7722,6 +7739,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(b64(epicPlan), `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
+    'plan-polish': `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
   };
   const arm = (step: string): string => {
     const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}; ${done(`review-${step}`)}`;
@@ -7734,7 +7752,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
-    `${['groom', 'plan-bundle'].map(arm).join('\n')}\n` +
+    `${['groom', 'plan-bundle', 'plan-polish'].map(arm).join('\n')}\n` +
     '  esac\ndone\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
@@ -7772,11 +7790,11 @@ test('seedEpicChainRepo binds the repo to a catalog entry carrying the example f
 });
 
 const EPIC_GATE_WAIT = { start: 10_000, gate: 90_000, step: 30_000 } as const;
-const EPIC_GATE_DRIVE_MS = EPIC_GATE_WAIT.start + 2 * EPIC_GATE_WAIT.gate + EPIC_GATE_WAIT.step;
+const EPIC_GATE_DRIVE_MS = EPIC_GATE_WAIT.start + 3 * EPIC_GATE_WAIT.gate + 2 * EPIC_GATE_WAIT.step;
 
-// Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
+// Drive Start → groom → approve groom → approve plan-bundle → plan-polish reaches its gate. Leaves the panel open at the plan-polish
 // gate for the caller to inspect/act on.
-async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
+async function driveToEpicPlanPolishGate(repo: string): Promise<void> {
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
   await typeCommand('fake-agent');
@@ -7787,9 +7805,15 @@ async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-bundle');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toContain('verdict: clean'); // plan-bundle at gate
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click(); // approve plan-bundle → enter plan-polish
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-polish');
+  await expect
+    .poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate })
+    .toMatch(/step: plan-polish[\s\S]*verdict: clean/); // plan-polish at gate
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
 }
 
-test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the plan-bundle gate', { tag: '@ownapp' }, async () => {
+test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the plan-polish gate', { tag: '@ownapp' }, async () => {
   const repo = seedEpicChainRepo('agent-term-e2e-epicA-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicA-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-epicA-bin-', { realCommitOps: true });
@@ -7801,7 +7825,7 @@ test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
 
   // The plan the agent wrote is classified an epic → the panel names every sub-ticket promotion will create.
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
@@ -7827,7 +7851,7 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
 
   // Approve the epic plan → the confirm-first preview is raised (nothing has reached GitHub yet).
   await loopPanel().locator('[data-gate-option="approve"]').click();
@@ -7845,7 +7869,7 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   await expect(dialog).toBeHidden({ timeout: 10_000 });
   expect(readGhLog(logFile)).not.toContain('issue create');
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
-  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // not advanced/terminated on decline
+  expect(readIf(appFlowState(repo))).toContain('step: plan-polish'); // not advanced/terminated on decline
 
   // Approve again and CONFIRM this time → the promotion runs, the gate is accepted, and the epic flow stands down.
   await loopPanel().locator('[data-gate-option="approve"]').click();
@@ -7853,7 +7877,7 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   await dialog.locator('.pill.danger.confirm').click();
   await expect.poll(() => readGhLog(logFile), { timeout: 30_000 }).toContain('issue create'); // the chain is created now
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-polish'); // stood down
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -7873,7 +7897,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toBeVisible({ timeout: 15_000 });
@@ -7906,7 +7930,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   expect(epicBody).toContain('- [ ] #501 — Slice 1 of the feature');
   expect(epicBody).toContain('- [ ] #502 — Slice 2 of the feature');
 
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle'); // stood down
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-polish'); // stood down
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -7943,7 +7967,7 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: EPIC_PIN_WAIT.firstPaint });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
   expect(readRunBinding(repo), 'the run is bound to catalog flow X').toEqual({ source: 'catalog', tier: 'global', id: EPIC_X.id });
   const plan = readIf(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'));
   expect(plan, 'the epic plan was written').toContain('Slice 1 of the feature');
@@ -7990,7 +8014,7 @@ test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const preview = page.getByRole('alertdialog');
   await expect(preview).toBeVisible({ timeout: 15_000 });
@@ -8000,7 +8024,7 @@ test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported
   await expect(page.getByRole('alertdialog').filter({ hasText: 'gh label create agent-loop/subticket' })).toBeVisible({ timeout: 30_000 });
   expect(ghPromotionMutations(logFile)).toEqual(mutationsBeforeConfirm);
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'))).toBe(false);
-  expect(readIf(appFlowState(repo))).toContain('step: plan-bundle'); // the gate stays re-decidable
+  expect(readIf(appFlowState(repo))).toContain('step: plan-polish'); // the gate stays re-decidable
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -8020,7 +8044,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
   // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
   // SOLE guard against duplicate public issues, so #124 refuses at approve — before the confirm preview is raised.
   writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
@@ -8032,10 +8056,10 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
-  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-polish.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-polish');
   // §25 — the reconstructed timeline records NO preview event (the block fired no `epic-promotion-preview` cmd).
   await expect.poll(() => epicPreviewAuditCount(home, repo), { timeout: 10_000 }).toBe(0);
 
@@ -8057,7 +8081,7 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
   // A READABLE partial-promotion record whose recorded split has diverged from the plan (an index the current
   // plan no longer carries). This exercises the REAL gate wiring — readEpicPromotion + promotionRecordStale in
   // index.ts, not an injected stub — so a deleted stale branch would raise the preview here and fail this test.
@@ -8073,10 +8097,10 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   await expect(page.getByRole('alertdialog').filter({ hasText: 'partial promotion' })).toBeVisible({ timeout: 15_000 });
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
-  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-bundle.
+  // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-polish.
   await expect.poll(() => ghPromotionMutations(logFile), { timeout: 10_000 }).toEqual(promoMutationsBefore); // no create/edit/close
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: plan-polish');
   // §25 — the reconstructed timeline records NO preview event (the block fired no `epic-promotion-preview` cmd).
   await expect.poll(() => epicPreviewAuditCount(home, repo), { timeout: 10_000 }).toBe(0);
 
@@ -8099,7 +8123,7 @@ test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanPolishGate(repo);
 
   // AC1 — the classification is surfaced at the gate: the panel names every sub-ticket the split will create.
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
@@ -8148,7 +8172,7 @@ test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (
 
   // The epic flow stood down (terminated), and the gate was accepted.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: accepted');
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).not.toContain('step: plan-polish');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

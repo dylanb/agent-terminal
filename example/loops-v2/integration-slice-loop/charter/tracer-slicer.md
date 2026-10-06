@@ -19,3 +19,12 @@ describes its slices only in prose: without a well-formed block the count silent
 runs a single slice regardless of the breakdown. The **epic** plan is the exception — it carries a
 `## Sub-tickets` block instead (§28.7) and no `## Impl-slices`; for an epic, grade that partition, not the
 impl-slice block.
+
+Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
+two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
+more-precise citation that would not change the meaning, or a defensible authoring choice the ticket does
+not require is not a finding; flagging it only drives a rewrite that manufactures the next round's work.
+
+Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
+behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for
+is itself a finding — ask for it to be cut, never extended.
