@@ -836,15 +836,25 @@ describe('§27 engine — stall (AC6)', () => {
     expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('resumed after a stall'), 0);
   });
 
-  it('a done file after the operator terminated a stalled turn does not resume it', () => {
+  it('a done file after the stalled turn was released (its flow terminated) does not resume it', () => {
     const engine = makeEngine();
     enterAndInjectWork(engine);
     engine.onStall();
     writeArtifact(true);
-    engine.routeOut(repo, STEP, TURN_KEY, 'terminate');
+    engine.releaseStalledTurn(repo);
     engine.onDoneSignal();
     expect(readAppLoopState(repo)?.status).toBe('error');
     expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('releasing a different worktree leaves the stalled turn resumable', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.releaseStalledTurn(join(tmpdir(), 'some-other-repo'));
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('working');
   });
 
   it('visible activity re-arms the stall watchdog while in flight (a long streaming turn never stalls)', () => {

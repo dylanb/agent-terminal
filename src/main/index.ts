@@ -792,6 +792,7 @@ async function createWindow(): Promise<void> {
       trustedAppBootstraps.delete(repoKey);
     },
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
     clearMonitor: () => {

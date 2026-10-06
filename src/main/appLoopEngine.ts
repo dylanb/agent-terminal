@@ -223,6 +223,8 @@ export interface AppLoopEngine {
   /** The live in-memory error for `repoDir`, or null — the view surfaces it when the persisted error write
    *  failed, so the route-out stays reachable (§27.12c). */
   liveErrorFor(repoDir: string): AppLoopLiveError | null;
+  /** §27.12 — the flow for `repoDir` was terminated: a stalled turn there no longer resumes on its done-signal. */
+  releaseStalledTurn(repoDir: string): void;
 }
 
 /** The in-flight §27 turn, a discriminated union on `phase` so the work turn and the chained review-and-fix
@@ -1306,7 +1308,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
       if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
       if (action === 'terminate') {
-        runner.release();
         deps.terminateFlow(repoDir);
         return;
       }
@@ -1567,6 +1568,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     activeTurnKey: () => active?.turnKey ?? null,
     activeRepoDir: () => active?.repoDir ?? null,
+    releaseStalledTurn: (repoDir) => {
+      if (active?.repoDir === repoDir) runner.release();
+    },
     liveErrorFor: (repoDir) => {
       if (!liveError || liveError.repoDir !== repoDir) return null;
       const { kind, loop, step, turnKey, reason, round } = liveError;

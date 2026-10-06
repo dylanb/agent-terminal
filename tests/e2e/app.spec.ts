@@ -5276,6 +5276,52 @@ test('a §27 turn that stalls on an agent question completes when the operator a
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.12 — a flow terminated from the strip while its turn sits stalled has ended: the agent's late done file
+// must not resume the turn and advance a run the operator already ended.
+test('a §27 turn stalled on an agent question does not resume after the flow is terminated (§27.12)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-askterm-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-askterm-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-askterm-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'ask' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '4000', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
+
+  await page.locator('#flow-strip .flow-terminate').click();
+  const confirm = page.locator('#flow-confirm-host .flow-modal');
+  await expect(confirm).toBeVisible({ timeout: 10_000 });
+  await confirm.locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+
+  await typeCommand('yes');
+  const doneFile = join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME);
+  await expect.poll(() => readIf(doneFile), { timeout: 15_000 }).toBe('work-plan');
+  // The done file is down; give its watcher time to act before asserting it did nothing.
+  await page.waitForTimeout(3_000);
+  expect(readIf(appRunState(repo))).not.toContain('status: working');
+  expect(readIf(appRunState(repo))).not.toContain('status: complete');
+  expect(readIf(join(repo, '.agent-terminal', 'review-runs'))).toBe('');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // §27.12 / AC8 — a §27 work turn stranded in `error`, resumed after a RELAUNCH, must complete on its
 // done-signal when Retry re-drives it: the resume/route-out path re-arms the §27 done-file watch, so the
 // re-injected turn's turn-done file is observed. Without the re-arm the fresh process has no live watcher,
