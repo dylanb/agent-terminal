@@ -3125,7 +3125,8 @@ function seedFakeAgentV2(
   opts: {
     stepId: string;
     artifactRel: string;
-    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor';
+    // `ask` asks the operator a question and waits silently; the operator's `yes` completes the turn.
+    work: 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor' | 'ask';
     // §28.5.5 — the classified outcome the fake writes into the phase-result file, read back by every
     // result-producing work mode's completion gate (red/green/refactor). `writeTest` is RED-only: whether the
     // turn authors a test-glob file this turn (the "a test was added" async clause).
@@ -3194,7 +3195,9 @@ function seedFakeAgentV2(
   const workAct =
     opts.work === 'noop'
       ? ':'
-      : opts.work === 'green'
+      : opts.work === 'ask'
+        ? `${bump}; mkdir -p .agent-terminal; : > .agent-terminal/asked; echo 'Question: may I proceed? (yes)'`
+        : opts.work === 'green'
         ? greenAct
         : opts.work === 'red'
           ? redAct
@@ -3263,6 +3266,9 @@ function seedFakeAgentV2(
     `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;\n` +
     `    *turn-done:${reviewKey}*) ${reviewAct} ;;\n` +
     `    *turn-done:${turnKey}*) ${workAct} ;;\n` +
+    (opts.work === 'ask'
+      ? `    yes) [ -f .agent-terminal/asked ] && { rm .agent-terminal/asked; ${writeArtifact(true)}; ${done(turnKey)}; } ;;\n`
+      : '') +
     '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
@@ -5225,6 +5231,44 @@ test('a §27 work turn with no valid artifact retries then errors, offering all 
   // Accept advances through the same chain a signalled completion takes — WITHOUT re-running the turn.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: complete');
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2); // Accept never re-injected the work turn
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.12 — an agent that stops mid-turn to ask the operator a question goes silent, so the stall watchdog
+// summons the human. Answering the agent is the route out: its done-file completes the turn with no Retry.
+test('a §27 turn that stalls on an agent question completes when the operator answers and the agent writes its done file (§27.12)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-ask-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-ask-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-ask-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'ask' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '4000', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
+  expect(readIf(appRunState(repo))).toContain('stalled');
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
+
+  await typeCommand('yes');
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(1); // never re-injected
+  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

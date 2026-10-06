@@ -944,6 +944,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       deps.emitError(reason);
     },
+    resumeStalled: () => {
+      if (!active) return;
+      persist('working');
+      deps.audit(active.repoDir, `§27 turn ${active.turnKey} resumed after a stall (done-signal)`, 0);
+    },
     onComplete: (turnKey) => {
       if (!active) return;
       if (active.phase === 'work') {
@@ -1239,9 +1244,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (a?.completion.kind === 'red') {
         // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
         // re-enter the SYNC runner with the pre-evaluated gate. Guards: `asyncGatePendingFor` dedupes a duplicate
-        // (un-debounced) done-signal while a gate is pending; the runner stays 'in-flight' during the await, so
-        // a concurrent onStall that errors the turn makes this late signal a no-op (runner state guard); and a
-        // turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
+        // (un-debounced) done-signal while a gate is pending; a stall during the await leaves the turn resumable,
+        // so the late gate still resolves it unless the operator accepted or terminated it meanwhile (runner
+        // guard); and a turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
         if (asyncGatePendingFor === a) return;
         asyncGatePendingFor = a;
         void redAsyncGate(a).then((gate) => {
@@ -1257,11 +1262,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         void greenAsyncGate(a).then(({ gate, changedTests }) => {
           asyncGatePendingFor = null;
           if (active === a) {
-            // A concurrent onStall may have errored `a` while the gate awaited (the runner is then not
-            // 'in-flight', and `active` still points at `a` — onStall does not rebuild it). The stash is still
-            // written here, but it is SAFE: `runner.onDoneSignal(gate)` below no-ops (runner-state guard), so
-            // onComplete never fires for this turn to drain it, and the next work turn's onComplete clears it
-            // unconditionally. IT-GREEN-8 pins that this stashed flag is never recorded against the errored turn.
+            // If the operator accepted or terminated `a` while the gate awaited, `runner.onDoneSignal(gate)` below
+            // no-ops, so onComplete never drains this stash; the next work turn's onComplete clears it.
             stashChangedTests(a, changedTests);
             runner.onDoneSignal(gate);
           }
@@ -1304,6 +1306,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
       if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
       if (action === 'terminate') {
+        runner.release();
         deps.terminateFlow(repoDir);
         return;
       }
@@ -1317,6 +1320,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             refuseRouteOut('turn-error', saveFailReason, round);
             return;
           }
+          runner.release();
           deps.audit(repoDir, successAudit, 0);
         };
         if (active.phase === 'review') {
