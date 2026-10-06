@@ -2,7 +2,8 @@
 // gate refs from the flow's typed inputs (AC8/§27.15).
 
 import type { GateDecisionOption } from '../shared/ipc';
-import { gateDecisionAuditCmd } from '../shared/audit';
+import { gateDecisionAuditCmd, type GateDecider } from '../shared/audit';
+import type { AutoHaltReason } from '../shared/gateAuthority';
 import {
   validFeedback,
   validInstruction,
@@ -38,7 +39,7 @@ export interface AppGateDecisionDeps {
    *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
-  advanceFlow(repoDir: string): void;
+  advanceFlow(repoDir: string, step?: string): void;
   /** §28.4.1 — on an approve, resolve the impl-slice count from the plan-bundle's slice-plan into the `slices`
    *  flow input the refactor loop-back reads (§28.4.1). Data-driven: the composition root reads the count
    *  only when `def` declares the plan artifact (the plan-bundle's contract), so a non-plan-bundle approve is a
@@ -57,7 +58,7 @@ export interface AppGateDecisionDeps {
   clearSliceBrief(repoDir: string): void;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
-  maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string): EpicGateOutcome;
+  maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string, decider?: GateDecider): EpicGateOutcome;
   /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback
    *  (a domain port the composition root wires to the §27 engine). It is NOT approve: the flow does not
    *  advance and no gh side-effect runs — the loop returns to iterate on the step. Returns whether the round
@@ -327,4 +328,30 @@ export async function runAppGateDecision(
   deps.advanceFlow(repoDir);
   deps.onViewChanged();
   return false; // only a request-changes reports true; approve's result is ignored by the one-way caller
+}
+
+export type GateApproveOutcome =
+  | { kind: 'advanced'; effectFailures: string[] }
+  | { kind: 'preview-raised' }
+  | { kind: 'blocked' }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'accept-failed'; reason: string }
+  | { kind: 'abandoned' }
+  | { kind: 'run-ended' }
+  | { kind: 'refused-late'; reasons: AutoHaltReason[] }
+  | { kind: 'stood-down' };
+
+export type ApproveClaim = { ok: true } | { ok: false; abandoned: true } | { ok: false; runEnded: true } | { ok: false; reasons: AutoHaltReason[] };
+
+export type ApproveDecider =
+  | { kind: 'human' }
+  | { kind: 'engine'; boundLoop: string; humanAttempted(): boolean; claimAccept(): ApproveClaim; checkDef(r: LoopDefV2Result): string | null };
+
+export async function runAppApprove(repoDir: string, step: string, turnKey: string, deps: AppGateDecisionDeps, _decider: ApproveDecider): Promise<GateApproveOutcome> {
+  await runAppGateDecision(repoDir, step, turnKey, 'approve', deps);
+  return { kind: 'refused', reason: 'stub' };
+}
+
+export function stepScopedAdvance(_currentStep: (repoDir: string) => string | null, advance: (repoDir: string) => void): AppGateDecisionDeps['advanceFlow'] {
+  return (repoDir) => advance(repoDir);
 }

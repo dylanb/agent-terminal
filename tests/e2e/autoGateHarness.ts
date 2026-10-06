@@ -1,6 +1,8 @@
 // Helpers only the #137 auto-gate e2e uses (§27.9.1), built on the shared fake tools.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { load } from 'js-yaml';
 import type { Page } from '@playwright/test';
@@ -45,6 +47,35 @@ export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): str
     if (s.authority !== undefined) lines.push(`    gate_authority: ${s.authority}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+export const AUTO_GATE_CAPABILITIES = 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n';
+
+/** A real git repo at its baseline commit, its §27 bootstrap complete and its flow not started at `firstStep`;
+ *  `.agent-terminal/` is gitignored so engine state never rides into a phase commit. A `plan` artifact is
+ *  present for loops that declare it as an input; `ticket` pre-supplies a groom step's ticket input. */
+export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { localFlowYaml?: string; ticket?: string } = {}): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const git = (...args: string[]): void => void execFileSync('git', args, { cwd: dir });
+  git('init', '-q');
+  git('config', 'user.email', 't@t');
+  git('config', 'user.name', 'T');
+  writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
+  writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  writeFileSync(join(dir, 'loop-capabilities.yaml'), AUTO_GATE_CAPABILITIES);
+  const loopDir = join(dir, '.agent-terminal', 'loop');
+  mkdirSync(join(loopDir, 'artifacts'), { recursive: true });
+  writeFileSync(join(loopDir, 'artifacts', 'plan.md'), '# plan\n');
+  writeFileSync(
+    join(loopDir, 'bootstrap.yaml'),
+    'schema_version: 1\nstatus: complete\npr: 4242\nbranch: plan-loop/issue-176\nissue: 176\ninitial_status: planning\nupdated_at: 2026-07-23T00:00:00.000Z\n',
+  );
+  const inputs = opts.ticket === undefined ? '' : `inputs:\n  ticket: ${JSON.stringify(opts.ticket)}\n`;
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: ${firstStep}\nstatus: not_started\n${inputs}`);
+  if (opts.localFlowYaml !== undefined) writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), opts.localFlowYaml);
+  git('add', '-A');
+  git('commit', '-qm', 'baseline');
+  return dir;
 }
 
 /** An operator-catalog flow (the global tier under `home`) made active for `repo` — an N9b.2-trusted run. */

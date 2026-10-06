@@ -7,6 +7,7 @@ import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
 import type { StartednessSignal } from './flowStarted';
 import type { HeldRunView } from './runHold';
+import type { AutoHaltReason } from './gateAuthority';
 
 export type SessionId = string;
 
@@ -456,6 +457,20 @@ export interface FlowDerived {
  *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
  *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
  *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
+export interface GlobsDiff {
+  lines: { op: '+' | '-' | ' '; text: string }[];
+}
+
+/** §27.9.1 */
+export interface FlowAutoGateView {
+  deciding: boolean;
+  hung: boolean;
+  haltGeneric: boolean;
+  haltReasons: { reason: AutoHaltReason; detail?: string }[];
+  failedEffect?: { state: 'set' | 'unknown'; detail: string };
+  globsReview?: 'pending' | { anchorHead: string | null; vsHead: GlobsDiff | 'unavailable'; vsWorkingTree: GlobsDiff | 'unavailable' };
+}
+
 export interface FlowLoopView {
   status: string;
   /** The run's iteration counter (§27.5). Absent means NO ROUND HAS RUN — the honest value for a
@@ -482,6 +497,7 @@ export interface FlowLoopView {
    *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
    *  a derived loop view — the `?` is for hand-constructed views only. */
   humanNeeded?: boolean;
+  autoGate?: FlowAutoGateView;
   /** §27.12 — the reason the current turn failed (or, on a marked binding, why the step names no surviving
    *  engine), present only at `status: 'error'`. Lets the loop panel show WHY the loop stopped (e.g. "no
    *  Claude at the prompt") rather than a bare "error", and is cleared the moment the status recovers.

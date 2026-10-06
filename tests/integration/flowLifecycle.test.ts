@@ -82,6 +82,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
         effects.forgotten.push(k);
         if (opts.forgetThrows === true) throw new Error('the run registry is unwritable');
       },
+      endRun: () => {},
       recordTerminate: (k: string) => audit.recorder.recordTerminate(k),
       clearTodos: (k: string) => todos.clear(k),
       clearSliceBrief: (k: string) => clearSliceBrief(k),

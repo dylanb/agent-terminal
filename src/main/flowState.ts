@@ -23,6 +23,7 @@ export interface PersistedFlowState {
    *  `decodeStrict` still accepts a document a pre-sweep run stamped, and `writeTitle` does not throw
    *  on it (§H.2). Absent for a flow that never started, and for one persisted before this field. */
   startedAt?: number;
+  flow?: string;
   /** The name the user gave this worktree's work (§22.3.1). Absent until they name one. */
   title?: string;
   /** §28.4 loop-back state: per-repeat-step iteration count (how many times each repeat step has been

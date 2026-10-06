@@ -60,8 +60,13 @@ export interface AuditRecorderDeps {
   log?: (msg: string, err: unknown) => void;
 }
 
+export interface AuditRunStart {
+  startedAt: number;
+  flow: string;
+}
+
 export interface AuditRecorder {
-  recordTransition(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike): void;
+  recordTransition(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike, start?: AuditRunStart): void;
   /** Record a todo-list mutation, but only while a run is open for the repo (§25.4). */
   recordTodoChange(repoKey: string, before: TodoLike[], after: TodoLike[]): void;
   /** Record a loop-state observation for the run, diffing against the last seen (§25.5). Fed by the

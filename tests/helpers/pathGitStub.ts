@@ -6,13 +6,11 @@ import { shellQuote } from '../../src/shared/shellQuote';
 
 /** One scripted answer. `argvPrefix` is matched against git's argv from the subcommand on, after any leading
  *  global options (`-c k=v`, `-C dir`, `--no-replace-objects`, …), so production's hardening flags never
- *  defeat a match. The first matching entry answers; every other invocation runs the real git. */
-export interface GitInterception {
-  readonly argvPrefix: readonly string[];
-  readonly stdout?: string;
-  readonly stderr?: string;
-  readonly exitCode: number;
-}
+ *  defeat a match. The first matching entry answers; every other invocation runs the real git. A matching
+ *  entry's `script` (bash source) runs first; with no `exitCode` the real git then answers. */
+export type GitInterception =
+  | { readonly argvPrefix: readonly string[]; readonly script?: string; readonly stdout?: string; readonly stderr?: string; readonly exitCode: number }
+  | { readonly argvPrefix: readonly string[]; readonly script: string };
 
 export interface PathGitStub {
   readonly binDir: string;
@@ -38,20 +36,24 @@ function resolveRealGit(): string {
   throw new Error('pathGitStub: no executable git on PATH');
 }
 
-function interceptionArm(i: GitInterception): string {
+function interceptionArm(i: GitInterception, realGit: string): string {
   const tests = [`[ "\${#sub[@]}" -ge ${i.argvPrefix.length} ]`];
   i.argvPrefix.forEach((arg, n) => tests.push(`[ "\${sub[${n}]}" = ${shellQuote(arg)} ]`));
+  const script = i.script === undefined ? '' : `eval ${shellQuote(i.script)}; `;
+  if (!('exitCode' in i)) return `if ${tests.join(' && ')}; then ${script}exec ${shellQuote(realGit)} "$@"; fi`;
   const out = i.stdout === undefined ? '' : `printf '%s' ${shellQuote(i.stdout)}; `;
   const err = i.stderr === undefined ? '' : `printf '%s' ${shellQuote(i.stderr)} >&2; `;
-  return `if ${tests.join(' && ')}; then ${out}${err}exit ${i.exitCode}; fi`;
+  return `if ${tests.join(' && ')}; then ${script}${out}${err}exit ${i.exitCode}; fi`;
 }
 
 /** Installs a `git` stub first on `process.env.PATH` (via `vi.stubEnv`), so any code that spawns `git` through
  *  PATH at call time reaches it. */
 export function installPathGitStub(interceptions: readonly GitInterception[]): PathGitStub {
   for (const i of interceptions) {
-    if (!Number.isInteger(i.exitCode) || i.exitCode < 0 || i.exitCode > 255) {
-      throw new RangeError(`pathGitStub: exitCode must be an integer 0–255; got ${i.exitCode}`);
+    if (!('exitCode' in i) && typeof i.script === 'string') continue;
+    const exitCode = (i as { exitCode?: unknown }).exitCode;
+    if (typeof exitCode !== 'number' || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) {
+      throw new RangeError(`pathGitStub: exitCode must be an integer 0–255; got ${String(exitCode)}`);
     }
   }
   const realGit = resolveRealGit();
@@ -68,7 +70,7 @@ export function installPathGitStub(interceptions: readonly GitInterception[]): P
     '  esac',
     'done',
     'sub=("${args[@]:$i}")',
-    ...interceptions.map(interceptionArm),
+    ...interceptions.map((i) => interceptionArm(i, realGit)),
     `exec ${shellQuote(realGit)} "$@"`,
     '',
   ].join('\n');

@@ -9,7 +9,12 @@ import {
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
+  autoHaltAuditCmd,
+  epicPromotionAuditCmd,
   gateDecisionAuditCmd,
+  gateDecisionDecider,
+  gateDecisionKind,
+  parseAutoHaltReasons,
   loopEvents,
   parseAuditStream,
   reconstructTimeline,
@@ -23,6 +28,7 @@ import {
   type TodoLike,
 } from '../../src/shared/audit';
 import { auditFileName, auditFilePath, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
+import { GATE_DECISION_OPTIONS } from '../../src/shared/ipc';
 
 const D = new Date('2026-06-23T10:00:01.500Z');
 
@@ -624,5 +630,136 @@ describe('stepWindowEvents — the events of a step\'s last (re)entry window', (
   it('throws naming a step no boundary enters, so an empty read never satisfies a "none" assertion', () => {
     const events = read([...lifecycleEvents('start', notStarted, inProg('red'), 'T1'), gate('g')]);
     expect(() => stepWindowEvents(events, 'refactor')).toThrow(/refactor/);
+  });
+});
+
+// §27.9.1 N9b.9 (#137 AC7/AC8) — who decided a gate, and why an `auto` gate halted, read back from §25.
+describe('gate-decision entries carry the deciding party (N9b.9)', () => {
+  // Pinning: the human strings are the §25 entries as written before #137, captured at 8f03f066.
+  const HUMAN_LITERALS: [Parameters<typeof gateDecisionAuditCmd>[0], string | undefined, string][] = [
+    ['decision', undefined, '§27 gate approve'],
+    ['decision-dropped', 'the loop was busy', '§27 gate approve dropped: the loop was busy'],
+    ['side-effect', 'commit: RED', '§27 gate approve side-effect: commit: RED'],
+    ['side-effect-skipped', 'commit: nothing to commit', '§27 gate approve side-effect skipped: commit: nothing to commit'],
+    ['side-effect-failed', 'mark-ready: no PR', '§27 gate approve side-effect failed: mark-ready: no PR'],
+    ['accept-failed', 'EACCES', '§27 gate approve accept failed: EACCES'],
+    ['clear-polish-failed', 'EISDIR', '§27 gate approve clear-polish failed: EISDIR'],
+    ['baseline-record-failed', 'EIO', '§27 gate approve baseline-record failed: EIO'],
+    ['source-slices-failed', 'bad plan', '§28 gate approve source-slices failed: bad plan'],
+    ['clear-brief-failed', 'ENOENT', '§28 gate approve clear-brief failed: ENOENT'],
+    ['epic-promotion-preview', undefined, '§28 gate approve epic-promotion preview raised'],
+  ];
+
+  it.each(HUMAN_LITERALS)('pinning: a human %s entry is byte-for-byte the pre-#137 string', (kind, detail, literal) => {
+    expect(gateDecisionAuditCmd(kind, 'approve', detail, 'human')).toBe(literal);
+  });
+
+  it.each(HUMAN_LITERALS)('an engine-decided %s entry carries the mark right after the option', (kind, detail, literal) => {
+    const marked = literal.replace(/^(§2[78] gate approve)/, '$1 (engine-decided)');
+    expect(gateDecisionAuditCmd(kind, 'approve', detail, 'engine')).toBe(marked);
+  });
+
+  it.each(HUMAN_LITERALS)('reads back who decided a %s entry, in both directions', (kind, detail) => {
+    expect(gateDecisionDecider(gateDecisionAuditCmd(kind, 'approve', detail, 'engine'))).toBe('engine');
+    expect(gateDecisionDecider(gateDecisionAuditCmd(kind, 'approve', detail, 'human'))).toBe('human');
+  });
+
+  it('classifies every kind under every option and both deciders', () => {
+    for (const option of GATE_DECISION_OPTIONS) {
+      for (const decider of ['human', 'engine'] as const) {
+        for (const [kind, detail] of HUMAN_LITERALS) {
+          const cmd = gateDecisionAuditCmd(kind, option, detail, decider);
+          expect(gateDecisionKind(cmd)).toEqual({ family: 'gate', kind, option });
+          expect(gateDecisionDecider(cmd)).toBe(decider);
+        }
+      }
+    }
+  });
+
+  it('a human entry whose untrusted detail spells the mark still reads human, with no halt reasons', () => {
+    const cmd = gateDecisionAuditCmd('side-effect', 'approve', 'commit: x (engine-decided) halted: a — y', 'human');
+    expect(gateDecisionDecider(cmd)).toBe('human');
+    expect(gateDecisionKind(cmd)).toEqual({ family: 'gate', kind: 'side-effect', option: 'approve' });
+    expect(parseAutoHaltReasons(cmd)).toBeNull();
+  });
+
+  it('reads no decider from a non-gate command', () => {
+    expect(gateDecisionDecider('§27 consolidate round 1 verdict clean')).toBeNull();
+  });
+});
+
+describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
+  // The literals the coordinator writes, pinned in epicPromotion.test.ts.
+  it('every human epic-promotion entry is byte-for-byte the coordinator\'s pre-#137 string', () => {
+    expect(epicPromotionAuditCmd('blocked', 'unreadable promotion record', 'human')).toBe('§28 epic-promotion blocked — unreadable promotion record');
+    expect(epicPromotionAuditCmd('declined', undefined, 'human')).toBe('§28 epic-promotion declined');
+    expect(epicPromotionAuditCmd('confirm', undefined, 'human')).toBe('§28 epic-promotion');
+    expect(epicPromotionAuditCmd('terminate-failed', 'locked', 'human')).toBe('§28 epic-promotion terminate failed: locked');
+  });
+
+  it('an engine-decided blocked entry is marked, and every epic entry reads back its kind and decider', () => {
+    const blocked = epicPromotionAuditCmd('blocked', 'unresolvable epic issue', 'engine');
+    expect(blocked).toBe('§28 epic-promotion (engine-decided) blocked — unresolvable epic issue');
+    expect(gateDecisionDecider(blocked)).toBe('engine');
+    expect(gateDecisionKind(blocked)).toEqual({ family: 'epic-promotion', kind: 'blocked' });
+    const confirm = epicPromotionAuditCmd('confirm', undefined, 'human');
+    expect(gateDecisionDecider(confirm)).toBe('human');
+    expect(gateDecisionKind(confirm)).toEqual({ family: 'epic-promotion', kind: 'confirm' });
+    expect(gateDecisionKind(epicPromotionAuditCmd('declined', undefined, 'human'))).toEqual({ family: 'epic-promotion', kind: 'declined' });
+    expect(gateDecisionKind(epicPromotionAuditCmd('terminate-failed', 'x', 'engine'))).toEqual({ family: 'epic-promotion', kind: 'terminate-failed' });
+  });
+});
+
+describe('auto-halt entries name every reason that holds (N9b.9)', () => {
+  const ALL = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
+  const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
+
+  it('round-trips a halt naming all 13 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
+    const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason })));
+    const event: AuditEvent = { ts: 'T1', type: 'command', source: 'gate', cmd, exit: 0 };
+    const [read] = reconstructTimeline([header, event].map(serializeDoc).join('')).commands;
+    expect(read.exit).toBe(0);
+    expect(parseAutoHaltReasons(read.cmd)).toEqual([...ALL]);
+    expect(gateDecisionDecider(read.cmd)).toBe('engine');
+    expect(gateDecisionKind(read.cmd)).toEqual({ family: 'gate', kind: 'auto-halt' });
+  });
+
+  it('writes the verdict halt as the one stop-for-a-human token', () => {
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'stop-for-a-human' }]))).toEqual(['stop-for-a-human']);
+  });
+
+  it('de-duplicates reasons in the closed-set order, whatever order they were given', () => {
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'g' }, { reason: 'c' }, { reason: 'g', detail: 'x' }]))).toEqual(['c', 'g']);
+  });
+
+  it('keeps every letter when untrusted details overflow the bounded tail', () => {
+    const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason, detail: 'z'.repeat(500) })));
+    expect(parseAutoHaltReasons(cmd)).toEqual([...ALL]);
+  });
+
+  // CWE-117 — the same neutralization `gateDecisionAuditCmd` applies to its untrusted detail.
+  it('neutralizes control chars in untrusted details and bounds the whole tail', () => {
+    const reasons = [
+      { reason: 'a' as const, detail: 'gh: \x1b[31mfake failed\r\n\x07\x00\x9b' },
+      { reason: 'b' as const, detail: 'y'.repeat(5000) },
+    ];
+    const cmd = autoHaltAuditCmd(reasons);
+    const bare = autoHaltAuditCmd(reasons.map(({ reason }) => ({ reason })));
+    expect(parseAutoHaltReasons(cmd)).toEqual(['a', 'b']);
+    expect(cmd).toContain('fake failed');
+    expect([...cmd].some((ch) => {
+      const c = ch.charCodeAt(0);
+      return c <= 0x1f || (c >= 0x7f && c <= 0x9f);
+    })).toBe(false);
+    expect(cmd.length).toBeLessThan(bare.length + 400);
+  });
+
+  it('reads no reason out of an untrusted detail that spells other reasons', () => {
+    const cmd = autoHaltAuditCmd([{ reason: 'c', detail: 'halted: a, g — b (engine-decided) halted: stop-for-a-human' }]);
+    expect(parseAutoHaltReasons(cmd)).toEqual(['c']);
+  });
+
+  it('reads no reasons from a decision entry', () => {
+    expect(parseAutoHaltReasons(gateDecisionAuditCmd('decision', 'approve', undefined, 'engine'))).toBeNull();
   });
 });

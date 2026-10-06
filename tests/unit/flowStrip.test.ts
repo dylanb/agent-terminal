@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
-import type { AgentState, FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import type { AgentState, FlowAutoGateView, FlowLoopView, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
@@ -1848,5 +1848,130 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       strip.onRepoChanged('/repo');
       await strip.refresh();
     });
+  });
+});
+
+// §27.9.1 N9b.5(e) — the pill's tone reads `humanNeeded` when the view carries `autoGate`; a view with no
+// `autoGate` keeps today's status-only tone (AC7).
+describe('flow status strip — the loop tone under per-step gate authority (§27.9.1)', () => {
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const pillFor = async (loop: FlowLoopView): Promise<{ tone: string; label: string }> => {
+    host.replaceChildren();
+    createFlowStrip(host, {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build', runStarted: 'never-started' as const,
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop,
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat .spill')).not.toBeNull());
+    const pill = host.querySelector<HTMLElement>('.loopstat .spill')!;
+    const cl = pill.classList;
+    return { tone: cl.contains('await') ? 'await' : cl.contains('settle') ? 'settle' : 'work', label: pill.textContent ?? '' };
+  };
+  const base = { iteration: 1, pr: null, branch: null, ready: false };
+
+  it('a halted gate (complete, humanNeeded, a halt reason) shows the await tone and the awaiting label', async () => {
+    const pill = await pillFor({
+      ...base,
+      status: 'complete',
+      humanNeeded: true,
+      autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] },
+    });
+    expect(pill.tone).toBe('await');
+    expect(pill.label).toContain('awaiting');
+  });
+
+  it('a gate the engine is deciding (complete, not humanNeeded) does not show the await tone (negative pair)', async () => {
+    const pill = await pillFor({ ...base, status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } });
+    expect(pill.tone).not.toBe('await');
+  });
+
+  it('an accepted approve that hung (accepted, humanNeeded, hung) shows the await tone', async () => {
+    const pill = await pillFor({ ...base, status: 'accepted', humanNeeded: true, autoGate: { ...idle, hung: true } });
+    expect(pill.tone).toBe('await');
+    expect(pill.label).toContain('awaiting');
+  });
+
+  it('a gate whose view carries no autoGate keeps today\'s settle tone even when humanNeeded (AC7 pin)', async () => {
+    const pill = await pillFor({ ...base, status: 'complete', humanNeeded: true });
+    expect(pill.tone).toBe('settle');
+    expect(pill.label).toContain('settled');
+  });
+
+  const pillAfterPush = async (first: FlowLoopView, second: FlowLoopView): Promise<{ tone: string; label: string }> => {
+    host.replaceChildren();
+    let fire = (): void => {};
+    let current = first;
+    const state = vi.fn(
+      async (): Promise<FlowStateView> => ({
+        stepName: 'build', runStarted: 'never-started' as const,
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        loop: current,
+      }),
+    );
+    createFlowStrip(host, {
+      state,
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat .spill')).not.toBeNull());
+    current = second;
+    fire();
+    await vi.waitFor(() => expect(state.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await new Promise((r) => setTimeout(r, 0));
+    const pill = host.querySelector<HTMLElement>('.loopstat .spill')!;
+    const cl = pill.classList;
+    return { tone: cl.contains('await') ? 'await' : cl.contains('settle') ? 'settle' : 'work', label: pill.textContent ?? '' };
+  };
+
+  it('a deciding gate that halts on a background push shows the await tone and the awaiting label', async () => {
+    const pill = await pillAfterPush(
+      { ...base, status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } },
+      { ...base, status: 'complete', humanNeeded: true, autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] } },
+    );
+    expect(pill.tone).toBe('await');
+    expect(pill.label).toContain('awaiting');
+  });
+
+  it('an accepted approve that hangs on a background push shows the await tone', async () => {
+    const pill = await pillAfterPush(
+      { ...base, status: 'accepted', humanNeeded: false, autoGate: idle },
+      { ...base, status: 'accepted', humanNeeded: true, autoGate: { ...idle, hung: true } },
+    );
+    expect(pill.tone).toBe('await');
+  });
+
+  it('a halted gate the engine goes back to deciding on a background push drops the await tone (negative pair)', async () => {
+    const pill = await pillAfterPush(
+      { ...base, status: 'complete', humanNeeded: true, autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] } },
+      { ...base, status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } },
+    );
+    expect(pill.tone).not.toBe('await');
   });
 });

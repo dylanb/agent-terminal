@@ -166,7 +166,11 @@ export interface LoopDefV2 {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | { ok: false; reason: string };
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; tier?: 'repo' | 'operator' | 'app-bundled' } | { ok: false; reason: string };
+
+export function loopDefIdentity(_r: LoopDefV2Result): { name: string; digest: string } | null {
+  return null;
+}
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;

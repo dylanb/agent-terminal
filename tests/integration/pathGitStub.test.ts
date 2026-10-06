@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installPathGitStub, type PathGitStub } from '../helpers/pathGitStub';
+import { installPathGitStub, type GitInterception, type PathGitStub } from '../helpers/pathGitStub';
 
 const viaPath = (args: string[], cwd?: string): { stdout: string; stderr: string; status: number | null } => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -59,6 +59,37 @@ describe('PATH-first git stub', () => {
     expect(process.env.PATH).toBe(originalPath);
     expect(existsSync(binDir)).toBe(false);
     expect(viaPath(['help']).stdout).not.toBe('fake\n');
+  });
+
+  it('runs an interception\'s script before its scripted answer', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pathgitstub-script-'));
+    try {
+      const marker = join(dir, "it's marked");
+      stub = installPathGitStub([{ argvPrefix: ['rev-parse', 'HEAD'], script: `printf 'ran' > "${marker}"`, stdout: 'deadbeef\n', exitCode: 0 }]);
+      expect(viaPath(['rev-parse', 'HEAD'])).toEqual({ stdout: 'deadbeef\n', stderr: '', status: 0 });
+      expect(existsSync(marker) ? readFileSync(marker, 'utf8') : null).toBe('ran');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('answers through the real git after the script when the interception scripts no exit code', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'pathgitstub-through-'));
+    try {
+      expect(viaPath(['init', '-q'], repo).status).toBe(0);
+      const marker = join(repo, 'marker');
+      stub = installPathGitStub([{ argvPrefix: ['rev-parse', '--is-inside-work-tree'], script: `printf 'ran' > "${marker}"` }]);
+      expect(viaPath(['rev-parse', '--is-inside-work-tree'], repo)).toEqual({ stdout: 'true\n', stderr: '', status: 0 });
+      expect(existsSync(marker) ? readFileSync(marker, 'utf8') : null).toBe('ran');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an interception that neither scripts an exit code nor runs a script', () => {
+    const originalPath = process.env.PATH;
+    expect(() => installPathGitStub([{ argvPrefix: ['status'] } as unknown as GitInterception])).toThrow(RangeError);
+    expect(process.env.PATH).toBe(originalPath);
   });
 
   it('refuses an exit code the shell cannot return, before touching PATH', () => {

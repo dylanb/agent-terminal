@@ -6,6 +6,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
+import type { GateDecider } from '../shared/audit';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
 import type { LifecycleTerminateResult } from './flowLifecycle';
@@ -222,7 +223,7 @@ export type EpicGateOutcome =
 export interface EpicPromotionCoordinator {
   /** Classify an approve at the epic gate into an `EpicGateOutcome`. Authorizing preconditions are checked
    *  HERE, before the preview is raised (§28.7 / CODE-STANDARDS policy-checked-at-the-operation). */
-  maybeBegin(repoDir: string, def: LoopDefV2, loop: string, step: string, turnKey: string, refs: EpicPromotionRefs): EpicGateOutcome;
+  maybeBegin(repoDir: string, def: LoopDefV2, loop: string, step: string, turnKey: string, refs: EpicPromotionRefs, decider?: GateDecider): EpicGateOutcome;
   /** Answer a held promotion: confirm promotes then accepts + stands down; decline drops it and leaves the gate. */
   resolve(repoDir: string, step: string, confirm: boolean): Promise<void>;
 }

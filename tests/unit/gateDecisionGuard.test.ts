@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createGuardedGateDecision, stepLoopBinding } from '../../src/main/gateDecisionGuard';
+import { createGuardedGateDecision, markedBindingRefusal, stepLoopBinding } from '../../src/main/gateDecisionGuard';
 import { MARKED_BINDING_REASON } from '../../src/shared/loopNamespace';
 import type { FlowStepDef } from '../../src/main/flow';
 
@@ -61,5 +61,25 @@ describe('createGuardedGateDecision — the outward-facing side effect never run
     await decide('/repo', 'build', 'consolidate-build', 'request-changes');
     expect(refuse).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledOnce();
+  });
+});
+
+// #137 S1 — the refusal as a domain predicate, so the engine approve and the guarded human runner share one check.
+describe('markedBindingRefusal — the §B.3 refusal both deciders call (#137 S1)', () => {
+  it('names the marked-binding reason for a step that binds the retired engine', () => {
+    expect(markedBindingRefusal(() => 'legacy', '/repo', 'plan')).toBe(MARKED_BINDING_REASON);
+  });
+
+  it.each([
+    ['a surviving (app) binding', 'app' as const],
+    ['an unknown (null) binding', null],
+  ])('refuses nothing for %s (negative pair)', (_label, binding) => {
+    expect(markedBindingRefusal(() => binding, '/repo', 'build')).toBeNull();
+  });
+
+  it('refuses by the step it is asked about, not another step of the same flow', () => {
+    const bindingOf = (_repoKey: string, step: string) => (step === 'plan' ? ('legacy' as const) : ('app' as const));
+    expect(markedBindingRefusal(bindingOf, '/repo', 'plan')).toBe(MARKED_BINDING_REASON);
+    expect(markedBindingRefusal(bindingOf, '/repo', 'build')).toBeNull();
   });
 });

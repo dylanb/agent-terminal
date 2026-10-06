@@ -791,6 +791,7 @@ async function createWindow(): Promise<void> {
       currentFlowEntryTokens.delete(repoKey);
       trustedAppBootstraps.delete(repoKey);
     },
+    endRun: () => {},
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),

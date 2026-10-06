@@ -7,7 +7,7 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
-import type { FlowLoopView } from '../shared/ipc';
+import type { FlowAutoGateView, FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { readEpicSubTicketsAtGate } from './epicPromotion';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2 } from './loopDefV2';
@@ -130,6 +130,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   };
 }
 
+/** §27.9.1 */
+export type AutoGateViewFor = (repoKey: string, step: string, turnKey: string) => FlowAutoGateView | undefined;
+
 /** The flow manager's §27 loop-view provider: reconstruct a relaunch-stranded turn to routable BEFORE the
  *  live error is read, then derive the view from it + the resolved def (§27.12/§27.15). Without this a
  *  persisted `working` turn — definitionally stopped by the relaunch — mirrors to a not-human-needed view
@@ -139,6 +142,7 @@ export function provideAppLoopView(
   engine: Pick<AppLoopEngine, 'activeRepoDir' | 'resume' | 'liveErrorFor'>,
   name: string,
   ctx: LoopDefV2Context,
+  _autoGateViewFor?: AutoGateViewFor,
 ): FlowLoopView {
   if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
   return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));

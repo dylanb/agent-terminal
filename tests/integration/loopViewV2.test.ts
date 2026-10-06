@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deriveAppLoopView } from '../../src/main/loopViewV2';
+import { deriveAppLoopView, provideAppLoopView, type AutoGateViewFor } from '../../src/main/loopViewV2';
+import type { FlowAutoGateView } from '../../src/shared/ipc';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { writeAppLoopState, enterPolish, recordChangedTests } from '../../src/main/appLoopState';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
@@ -508,5 +509,58 @@ outputs:
     writeAppLoopState(repoDir, { loop: 'plan-bundle-loop', step: 'plan-bundle', turnKey: 'work-plan-bundle', status: 'working' }, FIXED);
     const view = deriveAppLoopView('plan-bundle-loop', { tiers: tiers(), repoDir });
     expect(view.epic).toBeUndefined();
+  });
+});
+
+// §27.9.1 N9b.5(e) — `humanNeeded` reads the gate controller's state through the injected `autoGateViewFor`
+// seam: a gate the engine is deciding is not human-needed, a hung accepted approve is, and a run the seam
+// reports nothing for keeps today's view with no `autoGate` field (AC7).
+describe('provideAppLoopView — per-step gate authority (§27.9.1)', () => {
+  const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const engine = { activeRepoDir: () => repoDir, resume: () => {}, liveErrorFor: () => null };
+  const seamFor = (step: string, turnKey: string, view: FlowAutoGateView): AutoGateViewFor =>
+    (k, s, t) => (k === repoDir && s === step && t === turnKey ? view : undefined);
+
+  it('a clean gate the engine is deciding is not human-needed and carries the seam\'s autoGate', () => {
+    plant('plan-loop', ['approve', 'request-changes']);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 1, verdict: 'clean' },
+      FIXED,
+    );
+    const deciding = { ...idle, deciding: true };
+    const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', deciding));
+    expect(view.humanNeeded).toBe(false);
+    expect(view.autoGate).toEqual(deciding);
+  });
+
+  it('an accepted run whose approve hung is human-needed', () => {
+    plant('plan-loop', ['approve', 'request-changes']);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }, FIXED);
+    const hung = { ...idle, hung: true };
+    const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', hung));
+    expect(view.humanNeeded).toBe(true);
+    expect(view.autoGate).toEqual(hung);
+  });
+
+  it('an accepted run whose engine approve is still running its effects is not human-needed (negative pair)', () => {
+    plant('plan-loop', ['approve', 'request-changes']);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }, FIXED);
+    const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', idle));
+    expect(view.humanNeeded).toBe(false);
+    expect(view.autoGate).toEqual(idle);
+  });
+
+  it('a run the seam reports nothing for carries no autoGate and keeps today\'s humanNeeded (AC7 pin)', () => {
+    plant('plan-loop', ['approve', 'request-changes']);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 1, verdict: 'clean' },
+      FIXED,
+    );
+    const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, () => undefined);
+    expect(view).not.toHaveProperty('autoGate');
+    expect(view.humanNeeded).toBe(true);
   });
 });

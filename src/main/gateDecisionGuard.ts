@@ -19,6 +19,10 @@ export function stepLoopBinding(steps: FlowStepDef[], stepId: string): LoopBindi
   return step?.kind === 'loop' ? (step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE) : null;
 }
 
+export function markedBindingRefusal(_bindingOf: (repoKey: string, step: string) => LoopBinding | null, _repoKey: string, _step: string): string | null {
+  return null;
+}
+
 /** A gate-decision runner (approve one-way, request-changes/redo two-way): resolves to whether the decision
  *  was delivered. */
 export type GateDecisionRun = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string) => Promise<boolean>;

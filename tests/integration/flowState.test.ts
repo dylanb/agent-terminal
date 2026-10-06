@@ -36,6 +36,15 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', startedAt: 1_752_062_400_000 });
   });
 
+  // #137 — the run's identity (its flow name and Start instant) locates its §25 file; a §22.3.1 rename keeps it.
+  it('round-trips the run\'s flow name beside its start instant, and a rename keeps both', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'plan', status: 'in_progress', flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999 });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999 });
+    store.writeTitle('x');
+    expect(createFlowStateStore(dir).read()).toMatchObject({ flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999, title: 'x' });
+  });
+
   it('omits the start instant for a flow that never recorded one', () => {
     createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
     expect(createFlowStateStore(dir).read()).not.toHaveProperty('startedAt');

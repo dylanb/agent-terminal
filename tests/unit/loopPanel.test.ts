@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLoopPanel } from '../../src/renderer/src/loopPanel';
 import { assertRendersFromHostDocument } from './relocatable';
-import type { FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ipc';
+import type { FlowAutoGateView, FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ipc';
+import { autoHaltReasonLabel } from '../../src/shared/gateAuthority';
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
@@ -1000,5 +1001,119 @@ describe('docked loop panel — the epic preview (§28.7)', () => {
     expect(host.querySelector('[data-epic-preview]')).not.toBeNull();
     panel.render(loop({}), 'plan');
     expect(host.querySelector('[data-epic-preview]')).toBeNull();
+  });
+});
+
+// §27.9.1 N9b.5(e) — the status row's act tone reads `humanNeeded` when the view carries `autoGate`; a view with
+// no `autoGate` keeps today's status-only tone (AC7).
+describe('docked loop panel — the status tone under per-step gate authority (§27.9.1)', () => {
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const statusIsAct = (): boolean | undefined => row('status')?.querySelector('.lv')?.classList.contains('bad');
+
+  it('a halted gate (complete, humanNeeded, a halt reason) shows the act tone', () => {
+    createLoopPanel(host).render(
+      loop({ status: 'complete', humanNeeded: true, autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] } }),
+      'build',
+    );
+    expect(statusIsAct()).toBe(true);
+  });
+
+  it('a gate the engine is deciding (complete, not humanNeeded) shows no act tone (negative pair)', () => {
+    createLoopPanel(host).render(loop({ status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } }), 'build');
+    expect(statusIsAct()).toBe(false);
+  });
+
+  it('an accepted approve that hung (accepted, humanNeeded, hung) shows the act tone', () => {
+    createLoopPanel(host).render(loop({ status: 'accepted', humanNeeded: true, autoGate: { ...idle, hung: true } }), 'build');
+    expect(statusIsAct()).toBe(true);
+  });
+
+  it('a gate whose view carries no autoGate keeps today\'s settled tone even when humanNeeded (AC7 pin)', () => {
+    createLoopPanel(host).render(loop({ status: 'complete', humanNeeded: true }), 'build');
+    expect(statusIsAct()).toBe(false);
+  });
+
+  it('a deciding gate that halts on the same mounted panel shows the act tone', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } }), 'build');
+    panel.render(
+      loop({ status: 'complete', humanNeeded: true, autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] } }),
+      'build',
+    );
+    expect(statusIsAct()).toBe(true);
+  });
+
+  it('an accepted approve that hangs on the same mounted panel shows the act tone', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'accepted', humanNeeded: false, autoGate: idle }), 'build');
+    panel.render(loop({ status: 'accepted', humanNeeded: true, autoGate: { ...idle, hung: true } }), 'build');
+    expect(statusIsAct()).toBe(true);
+  });
+
+  it('a halted gate the engine goes back to deciding on the same mounted panel drops the act tone (negative pair)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(
+      loop({ status: 'complete', humanNeeded: true, autoGate: { ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] } }),
+      'build',
+    );
+    panel.render(loop({ status: 'complete', humanNeeded: false, autoGate: { ...idle, deciding: true } }), 'build');
+    expect(statusIsAct()).toBe(false);
+  });
+});
+
+// §27.9.1 N9b.5(e) / N9b.6 — the S1 auto-gate elements the panel renders from `autoGate`.
+describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const autoGateView = (autoGate: FlowAutoGateView, humanNeeded = true): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'request-changes'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', humanNeeded, autoGate });
+  const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
+  const reasonRows = (): string[] => [...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason') ?? '');
+
+  it('a gate the engine is deciding shows `[data-auto-deciding]` with the gate buttons still present', () => {
+    mount().render(autoGateView({ ...idle, deciding: true }, false), 'plan');
+    expect(host.querySelector('[data-auto-deciding]')).not.toBeNull();
+    expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull();
+  });
+
+  it('a gate the engine is not deciding shows no `[data-auto-deciding]` (negative pair)', () => {
+    mount().render(autoGateView(idle), 'plan');
+    expect(host.querySelector('[data-auto-deciding]')).toBeNull();
+  });
+
+  it('a generic halt shows one `[data-auto-halt-generic]` row beside the displayed letter row', () => {
+    mount().render(autoGateView({ ...idle, haltGeneric: true, haltReasons: [{ reason: 'stop-for-a-human' }] }), 'plan');
+    expect(host.querySelectorAll('[data-auto-halt-generic]')).toHaveLength(1);
+    expect(reasonRows()).toEqual(['stop-for-a-human']);
+  });
+
+  it('a halt that is not generic shows no `[data-auto-halt-generic]` row (negative pair)', () => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] }), 'plan');
+    expect(host.querySelector('[data-auto-halt-generic]')).toBeNull();
+  });
+
+  it.each(['stop-for-a-human', 'c', 'e'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row for it', (reason) => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason }] }), 'plan');
+    const rows = [...host.querySelectorAll<HTMLElement>(`[data-auto-halt-reason="${reason}"]`)];
+    expect(rows).toHaveLength(1);
+    const label = autoHaltReasonLabel(reason);
+    expect(label.trim()).not.toBe('');
+    expect(rows[0].textContent).toContain(label);
+  });
+
+  it('the three reasons S1 renders carry three distinct shared labels', () => {
+    expect(new Set((['stop-for-a-human', 'c', 'e'] as const).map(autoHaltReasonLabel)).size).toBe(3);
+  });
+
+  it('rebuilds the reason rows in place when the reason set changes on the same mounted panel', () => {
+    const panel = mount();
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
+    expect(reasonRows()).toEqual(['c']);
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'e' }] }), 'plan');
+    expect(reasonRows()).toEqual(['e']);
+  });
+
+  it('a view with no halt reasons shows no `[data-auto-halt-reason]` row (negative pair)', () => {
+    mount().render(autoGateView({ ...idle, deciding: true }, false), 'plan');
+    expect(reasonRows()).toEqual([]);
   });
 });

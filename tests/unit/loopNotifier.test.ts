@@ -197,3 +197,31 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(reveal).toHaveBeenCalledTimes(1);
   });
 });
+
+// §27.9.1 N9b.5(e) (#137) — a view carrying `autoGate` that stops needing a human ends that stop, so the next stop notifies.
+describe('createLoopNotifier — distinct auto-gate stops (§27.9.1)', () => {
+  const DECIDING = { deciding: true, hung: false, haltGeneric: false, haltReasons: [] };
+  const HALTED = { deciding: false, hung: false, haltGeneric: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] };
+
+  it('a human-needed stop, then a deciding gate, then another human-needed stop with the same status and iteration notifies twice', () => {
+    const { notifier, notify } = harness();
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 1, autoGate: HALTED }));
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 1, humanNeeded: false, autoGate: DECIDING }));
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 1, autoGate: HALTED }));
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('the same human-needed auto-gate stop pushed three times notifies once', () => {
+    const { notifier, notify } = harness();
+    for (let i = 0; i < 3; i += 1) notifier.observe(REPO, loopView({ status: 'complete', iteration: 1, autoGate: HALTED }));
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('pinning: two stops of a run with no auto step sharing status and iteration, a working view between, notify once (AC7)', () => {
+    const { notifier, notify } = harness();
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 1 }));
+    notifier.observe(REPO, loopView({ status: 'working', iteration: 1, humanNeeded: false }));
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 1 }));
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+});

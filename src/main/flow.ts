@@ -23,6 +23,7 @@ import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
+import type { GateAuthority } from '../shared/gateAuthority';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -57,6 +58,7 @@ export interface FlowStepDef {
    *  surviving engine when the flow file names none (AC 4) — so engine choice is a property of the reviewed
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
+  gateAuthority?: GateAuthority;
   /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: 'pickup';
@@ -660,7 +662,7 @@ export function createFlowMachine(
  */
 export interface FlowManager {
   state(repoKey: string): FlowStateView;
-  start(repoKey: string): FlowStateView;
+  start(repoKey: string, opts?: { startedAt: number; run?: { definition: FlowDefinition; binding?: DispositionRead } }): FlowStateView;
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;

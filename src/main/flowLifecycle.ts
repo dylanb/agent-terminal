@@ -21,6 +21,7 @@ export interface FlowLifecycleDeps {
   loopTurnActive(repoKey: string): boolean;
   /** Drop the runtime state issued under the run's current binding. */
   forgetRunEntry(repoKey: string): void;
+  endRun(repoKey: string): void;
   recordTerminate(repoKey: string): void;
   clearTodos(repoKey: string): void;
   clearSliceBrief(repoKey: string): void;

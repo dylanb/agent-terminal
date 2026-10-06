@@ -35,6 +35,7 @@ import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolid
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import type { AutoGate } from './autoGate';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -167,6 +168,12 @@ export interface AppLoopEngineDeps {
   sliceBrief(repoDir: string): SliceBrief | null;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
+  gateReaching?: AutoGate['gateReaching'];
+  gateReached?: AutoGate['gateReached'];
+  gateNotReached?: AutoGate['gateNotReached'];
+  loopRunEvent?: AutoGate['loopRunEvent'];
+  interruptArmed?: AutoGate['interruptArmed'];
+  consumeInterrupt?: AutoGate['consumeInterrupt'];
 }
 
 export interface AppLoopEngine {

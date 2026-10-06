@@ -3,7 +3,8 @@
 // tests, and a future viewer so the format and its meaning cannot drift (CLAUDE.md src/shared rule).
 
 import yaml from 'js-yaml';
-import type { FlowStatus, TodoStatus } from './ipc';
+import type { FlowStatus, GateDecisionOption, TodoStatus } from './ipc';
+import type { AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
 
 export interface AuditHeader {
@@ -386,7 +387,9 @@ export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effe
 
 const GATE_DETAIL_MAX = 200;
 
-export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
+export type GateDecider = 'human' | 'engine';
+
+export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string, _decider?: GateDecider): string {
   // The detail can carry untrusted content (a def-supplied side-effect action / commit phase label), so it
   // is neutralized before it lands in the append-only §25 stream — the same CWE-117 treatment loopStatus
   // mandates for every human-facing sink and notifyFailedEvent already applies.
@@ -415,6 +418,32 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
     case 'epic-promotion-preview':
       return `§28 gate ${option} epic-promotion preview raised`;
   }
+}
+
+export type EpicPromotionAuditKind = 'blocked' | 'declined' | 'confirm' | 'terminate-failed';
+
+export type GateDecisionClass =
+  | { family: 'gate'; kind: GateDecisionAuditKind | 'auto-halt'; option?: GateDecisionOption }
+  | { family: 'epic-promotion'; kind: EpicPromotionAuditKind };
+
+export function epicPromotionAuditCmd(_kind: EpicPromotionAuditKind, _detail: string | undefined, _decider: GateDecider): string {
+  return '';
+}
+
+export function gateDecisionDecider(_cmd: string): GateDecider | null {
+  return null;
+}
+
+export function gateDecisionKind(_cmd: string): GateDecisionClass | null {
+  return null;
+}
+
+export function autoHaltAuditCmd(_reasons: { reason: AutoHaltReason; detail?: string }[]): string {
+  return '';
+}
+
+export function parseAutoHaltReasons(_cmd: string): AutoHaltReason[] | null {
+  return null;
 }
 
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {

@@ -57,6 +57,7 @@ export interface ResolvedRunDefinition {
   /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
    *  re-resolves the SAME source rather than the live pointer. Absent on a refused pick or a held begun run. */
   binding?: DispositionRead;
+  flowSourceTrust?: 'operator' | 'repo';
 }
 
 export type ResolveRunDefinition = (localDir: string, globalDir: string) => ResolvedRunDefinition;
