@@ -42,7 +42,7 @@ export interface StartRun {
 }
 
 export type GateCause = 'verdict' | 'interrupt';
-export type LoopRunEvent = 'error' | 'retried' | 'accepted' | { roundReport: string };
+export type LoopRunEvent = 'error' | 'retried' | 'accepted' | { roundReport: string | null };
 export type EngineApprove = (repoDir: string, step: string, turnKey: string, decider: ApproveDecider) => Promise<GateApproveOutcome>;
 export interface AutoGateTimer {
   readonly id: number;
@@ -110,6 +110,7 @@ interface LoopRun {
   step: string;
   repoTierSeen: boolean;
   identityMismatch: boolean;
+  identityUnread: boolean;
   endedInError: boolean;
   acceptedFailure: boolean;
   needsAHuman: boolean;
@@ -137,6 +138,8 @@ interface AutoRun {
 
 const sameGate = (a: GateKey | null, step: string, turnKey: string, gateSeq: number): boolean =>
   a !== null && a.step === step && a.turnKey === turnKey && a.gateSeq === gateSeq;
+
+const sameIdentity = (a: DefIdentity | null, b: DefIdentity | null): boolean => a !== null && b !== null && a.name === b.name && a.digest === b.digest;
 
 const isFrozenCheckCompletion = (c: DefResolution['completion']): boolean => c === 'green' || c === 'refactor';
 
@@ -214,7 +217,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     // S4 replaces this fail-closed stub with the approve-time frozen check.
     if (frozen && run.frozenCheck.has(step)) reasons.push({ reason: 'e', detail: 'the approve-time frozen check is not available' });
     reasons.push(...trustReasons(repoDir, run, step));
-    if (lr === null || run.trustedGlobsCommit === null || (run.defIdentity.get(step) ?? null) === null) reasons.push({ reason: 'h' });
+    if (lr === null || lr.identityUnread || run.trustedGlobsCommit === null || (run.defIdentity.get(step) ?? null) === null) reasons.push({ reason: 'h' });
     if (run.failedEffect !== null) reasons.push({ reason: 'i' });
     return reasons;
   };
@@ -356,12 +359,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const held = run.defIdentity.get(step) ?? null;
     const now = loopDefIdentity(r);
     if (held === null || now === null) return 'the def identity held at Start is missing';
-    return held.name === now.name && held.digest === now.digest ? null : 'the def changed since Start';
+    return sameIdentity(held, now) ? null : 'the def changed since Start';
   };
 
   const autoGateViewFor: AutoGateViewFor = (repoKey, step, turnKey) => {
     const run = runs.get(repoKey);
-    if (run === undefined || !(isAuto(run) || run.untrusted.size > 0)) return undefined;
+    if (run === undefined || !isAuto(run)) return undefined;
     const shown = sameGate(run.haltShown, step, turnKey, run.gateSeq) ? run.haltShown!.reasons : [];
     const view: FlowAutoGateView = {
       deciding: sameGate(run.deciding, step, turnKey, run.gateSeq),
@@ -456,7 +459,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     beginLoopRun(repoKey, step) {
       const run = runs.get(repoKey);
       if (run === undefined) return;
-      run.loopRun = { step, repoTierSeen: false, identityMismatch: false, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
+      run.loopRun = { step, repoTierSeen: false, identityMismatch: false, identityUnread: false, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
       nextGate(run);
     },
     observeDefResolution(repoKey, name, result) {
@@ -467,6 +470,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (bound === undefined) return;
       if (result === null || name !== bound.loop) lr.identityMismatch = true;
       else if (result.tier === 'repo') lr.repoTierSeen = true;
+      else if (bound.authority === 'auto') {
+        const held = run.defIdentity.get(lr.step) ?? null;
+        if (held === null) return;
+        if (result.identity === null) lr.identityUnread = true;
+        else if (!sameIdentity(held, result.identity)) lr.identityMismatch = true;
+      }
     },
     gateReaching(repoDir, step, turnKey, verdict, cause) {
       const run = runs.get(repoDir);
@@ -523,7 +532,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         lr.recorded.add('b');
         return;
       }
-      lr.needsAHuman = reportNeedsAHuman(event.roundReport) !== false;
+      lr.needsAHuman = event.roundReport === null || reportNeedsAHuman(event.roundReport) !== false;
     },
     interruptArmed(repoDir, step) {
       const run = runs.get(repoDir);

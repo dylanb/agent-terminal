@@ -57,6 +57,17 @@ const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') :
 const runState = (repo: string): string => readIf(join(repo, '.agent-terminal', 'loop', 'run-state.yaml'));
 const flowState = (repo: string): string => readIf(join(repo, '.agent-terminal', 'flow-state.yaml'));
 const gitIn = (repo: string, ...args: string[]): string => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+const gateDiagnosis = (home: string, repo: string): string => {
+  let entries: string;
+  try {
+    entries = auditGateEntries(home, repo)
+      .map((e) => `${e.cmd}${parseAutoHaltReasons(e.cmd) === null ? '' : ` → reasons ${JSON.stringify(parseAutoHaltReasons(e.cmd))}`}`)
+      .join('\n');
+  } catch (e) {
+    entries = `unreadable: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  return `run-state.yaml:\n${runState(repo)}\n§25 gate entries:\n${entries}`;
+};
 
 const loopReadout = () => page.locator('#flow-strip .loopstat');
 const loopPanel = () => page.locator('#loop-panel');
@@ -145,7 +156,12 @@ test('auto clean gate advances with its phase commit; no alert is raised and the
   await flowControl().click();
 
   // The engine approved the clean `red` gate: the flow moved on to the manual step with no gate click.
-  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: done$/m);
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS })
+    .toMatch(/^step: done$/m)
+    .catch((e: unknown) => {
+      throw new Error(`${e instanceof Error ? e.message : String(e)}\n\n${gateDiagnosis(home, repo)}`);
+    });
   expect(flowState(repo)).toMatch(/^status: in_progress$/m);
   await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
   expect(gitIn(repo, 'log', '--format=%s', `${baseline}..HEAD`).split('\n')).toContain('RED');
@@ -301,7 +317,8 @@ test('pinning: a human step on a trusted flow waits at its clean gate and the op
 
   const gateCmds = runGateCmds(home, repo);
   expect(gateCmds).toContain('§27 gate approve');
-  expect(gateCmds.filter((c) => c.includes('(engine-decided)'))).toEqual([]);
+  expect(gateCmds.filter((c) => gateDecisionKind(c)?.kind === 'decision').map((c) => gateDecisionDecider(c))).toEqual(['human']);
+  expect(gateCmds.filter((c) => gateDecisionDecider(c) === 'engine')).toEqual([]);
 });
 
 test('a manual Advance while a human approve runs its side-effect moves the flow once: the approve does not advance it again (N9b.5(e))', { tag: '@ownapp' }, async () => {

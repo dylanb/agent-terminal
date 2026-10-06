@@ -92,7 +92,7 @@ interface Rig {
   approvals: Approval[];
   views: FlowLoopView[];
   notify: ReturnType<typeof vi.fn<(o: LoopNotifyOpts) => () => void>>;
-  outcome: (o: GateApproveOutcome) => void;
+  outcome: (o: GateApproveOutcome | 'throw' | 'reject') => void;
   hold: () => () => void;
   view: (repoDir?: string) => FlowLoopView;
   pushView: (repoKey: string) => void;
@@ -156,7 +156,7 @@ function makeRig(opts: { auditThrows?: boolean; readsThrow?: () => boolean; runI
   const views: FlowLoopView[] = [];
   const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
   const notifier = createLoopNotifier({ isFocused: () => false, onFocusChanged: () => {}, notify, focusWindow: () => {}, reveal: () => {} });
-  let nextOutcome: GateApproveOutcome = { kind: 'advanced', effectFailures: [] };
+  let nextOutcome: GateApproveOutcome | 'throw' | 'reject' = { kind: 'advanced', effectFailures: [] };
   let held: Promise<void> | null = null;
   let engineLike: EngineLike = { activeRepoDir: () => repoDir, resume: () => {}, liveErrorFor: () => null };
   let gate!: AutoGate;
@@ -187,14 +187,24 @@ function makeRig(opts: { auditThrows?: boolean; readsThrow?: () => boolean; runI
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
   });
-  gate.attachApprove(async (dir, step, turnKey, decider) => {
+  gate.attachApprove((dir, step, turnKey, decider) => {
     const a: Approval = { repoDir: dir, step, turnKey, decider: decider.kind };
     approvals.push(a);
-    if (held) await held;
-    if (decider.kind === 'engine') a.claim = decider.claimAccept();
-    if (a.claim && !a.claim.ok) return 'runEnded' in a.claim ? { kind: 'run-ended' } : { kind: 'abandoned' };
-    if (nextOutcome.kind === 'advanced') writeAppLoopState(dir, { loop: LOOP, step, turnKey, status: 'accepted' }, FIXED);
-    return nextOutcome;
+    if (nextOutcome === 'throw') throw new Error('approve threw before settling');
+    const run = async (): Promise<GateApproveOutcome> => {
+      if (held) await held;
+      const outcome = nextOutcome;
+      if (outcome === 'throw' || outcome === 'reject') throw new Error('approve rejected after the accept');
+      if (decider.kind === 'engine') a.claim = decider.claimAccept();
+      if (a.claim && !a.claim.ok) {
+        if ('runEnded' in a.claim) return { kind: 'run-ended' };
+        if ('abandoned' in a.claim) return { kind: 'abandoned' };
+        return { kind: 'refused-late', reasons: a.claim.reasons };
+      }
+      if (outcome.kind === 'advanced') writeAppLoopState(dir, { loop: LOOP, step, turnKey, status: 'accepted' }, FIXED);
+      return outcome;
+    };
+    return run();
   });
   return {
     gate,
@@ -314,6 +324,25 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     expect(autoHalts(rig)).toHaveLength(1);
   });
 
+  // §27.9.1 N9b.6 — a reason whose evaluation cannot complete holds: a report the engine cannot re-read is (a).
+  it('(a): a round report that passed its artifact check but cannot be re-read halts the clean gate that follows, with no engine approve', async () => {
+    const { rig, engine } = wired();
+    h.driveToReviewInjected(engine);
+    h.writeReport(roundReportWithDisposition(['summary'], ROSTER, 'fixed'));
+    const read = h.readArtifact.getMockImplementation()!;
+    let reportReads = 0;
+    h.readArtifact.mockImplementation((p) => (p.includes('/reports/') && ++reportReads > 1 ? null : read(p)));
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, turnKey: CONSOLIDATE_KEY, status: 'complete' });
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view(h.repo).humanNeeded).toBe(true);
+    expect(autoHalts(rig)).toHaveLength(1);
+  });
+
   // Plan row "Failed gate persist" (N9b.5(e), §25 truth), through the real engine and controller.
   it('a clean `auto` gate whose `complete` write fails reads human-needed before any timer, raises the notifier, and writes no entry, even after the bound', async () => {
     const { rig, engine } = wired((dir, state) => {
@@ -428,6 +457,14 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(autoHalts(rig)).toEqual([]);
   });
 
+  it('(a): an unreadable round report after a settled one halts a clean gate (the earlier report does not stand in)', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', { roundReport: roundReportWithDisposition(['summary'], ['p1'], 'fixed') });
+    rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', { roundReport: null });
+    await expectGenericHalt(rig);
+  });
+
   it('(b): an accepted failed turn holds for the rest of the loop run', async () => {
     const rig = makeRig();
     startTrusted(rig);
@@ -454,6 +491,35 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     startTrusted(rig);
     rig.gate.observeDefResolution(repoDir, LOOP, { tier: 'repo', identity: null });
     await expectGenericHalt(rig);
+  });
+
+  it('(g): a loop-run resolution whose identity differs from the Start-held one halts a clean gate, even after the def is restored', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.observeDefResolution(repoDir, LOOP, { tier: 'operator', identity: { name: LOOP, digest: 'edited' } });
+    rig.gate.observeDefResolution(repoDir, LOOP, OPERATOR_DEF);
+    await expectGenericHalt(rig);
+  });
+
+  it('(h) not (g): a step whose def identity could not be captured at Start halts as a missing input, not an untrusted source', async () => {
+    const rig = makeRig();
+    defNow = { tier: 'operator', identity: null };
+    startTrusted(rig);
+    await expectGenericHalt(rig);
+    const reasons = parseAutoHaltReasons(autoHalts(rig)[0]) ?? [];
+    expect(reasons).toContain('h');
+    expect(reasons).not.toContain('g');
+  });
+
+  it('(h) not (g): an operator-tier loop-run resolution whose identity cannot be read halts as a missing input', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.observeDefResolution(repoDir, LOOP, { tier: 'operator', identity: null });
+    rig.gate.observeDefResolution(repoDir, LOOP, OPERATOR_DEF);
+    await expectGenericHalt(rig);
+    const reasons = parseAutoHaltReasons(autoHalts(rig)[0]) ?? [];
+    expect(reasons).toContain('h');
+    expect(reasons).not.toContain('g');
   });
 
   // Plan row "No intermediate commit is unsafe" (stub-only until S3): an arm naming another step still halts.
@@ -483,6 +549,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
   it('control for the preparer leg: an operator-side resolution at the preparer leaves the clean gate to the engine', async () => {
     const rig = makeRig();
     const preparerResolve = composeLoopBindingResolve(rig.gate, composeObservedResolveDef(rig.gate, ctxFor));
+    defNow = plantedResolution(repoDir);
     current = startRun(loopSteps('auto'));
     rig.gate.bindAtStart(repoDir, current, 0, () => SHA);
     rig.gate.commitStart(repoDir);
@@ -551,6 +618,55 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(halts).toHaveLength(1);
     expect([...(parseAutoHaltReasons(halts[0]) ?? [])].sort()).toEqual(['c', 'e']);
     expect((rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).sort()).toEqual(['c', 'e']);
+  });
+});
+
+describe('autoGate — every engine approve outcome other than `advanced` halts the gate (N9b.6(k)/(l), #137 S1)', () => {
+  it.each([
+    ['refused', { kind: 'refused', reason: 'the run-state no longer matches the gate' } as GateApproveOutcome, 1],
+    ['accept-failed', { kind: 'accept-failed', reason: 'ENOSPC' } as GateApproveOutcome, 0],
+    ['blocked', { kind: 'blocked' } as GateApproveOutcome, 1],
+    ['preview-raised', { kind: 'preview-raised' } as GateApproveOutcome, 0],
+    ['abandoned', { kind: 'abandoned' } as GateApproveOutcome, 1],
+  ])('%s: human-needed, no longer deciding, the halt shown, no failed-effect marker, and only the `auto-halt` entries the controller owns', async (_label, outcome, entries) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.outcome(outcome);
+    await reachGate(rig, 'clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.deciding).toBe(false);
+    expect(v.autoGate?.failedEffect).toBeUndefined();
+    expect(v.autoGate?.haltGeneric).toBe(true);
+    expect(autoHalts(rig)).toHaveLength(entries);
+  });
+
+  it.each(['throw', 'reject'] as const)('an engine approve that %ss: human-needed, the failed-effect marker set, and one `auto-halt` entry naming (l)', async (failure) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.outcome(failure);
+    await reachGate(rig, 'clean');
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.deciding).toBe(false);
+    expect(v.autoGate?.failedEffect?.state).toBe('set');
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
+  });
+
+  it('an interrupt armed after the evaluation but before the claim is refused at the claim: no accept, human-needed, (c) shown and recorded', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    const release = rig.hold();
+    await reachGate(rig, 'clean');
+    armInterrupt(repoDir, 'next');
+    release();
+    await flush();
+    expect(readAppLoopState(repoDir)?.status).toBe('complete');
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toContain('c');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('c');
   });
 });
 
@@ -755,6 +871,7 @@ describe('autoGate — run lifetime and binding (N9b.2, N9b.5(b))', () => {
   it('a per-loop-run flag raised in one `auto` step does not hold the next step entered through the preparer', async () => {
     const rig = makeRig();
     const preparerResolve = composeLoopBindingResolve(rig.gate, composeObservedResolveDef(rig.gate, ctxFor));
+    defNow = plantedResolution(repoDir);
     current = startRun([
       { id: STEP, kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' },
       { id: 'second', kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' },
@@ -791,6 +908,21 @@ describe('autoGate — human and undeclared steps on a trusted flow are unchange
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
     expect(autoHalts(rig)).toEqual([]);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v).not.toHaveProperty('autoGate');
+  });
+
+  // Changelog v2.172 (1)/(3): a run whose only declared `auto` was lowered at Start is a run with no `auto` step.
+  it('a run whose declared `auto` step was lowered at Start by a repo flow source: no approve, human-needed, and no `autoGate` on the view', async () => {
+    const rig = makeRig();
+    current = startRun(loopSteps('auto'), 'repo');
+    rig.gate.bindAtStart(repoDir, current, Date.parse('2026-07-17T12:00:00.000Z'), () => SHA);
+    rig.gate.commitStart(repoDir);
+    rig.gate.beginLoopRun(repoDir, STEP);
+    rig.gate.observeDefResolution(repoDir, LOOP, defNow);
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
     expect(v).not.toHaveProperty('autoGate');

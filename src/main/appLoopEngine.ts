@@ -983,7 +983,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         deps.audit(active.repoDir, reviewRoundAuditCmd('complete', active.round), 0);
         const report = deps.readArtifact(active.reportPath);
         const reviewed = active;
-        if (report !== null) hook(() => deps.loopRunEvent?.(reviewed.repoDir, reviewed.stepId, reviewed.turnKey, { roundReport: report }));
+        hook(() => deps.loopRunEvent?.(reviewed.repoDir, reviewed.stepId, reviewed.turnKey, { roundReport: report }));
         startConsolidate(active);
         return;
       }
