@@ -386,9 +386,11 @@ describe('autoGate — Restart and Undo keep the Start-bound authority (#137 S1)
 
   it('Undo back onto the `auto` step: its clean gate is engine-approved again', async () => {
     const rig = makeRig();
+    // Undo returns a `done` run to its last step (§24.2.2), so the `auto` step is the flow's last.
+    writeGlobalEntry(rig.globalDir, FLOW_ID, flowYaml(FLOW_NAME, 'auto').replace('  - id: next\n    kind: manual\n', ''));
     expect(rig.flowStart(rig.wt).status).toBe('in_progress');
     await rig.reachGate('clean');
-    expect(rig.flow.state(rig.wt).stepName).toBe('next');
+    expect(rig.flow.state(rig.wt).status).toBe('done');
 
     rig.flow.undo(rig.wt);
     expect(rig.flow.state(rig.wt).stepName).toBe(STEP);

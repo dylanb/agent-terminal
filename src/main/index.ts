@@ -123,15 +123,27 @@ import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import type { LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
-import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
+import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
+import { createAutoGate, defResolutionOf, START_CAPTURE_TIMEOUT_MS } from './autoGate';
+import type { LoopBinding } from '../shared/loopNamespace';
+import {
+  composeCurrentRun,
+  composeEngineApprove,
+  composeLifecycleEndRun,
+  composeLoopBindingResolve,
+  composeObservedResolveDef,
+  composeRecordFlowTransition,
+  composeRunInProgressAt,
+  composeStartTransition,
+} from './autoGateComposition';
 import type { CliInstallResult } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
@@ -340,6 +352,37 @@ async function createWindow(): Promise<void> {
     repoDir,
   });
   let lifecycle: FlowLifecycle;
+  // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
+  const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  let nextAutoGateTimer = 0;
+  const autoGate = createAutoGate({
+    audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
+    resolveDef: (repoDir, loop) => defResolutionOf(observedResolveDef(repoDir, loop)),
+    currentRun: composeCurrentRun(flowGlobalDir),
+    runInProgressAt: composeRunInProgressAt(),
+    onViewChanged: () => pushFlowChanged(),
+    setTimer: (cb, ms) => {
+      const id = ++nextAutoGateTimer;
+      autoGateTimers.set(
+        id,
+        setTimeout(() => {
+          autoGateTimers.delete(id);
+          cb();
+        }, ms),
+      );
+      return { id };
+    },
+    clearTimer: (h) => {
+      const t = autoGateTimers.get(h.id);
+      if (t !== undefined) clearTimeout(t);
+      autoGateTimers.delete(h.id);
+    },
+  });
+  const observedResolveDef = composeObservedResolveDef(autoGate, appDefContext);
+  const recordFlowTransition = composeRecordFlowTransition(
+    { recordTransition: (repoKey, kind, before, after, start) => audit.recordTransition(repoKey, kind, before, after, start) },
+    autoGate,
+  );
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
@@ -383,7 +426,7 @@ async function createWindow(): Promise<void> {
       appTurnTimer = null;
     },
     noteSettle: () => shadow.noteSettle(),
-    resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
+    resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
     readRecipe: (absPath) => {
       try {
         return readFileSync(absPath, 'utf8');
@@ -422,7 +465,14 @@ async function createWindow(): Promise<void> {
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),
     terminateFlow: (repoDir) => lifecycle.terminateUnattended(repoDir),
+    gateReaching: autoGate.gateReaching,
+    gateReached: autoGate.gateReached,
+    gateNotReached: autoGate.gateNotReached,
+    loopRunEvent: autoGate.loopRunEvent,
+    interruptArmed: autoGate.interruptArmed,
+    consumeInterrupt: autoGate.consumeInterrupt,
   });
+  const loopBindingResolve = composeLoopBindingResolve(autoGate, observedResolveDef);
   // Watch the §27 done-file (in the §27 loop area) for the active §27 turn, key-matched so a prior turn's
   // latched file cannot complete a different one (§27.12).
   const armAppTurnDoneWatch = (repoDir: string): void => {
@@ -476,7 +526,7 @@ async function createWindow(): Promise<void> {
     resolveDef: (step) => {
       const t = activeFlowEntryOccurrence;
       if (!t || step.loop === undefined) return { ok: false, reason: 'this loop step names no loop to run' };
-      return resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+      return loopBindingResolve(t.repoKey, step.id, step.loop);
     },
     canEnterWork: () => appEngine.canEnter(),
     // Position 2 — an unresolved def keeps the surviving app-namespace step (reverting would be an AC 2
@@ -518,7 +568,7 @@ async function createWindow(): Promise<void> {
     enterAppLoop: (step) => {
       const t = activeFlowEntryOccurrence;
       if (!t || step.loop === undefined) return;
-      const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+      const resolved = observedResolveDef(t.repoKey, step.loop);
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
       // §28.4 D1 — which impl-slice this entry is for; the engine keys the result artifact off it so a
       // loop-back re-entered RED writes `red-result.slice-N.md` fresh instead of resuming slice 1's product.
@@ -566,10 +616,16 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      provideAppLoopView(appEngine, name, {
-        tiers: resolveAppLoopDefTiers(iconLoc),
-        repoDir: repoKey,
-      }),
+      provideAppLoopView(
+        appEngine,
+        name,
+        {
+          tiers: resolveAppLoopDefTiers(iconLoc),
+          repoDir: repoKey,
+        },
+        autoGate.autoGateViewFor,
+        (n) => observedResolveDef(repoKey, n),
+      ),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
@@ -791,7 +847,7 @@ async function createWindow(): Promise<void> {
       currentFlowEntryTokens.delete(repoKey);
       trustedAppBootstraps.delete(repoKey);
     },
-    endRun: () => {},
+    endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
@@ -897,90 +953,99 @@ async function createWindow(): Promise<void> {
   // §27.9/§27.13 / N5 — composition root for the §27 gate decision. Returns the request-changes
   // delivered/dropped result so the two-way flow:appRequestChanges caller can hold the composer open on a
   // drop (approve goes through the one-way channel and ignores the result).
+  // One deps factory for both deciders' approve (§27.9.1 N9b.5(c)): the gh and commit ports bind their worktree at
+  // construction, so each decision gets its own.
+  const approveDepsFor = (repoKey: string): AppGateDecisionDeps => ({
+    readRunState: (repoDir) => readAppLoopState(repoDir),
+    resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
+    refs: (repoDir) => {
+      return resolveAppGateRefs(
+        flow.state(repoDir).refs,
+        trustedAppBootstraps.get(repoDir) ?? null,
+      );
+    },
+    runSideEffect: createRealAppGateGitHub(repoKey),
+    runCommitSideEffect: createRealAppGateCommit(repoKey),
+    persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+    advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
+    // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
+    // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
+    // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
+    // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
+    // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
+    sourceSliceCount: (repoDir, def) => {
+      const planBinding = def.outputs.find((o) => o.id === 'plan');
+      if (planBinding === undefined) return;
+      let planText = '';
+      try {
+        planText = readFileSync(planBinding.path, 'utf8');
+      } catch {
+        planText = '';
+      }
+      flow.resolveInputs(repoDir, { slices: String(implSliceCount(planText)) });
+    },
+    // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
+    reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
+    // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
+    recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
+    clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
+    audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
+    emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),
+    // §28.5.1 — the raw fail-loud store; the executor wraps this call best-effort (like its other side-effects).
+    recordBaseline: recordBaselineCommit,
+    onViewChanged: () => pushFlowChanged(),
+    // §27.9/AC4 — the resume+done-watch preamble mirrors the flowAppRouteOut handler below; both drive a
+    // §27 engine that is idle for this repoDir after a relaunch (there is no launch-time §27 resume).
+    deliverFeedback: (repoDir, s, tk, feedback) => {
+      if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
+      armAppTurnDoneWatch(repoDir);
+      return appEngine.requestChanges(repoDir, s, tk, feedback);
+    },
+    // §27.9/AC5 — redo re-enters the work turn; same resume+done-watch preamble as deliverFeedback so a
+    // §27 engine idle for this repoDir after a relaunch reconstructs the gate before the clean-slate re-entry.
+    deliverRedo: (repoDir, s, tk, instruction) => {
+      if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
+      armAppTurnDoneWatch(repoDir);
+      return appEngine.redo(repoDir, s, tk, instruction);
+    },
+    // §27.9/AC6 — polish is app-owned loop state written to its own file (§27.9).
+    enterPolish: (repoDir, step) => enterPolish(repoDir, step),
+    clearPolish: (repoDir) => clearPolish(repoDir),
+    // §28.7 — an epic plan intercepts before accept; the coordinator sources the epic issue from the flow's
+    // ticket ref (never re-derived — §6) and the loop name from the resolved def.
+    maybeBeginEpicPromotion: (repoDir, def, step, turnKey, decider) => {
+      const gateRefs = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
+      return epicPromotionCoordinator.maybeBegin(repoDir, def, def.name, step, turnKey, { epic: gateRefs.ticket, pr: gateRefs.pr }, decider);
+    },
+  });
   const runAppGateDecisionRaw = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
-    runAppGateDecisionImpl(
-      repoKey,
-      step,
-      turnKey,
-      option,
-      {
-        readRunState: (repoDir) => readAppLoopState(repoDir),
-        resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
-        refs: (repoDir) => {
-          return resolveAppGateRefs(
-            flow.state(repoDir).refs,
-            trustedAppBootstraps.get(repoDir) ?? null,
-          );
-        },
-        runSideEffect: createRealAppGateGitHub(repoKey),
-        runCommitSideEffect: createRealAppGateCommit(repoKey),
-        persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
-        advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
-        // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
-        // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
-        // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
-        // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
-        // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
-        sourceSliceCount: (repoDir, def) => {
-          const planBinding = def.outputs.find((o) => o.id === 'plan');
-          if (planBinding === undefined) return;
-          let planText = '';
-          try {
-            planText = readFileSync(planBinding.path, 'utf8');
-          } catch {
-            planText = '';
-          }
-          flow.resolveInputs(repoDir, { slices: String(implSliceCount(planText)) });
-        },
-        // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
-        reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
-        // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
-        recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
-        clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
-        audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
-        emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
-        emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),
-        // §28.5.1 — the raw fail-loud store; the executor wraps this call best-effort (like its other side-effects).
-        recordBaseline: recordBaselineCommit,
-        onViewChanged: () => pushFlowChanged(),
-        // §27.9/AC4 — the resume+done-watch preamble mirrors the flowAppRouteOut handler below; both drive a
-        // §27 engine that is idle for this repoDir after a relaunch (there is no launch-time §27 resume).
-        deliverFeedback: (repoDir, s, tk, feedback) => {
-          if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
-          armAppTurnDoneWatch(repoDir);
-          return appEngine.requestChanges(repoDir, s, tk, feedback);
-        },
-        // §27.9/AC5 — redo re-enters the work turn; same resume+done-watch preamble as deliverFeedback so a
-        // §27 engine idle for this repoDir after a relaunch reconstructs the gate before the clean-slate re-entry.
-        deliverRedo: (repoDir, s, tk, instruction) => {
-          if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
-          armAppTurnDoneWatch(repoDir);
-          return appEngine.redo(repoDir, s, tk, instruction);
-        },
-        // §27.9/AC6 — polish is app-owned loop state written to its own file (§27.9).
-        enterPolish: (repoDir, step) => enterPolish(repoDir, step),
-        clearPolish: (repoDir) => clearPolish(repoDir),
-        // §28.7 — an epic plan intercepts before accept; the coordinator sources the epic issue from the flow's
-        // ticket ref (never re-derived — §6) and the loop name from the resolved def.
-        maybeBeginEpicPromotion: (repoDir, def, step, turnKey) => {
-          const gateRefs = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
-          return epicPromotionCoordinator.maybeBegin(repoDir, def, def.name, step, turnKey, { epic: gateRefs.ticket, pr: gateRefs.pr });
-        },
-      },
-      note,
-    );
+    runAppGateDecisionImpl(repoKey, step, turnKey, option, approveDepsFor(repoKey), note);
 
   // §B.3/AC 4 — the gate-decision seam refuses a marked binding at the operation: a step that binds no
   // surviving engine (loop_namespace: legacy) never reaches the outward-facing side effect, even if its run
   // state already sits at a verdict. The binding is read from the loaded def by the step id the payload names
   // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
+  const gateBindingOf = (repoKey: string, step: string): LoopBinding | null => {
+    const load = resolveActiveDefinition(repoKey);
+    return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
+  };
   const runAppGateDecision = createGuardedGateDecision({
-    bindingOf: (repoKey, step) => {
-      const load = resolveActiveDefinition(repoKey);
-      return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
-    },
+    bindingOf: gateBindingOf,
     refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     run: runAppGateDecisionRaw,
+  });
+  autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
+  const flowStartTransition = composeStartTransition({
+    autoGate,
+    resolveForStart: (repoKey) => {
+      const r = resolveRun(repoKey);
+      return r.load.ok ? { definition: r.load.definition, flowSourceTrust: r.flowSourceTrust ?? 'repo', binding: r.binding } : null;
+    },
+    start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
+    now: () => Date.now(),
+    record: recordFlowTransition,
+    captureTimeoutMs: START_CAPTURE_TIMEOUT_MS,
   });
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
@@ -1059,6 +1124,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowArmInterrupt(m)) return;
         try {
           armInterrupt(m.repoKey, m.step);
+          autoGate.armInterrupt(m.repoKey, m.step);
         } catch (e) {
           send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}` });
           return;
@@ -1174,9 +1240,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
         const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          withoutTrustedBootstrap(m.repoKey, () =>
-            recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
-          ),
+          withoutTrustedBootstrap(m.repoKey, () => trackLoop(m.repoKey, withDerived(m.repoKey, flowStartTransition(m.repoKey)))),
         );
         if (started.ok) return started.value;
         return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });

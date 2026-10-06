@@ -6,7 +6,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
-import type { GateDecider } from '../shared/audit';
+import { epicPromotionAuditCmd, type GateDecider } from '../shared/audit';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
 import type { LifecycleTerminateResult } from './flowLifecycle';
@@ -239,9 +239,9 @@ function sameSplit(a: EpicSubTicket[], b: EpicSubTicket[]): boolean {
  *  §28 block audit entry so the run log never blurs the two outcomes (CODE-STANDARDS run-log truthfulness). */
 export type EpicPromotionGateBlock = 'corrupt' | 'stale-split';
 
-const EPIC_PROMOTION_BLOCKED_UNREADABLE = '§28 epic-promotion blocked — unreadable promotion record';
-const EPIC_PROMOTION_BLOCKED_STALE = '§28 epic-promotion blocked — plan diverged from partial-promotion record';
-const EPIC_PROMOTION_BLOCKED_UNRESOLVABLE = '§28 epic-promotion blocked — unresolvable epic issue';
+const BLOCKED_UNREADABLE = 'unreadable promotion record';
+const BLOCKED_STALE = 'plan diverged from partial-promotion record';
+const BLOCKED_UNRESOLVABLE = 'unresolvable epic issue';
 
 const EPIC_ISSUE_UNRESOLVABLE_ERROR = 'this epic plan has no resolvable epic issue to promote — its flow carries no epic issue reference; fix the flow state and re-approve';
 
@@ -249,14 +249,14 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
   const held = new Map<string, { def: LoopDefV2; loop: string; step: string; turnKey: string; epic: number; pr: number | null; subTickets: EpicSubTicket[] }>();
   const key = (repoDir: string, step: string): string => `${repoDir}\0${step}`;
   return {
-    maybeBegin(repoDir, def, loop, step, turnKey, refs) {
+    maybeBegin(repoDir, def, loop, step, turnKey, refs, decider = 'human') {
       const subTickets = deps.readSubTickets(def);
       if (subTickets === null) return { kind: 'not-epic' };
       // §28.7 — a well-formed epic plan whose epic issue is unresolvable cannot be promoted; block loudly here
       // rather than fall through to the silent single-ticket accept (the UI-offered-X / got-Y divergence).
       if (refs.epic === null) {
         deps.emitError(repoDir, EPIC_ISSUE_UNRESOLVABLE_ERROR);
-        deps.audit(repoDir, EPIC_PROMOTION_BLOCKED_UNRESOLVABLE, 1);
+        deps.audit(repoDir, epicPromotionAuditCmd('blocked', BLOCKED_UNRESOLVABLE, decider), 1);
         return { kind: 'blocked' };
       }
       // §28.7 — the promotion record is the sole guard against re-creating duplicate public issues, so a record
@@ -265,7 +265,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       if (block !== null) {
         const corrupt = block === 'corrupt';
         deps.emitError(repoDir, corrupt ? promotionRecordUnreadableError(refs.epic) : promotionRecordStaleError(refs.epic));
-        deps.audit(repoDir, corrupt ? EPIC_PROMOTION_BLOCKED_UNREADABLE : EPIC_PROMOTION_BLOCKED_STALE, 1);
+        deps.audit(repoDir, epicPromotionAuditCmd('blocked', corrupt ? BLOCKED_UNREADABLE : BLOCKED_STALE, decider), 1);
         return { kind: 'blocked' };
       }
       held.set(key(repoDir, step), { def, loop, step, turnKey, epic: refs.epic, pr: refs.pr, subTickets });
@@ -277,7 +277,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       if (h === undefined) return; // no pending promotion — a raced or stale answer
       held.delete(key(repoDir, step));
       if (!confirm) {
-        deps.audit(repoDir, '§28 epic-promotion declined', 0);
+        deps.audit(repoDir, epicPromotionAuditCmd('declined', undefined, 'human'), 0);
         deps.onViewChanged();
         return;
       }
@@ -298,7 +298,7 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       // (the approved plan is never lost), and it is never confused with a persist failure.
       try {
         await deps.runPromotion(repoDir, { epic: h.epic, pr: h.pr, subTickets: fresh });
-        deps.audit(repoDir, '§28 epic-promotion', 0);
+        deps.audit(repoDir, epicPromotionAuditCmd('confirm', undefined, 'human'), 0);
       } catch (e) {
         deps.emitError(repoDir, `epic promotion failed: ${errMsg(e)}`);
         deps.onViewChanged();
@@ -318,10 +318,10 @@ export function createEpicPromotionCoordinator(deps: EpicPromotionCoordinatorDep
       try {
         const terminated = deps.terminateFlow(repoDir);
         if (terminated.outcome === 'refused' && terminated.cause !== 'not-begun') {
-          deps.audit(repoDir, `§28 epic-promotion terminate failed: ${terminated.reason}`, 1);
+          deps.audit(repoDir, epicPromotionAuditCmd('terminate-failed', terminated.reason, 'human'), 1);
         }
       } catch (e) {
-        deps.audit(repoDir, `§28 epic-promotion terminate failed: ${errMsg(e)}`, 1);
+        deps.audit(repoDir, epicPromotionAuditCmd('terminate-failed', errMsg(e), 'human'), 1);
       }
       deps.onViewChanged();
     },

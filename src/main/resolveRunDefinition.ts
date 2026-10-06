@@ -6,7 +6,7 @@ import {
   FLOW_DEF_FILE,
   loadFlowDefinition,
   loadUntrustedFlowDefinition,
-  loadFlowDefinitionLocalFirst,
+  loadFlowDefinitionLocalFirstFrom,
   type FlowLoad,
 } from './flow';
 import { type StartednessSignal } from '../shared/flowStarted';
@@ -57,8 +57,18 @@ export interface ResolvedRunDefinition {
   /** §18.7.3 AC9 — the source this resolution bound to, recorded at the in_progress transition so a begun run
    *  re-resolves the SAME source rather than the live pointer. Absent on a refused pick or a held begun run. */
   binding?: DispositionRead;
-  flowSourceTrust?: 'operator' | 'repo';
+  /** §27.9.1 N9b.2(a) — whether the loaded flow is operator ground or repo content. Absent where nothing loaded. */
+  flowSourceTrust?: FlowSourceTrust;
 }
+
+export type FlowSourceTrust = 'operator' | 'repo';
+
+function localFirst(localDir: string, globalDir: string, binding: DispositionRead): ResolvedRunDefinition {
+  const { load, from } = loadFlowDefinitionLocalFirstFrom(localDir, globalDir);
+  return { load, binding, flowSourceTrust: from === 'global' ? 'operator' : 'repo' };
+}
+
+const catalogTrust = (tier: CatalogTier): FlowSourceTrust => (tier === 'global' ? 'operator' : 'repo');
 
 export type ResolveRunDefinition = (localDir: string, globalDir: string) => ResolvedRunDefinition;
 
@@ -84,7 +94,7 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
     const pointer = deps.pointer();
     switch (pointer.kind) {
       case 'unset':
-        return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: { source: 'non-catalog' } };
+        return localFirst(localDir, globalDir, { source: 'non-catalog' });
       case 'invalid':
         // §18.7.6 / CWE-116/117 — the reason is display-sanitized at its source (the pointer read strips and
         // bounds the echoed rejected value), so the resolver forwards it as-is.
@@ -95,6 +105,7 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
           return {
             load: loadCatalogEntryDefinition(entry.flowDir),
             binding: { source: 'catalog', tier: entry.tier, id: pointer.id },
+            flowSourceTrust: catalogTrust(entry.tier),
           };
         }
         return { load: { ok: false, error: catalogRefusal(pointer.id, entry.cause) } };
@@ -139,12 +150,13 @@ export function resolveBoundSource(
       // §18.1 error state, never a silent swap to a different source.
       const entry = catalogEntry(disposition.id, disposition.tier);
       if (!entry.ok || entry.tier !== disposition.tier) return { load: lostBindingHold() };
-      return { load: loadCatalogEntryDefinition(entry.flowDir), binding: disposition };
+      return { load: loadCatalogEntryDefinition(entry.flowDir), binding: disposition, flowSourceTrust: catalogTrust(entry.tier) };
     }
     case 'non-catalog':
-      return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: disposition };
+      return localFirst(localDir, globalDir, disposition);
     case 'fallback':
-      return { load: loadFlowDefinition(globalDir), binding: disposition };
+      // Only held-run recovery writes it, so it fails toward `human`.
+      return { load: loadFlowDefinition(globalDir), binding: disposition, flowSourceTrust: 'repo' };
     default:
       // §18.7.6 — a persisted source outside the closed set (on-disk corruption the type cannot catch at
       // runtime) fails closed to the §18.1 error, never a fall-open to the live local↔global chain.

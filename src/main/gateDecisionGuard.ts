@@ -19,8 +19,11 @@ export function stepLoopBinding(steps: FlowStepDef[], stepId: string): LoopBindi
   return step?.kind === 'loop' ? (step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE) : null;
 }
 
-export function markedBindingRefusal(_bindingOf: (repoKey: string, step: string) => LoopBinding | null, _repoKey: string, _step: string): string | null {
-  return null;
+/** §B.3 — the refusal both deciders check at the operation: the reason when `step` binds no surviving engine.
+ *  A null (non-loop / unresolved) binding refuses nothing. */
+export function markedBindingRefusal(bindingOf: (repoKey: string, step: string) => LoopBinding | null, repoKey: string, step: string): string | null {
+  const binding = bindingOf(repoKey, step);
+  return binding !== null && bindsNoSurvivingEngine(binding) ? MARKED_BINDING_REASON : null;
 }
 
 /** A gate-decision runner (approve one-way, request-changes/redo two-way): resolves to whether the decision
@@ -37,9 +40,9 @@ export function createGuardedGateDecision(deps: {
   run: GateDecisionRun;
 }): GateDecisionRun {
   return (repoKey, step, turnKey, option, note) => {
-    const binding = deps.bindingOf(repoKey, step);
-    if (binding !== null && bindsNoSurvivingEngine(binding)) {
-      deps.refuse(MARKED_BINDING_REASON);
+    const refusal = markedBindingRefusal(deps.bindingOf, repoKey, step);
+    if (refusal !== null) {
+      deps.refuse(refusal);
       return Promise.resolve(false);
     }
     return deps.run(repoKey, step, turnKey, option, note);

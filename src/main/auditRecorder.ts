@@ -127,13 +127,13 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
   };
 
   return {
-    recordTransition(repoKey, kind, before, after) {
+    recordTransition(repoKey, kind, before, after, start) {
       try {
-        const date = now();
+        const date = kind === 'start' && start !== undefined ? new Date(start.startedAt) : now();
         const ts = auditTimestamp(date);
         if (kind === 'start') {
           if (after.status !== 'in_progress') return;
-          const flow = flowName(repoKey);
+          const flow = start !== undefined ? start.flow : flowName(repoKey);
           if (!flow) return;
           const file = auditFilePath(root, repoKey, flow, date);
           const header: AuditHeader = { flow, repo: path.basename(repoKey), repoPath: repoKey, started: ts };

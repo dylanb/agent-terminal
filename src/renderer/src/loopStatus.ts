@@ -3,6 +3,11 @@
 // `settle` = a terminal/approved end, `work` = anything else.
 
 import { isHumanNeededStatus } from '../../shared/loopStatus';
+import type { FlowLoopView } from '../../shared/ipc';
+
+/** The loop view a tone is read from: a bare status, or the view itself so a view carrying `autoGate`
+ *  takes its `await` tone from `humanNeeded` (§27.9.1 N9b.5(e)). */
+export type ToneSource = string | Pick<FlowLoopView, 'status' | 'humanNeeded' | 'autoGate'>;
 
 export type SpillTone = 'await' | 'work' | 'settle';
 
@@ -10,7 +15,12 @@ export type SpillTone = 'await' | 'work' | 'settle';
 // — settled, not human-needed; keep it ahead of the awaiting-* prefix below.
 const SETTLE = /^(awaiting-team-review|merged|approved|done|complete|completed|shipped|closed|terminated)$/;
 
-export function spillTone(status: string): SpillTone {
+export function spillTone(source: ToneSource): SpillTone {
+  if (typeof source !== 'string' && source.autoGate !== undefined) {
+    if (source.humanNeeded === true) return 'await';
+    return SETTLE.test(source.status) ? 'settle' : 'work';
+  }
+  const status = typeof source === 'string' ? source : source.status;
   if (SETTLE.test(status)) return 'settle';
   if (isHumanNeededStatus(status)) return 'await';
   return 'work';
@@ -18,6 +28,6 @@ export function spillTone(status: string): SpillTone {
 
 /** The compact one-word label for the rail read-out (the panel shows the exact `status`). */
 const TONE_LABEL: Record<SpillTone, string> = { await: 'awaiting', work: 'working', settle: 'settled' };
-export function toneLabel(status: string): string {
-  return TONE_LABEL[spillTone(status)];
+export function toneLabel(source: ToneSource): string {
+  return TONE_LABEL[spillTone(source)];
 }

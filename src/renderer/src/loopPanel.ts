@@ -13,6 +13,7 @@ import { loopGateActionable } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
+import { autoHaltReasonLabel } from '../../shared/gateAuthority';
 import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -114,7 +115,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltGeneric, loop.autoGate.haltReasons] : null] : null,
   ]);
 }
 
@@ -349,7 +350,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // WCAG 4.1.3 — only touch the live-region text on a real change; an unchanged passive push (refs
       // only) must not rewrite these nodes, or a screen reader re-announces content that did not change.
       if (liveLoop.statusVal.textContent !== loop.status) liveLoop.statusVal.textContent = loop.status;
-      liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
+      liveLoop.statusVal.classList.toggle('bad', spillTone(loop) === 'await');
       if (liveLoop.iterVal && loop.iteration !== undefined) {
         const iter = String(loop.iteration);
         if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
@@ -439,7 +440,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // transition that advances the run in place); a polite live region announces that change.
       ldl.setAttribute('aria-live', 'polite');
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
-      const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
+      const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop) === 'await' ? 'bad' : '');
       ldl.append(statusRow);
       // No iteration row when no round has run (a §27 run-less view); the reason row then anchors on the
       // status row instead. An absent iteration is not rendered as 0 (§27 IPC item 3).
@@ -515,6 +516,39 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         }
         section.append(list);
         body.append(section);
+      }
+
+      // §27.9.1 N9b.5(e)/N9b.6 — the engine deciding an `auto` gate, and every reason it halted for. Every string
+      // reaches the DOM through textContent only (CWE-79): the gate's approve button sits beside it.
+      if (loop.autoGate) {
+        const ag = loop.autoGate;
+        if (ag.deciding) {
+          const notice = doc.createElement('p');
+          notice.className = 'auto-deciding';
+          notice.dataset.autoDeciding = '';
+          notice.setAttribute('role', 'status');
+          notice.textContent = 'The engine is deciding this gate — you can still decide it yourself.';
+          body.append(notice);
+        }
+        if (ag.haltReasons.length > 0 || ag.haltGeneric) {
+          const halt = doc.createElement('ul');
+          halt.className = 'auto-halt';
+          halt.setAttribute('aria-label', 'why this gate needs you');
+          for (const { reason, detail } of ag.haltReasons) {
+            const li = doc.createElement('li');
+            li.dataset.autoHaltReason = reason;
+            const label = autoHaltReasonLabel(reason);
+            li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
+            halt.append(li);
+          }
+          if (ag.haltGeneric) {
+            const li = doc.createElement('li');
+            li.dataset.autoHaltGeneric = '';
+            li.textContent = 'The engine could not approve this gate.';
+            halt.append(li);
+          }
+          body.append(halt);
+        }
       }
 
       // §27.9/N5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button per

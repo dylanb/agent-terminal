@@ -36,8 +36,8 @@ describe('audit timestamps (§25.2/§25.3)', () => {
   it('renders an ISO-8601 UTC second-precision ts for events', () => {
     expect(auditTimestamp(D)).toBe('2026-06-23T10:00:01Z');
   });
-  it('renders a filesystem-safe stamp (colons → dashes) for the file name', () => {
-    expect(auditFileStamp(D)).toBe('2026-06-23T10-00-01Z');
+  it('renders a filesystem-safe millisecond stamp (colons → dashes) for the file name', () => {
+    expect(auditFileStamp(D)).toBe('2026-06-23T10-00-01.500Z');
   });
 });
 
@@ -49,7 +49,11 @@ describe('audit path derivation (§25.2)', () => {
     expect(auditRepoDir('/root', '/a/b/agent-terminal')).toBe(path.join('/root', 'agent-terminal'));
   });
   it('names the file <flow>_<stamp>.yaml', () => {
-    expect(auditFileName('feature-dev', D)).toBe('feature-dev_2026-06-23T10-00-01Z.yaml');
+    expect(auditFileName('feature-dev', D)).toBe('feature-dev_2026-06-23T10-00-01.500Z.yaml');
+  });
+  it('gives two Starts of one flow in the same second different files', () => {
+    const later = new Date(D.getTime() + 1);
+    expect(auditFilePath('/root', '/a/b/repo', 'feature-dev', later)).not.toBe(auditFilePath('/root', '/a/b/repo', 'feature-dev', D));
   });
   it('sanitizes an untrusted flow name so it cannot traverse the audit tree (CWE-22)', () => {
     const repoDir = auditRepoDir('/root', '/a/b/repo');

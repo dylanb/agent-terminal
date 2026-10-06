@@ -5415,7 +5415,7 @@ test('Restart clears the ticket/PR display and wipes its resolved inputs (§24.2
 
   // Re-entering `work` shows nothing: Restart wiped the inputs, and (unlike the retired mirror) there is no
   // external source to re-read — flow-state.yaml no longer carries the ticket/PR.
-  expect(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')).not.toContain('179');
+  expect(load(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'))).not.toHaveProperty('inputs');
   await flowControl().click(); // Advance → work again
   await expect(flowStation(2)).toHaveClass(/\bactive\b/); // on `work` (station 2), yet…
   await expect(loopReadout()).toHaveCount(0); // …no refs: the inputs were wiped and there is nothing to re-read

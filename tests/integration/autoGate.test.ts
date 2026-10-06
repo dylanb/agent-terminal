@@ -1019,7 +1019,7 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
     startTrusted(rig, loopSteps('auto'), a);
     startTrusted(rig, loopSteps('auto'), b);
     await reachGate(rig, 'clean', 'verdict', b);
-    expect(git.git(b, ['rev-list', '--count', 'HEAD'])).toBe('2');
+    await vi.waitFor(() => expect(git.git(b, ['rev-list', '--count', 'HEAD'])).toBe('2'), { timeout: 10_000 });
     expect(git.git(b, ['show', '--name-only', '--format=', 'HEAD']).split('\n')).toContain('src/b.ts');
     expect(git.git(a, ['rev-parse', 'HEAD'])).toBe(headA);
   });

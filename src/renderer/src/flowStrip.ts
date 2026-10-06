@@ -172,11 +172,11 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
   const v = doc.createElement('span');
   v.className = 'v';
   const pill = doc.createElement('span');
-  pill.className = `spill ${spillTone(loop.status)}`;
+  pill.className = `spill ${spillTone(loop)}`;
   const dot = doc.createElement('span');
   dot.className = 'pdot';
   const label = doc.createElement('span');
-  label.textContent = toneLabel(loop.status);
+  label.textContent = toneLabel(loop);
   pill.append(dot, label);
   const car = doc.createElement('span');
   car.className = 'car';
@@ -489,8 +489,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     if (state.loop) {
       const pill = host.querySelector<HTMLElement>('.loopstat .spill');
       if (pill) {
-        pill.className = `spill ${spillTone(state.loop.status)}`;
-        if (pill.lastElementChild) pill.lastElementChild.textContent = toneLabel(state.loop.status);
+        pill.className = `spill ${spillTone(state.loop)}`;
+        if (pill.lastElementChild) pill.lastElementChild.textContent = toneLabel(state.loop);
       }
       const iter = host.querySelector('.loop-iter');
       if (iter && state.loop.iteration !== undefined) iter.textContent = `iter ${state.loop.iteration}`;

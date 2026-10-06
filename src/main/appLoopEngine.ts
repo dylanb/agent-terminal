@@ -509,7 +509,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return { ids, inputs: chainFor(repoDir, stepId, def, { kind: 're-enter', ids }) };
   };
 
-  const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
+  // §27.9.1 — the gate-authority hooks report facts to the controller; a hook that throws never aborts the turn.
+  const hook = (call: () => void): void => {
+    try {
+      call();
+    } catch (e) {
+      void (e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const persist = (status: AppLoopRunState['status'], errorReason?: string, notify = true): boolean => {
     if (!active) return false;
     if (status !== 'error') liveError = null;
     const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
@@ -547,7 +556,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       void (e instanceof Error ? e.message : String(e));
       landed = false;
     }
-    deps.onViewChanged();
+    if (notify) deps.onViewChanged();
     return landed;
   };
 
@@ -949,6 +958,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       setLiveError('turn-error', reason, round);
       persist('error', reason);
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
+      const errored = active;
+      hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, 'error'));
       deps.emitError(reason);
     },
     onComplete: (turnKey) => {
@@ -970,6 +981,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.6/AC1 — the review-and-fix round completed; chain the consolidator with no transient complete
         // state (so a relaunch never mistakes a mid-chain crash for a finished loop).
         deps.audit(active.repoDir, reviewRoundAuditCmd('complete', active.round), 0);
+        const report = deps.readArtifact(active.reportPath);
+        const reviewed = active;
+        if (report !== null) hook(() => deps.loopRunEvent?.(reviewed.repoDir, reviewed.stepId, reviewed.turnKey, { roundReport: report }));
         startConsolidate(active);
         return;
       }
@@ -1109,11 +1123,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   /** Persist a routed-to-gate consolidator turn (§27.6): record the verdict, its reason (gated), and the
    *  roster it chose, then stop at the gate (`complete`, N4 gate is display-only). */
-  const routeConsolidateToGate = (turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>, verdict: ConsolidatorVerdict, reason: string | undefined, roster: string[]): void => {
+  const routeConsolidateToGate = (
+    turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>,
+    verdict: ConsolidatorVerdict,
+    reason: string | undefined,
+    roster: string[],
+    cause: 'verdict' | 'interrupt' = 'verdict',
+  ): void => {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
     turn.chosenRoster = roster.length > 0 ? roster : undefined;
+    // §27.9.1 N9b.5(e) — before the persist, so the view it pushes already reads the engine's decision.
+    hook(() => deps.gateReaching?.(turn.repoDir, turn.stepId, turn.turnKey, verdict, cause));
     if (!persist('complete')) {
+      hook(() => deps.gateNotReached?.(turn.repoDir, turn.stepId, turn.turnKey));
       // §27.12c/CWE-703/755 — the `complete` write failed (ENOSPC/EPERM/a planted symlink), so the disk still
       // holds the pre-terminal `working`. This is the ONE transition whose purpose is to summon the human (a
       // `stop for a human`/`clean` gate); nulling liveError and leaving `working` would silently strand them.
@@ -1123,6 +1146,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
+    hook(() => deps.gateReached?.(turn.repoDir, turn.stepId, turn.turnKey));
   };
 
   /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued
@@ -1161,11 +1185,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     // §27.9/AC9 — a queued interrupt for this step routes to the gate regardless of the verdict, still stating
     // the verdict it would otherwise have reached. One-shot: cleared when honored, and recorded as its own §25
     // event so the timeline distinguishes an interrupt-honored gate from a verdict-reached one.
-    const armed = readArmedInterrupt(turn.repoDir);
-    if (armed && armed.step === turn.stepId) {
-      clearInterrupt(turn.repoDir);
+    const armed = deps.interruptArmed ? deps.interruptArmed(turn.repoDir, turn.stepId) : readArmedInterrupt(turn.repoDir)?.step === turn.stepId;
+    if (armed) {
+      if (deps.consumeInterrupt) deps.consumeInterrupt(turn.repoDir);
+      else clearInterrupt(turn.repoDir);
       deps.audit(turn.repoDir, consolidateAuditCmd('interrupt', turn.round, verdict), 0);
-      routeConsolidateToGate(turn, verdict, reason, roster);
+      routeConsolidateToGate(turn, verdict, reason, roster, 'interrupt');
       return;
     }
 
@@ -1320,11 +1345,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
         // phases cannot drift on the write-failure contract.
         const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number): void => {
-          if (!persist('complete')) {
+          // The one view push follows the accepted fact, so the stop is never shown without its halt (§27.9.1).
+          if (!persist('complete', undefined, false)) {
             refuseRouteOut('turn-error', saveFailReason, round);
             return;
           }
           deps.audit(repoDir, successAudit, 0);
+          hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'accepted'));
+          deps.onViewChanged();
         };
         if (active.phase === 'review') {
           // §27.12c/CWE-755 — an `unresolved` review turn (its def/report-location no longer resolves) has NO
@@ -1485,6 +1513,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ? consolidateAuditCmd('retry', active.round)
             : `§27 work turn ${turnKey} retry`;
       deps.audit(repoDir, retryAudit, null);
+      hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'retried'));
       runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
     },
     requestChanges(repoDir, stepId, turnKey, feedback) {

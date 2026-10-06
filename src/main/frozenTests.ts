@@ -40,8 +40,8 @@ const MAX_MATCH_WORK = 100_000_000;
 // git read in this module uses — the two path detections and the baseline-capabilities read — so the posture
 // cannot be present in one and absent in another. The working-tree read reaches it on every RED completion
 // attempt, retries included.
-const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
-const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
+export const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
+export const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
 
 /** A fresh, unpredictable, never-created hooks dir: with core.hooksPath pointed here no hook can run. */
 function freshDisabledHooksDir(): string {
