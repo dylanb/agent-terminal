@@ -847,6 +847,18 @@ describe('§27 engine — stall (AC6)', () => {
     expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('resumed after a stall'), 0);
   });
 
+  it('a Terminate the flow refuses (it never reset the run) leaves the stalled turn resumable', () => {
+    const engine = makeEngine();
+    terminateFlow.mockReturnValueOnce({ outcome: 'refused', cause: 'locked', reason: 'held by a peer', view: {} as FlowStateView });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.routeOut(repo, STEP, TURN_KEY, 'terminate');
+    expect(terminateFlow).toHaveBeenCalledWith(repo);
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('working');
+  });
+
   it('releasing a different worktree leaves the stalled turn resumable', () => {
     const engine = makeEngine();
     enterAndInjectWork(engine);
