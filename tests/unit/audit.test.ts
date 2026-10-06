@@ -406,50 +406,50 @@ describe('§27 review-round audit vocabulary', () => {
 // round/consolidate ones (CLAUDE.md single-home rule), so the writer and a future viewer read the same phrases.
 describe('§27 gate-decision audit vocabulary', () => {
   it('builds command text carrying the option and the side-effect outcome, distinguishing success from failure', () => {
-    expect(gateDecisionAuditCmd('decision', 'approve')).toContain('approve');
-    const ok = gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready');
+    expect(gateDecisionAuditCmd('decision', 'approve', undefined, 'human')).toContain('approve');
+    const ok = gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready', 'human');
     expect(ok).toContain('approve');
     expect(ok).toContain('mark-ready');
-    const failed = gateDecisionAuditCmd('side-effect-failed', 'approve', 'mark-ready: no PR to mark ready');
+    const failed = gateDecisionAuditCmd('side-effect-failed', 'approve', 'mark-ready: no PR to mark ready', 'human');
     expect(failed).toContain('no PR to mark ready');
     // A recorded failure is distinguishable from a success for the same action (§27.13 / AC3).
-    expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready'));
+    expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready', 'human'));
     // §27.9/AC4 — a request-changes the engine could not start is recorded as a DROP, distinct from the decision
     // that ran, so the audit never claims a round that never happened.
-    const dropped = gateDecisionAuditCmd('decision-dropped', 'request-changes', 'the loop was busy');
+    const dropped = gateDecisionAuditCmd('decision-dropped', 'request-changes', 'the loop was busy', 'human');
     expect(dropped).toContain('request-changes');
     expect(dropped).toContain('the loop was busy');
-    expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes'));
+    expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes', undefined, 'human'));
     // §27.9/AC6 — an approve whose best-effort polish cleanup threw AFTER the accept persisted is recorded as a
     // clear-polish failure, distinct from the decision that succeeded, so the accept is never read as aborted.
-    const clearFailed = gateDecisionAuditCmd('clear-polish-failed', 'approve', 'EISDIR: illegal operation on a directory');
+    const clearFailed = gateDecisionAuditCmd('clear-polish-failed', 'approve', 'EISDIR: illegal operation on a directory', 'human');
     expect(clearFailed).toContain('approve');
     expect(clearFailed).toContain('EISDIR');
-    expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
+    expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve', undefined, 'human'));
   });
 
   // §28.3 / T-taint — an untrusted detail (a def-supplied action / commit phase label) is neutralized
   // before it lands in the append-only §25 stream (CWE-117): control chars stripped, length bounded.
   it('neutralizes control chars and bounds the length of an untrusted detail', () => {
     const evil = 'commit: RED\n\r\x1b[31mfake failed\x07\x00';
-    const out = gateDecisionAuditCmd('side-effect', 'approve', evil);
+    const out = gateDecisionAuditCmd('side-effect', 'approve', evil, 'human');
     const hasControlChar = [...out].some((ch) => {
       const c = ch.charCodeAt(0);
       return c <= 0x1f || c === 0x7f;
     });
     expect(hasControlChar).toBe(false); // no control chars reach the append-only stream
     const long = 'x'.repeat(1000);
-    expect(gateDecisionAuditCmd('side-effect', 'approve', long).length).toBeLessThan(400); // bounded
+    expect(gateDecisionAuditCmd('side-effect', 'approve', long, 'human').length).toBeLessThan(400); // bounded
   });
 
   // §28.3 / T13b — a benign nothing-to-commit is a DISTINCT outcome from a real failure, so a reader (a
   // reconstructed timeline) never mistakes an empty phase for a `git commit` error.
   it('records a benign skipped side-effect distinctly from a success and a failure', () => {
-    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit');
+    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit', 'human');
     expect(skipped).toContain('approve');
     expect(skipped).toContain('skipped');
-    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit'));
-    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit', 'human'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit', 'human'));
   });
 });
 

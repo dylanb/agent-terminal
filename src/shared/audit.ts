@@ -392,7 +392,7 @@ export type GateDecider = 'human' | 'engine';
 
 const ENGINE_MARK = ' (engine-decided)';
 
-export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: GateDecisionOption, detail?: string, decider: GateDecider = 'human'): string {
+export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: GateDecisionOption, detail: string | undefined, decider: GateDecider): string {
   // The detail can carry untrusted content (a def-supplied side-effect action / commit phase label), so it
   // is neutralized before it lands in the append-only §25 stream — the same CWE-117 treatment loopStatus
   // mandates for every human-facing sink and notifyFailedEvent already applies.

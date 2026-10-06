@@ -109,6 +109,25 @@ export function resolveGateSideEffectBodyFile(
   );
 }
 
+export type GateApproveOutcome =
+  | { kind: 'advanced'; effectFailures: string[] }
+  | { kind: 'preview-raised' }
+  | { kind: 'blocked' }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'accept-failed'; reason: string }
+  | { kind: 'abandoned' }
+  | { kind: 'run-ended' }
+  | { kind: 'refused-late'; reasons: AutoHaltReason[] }
+  | { kind: 'stood-down' };
+
+export type ApproveClaim = { ok: true } | { ok: false; abandoned: true } | { ok: false; runEnded: true } | { ok: false; reasons: AutoHaltReason[] };
+
+export type ApproveDecider =
+  | { kind: 'human' }
+  | { kind: 'engine'; boundLoop: string; humanAttempted(): boolean; claimAccept(): ApproveClaim; checkDef(r: LoopDefV2Result): string | null };
+
+export const HUMAN_DECIDER: ApproveDecider = { kind: 'human' };
+
 /** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
  *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
  *  the bound def declares. */
@@ -124,6 +143,8 @@ export async function runAppGateDecision(
     await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
     return false; // only a request-changes reports true; approve's result is ignored by the one-way caller
   }
+  const humanAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void =>
+    deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit);
   const run = deps.readRunState(repoDir);
   // §6/AC7
   if (!run || run.step !== step || run.turnKey !== turnKey) return false;
@@ -142,10 +163,10 @@ export async function runAppGateDecision(
     const feedback = validFeedback(note);
     if (feedback === undefined) return false;
     if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
-      deps.audit(repoDir, gateDecisionAuditCmd('decision', option, undefined, 'human'), 0);
+      humanAudit('decision', 0);
       return true;
     }
-    deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy', 'human'), 1);
+    humanAudit('decision-dropped', 1, 'the loop was busy');
     return false;
   }
   // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
@@ -155,10 +176,10 @@ export async function runAppGateDecision(
     const instruction = validInstruction(note);
     if (instruction === undefined) return false;
     if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
-      deps.audit(repoDir, gateDecisionAuditCmd('decision', option, undefined, 'human'), 0);
+      humanAudit('decision', 0);
       return true;
     }
-    deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy', 'human'), 1);
+    humanAudit('decision-dropped', 1, 'the loop was busy');
     return false;
   }
   // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
@@ -167,7 +188,7 @@ export async function runAppGateDecision(
   if (option === 'polish') {
     try {
       deps.enterPolish(repoDir, step);
-      deps.audit(repoDir, gateDecisionAuditCmd('decision', option, undefined, 'human'), 0);
+      humanAudit('decision', 0);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       deps.emitError(`could not enter polish: ${reason}`);
@@ -199,7 +220,7 @@ export async function runAppGateDecision(
       failure = e instanceof Error ? e.message : String(e);
     }
     if (reopened) {
-      deps.audit(repoDir, gateDecisionAuditCmd('decision', option, undefined, 'human'), 0);
+      humanAudit('decision', 0);
     } else {
       if (brief !== undefined) deps.clearSliceBrief(repoDir);
       deps.emitError(`could not reopen the slice: ${failure}`);
@@ -210,25 +231,6 @@ export async function runAppGateDecision(
   // impasse is never executed here.
   return false;
 }
-
-export type GateApproveOutcome =
-  | { kind: 'advanced'; effectFailures: string[] }
-  | { kind: 'preview-raised' }
-  | { kind: 'blocked' }
-  | { kind: 'refused'; reason: string }
-  | { kind: 'accept-failed'; reason: string }
-  | { kind: 'abandoned' }
-  | { kind: 'run-ended' }
-  | { kind: 'refused-late'; reasons: AutoHaltReason[] }
-  | { kind: 'stood-down' };
-
-export type ApproveClaim = { ok: true } | { ok: false; abandoned: true } | { ok: false; runEnded: true } | { ok: false; reasons: AutoHaltReason[] };
-
-export type ApproveDecider =
-  | { kind: 'human' }
-  | { kind: 'engine'; boundLoop: string; humanAttempted(): boolean; claimAccept(): ApproveClaim; checkDef(r: LoopDefV2Result): string | null };
-
-export const HUMAN_DECIDER: ApproveDecider = { kind: 'human' };
 
 /** The approve operation both deciders invoke (§27.9.1 N9b.5(c)): the same identity check, accept, effects,
  *  audit and advance, returning the outcome the engine branches on. Every entry carries its decider (N9b.9). */

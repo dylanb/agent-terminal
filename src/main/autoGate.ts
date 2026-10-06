@@ -89,6 +89,8 @@ export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
 // Until S2–S4 land their letter-keyed rows, every other reason shows as the one generic row.
 const SHOWN_REASONS: ReadonlySet<AutoHaltReason> = new Set(['stop-for-a-human', 'c', 'e']);
 
+type Reason = { reason: AutoHaltReason; detail?: string };
+
 interface GateKey {
   step: string;
   turnKey: string;
@@ -130,28 +132,28 @@ interface AutoRun {
   pendingGate: (GateKey & { verdict: ConsolidatorVerdict; cause: GateCause }) | null;
   deciding: Deciding | null;
   hung: GateKey | null;
-  haltShown: (GateKey & { reasons: { reason: AutoHaltReason; detail?: string }[] }) | null;
+  haltShown: (GateKey & { reasons: Reason[] }) | null;
 }
-
-type Reason = { reason: AutoHaltReason; detail?: string };
 
 const sameGate = (a: GateKey | null, step: string, turnKey: string, gateSeq: number): boolean =>
   a !== null && a.step === step && a.turnKey === turnKey && a.gateSeq === gateSeq;
 
 const isFrozenCheckCompletion = (c: DefResolution['completion']): boolean => c === 'green' || c === 'refactor';
 
+const bestEffort = (call: () => void): void => {
+  try {
+    call();
+  } catch (e) {
+    void errMsg(e);
+  }
+};
+
 export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const runs = new Map<string, AutoRun>();
   const replaced = new Map<string, AutoRun | undefined>();
   let approve: EngineApprove | null = null;
 
-  const push = (repoKey: string): void => {
-    try {
-      deps.onViewChanged(repoKey);
-    } catch (e) {
-      void errMsg(e);
-    }
-  };
+  const push = (repoKey: string): void => bestEffort(() => deps.onViewChanged(repoKey));
 
   const isAuto = (run: AutoRun): boolean => [...run.bound.values()].some((b) => b.authority === 'auto');
   const honouredAuto = (run: AutoRun, step: string): boolean => !run.cleared && run.bound.get(step)?.authority === 'auto';
@@ -171,11 +173,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
 
   const consume = (run: AutoRun, repoDir: string): void => {
     run.arm = null;
-    try {
-      clearInterrupt(repoDir);
-    } catch (e) {
-      void errMsg(e);
-    }
+    bestEffort(() => clearInterrupt(repoDir));
   };
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
@@ -183,15 +181,9 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (reasons.some((r) => r.reason === 'c')) consume(run, repoDir);
     const lr = run.loopRun;
     const recordedAlready = lr !== null && lr.step === key.step && reasons.every((r) => lr.recorded.has(r.reason));
-    if (opts.write && !recordedAlready) {
-      try {
-        deps.audit(repoDir, autoHaltAuditCmd(reasons), 0);
-      } catch (e) {
-        void errMsg(e);
-      }
-    }
+    if (opts.write && !recordedAlready) bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd(reasons), 0));
     run.haltShown = { step: key.step, turnKey: key.turnKey, gateSeq: key.gateSeq, reasons };
-    if (run.deciding !== null && sameGate(run.deciding, key.step, key.turnKey, key.gateSeq)) clearDeciding(run);
+    if (sameGate(run.deciding, key.step, key.turnKey, key.gateSeq)) clearDeciding(run);
     push(repoDir);
   };
 
@@ -491,7 +483,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     gateReached(repoDir, step, turnKey) {
       const run = runs.get(repoDir);
       const pg = run?.pendingGate ?? null;
-      if (run === undefined || pg === null || pg.step !== step || pg.turnKey !== turnKey || pg.gateSeq !== run.gateSeq) return;
+      if (run === undefined || pg === null || !sameGate(pg, step, turnKey, run.gateSeq)) return;
       run.pendingGate = null;
       if (!honouredAuto(run, step)) return;
       const verdictHalt = pg.cause === 'interrupt' ? 'c' : verdictReason(pg.verdict);

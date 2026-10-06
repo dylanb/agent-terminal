@@ -2184,7 +2184,7 @@ const readAuditRun = (home: string, repo: string, file: string): { header: unkno
 // §28.7/§25 — the confirm-first preview's §25 `command` event, derived from its single producer so a rename of the
 // cmd re-flows here rather than leaving a stale literal (shared-semantics). Its count in the reconstructed timeline
 // is the "a preview was raised" pin: >0 on the clean path (§25 iff, epicE2E), 0 when the gate blocked (#124).
-const EPIC_PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
+const EPIC_PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve', undefined, 'human');
 const epicPreviewAuditCount = (home: string, repo: string): number =>
   auditRunFiles(home, repo).reduce(
     (n, f) => n + readAuditRun(home, repo, f).events.filter((e) => e.type === 'command' && e.cmd.includes(EPIC_PREVIEW_AUDIT_CMD)).length,

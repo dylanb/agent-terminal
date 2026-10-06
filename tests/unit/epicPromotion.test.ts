@@ -11,7 +11,7 @@ import type { FlowStateView } from '../../src/shared/ipc';
 // §25 — the caller fires the preview audit iff maybeBegin returned preview-raised; the detection needle both the
 // block-string guard and these tests key on is derived from its single producer, never hardcoded (shared-semantics),
 // so a rename of the preview cmd re-flows here rather than leaving a stale literal that matches vacuously.
-const PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
+const PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve', undefined, 'human');
 
 const DEF = {} as LoopDefV2;
 const SUBS: EpicSubTicket[] = [
