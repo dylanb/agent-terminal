@@ -2,6 +2,7 @@
 
 import type { ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import type { FlowAutoGateView } from '../shared/ipc';
+import type { FlowLike, TransitionKind } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import type { AutoHaltReason } from '../shared/gateAuthority';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -11,7 +12,8 @@ import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGate
 import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
-import { clearInterrupt, readArmedInterrupt } from './appLoopState';
+import { clearInterrupt, readAppLoopState, readArmedInterrupt } from './appLoopState';
+import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
 
 // §27.9.1 N9b.5(e)
@@ -36,10 +38,12 @@ export interface AutoGateTimer {
 export interface AutoGateDeps {
   audit: (repoDir: string, cmd: string, exit: number | null) => void;
   resolveDef: (repoDir: string, loop: string) => DefResolution | null;
-  /** The run's flow source re-resolved from the binding its Start held (§27.9.1 N9b.2(c)); null when it no longer loads. */
-  currentRun: (repoDir: string, heldBinding: DispositionRead | undefined) => StartRun | null;
+  /** The in-progress run's flow, resolved from the binding its Start recorded; null when it cannot be (§27.9.1 N9b.8). */
+  currentRun: (repoDir: string) => StartRun | null;
   runInProgressAt: (repoDir: string, step: string) => boolean;
   onViewChanged: (repoKey: string) => void;
+  /** §27.9.1 N9b.5(d) — the run-end report of a failed effect. */
+  emitError?: (repoDir: string, reason: string) => void;
   setTimer: (cb: () => void, ms: number) => AutoGateTimer;
   clearTimer: (handle: AutoGateTimer) => void;
 }
@@ -57,6 +61,11 @@ export interface AutoGate {
   interruptArmed(repoDir: string, step: string): boolean;
   consumeInterrupt(repoDir: string): void;
   humanAttempt(repoKey: string): void;
+  /** Whether `step` is the loop step the run's gates are currently at. */
+  atGate(repoKey: string, step: string): boolean;
+  /** §27.9.1 N9b.5(d) — a human decision or manual Advance landed at the run's current gate. */
+  humanDecided(repoKey: string): void;
+  flowTransitioned(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike): void;
   attachApprove(approve: EngineApprove): void;
   isAutoRun(repoKey: string): boolean;
   autoGateViewFor: AutoGateViewFor;
@@ -68,8 +77,8 @@ export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
   return r.def.work.completion ? { completion: r.def.work.completion } : {};
 }
 
-// Until S2–S4 land their letter-keyed rows, every other reason shows as the one generic row.
-const SHOWN_REASONS: ReadonlySet<AutoHaltReason> = new Set(['stop-for-a-human', 'c', 'e']);
+// Until S3–S5 land their letter-keyed rows, these reasons show as the one generic row.
+const GENERIC_REASONS: ReadonlySet<AutoHaltReason> = new Set(['k', 'l']);
 
 type Reason = { reason: AutoHaltReason; detail?: string };
 
@@ -97,12 +106,16 @@ interface LoopRun {
 }
 
 interface AutoRun {
+  identity: RunIdentity;
+  /** The persisted gate state could not be read at the relaunch rebuild: (h) at every `auto` gate. */
+  stateUnreadable: boolean;
+  /** The last flow transition reached the run's end (§27.9.1 N9b.5(d)). */
+  atRunEnd: boolean;
   steps: FlowDefinition['steps'];
   bound: Map<string, { authority: 'auto' | 'human'; loop: string }>;
   frozenCheck: Set<string>;
-  heldBinding: DispositionRead | undefined;
   loopRun: LoopRun | null;
-  failedEffect: { state: 'set' | 'unknown'; detail: string } | null;
+  failedEffect: { state: 'set' | 'unknown'; detail: string; reported: boolean } | null;
   gateSeq: number;
   pendingGate: (GateKey & { verdict: ConsolidatorVerdict; cause: GateCause }) | null;
   deciding: Deciding | null;
@@ -129,6 +142,18 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   let approve: EngineApprove | null = null;
 
   const push = (repoKey: string): void => bestEffort(() => deps.onViewChanged(repoKey));
+
+  /** §27.9.1 N9b.5(d) — written before the view that shows the change is pushed. */
+  const persist = (repoDir: string, run: AutoRun): void => {
+    const lr = run.loopRun;
+    bestEffort(() =>
+      writeGateRunState(repoDir, {
+        run: run.identity,
+        loopRun: lr === null ? null : { step: lr.step, endedInError: lr.endedInError, acceptedFailure: lr.acceptedFailure, needsAHuman: lr.needsAHuman, recorded: [...lr.recorded] },
+        failedEffect: run.failedEffect === null ? null : { ...run.failedEffect },
+      }),
+    );
+  };
 
   const isAuto = (run: AutoRun): boolean => [...run.bound.values()].some((b) => b.authority === 'auto');
   const honouredAuto = (run: AutoRun, step: string): boolean => run.bound.get(step)?.authority === 'auto';
@@ -161,16 +186,28 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     push(repoDir);
   };
 
-  /** §27.9.1 N9b.2(c) */
-  const loweredReasons = (repoDir: string, run: AutoRun, step: string): Reason[] => {
-    const lowered = !honouredAuto(run, step) || sourceLowered(repoDir, run, step);
-    return lowered ? [{ reason: 'g' }] : [];
+  const setFailedEffect = (repoDir: string, run: AutoRun, detail: string): void => {
+    run.failedEffect = { state: 'set', detail, reported: false };
+    persist(repoDir, run);
+    if (run.atRunEnd) reportRunEnd(repoDir, run);
   };
 
-  const sourceLowered = (repoDir: string, run: AutoRun, step: string): boolean => {
-    const current = deps.currentRun(repoDir, run.heldBinding);
-    if (current === null) return true;
-    return current.definition.steps.find((s) => s.id === step)?.gateAuthority !== 'auto';
+  /** §27.9.1 N9b.5(d) — a run never ends silently over a failed effect. */
+  const reportRunEnd = (repoDir: string, run: AutoRun): void => {
+    const marker = run.failedEffect;
+    if (marker === null || marker.reported) return;
+    marker.reported = true;
+    persist(repoDir, run);
+    bestEffort(() => deps.emitError?.(repoDir, `A gate side-effect failed earlier in this run: ${marker.detail}`));
+    bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: 'i', detail: marker.detail }]), 0));
+  };
+
+  /** §27.9.1 N9b.5(d) — `done`, or a step after which the run has no loop step left. */
+  const reachedRunEnd = (run: AutoRun, after: FlowLike): boolean => {
+    if (after.status === 'done') return true;
+    if (after.status !== 'in_progress') return false;
+    const at = run.steps.findIndex((s) => s.id === after.stepName);
+    return at >= 0 && run.steps.slice(at).every((s) => s.kind !== 'loop');
   };
 
   /** §27.9.1 N9b.6 (a)–(j); `frozen` adds the approve-only frozen check. */
@@ -182,8 +219,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (cause === 'interrupt' || fileArmed(repoDir)) reasons.push({ reason: 'c' });
     // S4 replaces this fail-closed stub with the approve-time frozen check.
     if (frozen && run.frozenCheck.has(step)) reasons.push({ reason: 'e', detail: 'the approve-time frozen check is not available' });
-    reasons.push(...loweredReasons(repoDir, run, step));
-    if (lr === null) reasons.push({ reason: 'h' });
+    if (lr === null || run.stateUnreadable) reasons.push({ reason: 'h' });
     if (run.failedEffect !== null) reasons.push({ reason: 'i' });
     return reasons;
   };
@@ -203,7 +239,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (runs.get(repoDir) !== run || run.deciding !== d) return;
     if (d.claimed) {
       run.hung = { step: d.step, turnKey: d.turnKey, gateSeq: d.gateSeq };
-      run.failedEffect = { state: 'set', detail: 'the engine approve did not settle within its bound' };
+      setFailedEffect(repoDir, run, 'the engine approve did not settle within its bound');
       push(repoDir);
       return;
     }
@@ -222,7 +258,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const detail = (text: string): string => displaySafeEcho(text, MAX_ECHOED_REASON_LENGTH);
     switch (outcome.kind) {
       case 'advanced':
-        if (outcome.effectFailures.length > 0) run.failedEffect = { state: 'set', detail: detail(outcome.effectFailures.join('; ')) };
+        if (outcome.effectFailures.length > 0) setFailedEffect(repoDir, run, detail(outcome.effectFailures.join('; ')));
         clearDeciding(run);
         push(repoDir);
         return;
@@ -250,7 +286,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         push(repoDir);
         return;
       case 'threw':
-        run.failedEffect = { state: 'set', detail: detail(outcome.reason) };
+        setFailedEffect(repoDir, run, detail(outcome.reason));
         halt(repoDir, run, d, [{ reason: 'l', detail: detail(outcome.reason) }]);
         return;
     }
@@ -304,16 +340,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     if (!inProgress) return { ok: false, runEnded: true };
     if (d.abandoned) return { ok: false, abandoned: true };
-    const late: AutoHaltReason[] = [];
-    if (fileArmed(repoDir)) late.push('c');
-    let lowered: boolean;
-    try {
-      lowered = loweredReasons(repoDir, run, d.step).length > 0;
-    } catch {
-      lowered = true;
-    }
-    if (lowered) late.push('g');
-    if (late.length > 0) return { ok: false, reasons: late };
+    if (fileArmed(repoDir)) return { ok: false, reasons: ['c'] };
     d.claimed = true;
     return { ok: true };
   };
@@ -323,16 +350,95 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     return r.ok ? null : r.reason;
   };
 
+  const buildRun = (repoKey: string, start: StartRun, identity: RunIdentity): AutoRun => {
+    const auto: AutoRun = {
+      identity,
+      stateUnreadable: false,
+      atRunEnd: false,
+      steps: start.definition.steps,
+      bound: new Map(),
+      frozenCheck: new Set(),
+      loopRun: null,
+      failedEffect: null,
+      gateSeq: 0,
+      pendingGate: null,
+      deciding: null,
+      hung: null,
+      haltShown: null,
+    };
+    for (const step of start.definition.steps) {
+      if (step.kind !== 'loop' || step.loop === undefined) continue;
+      if (step.gateAuthority !== 'auto') {
+        auto.bound.set(step.id, { authority: 'human', loop: step.loop });
+        continue;
+      }
+      let res: DefResolution | null = null;
+      try {
+        res = deps.resolveDef(repoKey, step.loop);
+      } catch {
+        res = null;
+      }
+      auto.bound.set(step.id, { authority: 'auto', loop: step.loop });
+      if (isFrozenCheckCompletion(res?.completion)) auto.frozenCheck.add(step.id);
+    }
+    return auto;
+  };
+
+  /** §27.9.1 N9b.8 — a relaunched run keeps its authority; a gate it had already reached halts with (j). */
+  const rebuild = (repoKey: string): AutoRun | undefined => {
+    if (replaced.has(repoKey)) return undefined;
+    let identity: RunIdentity | null;
+    let start: StartRun | null;
+    try {
+      identity = inProgressRunIdentity(repoKey);
+      start = identity === null ? null : deps.currentRun(repoKey);
+    } catch {
+      return undefined;
+    }
+    if (identity === null || start === null) return undefined;
+    const run = buildRun(repoKey, start, identity);
+    const persisted = readGateRunState(repoKey);
+    if (persisted.kind === 'unreadable') {
+      run.stateUnreadable = true;
+      run.failedEffect = { state: 'set', detail: 'the run\'s gate state could not be read', reported: false };
+    } else if (persisted.kind === 'ok' && sameRun(persisted.state.run, identity)) {
+      const lr = persisted.state.loopRun;
+      run.loopRun = lr === null ? null : { ...lr, recorded: new Set(lr.recorded) };
+      run.failedEffect = persisted.state.failedEffect;
+    }
+    runs.set(repoKey, run);
+    resumeGate(repoKey, run);
+    return run;
+  };
+
+  const resumeGate = (repoDir: string, run: AutoRun): void => {
+    let state: ReturnType<typeof readAppLoopState>;
+    try {
+      state = readAppLoopState(repoDir);
+    } catch {
+      return;
+    }
+    if (state === null || state.status !== 'complete' || state.verdict === undefined || !honouredAuto(run, state.step)) return;
+    nextGate(run);
+    const key = { step: state.step, turnKey: state.turnKey, gateSeq: run.gateSeq };
+    const verdictHalt = verdictReason(state.verdict);
+    const reasons: Reason[] = [{ reason: 'j' }, ...(verdictHalt !== null ? [{ reason: verdictHalt }] : [])];
+    for (const r of evaluate(repoDir, run, state.step, 'verdict', true)) if (!reasons.some((x) => x.reason === r.reason)) reasons.push(r);
+    halt(repoDir, run, key, reasons);
+  };
+
+  const runFor = (repoKey: string): AutoRun | undefined => runs.get(repoKey) ?? rebuild(repoKey);
+
   const autoGateViewFor: AutoGateViewFor = (repoKey, step, turnKey) => {
-    const run = runs.get(repoKey);
+    const run = runFor(repoKey);
     if (run === undefined || !isAuto(run)) return undefined;
     const shown = sameGate(run.haltShown, step, turnKey, run.gateSeq) ? run.haltShown!.reasons : [];
     const view: FlowAutoGateView = {
       deciding: sameGate(run.deciding, step, turnKey, run.gateSeq),
       hung: sameGate(run.hung, step, turnKey, run.gateSeq),
-      haltGeneric: shown.some((r) => !SHOWN_REASONS.has(r.reason)),
-      haltReasons: shown.filter((r) => SHOWN_REASONS.has(r.reason)),
-      ...(run.failedEffect !== null ? { failedEffect: { ...run.failedEffect } } : {}),
+      haltGeneric: shown.some((r) => GENERIC_REASONS.has(r.reason)),
+      haltReasons: shown.filter((r) => !GENERIC_REASONS.has(r.reason)),
+      ...(run.failedEffect !== null ? { failedEffect: { state: run.failedEffect.state, detail: run.failedEffect.detail } } : {}),
     };
     return view;
   };
@@ -344,47 +450,24 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   };
 
   return {
-    bindAtStart(repoKey, run, _startedAt) {
+    bindAtStart(repoKey, run, startedAt) {
       replaced.set(repoKey, runs.get(repoKey));
-      const auto: AutoRun = {
-        steps: run.definition.steps,
-        bound: new Map(),
-        frozenCheck: new Set(),
-        heldBinding: run.binding,
-        loopRun: null,
-        failedEffect: null,
-        gateSeq: 0,
-        pendingGate: null,
-        deciding: null,
-        hung: null,
-        haltShown: null,
-      };
-      for (const step of run.definition.steps) {
-        if (step.kind !== 'loop' || step.loop === undefined) continue;
-        if (step.gateAuthority !== 'auto') {
-          auto.bound.set(step.id, { authority: 'human', loop: step.loop });
-          continue;
-        }
-        let res: DefResolution | null = null;
-        try {
-          res = deps.resolveDef(repoKey, step.loop);
-        } catch {
-          res = null;
-        }
-        auto.bound.set(step.id, { authority: 'auto', loop: step.loop });
-        if (isFrozenCheckCompletion(res?.completion)) auto.frozenCheck.add(step.id);
-      }
-      runs.set(repoKey, auto);
+      runs.set(repoKey, buildRun(repoKey, run, { flow: run.definition.name, startedAt }));
     },
     discardStart(repoKey) {
       if (!replaced.has(repoKey)) return;
       const prior = replaced.get(repoKey);
       replaced.delete(repoKey);
       if (prior === undefined) runs.delete(repoKey);
-      else runs.set(repoKey, prior);
+      else {
+        runs.set(repoKey, prior);
+        persist(repoKey, prior);
+      }
     },
     commitStart(repoKey) {
       replaced.delete(repoKey);
+      const run = runs.get(repoKey);
+      if (run !== undefined) persist(repoKey, run);
     },
     endRun(repoKey) {
       const run = runs.get(repoKey);
@@ -394,13 +477,15 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       runs.delete(repoKey);
     },
     beginLoopRun(repoKey, step) {
-      const run = runs.get(repoKey);
+      const run = runFor(repoKey);
       if (run === undefined) return;
       run.loopRun = { step, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
+      run.atRunEnd = false;
       nextGate(run);
+      persist(repoKey, run);
     },
     gateReaching(repoDir, step, turnKey, verdict, cause) {
-      const run = runs.get(repoDir);
+      const run = runFor(repoDir);
       if (run === undefined) return;
       nextGate(run);
       clearDeciding(run);
@@ -412,7 +497,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       run.deciding = d;
     },
     gateReached(repoDir, step, turnKey) {
-      const run = runs.get(repoDir);
+      const run = runFor(repoDir);
       const pg = run?.pendingGate ?? null;
       if (run === undefined || pg === null || !sameGate(pg, step, turnKey, run.gateSeq)) return;
       run.pendingGate = null;
@@ -435,29 +520,41 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       push(repoDir);
     },
     loopRunEvent(repoDir, step, turnKey, event) {
-      const run = runs.get(repoDir);
+      const run = runFor(repoDir);
       const lr = run?.loopRun ?? null;
       if (run === undefined || lr === null || lr.step !== step) return;
+      const haltB = (): void => {
+        if (!honouredAuto(run, step)) {
+          persist(repoDir, run);
+          return;
+        }
+        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'b' }]);
+        lr.recorded.add('b');
+        persist(repoDir, run);
+      };
       if (event === 'error') {
         lr.endedInError = true;
+        haltB();
         return;
       }
       if (event === 'retried') {
         lr.endedInError = false;
+        if (!lr.acceptedFailure) lr.recorded.delete('b');
         nextGate(run);
+        persist(repoDir, run);
+        push(repoDir);
         return;
       }
       if (event === 'accepted') {
         lr.acceptedFailure = true;
-        if (!honouredAuto(run, step)) return;
-        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'b' }]);
-        lr.recorded.add('b');
+        haltB();
         return;
       }
       lr.needsAHuman = event.roundReport === null || reportNeedsAHuman(event.roundReport) !== false;
+      persist(repoDir, run);
     },
     interruptArmed(repoDir, step) {
-      const run = runs.get(repoDir);
+      const run = runFor(repoDir);
       if (run !== undefined && isAuto(run)) return fileArmed(repoDir);
       return readArmedInterrupt(repoDir)?.step === step;
     },
@@ -468,11 +565,27 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const d = runs.get(repoKey)?.deciding;
       if (d) d.humanAttempted = true;
     },
+    atGate(repoKey, step) {
+      return runFor(repoKey)?.loopRun?.step === step;
+    },
+    humanDecided(repoKey) {
+      const run = runFor(repoKey);
+      if (run === undefined || run.failedEffect === null) return;
+      run.failedEffect = null;
+      persist(repoKey, run);
+      push(repoKey);
+    },
+    flowTransitioned(repoKey, _kind, _before, after) {
+      const run = runFor(repoKey);
+      if (run === undefined) return;
+      run.atRunEnd = reachedRunEnd(run, after);
+      if (run.atRunEnd) reportRunEnd(repoKey, run);
+    },
     attachApprove(fn) {
       approve = fn;
     },
     isAutoRun(repoKey) {
-      const run = runs.get(repoKey);
+      const run = runFor(repoKey);
       return run !== undefined && isAuto(run);
     },
     autoGateViewFor,

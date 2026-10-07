@@ -98,7 +98,7 @@ export function validInstruction(instruction: unknown): string | undefined {
  *  null when the loop area cannot be reduced to a symlink-free real path under the repo (a planted link at
  *  `.agent-terminal`, CWE-22/59). The ONE confinement-leaf resolver the per-file resolvers here share (run-state,
  *  the disjoint step-flags, the baseline), so the jail derivation lives once. */
-function loopAreaFile(repoDir: string, leaf: string): string | null {
+export function loopAreaFile(repoDir: string, leaf: string): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
   if (jail === null) return null;
   return confinedRealPath(jail, path.join(jail, leaf));

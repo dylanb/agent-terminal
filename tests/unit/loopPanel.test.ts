@@ -1118,7 +1118,7 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
   });
 });
 
-// §27.9.1 N9b.5(d) / N9b.6 — the S2 auto-gate elements: the (a), (b), (g), (h), (i) rows with their detail, and the
+// §27.9.1 N9b.5(d) / N9b.6 — the S2 auto-gate elements: the (a), (b), (h), (i) rows with their detail, and the
 // failed-effect marker (#137 S2).
 describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
@@ -1127,7 +1127,7 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
   const marker = (): HTMLElement | null => host.querySelector<HTMLElement>('[data-failed-effect]');
 
-  it.each(['a', 'b', 'g', 'h', 'i'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row carrying its detail', (reason) => {
+  it.each(['a', 'b', 'h', 'i'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row carrying its detail', (reason) => {
     mount().render(autoGateView({ ...idle, haltReasons: [{ reason, detail: 'the engine saw this' }] }), 'plan');
     const rows = [...host.querySelectorAll<HTMLElement>(`[data-auto-halt-reason="${reason}"]`)];
     expect(rows).toHaveLength(1);
@@ -1136,8 +1136,8 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   });
 
   it('a halt naming every S2 letter at once shows one row per letter and no generic row', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: (['a', 'b', 'g', 'h', 'i'] as const).map((reason) => ({ reason })) }), 'plan');
-    expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'g', 'h', 'i']);
+    mount().render(autoGateView({ ...idle, haltReasons: (['a', 'b', 'h', 'i'] as const).map((reason) => ({ reason })) }), 'plan');
+    expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'h', 'i']);
     expect(host.querySelector('[data-auto-halt-generic]')).toBeNull();
   });
 

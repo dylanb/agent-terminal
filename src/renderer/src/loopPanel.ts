@@ -115,7 +115,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltGeneric, loop.autoGate.haltReasons] : null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltGeneric, loop.autoGate.haltReasons, loop.autoGate.failedEffect ?? null] : null] : null,
   ]);
 }
 
@@ -548,6 +548,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
             halt.append(li);
           }
           body.append(halt);
+        }
+        // §27.9.1 N9b.5(d)
+        if (ag.failedEffect) {
+          const marker = doc.createElement('p');
+          marker.className = 'failed-effect';
+          marker.dataset.failedEffect = ag.failedEffect.state;
+          marker.setAttribute('role', 'status');
+          const lead = ag.failedEffect.state === 'set' ? 'A gate side-effect failed earlier in this run' : 'A gate side-effect may have failed earlier in this run';
+          marker.textContent = stripDisplayControlChars(`${lead}: ${ag.failedEffect.detail}`);
+          body.append(marker);
         }
       }
 

@@ -6,7 +6,7 @@ export function isGateAuthority(v: unknown): v is GateAuthority {
   return typeof v === 'string' && (GATE_AUTHORITIES as readonly string[]).includes(v);
 }
 
-export const AUTO_HALT_REASONS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
+export const AUTO_HALT_REASONS = ['a', 'b', 'c', 'd', 'e', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
 export type AutoHaltReason = (typeof AUTO_HALT_REASONS)[number];
 
 const AUTO_HALT_LABELS: Record<AutoHaltReason, string> = {
@@ -15,8 +15,6 @@ const AUTO_HALT_LABELS: Record<AutoHaltReason, string> = {
   c: 'interrupt armed',
   d: 'frozen tests changed',
   e: 'frozen check unavailable',
-  f: 'test globs changed',
-  g: 'untrusted source',
   h: 'engine input missing',
   i: 'failed effect',
   j: 'relaunched',

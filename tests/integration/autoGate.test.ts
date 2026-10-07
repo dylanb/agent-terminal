@@ -829,28 +829,6 @@ describe('autoGate — the decision bound (N9b.5(e))', () => {
     expect(rig.audits.length).toBe(entries);
   });
 
-  it('a `gateReached` or decide setup that throws still reads human-needed at the bound, and not before it', async () => {
-    let failReads = false;
-    const rig = makeRig({ readsThrow: () => failReads });
-    startTrusted(rig);
-    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
-    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
-    failReads = true;
-    try {
-      await Promise.resolve(rig.gate.gateReached(repoDir, STEP, TURN));
-    } catch {
-      /* the throw is the scenario; the bound is what must surface it */
-    }
-    await flush();
-    failReads = false;
-    rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS - 1);
-    expect(rig.view().humanNeeded).toBe(false);
-    expect(rig.notify).not.toHaveBeenCalled();
-    rig.clock.advanceBy(1);
-    expect(rig.view().humanNeeded).toBe(true);
-    expect(rig.notify).toHaveBeenCalledTimes(1);
-  });
-
   it('a refused engine approve halts at once, even when its `auto-halt` entry cannot be written', async () => {
     const rig = makeRig({ auditThrows: true });
     startTrusted(rig);

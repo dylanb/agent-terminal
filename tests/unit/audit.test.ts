@@ -29,6 +29,7 @@ import {
 } from '../../src/shared/audit';
 import { auditFileName, auditFilePath, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { GATE_DECISION_OPTIONS } from '../../src/shared/ipc';
+import { isAutoHaltReason } from '../../src/shared/gateAuthority';
 
 const D = new Date('2026-06-23T10:00:01.500Z');
 
@@ -715,10 +716,10 @@ describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
 });
 
 describe('auto-halt entries name every reason that holds (N9b.9)', () => {
-  const ALL = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
+  const ALL = ['a', 'b', 'c', 'd', 'e', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
   const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
 
-  it('round-trips a halt naming all 13 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
+  it('round-trips a halt naming all 11 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
     const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason })));
     const event: AuditEvent = { ts: 'T1', type: 'command', source: 'gate', cmd, exit: 0 };
     const [read] = reconstructTimeline([header, event].map(serializeDoc).join('')).commands;
@@ -733,7 +734,13 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
   });
 
   it('de-duplicates reasons in the closed-set order, whatever order they were given', () => {
-    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'g' }, { reason: 'c' }, { reason: 'g', detail: 'x' }]))).toEqual(['c', 'g']);
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'h' }, { reason: 'c' }, { reason: 'h', detail: 'x' }]))).toEqual(['c', 'h']);
+  });
+
+  // #137 S2 — v2.175 retired (f) and (g); the letters are not reused.
+  it('(f) and (g) are not halt reasons', () => {
+    expect(isAutoHaltReason('f')).toBe(false);
+    expect(isAutoHaltReason('g')).toBe(false);
   });
 
   it('keeps every letter when untrusted details overflow the bounded tail', () => {

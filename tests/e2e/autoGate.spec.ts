@@ -693,8 +693,8 @@ test('a relaunch keeps the run\'s authority: after a relaunch at a human gate, t
   await openLoopPanel();
   await approveOption().click({ timeout: UI_MS });
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red$/m);
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
+  // The engine's approve replaces the clean `complete` run-state within the round, so only its result is polled.
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
 
   const redDecisions = auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
   expect(redDecisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);

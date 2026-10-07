@@ -27,6 +27,7 @@ import {
   type DismissAllMsg,
   type DismissMsg,
   type FlowRequestMsg,
+  type FlowAdvanceMsg,
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
   type FlowSetActiveFlowMsg,
@@ -164,8 +165,8 @@ export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
 }
 
 /** flow:advance (§6, #137 S2). */
-export function isValidFlowAdvance(m: unknown): m is FlowRequestMsg {
-  return isValidFlowRequest(m);
+export function isValidFlowAdvance(m: unknown): m is FlowAdvanceMsg {
+  return isValidFlowRequest(m) && (!('step' in m) || m.step === undefined || (typeof m.step === 'string' && m.step.length > 0));
 }
 
 /** flow:provideInput — the typed input answers persisted to flow-state (§18.4 / §24.2.3 T3). */

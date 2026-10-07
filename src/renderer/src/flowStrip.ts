@@ -257,11 +257,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     void refresh();
   };
 
-  const runAct = (act: Act, key: string): Promise<FlowStateView> =>
+  const runAct = (act: Act, key: string, step: string): Promise<FlowStateView> =>
     act === 'start'
       ? deps.start(key)
       : act === 'advance'
-        ? deps.advance(key)
+        ? deps.advance(key, step)
         : act === 'restart'
           ? deps.restart(key)
           : deps.undo(key);
@@ -269,7 +269,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   /** A lifecycle control button: fires its transition, disabling itself while in flight so a
    *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
    *  this keeps the UI honest), then re-renders from the returned state. */
-  function controlButton(label: string, act: Act): HTMLButtonElement {
+  function controlButton(label: string, act: Act, step: string): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
     button.textContent = label;
@@ -277,7 +277,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       if (repoKey === null) return;
       const key = repoKey;
       button.disabled = true;
-      runAct(act, key)
+      runAct(act, key, step)
         .then((view) => {
           // The cwd may have moved while the transition was in flight; the awaited view belongs to
           // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
@@ -418,8 +418,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // Undo takes the advance back to in-progress WITHOUT re-running the step's entry actions —
     // distinct from Restart, which re-runs them.
-    if (state.status === 'done') host.append(controlButton('Undo', 'undo'));
-    host.append(controlButton(control.label, control.act));
+    if (state.status === 'done') host.append(controlButton('Undo', 'undo', state.stepName));
+    host.append(controlButton(control.label, control.act, state.stepName));
 
     // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
     // is wired — absent (not in the accessibility tree) otherwise.

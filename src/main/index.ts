@@ -36,6 +36,7 @@ import {
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
+  isValidFlowAdvance,
   isValidFlowProvideInput,
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
@@ -137,6 +138,7 @@ import type { LoopBinding } from '../shared/loopNamespace';
 import {
   composeCurrentRun,
   composeEngineApprove,
+  composeHumanDecisionRunners,
   composeLifecycleEndRun,
   composeLoopBindingResolve,
   composeObservedResolveDef,
@@ -361,6 +363,7 @@ async function createWindow(): Promise<void> {
     currentRun: composeCurrentRun(flowGlobalDir),
     runInProgressAt: composeRunInProgressAt(),
     onViewChanged: () => pushFlowChanged(),
+    emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     setTimer: (cb, ms) => {
       const id = ++nextAutoGateTimer;
       autoGateTimers.set(
@@ -379,10 +382,6 @@ async function createWindow(): Promise<void> {
     },
   });
   const observedResolveDef = composeObservedResolveDef(appDefContext);
-  const recordFlowTransition = composeRecordFlowTransition(
-    { recordTransition: (repoKey, kind, before, after, start) => audit.recordTransition(repoKey, kind, before, after, start) },
-    autoGate,
-  );
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
@@ -640,6 +639,7 @@ async function createWindow(): Promise<void> {
       return load.ok ? load.definition.name : null;
     },
   });
+  const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
 
   // Security limitation (§27.12), tracked in #155: this map is runtime-seeded only, so after a relaunch
   // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
@@ -877,7 +877,7 @@ async function createWindow(): Promise<void> {
   const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
     const after = inTransition(repoKey, appLoopEntryFor(kind), mutate);
-    audit.recordTransition(repoKey, kind, before, after);
+    recordFlowTransition(repoKey, kind, before, after);
     return trackLoop(repoKey, withDerived(repoKey, after));
   };
 
@@ -907,7 +907,7 @@ async function createWindow(): Promise<void> {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return;
     const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
-    audit.recordTransition(repoKey, 'advance', pre, view);
+    recordFlowTransition(repoKey, 'advance', pre, view);
   };
 
   // §28.4.2 — the human back-to-red gate control's flow half: reopen the current slice's RED step. A BACKWARD
@@ -919,7 +919,7 @@ async function createWindow(): Promise<void> {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return false;
     const view = inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey));
-    audit.recordTransition(repoKey, 'undo', pre, view);
+    recordFlowTransition(repoKey, 'undo', pre, view);
     return view.status === 'in_progress' && view.stepName === flow.sliceStartStep(repoKey);
   };
 
@@ -1036,6 +1036,17 @@ async function createWindow(): Promise<void> {
     run: runAppGateDecisionRaw,
   });
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
+  const manualAdvances = new Map<string, FlowStateView>();
+  const humanRunners = composeHumanDecisionRunners(autoGate, {
+    decide: runAppGateDecision,
+    advance: (repoKey) => {
+      const pre = withDerived(repoKey, flow.state(repoKey));
+      const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
+      recordFlowTransition(repoKey, 'advance', pre, view);
+      manualAdvances.set(repoKey, view);
+    },
+    currentStep: (repoKey) => flow.state(repoKey).stepName,
+  });
   const flowStartTransition = composeStartTransition({
     autoGate,
     resolveForStart: (repoKey) => {
@@ -1113,7 +1124,7 @@ async function createWindow(): Promise<void> {
       // §27.9/§27.13 / N5 / §6 / AC7 — approve (and other one-way options); the result is not observed here.
       [CH.flowAppGateDecision]: (_e, m) => {
         if (!isValidFlowAppGateDecision(m)) return;
-        void runAppGateDecision(m.repoKey, m.step, m.turnKey, m.option);
+        void humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
@@ -1173,16 +1184,16 @@ async function createWindow(): Promise<void> {
       // §27.9/AC4 — request-changes is TWO-way (unlike approve): it returns whether the round started so the
       // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
       [CH.flowAppRequestChanges]: (_e, m) =>
-        isValidFlowAppRequestChanges(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'request-changes', m.feedback) : false,
+        isValidFlowAppRequestChanges(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'request-changes', m.feedback) : false,
       // §27.9/AC5 — redo is TWO-way like request-changes: it returns whether the work turn re-entered so the redo
       // composer holds open on a drop and never loses the human's instruction. The instruction rides as `note`.
       // Fail-closed to false.
       [CH.flowAppRedo]: (_e, m) =>
-        isValidFlowAppRedo(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
+        isValidFlowAppRedo(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
       // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at RED so the
       // composer holds open on a failed reopen and never loses the brief. Fail-closed to false.
       [CH.flowAppBackToRed]: (_e, m) =>
-        isValidFlowAppBackToRed(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,
+        isValidFlowAppBackToRed(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,
       // Todo CRUD (§16.4): fail-closed to [] on a malformed payload, so a bad message can never mutate
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).
@@ -1247,11 +1258,14 @@ async function createWindow(): Promise<void> {
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
-        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = inTransition(m.repoKey, appLoopEntryFor('advance'), () => flow.advance(m.repoKey));
-        audit.recordTransition(m.repoKey, 'advance', pre, view);
+        if (!humanRunners.advance(m.repoKey, m.step)) {
+          return trackLoop(m.repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
+        }
+        const view = manualAdvances.get(m.repoKey) ?? withDerived(m.repoKey, flow.state(m.repoKey));
+        manualAdvances.delete(m.repoKey);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop
           ? 'Advanced while the loop still needs you.'

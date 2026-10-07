@@ -728,7 +728,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
         throw new Error('EISDIR: illegal operation on a directory');
       },
     });
-    await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
+    await expect(approve(deps)).resolves.toBe(true); // resolves as landed — the throw is caught, never rejects into the caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
     expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand

@@ -140,8 +140,8 @@ export async function runAppGateDecision(
   note?: string,
 ): Promise<boolean> {
   if (option === 'approve') {
-    await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
-    return false; // only a request-changes reports true; approve's result is ignored by the one-way caller
+    const outcome = await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
+    return outcome.kind === 'advanced';
   }
   const humanAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void =>
     deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit);

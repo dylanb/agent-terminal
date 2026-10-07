@@ -11,6 +11,7 @@ import type { LoopBinding } from '../shared/loopNamespace';
 import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
 import { createBoundSourceResolver } from './runResolver';
 import { createFlowStateStore } from './flowState';
+import { readRunBinding } from './runDisposition';
 
 export type ObservedResolveDef = (repoDir: string, name: string) => LoopDefV2Result;
 export type RecordFlowTransition = AuditRecorder['recordTransition'];
@@ -73,8 +74,12 @@ export function composeEngineApprove(
   };
 }
 
-export function composeRecordFlowTransition(audit: Pick<AuditRecorder, 'recordTransition'>, _autoGate: AutoGate): RecordFlowTransition {
-  return (repoKey: string, kind: TransitionKind, before, after, start) => audit.recordTransition(repoKey, kind, before, after, start);
+/** Every flow transition's §25 record; the run end it reaches reports a failed-effect marker (§27.9.1 N9b.5(d)). */
+export function composeRecordFlowTransition(audit: Pick<AuditRecorder, 'recordTransition'>, autoGate: AutoGate): RecordFlowTransition {
+  return (repoKey: string, kind: TransitionKind, before, after, start) => {
+    audit.recordTransition(repoKey, kind, before, after, start);
+    autoGate.flowTransitioned(repoKey, kind, before, after);
+  };
 }
 
 /** The flow lifecycle's run-end: every reset to not_started ends the engine-held run. */
@@ -84,10 +89,11 @@ export function composeLifecycleEndRun(autoGate: AutoGate): (repoKey: string) =>
 
 export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'] {
   const resolveBound = createBoundSourceResolver(globalRoot);
-  return (repoDir, heldBinding) => {
-    if (heldBinding === undefined) return null;
-    const r = resolveBound(repoDir, heldBinding);
-    return r.load.ok ? { definition: r.load.definition, binding: heldBinding } : null;
+  return (repoDir) => {
+    const binding = readRunBinding(repoDir);
+    if (binding === null) return null;
+    const r = resolveBound(repoDir, binding);
+    return r.load.ok ? { definition: r.load.definition, binding } : null;
   };
 }
 
@@ -110,12 +116,19 @@ export interface HumanDecisionRunners {
   advance: (repoKey: string, step?: string) => boolean;
 }
 
-/** The four gate-decision runners and the manual Advance, as the human decides them. */
-export function composeHumanDecisionRunners(_autoGate: AutoGate, deps: HumanDecisionRunnerDeps): HumanDecisionRunners {
+/** The four gate-decision runners and the manual Advance, as the human decides them (§27.9.1 N9b.5(d)/(e)). */
+export function composeHumanDecisionRunners(autoGate: AutoGate, deps: HumanDecisionRunnerDeps): HumanDecisionRunners {
   return {
-    decide: (repoKey, step, turnKey, option, note) => deps.decide(repoKey, step, turnKey, option, note),
-    advance: (repoKey) => {
+    decide: async (repoKey, step, turnKey, option, note) => {
+      const atGate = autoGate.atGate(repoKey, step);
+      const landed = await deps.decide(repoKey, step, turnKey, option, note);
+      if (landed && atGate) autoGate.humanDecided(repoKey);
+      return landed;
+    },
+    advance: (repoKey, step) => {
+      if (step !== undefined && deps.currentStep(repoKey) !== step) return false;
       deps.advance(repoKey);
+      autoGate.humanDecided(repoKey);
       return true;
     },
   };

@@ -451,16 +451,6 @@ export interface FlowDerived {
   ready: boolean;
 }
 
-/** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip
- *  render, produced by the bound engine — not a mirror of any file the app reads.
- *  `status` is the per-LoopDef state-machine string (unbounded — the
- *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
- *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
- *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
-export interface GlobsDiff {
-  lines: { op: '+' | '-' | ' '; text: string }[];
-}
-
 /** §27.9.1 */
 export interface FlowAutoGateView {
   deciding: boolean;
@@ -468,9 +458,14 @@ export interface FlowAutoGateView {
   haltGeneric: boolean;
   haltReasons: { reason: AutoHaltReason; detail?: string }[];
   failedEffect?: { state: 'set' | 'unknown'; detail: string };
-  globsReview?: 'pending' | { anchorHead: string | null; vsHead: GlobsDiff | 'unavailable'; vsWorkingTree: GlobsDiff | 'unavailable' };
 }
 
+/** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip
+ *  render, produced by the bound engine — not a mirror of any file the app reads.
+ *  `status` is the per-LoopDef state-machine string (unbounded — the
+ *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
+ *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
+ *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
 export interface FlowLoopView {
   status: string;
   /** The run's iteration counter (§27.5). Absent means NO ROUND HAS RUN — the honest value for a
@@ -723,6 +718,11 @@ export interface FlowResolveEpicPromotionMsg {
 export interface FlowRequestMsg {
   sessionId: SessionId;
   repoKey: string;
+}
+
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)). */
+export interface FlowAdvanceMsg extends FlowRequestMsg {
+  step?: string;
 }
 
 /** flow:provideInput request (§18.4 / §24.2.3 T3 / §27.10): the renderer's answer to a step-entry
@@ -1143,8 +1143,9 @@ export interface FlowApi {
   state(repoKey: string): Promise<FlowStateView>;
   /** not_started → in_progress; rejects if not currently not_started. */
   start(repoKey: string): Promise<FlowStateView>;
-  /** in_progress → done; rejects if not currently in_progress. */
-  advance(repoKey: string): Promise<FlowStateView>;
+  /** in_progress → done; rejects if not currently in_progress. `step` names the step the caller showed:
+   *  an Advance naming a step the flow has left is refused (§27.9.1 N9b.5(e)). */
+  advance(repoKey: string, step?: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
