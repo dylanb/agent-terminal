@@ -966,6 +966,17 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       expect(existsSync(arm)).toBe(true);
     });
 
+    it('negative pair: a human decision landing at another step leaves an arm in place while the failed-clear (c) halt is still shown', async () => {
+      const rig = makeRig();
+      const arm = await haltOnUnclearableArm(rig);
+      rmSync(arm, { recursive: true });
+      armInterrupt(repoDir, STEP);
+      const other = `${STEP}-other`;
+      const runners = composeHumanDecisionRunners(rig.gate, { decide: async () => true, advance: () => 'advanced', currentStep: () => other });
+      await expect(runners.decide(repoDir, other, TURN, 'approve')).resolves.toBe(true);
+      expect(existsSync(arm)).toBe(true);
+    });
+
     async function haltOnUnclearableArm(rig: Rig): Promise<string> {
       startTrusted(rig);
       armInterrupt(repoDir, STEP);
@@ -976,6 +987,16 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c')?.detail ?? '').toMatch(/could not be cleared/);
       return arm;
     }
+
+    it('a manual Advance at the (c) gate retries the clear: no arm left behind', async () => {
+      const rig = makeRig();
+      const arm = await haltOnUnclearableArm(rig);
+      rmSync(arm, { recursive: true });
+      armInterrupt(repoDir, STEP);
+      const runners = composeHumanDecisionRunners(rig.gate, { decide: async () => true, advance: () => 'advanced', currentStep: () => STEP });
+      expect(runners.advance(repoDir, STEP)).toBe('advanced');
+      expect(existsSync(arm)).toBe(false);
+    });
 
     it('a clear that now succeeds leaves no arm behind', async () => {
       const rig = makeRig();
@@ -1050,6 +1071,40 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
   });
 
+  it.each(['onto the next loop step', 'off the gate\'s step'] as const)('an engine approve that rejects after the flow moved %s: the failed-effect marker set and no `auto-halt` entry', async (move) => {
+    let pending = true;
+    const rig = makeRig({ runInProgress: () => pending });
+    startTrusted(rig);
+    rig.gate.attachApprove(async (dir, _step, _turnKey, decider) => {
+      if (decider.kind === 'engine') decider.claimAccept();
+      pending = false;
+      if (move === 'onto the next loop step') rig.gate.beginLoopRun(dir, 'next');
+      throw new Error('advance threw after the accept');
+    });
+    await reachGate(rig, 'clean');
+    expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
+    expect(autoHalts(rig)).toEqual([]);
+  });
+
+  it('an engine approve that rejects when the gate\'s step cannot be read counts the gate as pending: one `auto-halt` entry naming (l)', async () => {
+    let readable = true;
+    const rig = makeRig({
+      runInProgress: () => {
+        if (!readable) throw new Error('flow state unreadable');
+        return true;
+      },
+    });
+    startTrusted(rig);
+    rig.gate.attachApprove(async (_dir, _step, _turnKey, decider) => {
+      if (decider.kind === 'engine') decider.claimAccept();
+      readable = false;
+      throw new Error('advance threw after the accept');
+    });
+    await reachGate(rig, 'clean');
+    expect(rig.view().humanNeeded).toBe(true);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
+  });
+
   it('an interrupt armed after the evaluation but before the claim is refused at the claim: no accept, human-needed, (c) shown and recorded', async () => {
     const rig = makeRig();
     startTrusted(rig);
@@ -1102,6 +1157,7 @@ describe('autoGate — the decision bound (N9b.5(e))', () => {
     rig.clock.advanceBy(1);
     const v = rig.view();
     expect(v.autoGate?.hung).toBe(true);
+    expect(v.autoGate?.deciding).toBe(false);
     expect(v.humanNeeded).toBe(true);
     expect(rig.notify).toHaveBeenCalledTimes(1);
     releaseEffects();

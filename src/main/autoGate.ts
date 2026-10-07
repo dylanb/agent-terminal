@@ -260,6 +260,15 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     halt(repoDir, run, d, [d.approveStarted ? { reason: 'l', detail: 'the engine approve did not settle within its bound' } : { reason: 'h', detail: 'the gate could not be evaluated' }]);
   };
 
+  /** §27.9.1 N9b.6(l) — a gate the run moved on from gets the marker alone; an unreadable probe counts as pending. */
+  const stillPending = (repoDir: string, d: Deciding): boolean => {
+    try {
+      return deps.runInProgressAt(repoDir, d.step);
+    } catch {
+      return true;
+    }
+  };
+
   const settle = (repoDir: string, run: AutoRun, d: Deciding, outcome: GateApproveOutcome | { kind: 'threw'; reason: string }): void => {
     if (d.ended || runs.get(repoDir) !== run) return;
     const wasHung = sameGate(run.hung, d.step, d.turnKey, d.gateSeq);
@@ -300,6 +309,11 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         return;
       case 'threw':
         setFailedEffect(repoDir, run, detail(outcome.reason));
+        if (!stillPending(repoDir, d)) {
+          clearDeciding(run);
+          push(repoDir);
+          return;
+        }
         halt(repoDir, run, d, [{ reason: 'l', detail: detail(outcome.reason) }]);
         return;
     }
@@ -464,9 +478,10 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const run = runFor(repoKey);
     if (run === undefined || !isAuto(run)) return undefined;
     const shown = sameGate(run.haltShown, step, turnKey, run.gateSeq) ? run.haltShown!.reasons : [];
+    const hung = sameGate(run.hung, step, turnKey, run.gateSeq);
     const view: FlowAutoGateView = {
-      deciding: sameGate(run.deciding, step, turnKey, run.gateSeq),
-      hung: sameGate(run.hung, step, turnKey, run.gateSeq),
+      deciding: !hung && sameGate(run.deciding, step, turnKey, run.gateSeq),
+      hung,
       haltReasons: shown,
       ...(run.failedEffect !== null ? { failedEffect: { state: run.failedEffect.state, detail: run.failedEffect.detail } } : {}),
     };

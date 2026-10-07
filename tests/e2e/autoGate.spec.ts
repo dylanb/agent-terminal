@@ -810,6 +810,9 @@ test('auto gate concurrency, bound: an engine approve whose `gh` effect does not
 
     await expect.poll(() => readIf(logFile), { timeout: LOOP_ROUND_MS }).toMatch(/^held \d+ gh issue edit/m);
     await expect(page.locator('#status-bar [data-status-alert]')).toBeVisible({ timeout: UI_MS });
+    const gate = readGateRunState(repo);
+    expect(gate.kind === 'ok' ? gate.state.failedEffect?.state : null).toBe('set');
+    expect(autoHaltReasons(home, repo)).toEqual([]);
   } finally {
     rmSync(sentinel, { force: true });
   }
