@@ -32,6 +32,8 @@ export interface RuntimeConfig {
   maxDoneTodos: number;
   stallTimeoutMs: number;
   startupExitGraceMs: number;
+  /** §27.9.1 N9b.5(e) — `APP_AUTO_GATE_DECISION_MS`. */
+  autoGateDecisionMs?: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   AUTO_GATE_DECISION_DEFAULT_MS,
   createAutoGate,
@@ -41,7 +41,9 @@ import { roundReportWithDisposition } from '../helpers/roundReports';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleRoundReport } from '../../src/shared/roundReport';
+import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 // §27.9.1 N9b.4–N9b.6, N9b.9 — Impl-slice 1 of #137: the engine-held gate controller driven at its own
 // boundary (the approve operation it invokes, the §25 entries it writes, the view it feeds the strip, panel and
@@ -153,7 +155,7 @@ const flowView = (loop: FlowLoopView): FlowStateView => ({
   loop,
 });
 
-function makeRig(opts: { auditThrows?: boolean; defThrows?: () => boolean; runInProgress?: () => boolean; onPush?: (repoKey: string) => void } = {}): Rig {
+function makeRig(opts: { auditThrows?: boolean; defThrows?: () => boolean; runInProgress?: () => boolean; onPush?: (repoKey: string) => void; env?: NodeJS.ProcessEnv } = {}): Rig {
   const clock = createVirtualClock(0);
   const audits: Rig['audits'] = [];
   const errors: Rig['errors'] = [];
@@ -191,6 +193,7 @@ function makeRig(opts: { auditThrows?: boolean; defThrows?: () => boolean; runIn
     emitError: (dir: string, reason: string) => void errors.push({ repoDir: dir, reason }),
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
+    decisionBoundMs: resolveRuntimeConfig(opts.env ?? {}).autoGateDecisionMs,
   } as AutoGateDeps);
   gate.attachApprove((dir, step, turnKey, decider) => {
     const a: Approval = { repoDir: dir, step, turnKey, decider: decider.kind };
@@ -454,6 +457,123 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     await flush();
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: TURN_KEY, status: 'complete' });
     expectOneBStop(rig);
+  });
+});
+
+// Plan AC11 row (S3), integration cell: the real `createAutoGate` answers the engine's `interruptArmed`, and a real
+// `armed-interrupt.yaml` is the arm (N9b.6(c)).
+describe('autoGate — the interrupt arm is run-scoped in a run with an `auto` step, and consumed (AC11, N9b.6(c), #137 S3)', () => {
+  const h = createAppLoopEngineHarness();
+  beforeEach(() => h.setUp());
+  afterEach(() => h.tearDown());
+
+  const LATER_AUTO: FlowStepDef = { id: 'later', kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' };
+
+  function wiredWith(steps: FlowStepDef[]): { rig: Rig; engine: ReturnType<typeof h.makeEngine> } {
+    repoDir = h.repo;
+    const rig = makeRig();
+    const g = rig.gate;
+    const engine = h.makeEngine(undefined, undefined, TEST_BRANCH, {
+      onViewChanged: () => rig.pushView(h.repo),
+      gateReaching: g.gateReaching,
+      gateReached: g.gateReached,
+      gateNotReached: g.gateNotReached,
+      loopRunEvent: g.loopRunEvent,
+      interruptArmed: g.interruptArmed,
+      consumeInterrupt: g.consumeInterrupt,
+    });
+    rig.useEngine(engine);
+    startTrusted(rig, steps, h.repo);
+    return { rig, engine };
+  }
+
+  it('an arm naming another step, at the consolidation of `auto` step Y: Y\'s gate halts with (c), no engine approve, and the arm file is consumed', async () => {
+    const { rig, engine } = wiredWith(loopSteps('auto'));
+    h.driveToConsolidateInjected(engine);
+    armInterrupt(h.repo, 'some-earlier-step');
+    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    await flush();
+    expect(rig.approvals).toEqual([]);
+    expectLetterShown(rig.view(h.repo), 'c');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('c');
+    expect(readArmedInterrupt(h.repo)).toBeNull();
+  });
+
+  it('in a run with no `auto` step, an arm naming another step is not honoured at Y: the clean gate is unchanged and the arm stays (AC7)', async () => {
+    const { rig, engine } = wiredWith(loopSteps('human'));
+    h.driveToConsolidateInjected(engine);
+    armInterrupt(h.repo, 'some-earlier-step');
+    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', verdict: 'clean' });
+    expect(rig.view(h.repo)).not.toHaveProperty('autoGate');
+    expect(autoHalts(rig)).toEqual([]);
+    expect(readArmedInterrupt(h.repo)?.step).toBe('some-earlier-step');
+  });
+
+  it('in a run that has an `auto` step, an arm naming another step at a `human` step Y whose consolidation says `another round`: Y stops at its gate, the arm is consumed, and no `auto-halt` entry is written (N9b.3)', async () => {
+    const { rig, engine } = wiredWith([loopSteps('human')[0], LATER_AUTO, { id: 'next', kind: 'manual' }]);
+    h.driveToConsolidateInjected(engine);
+    armInterrupt(h.repo, 'some-earlier-step');
+    h.completeConsolidate(engine, 1, exampleConsolidatorOutput('another round', ROSTER));
+    await flush();
+    const state = readAppLoopState(h.repo);
+    expect(state).toMatchObject({ step: STEP, status: 'complete', round: 1 });
+    expect(readArmedInterrupt(h.repo)).toBeNull();
+    expect(autoHalts(rig)).toEqual([]);
+    expect(rig.approvals).toEqual([]);
+  });
+
+  it('the negative pair: with no arm, that `human` step\'s `another round` starts the next round', async () => {
+    const { engine } = wiredWith([loopSteps('human')[0], LATER_AUTO, { id: 'next', kind: 'manual' }]);
+    h.driveToConsolidateInjected(engine);
+    h.completeConsolidate(engine, 1, exampleConsolidatorOutput('another round', ROSTER));
+    await flush();
+    expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
+  });
+});
+
+describe('autoGate — the approve-site (c) consumes the arm (AC11, N9b.6(c), #137 S3)', () => {
+  it('an arm naming another step, present when a clean `auto` gate is decided: (c) halts it and `armed-interrupt.yaml` is consumed', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    armInterrupt(repoDir, 'some-other-step');
+    await reachGate(rig, 'clean');
+    expect(rig.approvals).toEqual([]);
+    expectLetterShown(rig.view(), 'c');
+    expect(readArmedInterrupt(repoDir)).toBeNull();
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a clear that fails is shown with its detail, and the still-armed file is honoured as an arm at the run\'s next `auto` approve', async () => {
+    const rig = makeRig();
+    current = startRun([
+      { id: STEP, kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' },
+      { id: 'second', kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' },
+    ]);
+    rig.gate.bindAtStart(repoDir, current, 0);
+    rig.gate.commitStart(repoDir);
+    rig.gate.beginLoopRun(repoDir, STEP);
+    armInterrupt(repoDir, 'some-other-step');
+    const loopDir = dirname(loopAreaFile(repoDir, 'armed-interrupt.yaml')!);
+    rig.gate.gateReaching(repoDir, STEP, TURN, 'clean', 'verdict');
+    writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    chmodSync(loopDir, 0o555);
+    try {
+      rig.gate.gateReached(repoDir, STEP, TURN);
+      await flush();
+    } finally {
+      chmodSync(loopDir, 0o755);
+    }
+    const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c');
+    expect(c?.detail ?? '').toMatch(/could not be cleared/);
+    expect(readArmedInterrupt(repoDir)?.step).toBe('some-other-step');
+    expect(rig.approvals).toEqual([]);
+
+    rig.gate.beginLoopRun(repoDir, 'second');
+    await reachGate(rig, 'clean', 'verdict', repoDir, 'second');
+    expect(rig.approvals).toEqual([]);
+    expectLetterShown(rig.view(), 'c');
+    expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 });
 
@@ -964,6 +1084,65 @@ describe('autoGate — the decision bound (N9b.5(e))', () => {
     const v = rig.view();
     expect(v.autoGate?.deciding).toBe(false);
     expect(v.humanNeeded).toBe(true);
+    expect(rig.notify).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Plan AC14 row (S3): the bound is the operator's `APP_AUTO_GATE_DECISION_MS`, read through the one runtime-config
+// parser; a non-finite or non-positive value falls back to the default.
+describe('autoGate — the decision bound is the operator setting (AC14, N9b.5(e), #137 S3)', () => {
+  const CONFIGURED_MS = 1500;
+
+  async function heldUnclaimed(env: NodeJS.ProcessEnv): Promise<Rig> {
+    const rig = makeRig({ env });
+    startTrusted(rig);
+    rig.hold();
+    await reachGate(rig, 'clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    return rig;
+  }
+
+  it('a held engine approve reads human-needed exactly at the configured bound, not before it: one alert, and (l) shown', async () => {
+    const rig = await heldUnclaimed({ APP_AUTO_GATE_DECISION_MS: String(CONFIGURED_MS) });
+    rig.clock.advanceBy(CONFIGURED_MS - 1);
+    expect(rig.view().humanNeeded).toBe(false);
+    expect(rig.notify).not.toHaveBeenCalled();
+    rig.clock.advanceBy(1);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toEqual(['l']);
+    expect(rig.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('an engine approve that hangs after its claim is marked hung at the configured bound, with the failed-effect marker set', async () => {
+    const rig = makeRig({ env: { APP_AUTO_GATE_DECISION_MS: String(CONFIGURED_MS) } });
+    startTrusted(rig);
+    rig.gate.attachApprove(async (dir, step, turnKey, decider) => {
+      rig.approvals.push({ repoDir: dir, step, turnKey, decider: decider.kind });
+      if (decider.kind === 'engine') decider.claimAccept();
+      writeAppLoopState(dir, { loop: LOOP, step, turnKey, status: 'accepted' }, FIXED);
+      await new Promise<void>(() => {});
+      return { kind: 'advanced', effectFailures: [] };
+    });
+    await reachGate(rig, 'clean');
+    rig.clock.advanceBy(CONFIGURED_MS - 1);
+    expect(rig.view().autoGate?.hung).toBe(false);
+    expect(rig.notify).not.toHaveBeenCalled();
+    rig.clock.advanceBy(1);
+    const v = rig.view();
+    expect(v.autoGate?.hung).toBe(true);
+    expect(v.autoGate?.failedEffect?.state).toBe('set');
+    expect(v.humanNeeded).toBe(true);
+    expect(rig.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['-5', '0', 'NaN', 'abc'])('a configured bound of %j falls back to the default: not human-needed at default − 1 ms, human-needed at the default', async (raw) => {
+    const rig = await heldUnclaimed({ APP_AUTO_GATE_DECISION_MS: raw });
+    rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS - 1);
+    expect(rig.view().humanNeeded).toBe(false);
+    expect(rig.notify).not.toHaveBeenCalled();
+    rig.clock.advanceBy(1);
+    expect(rig.view().humanNeeded).toBe(true);
     expect(rig.notify).toHaveBeenCalledTimes(1);
   });
 });

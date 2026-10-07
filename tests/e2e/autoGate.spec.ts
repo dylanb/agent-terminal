@@ -10,7 +10,11 @@ import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { recordBaselineCommit } from '../../src/main/appLoopState';
-import { exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, type StepScript } from './fakeTools';
+import { readGateRunState } from '../../src/main/gateRunState';
+import { completionMarker } from '../../src/main/appWorkTurn';
+import { exampleEpicPlan } from '../../src/shared/epicPlan';
+import { load } from 'js-yaml';
+import { b64, exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, type StepScript } from './fakeTools';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -729,4 +733,170 @@ test('an `auto` gate the run had reached before a relaunch halts with (j) after 
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
   const decisions = auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
   expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+});
+
+// ── #137 S3: concurrency at the gate — the interrupt, the decision bound, the epic preview ──
+
+const ARMED_REL = '.agent-terminal/loop/armed-interrupt.yaml';
+
+test('auto gate concurrency, interrupt: an arm made at an earlier `human` step that no consolidation consumed halts the `auto` step\'s clean gate with (c) and is consumed (AC11)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(10, 1) + 2 * LOOP_ROUND_MS);
+  const home = tmp('agent-term-e2e-137-c-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-c-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-groom-auto-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const sentinel = join(tmp('agent-term-e2e-137-c-hold-'), 'hold');
+  writeFileSync(sentinel, '');
+  const { stepId: _red, ...red } = redAgent();
+  await launchInto('agent-term-e2e-137-c-', repo, home, {
+    groom: { ...GROOM_AGENT, hold: { sentinel }, consolidateAttempts: [NO_VERDICT, NO_VERDICT] },
+    red,
+  }, STALL_ENV);
+  const armFile = join(repo, ARMED_REL);
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*^status: working$/m);
+  await openLoopPanel();
+  await loopPanel().locator('[data-arm-interrupt]').click({ timeout: UI_MS });
+  await expect.poll(() => readIf(armFile), { timeout: UI_MS }).toMatch(/^step: groom$/m);
+  rmSync(sentinel, { force: true });
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
+  await expect.poll(() => runState(repo), { timeout: UI_MS }).toMatch(/^status: complete$/m);
+  expect(existsSync(armFile)).toBe(true);
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await flowControl().click();
+
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS, message: gateDiagnosis(home, repo) }).toMatch(/^step: red$[\s\S]*^status: complete$/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="c"]')).toBeVisible({ timeout: UI_MS });
+  await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(false);
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(engineDecisions(home, repo)).toEqual([]);
+});
+
+test('auto gate concurrency, bound: an engine approve whose `gh` effect does not settle within APP_AUTO_GATE_DECISION_MS raises the human-needed alert (AC14)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 0));
+  const home = tmp('agent-term-e2e-137-bound-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-bound-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-end', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'finalize', kind: 'manual' },
+  ]));
+  const sentinel = join(tmp('agent-term-e2e-137-bound-hold-'), 'hold');
+  writeFileSync(sentinel, '');
+  try {
+    const { logFile } = await launchInto('agent-term-e2e-137-bound-', repo, home, { stepId: 'groom', ...GROOM_AGENT }, {
+      APP_AUTO_GATE_DECISION_MS: '1500',
+      FAKE_GH_HOLD: sentinel,
+      FAKE_GH_HOLD_ACTION: 'update-issue-body',
+    });
+
+    await flowControl().click();
+
+    await expect.poll(() => readIf(logFile), { timeout: LOOP_ROUND_MS }).toMatch(/^held \d+ gh issue edit/m);
+    await expect(page.locator('#status-bar [data-status-alert]')).toBeVisible({ timeout: UI_MS });
+  } finally {
+    rmSync(sentinel, { force: true });
+  }
+});
+
+test('auto gate concurrency, bound fallback: APP_AUTO_GATE_DECISION_MS=-5 falls back to the default, so a held engine approve released at once advances with no halt and no failed-effect marker (AC14)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 1));
+  const home = tmp('agent-term-e2e-137-fallback-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-fallback-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-end', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'finalize', kind: 'manual' },
+  ]));
+  const sentinel = join(tmp('agent-term-e2e-137-fallback-hold-'), 'hold');
+  writeFileSync(sentinel, '');
+  try {
+    const { logFile } = await launchInto('agent-term-e2e-137-fallback-', repo, home, { stepId: 'groom', ...GROOM_AGENT }, {
+      APP_AUTO_GATE_DECISION_MS: '-5',
+      FAKE_GH_HOLD: sentinel,
+      FAKE_GH_HOLD_ACTION: 'update-issue-body',
+    });
+
+    await flowControl().click();
+
+    await expect.poll(() => readIf(logFile), { timeout: LOOP_ROUND_MS }).toMatch(/^held \d+ gh issue edit/m);
+    rmSync(sentinel, { force: true });
+
+    await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+    expect(engineDecisions(home, repo)).toHaveLength(1);
+    expect(autoHaltReasons(home, repo)).toEqual([]);
+    const gate = readGateRunState(repo);
+    expect(gate.kind === 'ok' ? gate.state.failedEffect : null).toBeNull();
+  } finally {
+    rmSync(sentinel, { force: true });
+  }
+});
+
+const PLAN_REL = '.agent-terminal/loop/artifacts/plan.md';
+
+function flowRunIdentity(repo: string): { flow: string; startedAt: number } {
+  const doc = load(flowState(repo)) as { flow?: unknown; started_at?: unknown } | null;
+  if (typeof doc?.flow !== 'string' || typeof doc.started_at !== 'number') throw new Error(`flow-state carries no run identity:\n${flowState(repo)}`);
+  return { flow: doc.flow, startedAt: doc.started_at };
+}
+
+test('auto gate concurrency, epic preview: an `auto` plan-bundle gate on an epic plan raises the confirm-first preview, shows (k), creates nothing, and the operator\'s confirm is human (AC9)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(8, 2) + LOOP_ROUND_MS);
+  const home = tmp('agent-term-e2e-137-k-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-k-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-groom-auto-plan-bundle', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
+    { id: 'plan-bundle', kind: 'loop', loop: 'plan-bundle-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const epicPlan = `${exampleEpicPlan(2)}\n${completionMarker('plan-bundle')}\n`;
+  const { logFile } = await launchInto('agent-term-e2e-137-k-', repo, home, {
+    groom: GROOM_AGENT,
+    'plan-bundle': {
+      artifactRel: PLAN_REL,
+      work: 'complete',
+      roster: loopRoster('plan-bundle-loop'),
+      extraShell: { work: [`printf %s '${b64(epicPlan)}' | base64 -d > ${PLAN_REL}`] },
+    },
+  });
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: clean/m);
+  await openLoopPanel();
+  await approveOption().click({ timeout: UI_MS });
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-bundle$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-bundle$[\s\S]*verdict: clean/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="k"]')).toBeVisible({ timeout: UI_MS });
+  expect(readIf(logFile)).not.toContain('issue create');
+  expect(flowState(repo)).toMatch(/^step: plan-bundle$/m);
+  const run = flowRunIdentity(repo);
+  const previews = auditGateEntries(home, repo, { run }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'epic-promotion-preview');
+  expect(previews.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
+
+  const dialog = page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' });
+  await expect(dialog).toBeVisible({ timeout: UI_MS });
+  await dialog.locator('.pill.danger.confirm').click();
+  await expect.poll(() => readIf(logFile), { timeout: APPROVE_ADVANCE_MS }).toContain('issue create');
+  await expect.poll(
+    () => auditGateEntries(home, repo, { run }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'confirm').map((e) => gateDecisionDecider(e.cmd)),
+    { timeout: UI_MS },
+  ).toEqual(['human']);
 });

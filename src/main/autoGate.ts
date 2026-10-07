@@ -46,6 +46,7 @@ export interface AutoGateDeps {
   emitError?: (repoDir: string, reason: string) => void;
   setTimer: (cb: () => void, ms: number) => AutoGateTimer;
   clearTimer: (handle: AutoGateTimer) => void;
+  decisionBoundMs?: number;
 }
 
 export interface AutoGate {

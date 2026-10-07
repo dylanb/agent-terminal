@@ -27,7 +27,7 @@ import { createHeldRunRecovery } from '../../src/main/heldRunRecovery';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
-import { enterPolish, loopAreaFile, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { armInterrupt, enterPolish, loopAreaFile, readAppLoopState, readArmedInterrupt, writeAppLoopState } from '../../src/main/appLoopState';
 import { writeGateRunState } from '../../src/main/gateRunState';
 import { stepScopedAdvance, type AppGateDecisionDeps, type ApproveDecider } from '../../src/main/appGateDecision';
 import { gateDecisionDecider, gateDecisionKind, parseAuditStream, parseAutoHaltReasons } from '../../src/shared/audit';
@@ -497,6 +497,33 @@ describe('autoGate — authority read from the run\'s bound flow, over the real 
     expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
   });
 
+});
+
+// Plan AC11 row (S3): the run-scoped arm holds for a run rebuilt after a relaunch.
+describe('autoGate — after a relaunch, the interrupt arm stays run-scoped (AC11, N9b.6(c), #137 S3)', () => {
+  it('a relaunched `auto` run honours an arm naming another step at its consolidation, and its clean gate halts with (c), consuming the arm', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+
+    const rig = before.relaunch();
+    armInterrupt(rig.wt, 'some-earlier-step');
+    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe(true);
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('c');
+    expect(readArmedInterrupt(rig.wt)).toBeNull();
+    expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
+  });
+
+  it('a relaunched `human` run does not honour an arm naming another step (negative pair)', () => {
+    const before = makeRig({ authority: 'human' });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+
+    const rig = before.relaunch();
+    armInterrupt(rig.wt, 'some-earlier-step');
+    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe(false);
+    expect(readArmedInterrupt(rig.wt)?.step).toBe('some-earlier-step');
+  });
 });
 
 describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
