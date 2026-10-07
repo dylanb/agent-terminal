@@ -77,6 +77,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
       writeError,
       onComplete,
       noteSettle,
+      resumeStalled: vi.fn(),
     };
   });
 
@@ -110,9 +111,9 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
   });
 
   it('a stall stops the run in error directly, without retrying the injection (§27.12)', () => {
-    // The wall-clock completion deadline is gone: onStall means the screen went silent for the whole
-    // (long) stall window while a turn was in flight — a genuine freeze, not a slow-but-working turn.
-    // Re-injecting a frozen instance cannot help, so it errors straight to the human (recoverable Retry).
+    // onStall means the screen went silent for the whole stall window while a turn was in flight — a
+    // frozen instance, or an agent waiting on the human. Re-injecting helps neither, so it goes straight
+    // to the human.
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
     expect(inject).toHaveBeenCalledTimes(1);
@@ -122,6 +123,73 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(writeError.mock.calls[0][0]).toContain('stall');
     expect(onComplete).not.toHaveBeenCalled();
     expect(r.state()).toBe('error');
+  });
+
+  it('a done-signal after a stall still completes the turn — an agent that waited on the human is not a failed turn (§27.12)', () => {
+    const resumeStalled = vi.fn();
+    const r = createTurnRunner({ ...deps, resumeStalled });
+    r.requestTurn('work-plan');
+    r.onStall();
+    expect(r.state()).toBe('error');
+    r.onDoneSignal();
+    expect(resumeStalled).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledWith('work-plan');
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('complete');
+  });
+
+  it('a done-signal after a stall still faces the completion check, and a shortfall retries once as usual', () => {
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onStall();
+    artifact = false;
+    r.onDoneSignal();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(inject).toHaveBeenLastCalledWith(`RETRY for work-plan: done-signal received but ${shortfall}`);
+    expect(r.state()).toBe('in-flight');
+  });
+
+  it('a stalled turn the operator released (accepted or terminated) ignores a late done-signal', () => {
+    const resumeStalled = vi.fn();
+    const r = createTurnRunner({ ...deps, resumeStalled });
+    r.requestTurn('work-plan');
+    r.onStall();
+    r.release();
+    r.onDoneSignal();
+    expect(resumeStalled).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(r.state()).toBe('error');
+  });
+
+  it('a stall while still waiting to inject is not resumable by a done-signal — no prompt was ever sent', () => {
+    hosted = 'busy';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onStall();
+    r.onDoneSignal();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(r.state()).toBe('error');
+  });
+
+  it('an error that is not a stall still ignores a later done-signal', () => {
+    const resumeStalled = vi.fn();
+    artifact = false;
+    const r = createTurnRunner({ ...deps, resumeStalled });
+    r.requestTurn('work-plan');
+    r.onDoneSignal();
+    r.onDoneSignal();
+    expect(r.state()).toBe('error');
+    artifact = true;
+    r.onDoneSignal();
+    expect(resumeStalled).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('the stall reason tells the operator how to resume the turn', () => {
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onStall();
+    expect(writeError.mock.calls[0][0]).toContain('done file');
   });
 
   it('visible activity re-arms the stall deadline while in flight, but is inert once the turn ends', () => {

@@ -63,7 +63,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
     const manager = createFlowManager({ globalDir: home, loadDefinition: (k) => createRunResolver(home)(k) });
     const todos = createTodoStore({ maxDoneTodos: 10 });
     const notices = createPendingNotices();
-    const effects = { monitorCleared: 0, flowChanged: 0, forgotten: [] as string[] };
+    const effects = { monitorCleared: 0, flowChanged: 0, forgotten: [] as string[], released: [] as string[] };
     const lock = opts.lock?.(lockRoot) ?? createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' });
     const lifecycle = createFlowLifecycle({
       lock,
@@ -87,6 +87,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       clearSliceBrief: (k: string) => clearSliceBrief(k),
       clearMonitor: () => effects.monitorCleared++,
       flowChanged: () => effects.flowChanged++,
+      releaseLoopTurn: (k: string) => effects.released.push(k),
       presentView: (_k: string, v: FlowStateView): FlowStateView => ({ ...v, loopActivity: { kind: 'presented' } as unknown as FlowStateView['loopActivity'] }),
     });
     const begin = (): void => {
@@ -146,6 +147,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(effects.monitorCleared).toBe(1);
       expect(effects.flowChanged).toBeGreaterThan(0);
       expect(effects.forgotten).toEqual([wt]);
+      expect(effects.released).toEqual([wt]);
     });
 
     it('a reset effect that throws aborts neither the reset nor the effects after it', () => {
@@ -175,7 +177,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(presented(result.view)).toBe('presented');
       expect(audit.eventTypes(wt)).not.toContain('flow.terminated');
       expect(todos.list(wt)).toHaveLength(1);
-      expect(effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
       expect(notices.take(wt)).toBeUndefined();
     });
 
@@ -209,7 +211,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(progression()).toBe(before);
       expect(audit.eventTypes(wt)).not.toContain('flow.terminated');
       expect(todos.list(wt)).toHaveLength(1);
-      expect(effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
       expect(notices.take(wt)).toBeUndefined();
     });
 
@@ -539,7 +541,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(r.audit.runFiles(r.wt)).toHaveLength(1);
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
       expect(r.todos.list(r.wt)).toHaveLength(1);
-      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
     });
 
     it.each(['resume-flow', 'other-flow'])('a %s choice is refused while an app-loop turn is in flight for the worktree, writing nothing and leaving it held', (id) => {
@@ -557,7 +559,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(readActiveFlow(r.wt)).toEqual(pointerBefore);
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
       expect(r.todos.list(r.wt)).toHaveLength(1);
-      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
     });
 
     it('an unconfirmed no-match rebind is refused before the run is ended: no audit entry, no effect, still held (AC20)', () => {
@@ -574,7 +576,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
       expect(readActiveFlow(r.wt)).toEqual(pointerBefore);
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
       expect(r.todos.list(r.wt)).toHaveLength(1);
-      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
     });
 
     it('a refused rebind runs no lifecycle effect', () => {
@@ -583,7 +585,7 @@ describe('the flow lifecycle (A3 T6a/T6b)', () => {
 
       expect(r.lifecycle.rebind(r.wt, { origin: 'repo', id: 'resume-flow' }, endRun(r)).ok).toBe(false);
 
-      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [] });
+      expect(r.effects).toEqual({ monitorCleared: 0, flowChanged: 0, forgotten: [], released: [] });
       expect(r.audit.eventTypes(r.wt)).not.toContain('flow.terminated');
     });
   });

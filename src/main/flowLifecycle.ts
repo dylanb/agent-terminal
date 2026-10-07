@@ -26,6 +26,8 @@ export interface FlowLifecycleDeps {
   clearSliceBrief(repoKey: string): void;
   clearMonitor(): void;
   flowChanged(): void;
+  /** §27.12 — the run ended, so a stalled loop turn for the worktree must not resume on a late done-signal. */
+  releaseLoopTurn(repoKey: string): void;
   presentView(repoKey: string, view: FlowStateView): FlowStateView;
 }
 
@@ -55,6 +57,7 @@ function bestEffort(effect: () => void): void {
 export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
   const afterTerminateReset = (repoKey: string): void => {
     bestEffort(() => deps.forgetRunEntry(repoKey));
+    bestEffort(() => deps.releaseLoopTurn(repoKey));
     bestEffort(() => deps.recordTerminate(repoKey));
     bestEffort(() => deps.clearTodos(repoKey));
     bestEffort(() => deps.clearSliceBrief(repoKey));

@@ -60,6 +60,9 @@ export interface TurnRunnerDeps {
   cancelTimer(): void;
   /** Persist `status: error` with the reason (§27.12). */
   writeError(reason: string): void;
+  /** §27.12 — a stalled turn's done-signal arrived: the turn is back in flight, so the stall error no longer
+   *  holds. Called before the completion check, which then completes, retries, or errors the turn as usual. */
+  resumeStalled(): void;
   /** The turn produced its done-signal and artifact — advance (next slice continues the cycle). */
   onComplete(turnKey: string): void;
   /** §27.12 — re-arm the §8.3 quiescence window: require a FRESH settle (a new active→quiet edge)
@@ -94,11 +97,14 @@ export interface TurnRunner {
   onStall(): void;
   /** Operator override (§27.12): assert the in-flight turn is done. */
   markComplete(): void;
+  /** The operator took a stalled turn out of the runner's hands (accept or terminate): a later done-signal for
+   *  it must not complete it a second time. */
+  release(): void;
   state(): TurnState;
 }
 
 // Total injections per turn before the run errors: the initial attempt plus one retry on a missing
-// artifact (§27.12). A stall never retries — it errors straight to the human.
+// artifact (§27.12). A stall never retries — it goes straight to the human.
 const MAX_ATTEMPTS = 2;
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
@@ -106,6 +112,8 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let turnKey: string | null = null;
   let attempts = 0;
   let awaitingInjectable = false;
+  // §27.12 — the turn stopped on a stall after its prompt went in, so its own done-signal still completes it.
+  let stalled = false;
   // §27.12 — a command (the actor-boundary /clear) to drain, gated, BEFORE the turn prompt. Consumed on
   // its own settle; injecting it re-arms quiescence so the prompt waits for /clear to drain (serialized pair).
   let preamble: string | null = null;
@@ -177,6 +185,11 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   };
 
   const resolveCompletion = (gate?: PrecomputedGate): void => {
+    if (state === 'error' && stalled) {
+      stalled = false;
+      state = 'in-flight';
+      deps.resumeStalled();
+    }
     if (state !== 'in-flight') return;
     const g = gate ?? { ok: true };
     // Runs while state is still 'in-flight', so a not-satisfied result routes through the existing fail() ->
@@ -202,6 +215,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       attempts = 0;
       retryCause = null;
       awaitingInjectable = false;
+      stalled = false;
       preamble = opts?.preamble ?? null;
       if (chained) {
         deps.noteSettle();
@@ -224,15 +238,17 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       if (state === 'in-flight') deps.armTimer();
     },
     onStall() {
-      // No visible activity for the whole (long) stall window while in flight — a genuine freeze, not a
-      // slow-but-working turn (which keeps resetting the watchdog via noteActivity). Re-injecting a frozen
-      // instance cannot help, so stop in `error` directly (recoverable Retry), never a wall-clock kill of
-      // a working turn (§27.12).
+      // §27.12 — silence for the whole stall window: a frozen instance or an agent waiting on the human.
+      // Re-injecting helps neither, so summon the human; a turn whose prompt went in stays resumable by its
+      // own done-signal.
       if (state !== 'in-flight') return;
       deps.cancelTimer();
       state = 'error';
+      stalled = !awaitingInjectable;
       deps.writeError(
-        awaitingInjectable ? 'stalled: the hosted agent never became injectable' : 'stalled: no terminal activity',
+        awaitingInjectable
+          ? 'stalled: the hosted agent never became injectable'
+          : 'stalled: no terminal activity — if the agent is waiting on you, answer it; the turn completes when it writes its done file',
       );
     },
     markComplete() {
@@ -248,6 +264,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       deps.cancelTimer();
       state = 'error';
       deps.writeError(`marked complete but ${shortfall}`);
+    },
+    release() {
+      stalled = false;
     },
     state() {
       return state;
