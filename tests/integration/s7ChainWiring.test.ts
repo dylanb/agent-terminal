@@ -61,7 +61,7 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'plan-polish-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: false,
-    consolidateSource: 'plan-loop', input: PLAN_INPUT, output: null,
+    consolidateSource: 'plan-polish-loop', input: PLAN_INPUT, output: null,
     polish: 'fix',
     personas: [
       ...PLAN_LANES.map(plan),

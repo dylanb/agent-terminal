@@ -10,9 +10,14 @@ over anything the method says:
 - **Do not edit the ticket**, comment on it, or change anything outside the plan artifact — no `gh`
   write, no commit, no edit to another file. Where the method would backdate a ticket driftable, list
   the driftable under "Needs your call" instead.
-- **Report in the plan.** Write the method's three-part report (Polished autonomously / Needs your call /
-  Re-review?) as a `## Polish report` section at the end of the plan, above the completion marker. Replace
-  any earlier polish report rather than adding a second one. Never stop to ask a question.
+- **Report in the plan.** Write the method's five-part report (Proportion / Polished autonomously / Scope
+  escalations / Needs your call / Re-review?) as a `## Polish report` section at the end of the plan, above
+  the completion marker. Replace any earlier polish report rather than adding a second one, but carry over
+  every recorded operator decision. Never stop to ask a question.
+- **Operator decisions are settled.** A scope escalation or "Needs your call" item the operator has ruled on
+  is recorded in the report as `Operator decision (<date>): <the ruling>`. Apply the ruling to the plan, keep
+  the record, and do not raise the item again. When this turn's instruction carries the operator's ruling on
+  a listed item, record it that way. An undecided scope escalation or call stops the loop for the operator.
 - **Machine-read plan tokens are binding.** The engine parses these out of the plan to fan out an epic and to
   count impl-slices, so keep every one exactly as written, with its numbering, and never demote it to
   illustrative: `Classification:`, `## Sub-tickets`, `### Sub-ticket`, `Depends on:`, `## Impl-slices`,
@@ -101,6 +106,22 @@ TDD/tracer-bullet ceremony is not over-engineering). Report the proportion read 
 vacuous guards. **Do not** remove anything load-bearing or change the core design — leave it and **recommend**
 it in the report; that's a goal-level call, not hardening.
 
+Then audit the plan's **defensive surface** — every guard, validation, fail-closed path and hardening rule, and
+the tests that pin them. This is where plans escalate unnoticed: each step of the reasoning sounds right, and
+the sum is a threat model nobody asked for.
+- **Name the adversary.** State in one line who or what the plan treats as hostile, and what that party can
+  write or control. Source it to the ticket or to a trust model the repo's spec or standards state. A party the
+  plan defends against that neither names is a **scope escalation**, however reasonable the inference that got
+  there ("this file is writable by X, so treat it as forged").
+- **Source every defence.** For each defensive item, cite the acceptance criterion, the ticket rule, or the
+  specific spec or standards clause that requires it *for this change*. A defence derived from a general
+  principle rather than a stated requirement is a scope escalation.
+- **Review history is evidence, not authority.** A defence that earlier review rounds asked for is not thereby
+  required; source it like any other.
+
+Do not cut a scope escalation yourself — whether the threat is in scope is the operator's call. List each one in
+the report with the threat it assumes, why no requirement sources it, and its rough size in plan lines.
+
 ### 2. Overspecification — churn-proof the specifics
 Find where the plan says "do it exactly this way" but a justifiable alternative exists: exact log/error
 strings, identifier names, `switch`-vs-`if`, exact test-fake shapes, and `file:line` anchors. Each is a churn
@@ -167,12 +188,17 @@ fixture recipe, whether a test helper already exists).
   do **not** do it; recommend it in the report instead.
 
 ## Output / reporting
-Report in three parts:
-1. **Polished autonomously** — the hardening applied, grouped by pass, one line each with the *why*.
-2. **Needs your call** — each recommend-item (goal-level tradeoff or large-effort rework) you deliberately did
+Report in five parts, in this order:
+1. **Proportion** — the report's first line is exactly one of `Proportion: proportionate`, `Proportion: heavy`
+   or `Proportion: overbuilt`. Follow it with the plan's size against the ticket's acceptance criteria and the
+   three largest contributors to that size.
+2. **Polished autonomously** — the hardening applied, grouped by pass, one line each with the *why*.
+3. **Scope escalations** — each unnamed adversary or unsourced defence from pass 1: what it defends against,
+   why no requirement sources it, its rough size, and your recommendation. Write "None" when there are none.
+4. **Needs your call** — each recommend-item (goal-level tradeoff or large-effort rework) you deliberately did
    **not** apply, as a crisp tradeoff with a recommended option, so the operator (or a follow-up run) can land
    it. This is the whole set — the pass never asks mid-run, so nothing is lost if it isn't here.
-3. **Re-review?** — "No" if every edit was intent-preserving; "Yes" and why if a correctness/approach change
+5. **Re-review?** — "No" if every edit was intent-preserving; "Yes" and why if a correctness/approach change
    landed (e.g. a corrected test recipe), so the loop can re-confirm the plan is clean.
 
 ## Anti-patterns (don't)
@@ -181,6 +207,8 @@ Report in three parts:
 - Writing a "verified" fact you didn't verify against the code.
 - Inventing a new standard when an existing one already applies.
 - Stopping to ask permission (or raising `AskUserQuestion`) instead of acting on hardening and reporting.
+- Treating a defence as needed because a standard's general principle implies it or a past review asked for
+  it — source it to this change's requirements, or list it as a scope escalation.
 - Silently *applying* a goal-level or large-effort change that was the operator's to decide — recommend it in
   the report, don't bake it in.
 - Disturbing the completion marker or renumbering sections.

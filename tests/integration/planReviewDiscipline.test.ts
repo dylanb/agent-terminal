@@ -34,6 +34,7 @@ const MATERIALITY_MARKER = 'Raise a finding only where';
 const SCOPE_MARKER = 'beyond what the ticket requires';
 const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
+const OPERATOR_DECISION = 'Operator decision (';
 
 describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   for (const f of charters) {
@@ -88,11 +89,44 @@ describe('plan-polish work turn', () => {
     for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(body, token).toContain(token);
   });
 
+  it('audits the defensive surface: names the adversary, sources every defence, and does not treat review history as authority', () => {
+    const body = recipe();
+    for (const marker of ['Name the adversary', 'Source every defence', 'Review history is evidence, not authority']) {
+      expect(body, marker).toContain(marker);
+    }
+  });
+
+  it('opens its report with a proportion verdict and lists scope escalations', () => {
+    const body = recipe();
+    for (const marker of ['Proportion: proportionate', 'Proportion: heavy', 'Proportion: overbuilt', '**Scope escalations**']) {
+      expect(body, marker).toContain(marker);
+    }
+  });
+
+  it('treats an item the plan records as an operator decision as settled', () => expect(recipe()).toContain(OPERATOR_DECISION));
+
   it('reads the ticket and the plan, and writes the plan', () => {
     const r = resolveDef(POLISH_LOOP);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.def.inputs.map((i) => i.id).sort()).toEqual(['groomed-ticket', 'plan']);
     expect(r.def.outputs.map((o) => o.id)).toEqual(['plan']);
+  });
+});
+
+describe('plan-polish consolidator', () => {
+  const consolidator = (): string => {
+    const r = resolveDef(POLISH_LOOP);
+    if (!r.ok) throw new Error(r.reason);
+    return readFileSync(r.def.consolidator, 'utf8');
+  };
+
+  it('reads the polish report, not only the round reports', () => expect(consolidator()).toContain(POLISH_REPORT_HEADING));
+
+  it('stops for a human on an overbuilt verdict or an undecided scope escalation or call, ahead of every other verdict', () => {
+    const body = consolidator();
+    for (const marker of ['Proportion: overbuilt', 'Scope escalations', 'Needs your call', OPERATOR_DECISION, 'takes precedence over `clean` and `another round`']) {
+      expect(body, marker).toContain(marker);
+    }
   });
 });
