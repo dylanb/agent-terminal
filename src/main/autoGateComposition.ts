@@ -113,23 +113,33 @@ export interface HumanDecisionRunnerDeps<View> {
 export interface HumanDecisionRunners<View> {
   decide: GateDecisionRun;
   /** The strip's manual Advance; null when it was refused. */
-  advance: (repoKey: string, step?: string) => View | null;
+  advance: (repoKey: string, step: string) => View | null;
 }
 
 /** The four gate-decision runners and the manual Advance, as the human decides them (§27.9.1 N9b.5(d)/(e)). */
 export function composeHumanDecisionRunners<View>(autoGate: AutoGate, deps: HumanDecisionRunnerDeps<View>): HumanDecisionRunners<View> {
   return {
     decide: async (repoKey, step, turnKey, option, note) => {
-      const atGate = autoGate.atGate(repoKey, step);
-      const landed = await deps.decide(repoKey, step, turnKey, option, note);
-      if (landed && atGate) autoGate.humanDecided(repoKey);
-      return landed;
+      const settled = autoGate.humanDecision(repoKey, step, turnKey);
+      let landed = false;
+      try {
+        landed = await deps.decide(repoKey, step, turnKey, option, note);
+        return landed;
+      } finally {
+        settled(landed);
+      }
     },
     advance: (repoKey, step) => {
-      if (step !== undefined && deps.currentStep(repoKey) !== step) return null;
-      const view = deps.advance(repoKey);
-      autoGate.humanDecided(repoKey);
-      return view;
+      if (deps.currentStep(repoKey) !== step) return null;
+      const settled = autoGate.humanDecision(repoKey, step, null);
+      let landed = false;
+      try {
+        const view = deps.advance(repoKey);
+        landed = true;
+        return view;
+      } finally {
+        settled(landed);
+      }
     },
   };
 }

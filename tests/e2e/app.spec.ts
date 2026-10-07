@@ -4375,7 +4375,7 @@ test('bootstrap-triggering flow IPC refuses a repository the main process never 
 
   const statuses = await page.evaluate(async (repoKey) => {
     const started = await window.flow.start(repoKey);
-    const advanced = await window.flow.advance(repoKey);
+    const advanced = await window.flow.advance(repoKey, 'plan');
     const provided = await window.flow.provideInput(repoKey, 'plan', { ticket: '176' });
     return [started.status, advanced.status, provided.status];
   }, repo);

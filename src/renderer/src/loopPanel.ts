@@ -115,7 +115,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltGeneric, loop.autoGate.haltReasons, loop.autoGate.failedEffect ?? null] : null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltReasons, loop.autoGate.failedEffect ?? null] : null] : null,
   ]);
 }
 
@@ -530,7 +530,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           notice.textContent = 'The engine is deciding this gate — you can still decide it yourself.';
           body.append(notice);
         }
-        if (ag.haltReasons.length > 0 || ag.haltGeneric) {
+        if (ag.haltReasons.length > 0) {
           const halt = doc.createElement('ul');
           halt.className = 'auto-halt';
           halt.setAttribute('aria-label', 'why this gate needs you');
@@ -539,12 +539,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
             li.dataset.autoHaltReason = reason;
             const label = autoHaltReasonLabel(reason);
             li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
-            halt.append(li);
-          }
-          if (ag.haltGeneric) {
-            const li = doc.createElement('li');
-            li.dataset.autoHaltGeneric = '';
-            li.textContent = 'The engine could not approve this gate.';
             halt.append(li);
           }
           body.append(halt);

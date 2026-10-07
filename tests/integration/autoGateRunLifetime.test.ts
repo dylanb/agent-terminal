@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createAutoGate, type AutoGate, type DefResolution, type StartRun } from '../../src/main/autoGate';
 import {
   composeCurrentRun,
   composeEngineApprove,
+  composeHumanDecisionRunners,
   composeLifecycleEndRun,
   composeLoopBindingResolve,
   composeObservedResolveDef,
@@ -26,9 +27,10 @@ import { createHeldRunRecovery } from '../../src/main/heldRunRecovery';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
-import { readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { enterPolish, loopAreaFile, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { writeGateRunState } from '../../src/main/gateRunState';
 import { stepScopedAdvance, type AppGateDecisionDeps, type ApproveDecider } from '../../src/main/appGateDecision';
-import { gateDecisionDecider, gateDecisionKind, parseAuditStream } from '../../src/shared/audit';
+import { gateDecisionDecider, gateDecisionKind, parseAuditStream, parseAutoHaltReasons } from '../../src/shared/audit';
 import type { ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 import { createGitRepoFixture } from '../helpers/gitRepo';
@@ -131,6 +133,7 @@ interface RigOpts {
   /** The app relaunched over this rig's worktree, catalog and §25 root: every in-memory part is new. */
   relaunchOf?: Rig;
   approveThrows?: () => boolean;
+  runInProgressAtThrows?: boolean;
 }
 
 interface Rig {
@@ -147,7 +150,8 @@ interface Rig {
   persisted: () => ReturnType<ReturnType<typeof createFlowStateStore>['read']>;
   reachGate: (verdict: ConsolidatorVerdict) => Promise<void>;
   gateEntries: (startedAt: number, flow?: string) => string[] | null;
-  relaunch: () => Rig;
+  errors: string[];
+  relaunch: (opts?: Omit<RigOpts, 'relaunchOf'>) => Rig;
 }
 
 function makeRig(opts: RigOpts = {}): Rig {
@@ -181,13 +185,19 @@ function makeRig(opts: RigOpts = {}): Rig {
     r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
 
   const approvals: Approval[] = [];
+  const errors: string[] = [];
   let flow!: FlowManager;
   const gate = createAutoGate({
     audit: (dir, cmd, exit) => recorder.recordCommand(dir, 'gate', cmd, exit),
     resolveDef: (dir) => plantedResolution(dir),
     currentRun: composeCurrentRun(globalDir),
-    runInProgressAt: composeRunInProgressAt(),
+    runInProgressAt: opts.runInProgressAtThrows
+      ? () => {
+          throw new Error('flow-state could not be read');
+        }
+      : composeRunInProgressAt(),
     onViewChanged: () => {},
+    emitError: (_dir, reason) => void errors.push(reason),
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
   });
@@ -285,7 +295,8 @@ function makeRig(opts: RigOpts = {}): Rig {
       if (!existsSync(file)) return null;
       return parseAuditStream(readFileSync(file, 'utf8')).events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
     },
-    relaunch: () => makeRig({ relaunchOf: rig }),
+    errors,
+    relaunch: (o = {}) => makeRig({ ...o, relaunchOf: rig }),
   };
   return rig;
 }
@@ -474,7 +485,6 @@ describe('autoGate — authority read from the run\'s bound flow, over the real 
     await rig.reachGate('clean');
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
     expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
-    expect(rig.view().autoGate?.haltGeneric ?? false).toBe(false);
   });
 
   it('a run bound through the leg-3 global fallback (pointer unset) advances its clean `auto` gate', async () => {
@@ -526,7 +536,6 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
     expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
-    expect(v.autoGate?.haltGeneric ?? false).toBe(false);
     expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
   });
 
@@ -562,6 +571,259 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
     expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('i');
+  });
+  // Pinning tests (#137 round 1): the loop run's flags persisted before a relaunch are read back after it (N9b.5(b), N9b.8).
+  it('a round that recorded `needs a human` before the relaunch halts the clean `auto` gate after it with (a): no engine approve', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    before.gate.loopRunEvent(before.wt, STEP, TURN, { roundReport: null });
+
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('a');
+  });
+
+  it('a failed turn Accepted before the relaunch halts the clean `auto` gate after it with (b), and the run keeps one (b) entry', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    before.gate.loopRunEvent(before.wt, STEP, TURN, 'accepted');
+
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('b');
+    const bEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('b'));
+    expect(bEntries).toHaveLength(1);
+  });
+
+  it('a gate state left by another run is ignored after the relaunch: its marker and loop-run flags are not this run\'s (no (b), no (i))', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeGateRunState(before.wt, {
+      run: { flow: 'Another Flow', startedAt: T0 - 60_000 },
+      loopRun: { step: STEP, endedInError: true, acceptedFailure: true, needsAHuman: true, recorded: ['b'] },
+      failedEffect: { state: 'set', detail: 'another run failed', reported: false },
+      relaunchHalt: null,
+    });
+
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    const v = rig.view();
+    expect(v.autoGate?.failedEffect).toBeUndefined();
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['b']));
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['i']));
+  });
+
+  it('a gate of the same step and turn at a later round than a persisted (j) halt writes its own (j) entry at the next relaunch (AC15(ii))', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const first = before.relaunch();
+    expect(first.gate.isAutoRun(first.wt)).toBe(true);
+    await flush();
+    writeAppLoopState(first.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 2, verdict: 'clean' }, FIXED);
+
+    const rig = first.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(2);
+  });
+
+  it('a gate the run left by a manual Advance before the relaunch writes no (j) after it: no engine `auto-halt` entry', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    before.flow.advance(before.wt);
+    expect(before.flow.state(before.wt).stepName).toBe('next');
+
+    const rig = before.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    expect(engineHalts(rig.gateEntries(T0)) ?? []).toEqual([]);
+  });
+
+  it('a run with no `auto` step writes no gate state: Start and a loop run leave no `gate-run.yaml` (N9b.3)', () => {
+    const rig = makeRig({ authority: 'human' });
+    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
+    rig.gate.beginLoopRun(rig.wt, STEP);
+    rig.gate.loopRunEvent(rig.wt, STEP, TURN, 'error');
+    expect(existsSync(loopAreaFile(rig.wt, 'gate-run.yaml')!)).toBe(false);
+  });
+
+  it('a gate halted with (j) and relaunched again before any decision keeps one (j) entry (AC15)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const first = before.relaunch();
+    expect(first.gate.isAutoRun(first.wt)).toBe(true);
+    await flush();
+
+    const rig = first.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(1);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+  });
+
+  it('a gate halted with (j) after the relaunch, whose next round in the same loop run halts again, writes an entry for that later halt (N9b.9)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'stop for a human' }, FIXED);
+    const rig = before.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const halts = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).length;
+    const afterRelaunch = halts();
+
+    await rig.reachGate('stop for a human');
+    expect(rig.view().humanNeeded).toBe(true);
+    expect(halts()).toBe(afterRelaunch + 1);
+  });
+
+  it('a later gate of the same step at the same round, reached after an earlier relaunch (j), writes its own (j) entry at the next relaunch (N9b.9)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const first = before.relaunch();
+    await flush();
+    await first.reachGate('stop for a human');
+
+    const rig = first.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(2);
+  });
+
+  it('a new loop run of the same step, whose round-1 gate is reached before the next relaunch, writes its own (j) entry (N9b.9)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const first = before.relaunch();
+    await flush();
+    first.gate.beginLoopRun(first.wt, STEP);
+
+    const rig = first.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(2);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a gate halted with (j) whose gate state cannot be saved at the relaunch also shows and records (h)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const loopDir = dirname(loopAreaFile(before.wt, 'gate-run.yaml')!);
+    chmodSync(loopDir, 0o555);
+    try {
+      const rig = before.relaunch();
+      expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+      await flush();
+      expect(rig.errors.some((e) => e.includes('gate state could not be saved'))).toBe(true);
+      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toEqual(expect.arrayContaining(['j', 'h']));
+      const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+      expect(jEntries.map((c) => parseAutoHaltReasons(c))).toEqual([expect.arrayContaining(['j', 'h'])]);
+    } finally {
+      chmodSync(loopDir, 0o755);
+    }
+  });
+
+  it('a gate whose state could not be read, halted with (j) and relaunched again before any decision, keeps one (j) entry', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    writeFileSync(loopAreaFile(before.wt, 'gate-run.yaml')!, 'schema_version: [unclosed\n');
+    const first = before.relaunch();
+    expect(first.gate.isAutoRun(first.wt)).toBe(true);
+    await flush();
+
+    const rig = first.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(1);
+  });
+
+  it('a gate reached before the relaunch whose run check cannot complete after it still halts with (j), recorded (N9b.6)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+
+    const rig = before.relaunch({ runInProgressAtThrows: true });
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(jEntries).toHaveLength(1);
+  });
+
+  it('a gate the human took into polish before the relaunch writes no (j) after it', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    enterPolish(before.wt, STEP);
+
+    const rig = before.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await flush();
+    expect(engineHalts(rig.gateEntries(T0)) ?? []).toEqual([]);
+  });
+
+  function relaunchOverUnreadableState(): Rig {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeFileSync(loopAreaFile(before.wt, 'gate-run.yaml')!, 'schema_version: [unclosed\n');
+    return before.relaunch();
+  }
+
+  it('a gate state that cannot be read at the relaunch is (h), not a failed effect: shown as may-have-failed, no (i) at the gate, and no (i) entry at the run end', async () => {
+    const rig = relaunchOverUnreadableState();
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    const v = rig.view();
+    expect(v.autoGate?.failedEffect?.state).toBe('unknown');
+    const shown = v.autoGate?.haltReasons.map((r) => r.reason) ?? [];
+    expect(shown).toContain('h');
+    expect(shown).not.toContain('i');
+    expect(v.autoGate?.haltReasons.find((r) => r.reason === 'h')?.detail).toBe('the run\'s gate state could not be read');
+
+    const hEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('h')).length;
+    const hBeforeEnd = hEntries();
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    const letters = (engineHalts(rig.gateEntries(T0)) ?? []).flatMap((c) => parseAutoHaltReasons(c) ?? []);
+    expect(letters).not.toContain('i');
+    expect(hEntries()).toBe(hBeforeEnd + 1);
+    expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state could not be read']);
+  });
+
+  it('a run with no `auto` step relaunched over a gate state it cannot read reports nothing at its end (N9b.3)', async () => {
+    const before = makeRig({ authority: 'human' });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    const file = loopAreaFile(before.wt, 'gate-run.yaml')!;
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, 'schema_version: [unclosed\n');
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    expect(rig.errors).toEqual([]);
+    expect(engineHalts(rig.gateEntries(T0)) ?? []).toEqual([]);
+    expect(rig.view().autoGate?.failedEffect).toBeUndefined();
+  });
+
+  it('once a human decides that (h) gate, the run\'s next clean `auto` gate is engine-approved again (N9b.8)', async () => {
+    const rig = relaunchOverUnreadableState();
+    await rig.reachGate('clean');
+    const runners = composeHumanDecisionRunners(rig.gate, { decide: async () => true, advance: (k: string) => k, currentStep: () => STEP });
+    await runners.decide(rig.wt, STEP, TURN, 'request-changes', 'note');
+    expect(rig.view().autoGate?.failedEffect).toBeUndefined();
+
+    rig.gate.beginLoopRun(rig.wt, STEP);
+    await rig.reachGate('clean');
+    expect(rig.approvals.map((a) => [a.step, a.decider])).toEqual([[STEP, 'engine']]);
   });
 });
 

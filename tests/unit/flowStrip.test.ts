@@ -1854,7 +1854,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 // §27.9.1 N9b.5(e) — the pill's tone reads `humanNeeded` when the view carries `autoGate`; a view with no
 // `autoGate` keeps today's status-only tone (AC7).
 describe('flow status strip — the loop tone under per-step gate authority (§27.9.1)', () => {
-  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltReasons: [] };
   const pillFor = async (loop: FlowLoopView): Promise<{ tone: string; label: string }> => {
     host.replaceChildren();
     createFlowStrip(host, {

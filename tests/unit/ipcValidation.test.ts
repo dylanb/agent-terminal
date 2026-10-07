@@ -143,9 +143,9 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest(arr)).toBe(false);
   });
 
-  // #137 S2: the strip's manual Advance names the step it showed; `step` is optional so existing callers keep working.
-  it('accepts a flow:advance with or without the step it acts on, rejecting a bad step or an unsafe key (§6, N9b.5(e))', () => {
-    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+  it('accepts a flow:advance only with the step it acts on, rejecting a missing or bad step or an unsafe key (§6, N9b.5(e))', () => {
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo' })).toBe(false);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: undefined })).toBe(false);
     expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: 'red' })).toBe(true);
     expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: '' })).toBe(false);
     expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: 7 })).toBe(false);

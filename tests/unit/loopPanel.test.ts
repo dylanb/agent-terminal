@@ -1007,7 +1007,7 @@ describe('docked loop panel — the epic preview (§28.7)', () => {
 // §27.9.1 N9b.5(e) — the status row's act tone reads `humanNeeded` when the view carries `autoGate`; a view with
 // no `autoGate` keeps today's status-only tone (AC7).
 describe('docked loop panel — the status tone under per-step gate authority (§27.9.1)', () => {
-  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltReasons: [] };
   const statusIsAct = (): boolean | undefined => row('status')?.querySelector('.lv')?.classList.contains('bad');
 
   it('a halted gate (complete, humanNeeded, a halt reason) shows the act tone', () => {
@@ -1063,7 +1063,7 @@ describe('docked loop panel — the status tone under per-step gate authority (�
 
 // §27.9.1 N9b.5(e) / N9b.6 — the S1 auto-gate elements the panel renders from `autoGate`.
 describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
-  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltReasons: [] };
   const autoGateView = (autoGate: FlowAutoGateView, humanNeeded = true): FlowLoopView =>
     loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'request-changes'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', humanNeeded, autoGate });
   const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
@@ -1080,15 +1080,10 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
     expect(host.querySelector('[data-auto-deciding]')).toBeNull();
   });
 
-  it('a generic halt shows one `[data-auto-halt-generic]` row beside the displayed letter row', () => {
-    mount().render(autoGateView({ ...idle, haltGeneric: true, haltReasons: [{ reason: 'stop-for-a-human' }] }), 'plan');
-    expect(host.querySelectorAll('[data-auto-halt-generic]')).toHaveLength(1);
-    expect(reasonRows()).toEqual(['stop-for-a-human']);
-  });
-
-  it('a halt that is not generic shows no `[data-auto-halt-generic]` row (negative pair)', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'stop-for-a-human' }] }), 'plan');
-    expect(host.querySelector('[data-auto-halt-generic]')).toBeNull();
+  it('an approve-outcome halt (l) shows its letter row with the refusal reason, beside the other letters (N9b.6)', () => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }, { reason: 'l', detail: 'the run-state no longer matches the gate' }] }), 'plan');
+    expect(reasonRows()).toEqual(['c', 'l']);
+    expect(host.querySelector('[data-auto-halt-reason="l"]')?.textContent).toContain('the run-state no longer matches the gate');
   });
 
   it.each(['stop-for-a-human', 'c', 'e'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row for it', (reason) => {
@@ -1121,7 +1116,7 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
 // §27.9.1 N9b.5(d) / N9b.6 — the S2 auto-gate elements: the (a), (b), (h), (i) rows with their detail, and the
 // failed-effect marker (#137 S2).
 describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
-  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltReasons: [] };
   const autoGateView = (autoGate: FlowAutoGateView): FlowLoopView =>
     loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'request-changes'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', humanNeeded: true, autoGate });
   const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
@@ -1135,10 +1130,9 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
     expect(rows[0].textContent).toContain('the engine saw this');
   });
 
-  it('a halt naming every S2 letter at once shows one row per letter and no generic row', () => {
+  it('a halt naming every S2 letter at once shows one row per letter', () => {
     mount().render(autoGateView({ ...idle, haltReasons: (['a', 'b', 'h', 'i'] as const).map((reason) => ({ reason })) }), 'plan');
     expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'h', 'i']);
-    expect(host.querySelector('[data-auto-halt-generic]')).toBeNull();
   });
 
   it.each(['set', 'unknown'] as const)('a `%s` failed-effect marker shows `[data-failed-effect]` with its state and failure text, beside the gate buttons', (state) => {

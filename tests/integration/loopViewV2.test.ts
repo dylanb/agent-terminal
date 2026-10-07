@@ -517,7 +517,7 @@ outputs:
 // reports nothing for keeps today's view with no `autoGate` field (AC7).
 describe('provideAppLoopView — per-step gate authority (§27.9.1)', () => {
   const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
-  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltReasons: [] };
   const engine = { activeRepoDir: () => repoDir, resume: () => {}, liveErrorFor: () => null };
   const seamFor = (step: string, turnKey: string, view: FlowAutoGateView): AutoGateViewFor =>
     (k, s, t) => (k === repoDir && s === step && t === turnKey ? view : undefined);

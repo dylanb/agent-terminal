@@ -158,7 +158,6 @@ function autoGateHumanNeeded(view: FlowLoopView, autoGate: FlowAutoGateView): bo
     (view.actionable && !autoGate.deciding) ||
     autoGate.hung ||
     autoGate.haltReasons.length > 0 ||
-    autoGate.haltGeneric ||
     isHumanNeededStatus(view.status)
   );
 }

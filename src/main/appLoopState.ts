@@ -394,7 +394,11 @@ interface StepFlag {
   /** The flag's step identity, or null when unset. Field-local validation (CWE-20): an empty/missing/non-string
    *  step is not a valid flag, so it reads as unset rather than surfacing a phantom identity. */
   read(repoDir: string): { step: string } | null;
+  /** Like `read`, but a present flag that cannot be read or validated is `unreadable`, not unset. */
+  probe(repoDir: string): FlagProbe;
 }
+
+export type FlagProbe = { kind: 'absent' } | { kind: 'set'; step: string } | { kind: 'unreadable' };
 
 function stepFlag(filename: string, what: string): StepFlag {
   const fileOf = (repoDir: string): string | null => loopAreaFile(repoDir, filename);
@@ -413,24 +417,28 @@ function stepFlag(filename: string, what: string): StepFlag {
       rmSync(file, { force: true });
     },
     read(repoDir) {
+      const p = this.probe(repoDir);
+      return p.kind === 'set' ? { step: p.step } : null;
+    },
+    probe(repoDir) {
       const file = fileOf(repoDir);
-      if (file === null) return null;
+      if (file === null) return { kind: 'absent' };
       let text: string;
       try {
         text = readFileSync(file, 'utf8');
-      } catch {
-        return null;
+      } catch (e) {
+        return isErrno(e, 'ENOENT') ? { kind: 'absent' } : { kind: 'unreadable' };
       }
       let doc: unknown;
       try {
         doc = yaml.load(text);
       } catch {
-        return null;
+        return { kind: 'unreadable' };
       }
-      if (!isRecord(doc)) return null;
-      if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
-      if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
-      return { step: doc.step };
+      if (!isRecord(doc)) return { kind: 'unreadable' };
+      if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return { kind: 'unreadable' };
+      if (typeof doc.step !== 'string' || doc.step.length === 0) return { kind: 'unreadable' };
+      return { kind: 'set', step: doc.step };
     },
   };
 }
@@ -447,6 +455,9 @@ export function clearInterrupt(repoDir: string): void {
 }
 export function readArmedInterrupt(repoDir: string): { step: string } | null {
   return armedInterrupt.read(repoDir);
+}
+export function probeArmedInterrupt(repoDir: string): FlagProbe {
+  return armedInterrupt.probe(repoDir);
 }
 
 /** Enter the polish stand-down for `step` (§27.9/AC6) — approve is the one lever that clears it (AC11). */

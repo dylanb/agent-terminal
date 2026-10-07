@@ -32,10 +32,18 @@ export interface PersistedFailedEffect {
   reported: boolean;
 }
 
+/** The gate whose relaunch (j) halt has been written (§27.9.1 N9b.8, AC15). */
+export interface RelaunchHalt {
+  step: string;
+  turnKey: string;
+  round: number | null;
+}
+
 export interface GateRunState {
   run: RunIdentity;
   loopRun: PersistedLoopRun | null;
   failedEffect: PersistedFailedEffect | null;
+  relaunchHalt: RelaunchHalt | null;
 }
 
 export type GateRunRead = { kind: 'absent' } | { kind: 'unreadable' } | { kind: 'ok'; state: GateRunState };
@@ -56,6 +64,7 @@ export function writeGateRunState(repoDir: string, state: GateRunState): void {
   if (file === null) throw new Error('§27 loop area is unresolvable');
   const lr = state.loopRun;
   const fe = state.failedEffect;
+  const rh = state.relaunchHalt;
   const doc = {
     schema_version: APP_LOOP_STATE_SCHEMA,
     flow: state.run.flow,
@@ -65,6 +74,7 @@ export function writeGateRunState(repoDir: string, state: GateRunState): void {
         ? null
         : { step: lr.step, ended_in_error: lr.endedInError, accepted_failure: lr.acceptedFailure, needs_a_human: lr.needsAHuman, recorded: lr.recorded },
     failed_effect: fe === null ? null : { state: fe.state, detail: fe.detail, reported: fe.reported },
+    relaunch_halt: rh === null ? null : { step: rh.step, turn_key: rh.turnKey, round: rh.round },
   };
   if (!atomicWriteFileSync(file, yaml.dump(doc))) {
     throw new Error(`cannot write §27 gate state: ${path.dirname(file)} is not a real directory`);
@@ -97,7 +107,15 @@ function decode(doc: unknown): GateRunState | null {
   if (loopRun === undefined) return null;
   const failedEffect = doc.failed_effect === null ? null : decodeFailedEffect(doc.failed_effect);
   if (failedEffect === undefined) return null;
-  return { run: { flow: doc.flow, startedAt: doc.started_at }, loopRun, failedEffect };
+  const relaunchHalt = doc.relaunch_halt === null ? null : decodeRelaunchHalt(doc.relaunch_halt);
+  if (relaunchHalt === undefined) return null;
+  return { run: { flow: doc.flow, startedAt: doc.started_at }, loopRun, failedEffect, relaunchHalt };
+}
+
+function decodeRelaunchHalt(v: unknown): RelaunchHalt | undefined {
+  if (!isRecord(v) || typeof v.step !== 'string' || typeof v.turn_key !== 'string') return undefined;
+  if (v.round !== null && !(typeof v.round === 'number' && Number.isInteger(v.round) && v.round > 0)) return undefined;
+  return { step: v.step, turnKey: v.turn_key, round: v.round };
 }
 
 function decodeLoopRun(v: unknown): PersistedLoopRun | undefined {

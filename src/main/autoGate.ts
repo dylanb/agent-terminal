@@ -12,8 +12,8 @@ import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGate
 import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
-import { clearInterrupt, readAppLoopState, readArmedInterrupt } from './appLoopState';
-import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RunIdentity } from './gateRunState';
+import { clearInterrupt, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt } from './appLoopState';
+import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
 
 // §27.9.1 N9b.5(e)
@@ -60,11 +60,8 @@ export interface AutoGate {
   loopRunEvent(repoDir: string, step: string, turnKey: string, event: LoopRunEvent): void;
   interruptArmed(repoDir: string, step: string): boolean;
   consumeInterrupt(repoDir: string): void;
-  humanAttempt(repoKey: string): void;
-  /** Whether `step` is the loop step the run's gates are currently at. */
-  atGate(repoKey: string, step: string): boolean;
-  /** §27.9.1 N9b.5(d) — a human decision or manual Advance landed at the run's current gate. */
-  humanDecided(repoKey: string): void;
+  /** §27.9.1 N9b.5(d)/(e) — a human decision attempt or manual Advance at `step`; call the result with whether it landed. */
+  humanDecision(repoKey: string, step: string, turnKey: string | null): (landed: boolean) => void;
   flowTransitioned(repoKey: string, after: FlowLike): void;
   attachApprove(approve: EngineApprove): void;
   isAutoRun(repoKey: string): boolean;
@@ -76,8 +73,6 @@ export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
   if (!r.ok) return null;
   return r.def.work.completion ? { completion: r.def.work.completion } : {};
 }
-
-const GENERIC_REASONS: ReadonlySet<AutoHaltReason> = new Set(['k', 'l']);
 
 type Reason = { reason: AutoHaltReason; detail?: string };
 
@@ -106,8 +101,9 @@ interface LoopRun {
 
 interface AutoRun {
   identity: RunIdentity;
-  /** The persisted gate state could not be read at the relaunch rebuild: (h) at every `auto` gate. */
-  stateUnreadable: boolean;
+  /** The last write of the persisted gate state did not land (§27.9.1 N9b.5(b)). */
+  stateUnsaved: boolean;
+  humanDecisions: number;
   /** The last flow transition reached the run's end (§27.9.1 N9b.5(d)). */
   atRunEnd: boolean;
   steps: FlowDefinition['steps'];
@@ -115,6 +111,7 @@ interface AutoRun {
   frozenCheck: Set<string>;
   loopRun: LoopRun | null;
   failedEffect: { state: 'set' | 'unknown'; detail: string; reported: boolean } | null;
+  relaunchHalt: RelaunchHalt | null;
   gateSeq: number;
   pendingGate: (GateKey & { verdict: ConsolidatorVerdict; cause: GateCause }) | null;
   deciding: Deciding | null;
@@ -144,25 +141,24 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
 
   /** §27.9.1 N9b.5(d) — written before the view that shows the change is pushed. */
   const persist = (repoDir: string, run: AutoRun): void => {
+    if (!isAuto(run)) return;
     const lr = run.loopRun;
-    bestEffort(() =>
+    try {
       writeGateRunState(repoDir, {
         run: run.identity,
         loopRun: lr === null ? null : { step: lr.step, endedInError: lr.endedInError, acceptedFailure: lr.acceptedFailure, needsAHuman: lr.needsAHuman, recorded: [...lr.recorded] },
         failedEffect: run.failedEffect === null ? null : { ...run.failedEffect },
-      }),
-    );
+        relaunchHalt: run.relaunchHalt === null ? null : { ...run.relaunchHalt },
+      });
+      run.stateUnsaved = false;
+    } catch (e) {
+      run.stateUnsaved = true;
+      bestEffort(() => deps.emitError?.(repoDir, `The run's gate state could not be saved: ${errMsg(e)}`));
+    }
   };
 
   const isAuto = (run: AutoRun): boolean => [...run.bound.values()].some((b) => b.authority === 'auto');
   const honouredAuto = (run: AutoRun, step: string): boolean => run.bound.get(step)?.authority === 'auto';
-  const fileArmed = (repoDir: string): boolean => {
-    try {
-      return readArmedInterrupt(repoDir) !== null;
-    } catch {
-      return true;
-    }
-  };
 
   const clearDeciding = (run: AutoRun): void => {
     if (run.deciding === null) return;
@@ -170,13 +166,19 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     run.deciding = null;
   };
 
-  const consume = (repoDir: string): void => {
-    bestEffort(() => clearInterrupt(repoDir));
+  const consume = (repoDir: string): string | null => {
+    try {
+      clearInterrupt(repoDir);
+      return null;
+    } catch (e) {
+      return `the interrupt could not be cleared: ${errMsg(e)}`;
+    }
   };
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
-  const halt = (repoDir: string, run: AutoRun, key: GateKey, reasons: Reason[], opts: { write: boolean } = { write: true }): void => {
-    if (reasons.some((r) => r.reason === 'c')) consume(repoDir);
+  const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean } = { write: true }): void => {
+    const failed = held.some((r) => r.reason === 'c') ? consume(repoDir) : null;
+    const reasons = failed === null ? held : held.map((r) => (r.reason === 'c' ? { ...r, detail: failed } : r));
     const lr = run.loopRun;
     const recordedAlready = lr !== null && lr.step === key.step && reasons.every((r) => lr.recorded.has(r.reason));
     if (opts.write && !recordedAlready) bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd(reasons), 0));
@@ -194,11 +196,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   /** §27.9.1 N9b.5(d) — a run never ends silently over a failed effect. */
   const reportRunEnd = (repoDir: string, run: AutoRun): void => {
     const marker = run.failedEffect;
-    if (marker === null || marker.reported) return;
+    if (marker === null || marker.reported || run.humanDecisions > 0) return;
     marker.reported = true;
     persist(repoDir, run);
-    bestEffort(() => deps.emitError?.(repoDir, `A gate side-effect failed earlier in this run: ${marker.detail}`));
-    bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: 'i', detail: marker.detail }]), 0));
+    const lead = marker.state === 'set' ? 'A gate side-effect failed earlier in this run' : 'A gate side-effect may have failed earlier in this run';
+    bestEffort(() => deps.emitError?.(repoDir, `${lead}: ${marker.detail}`));
+    bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'i' : 'h', detail: marker.detail }]), 0));
   };
 
   /** §27.9.1 N9b.5(d) — `done`, or a step after which the run has no loop step left. */
@@ -215,11 +218,16 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const lr = run.loopRun !== null && run.loopRun.step === step ? run.loopRun : null;
     if (lr === null || lr.needsAHuman) reasons.push({ reason: 'a' });
     if (lr !== null && (lr.endedInError || lr.acceptedFailure)) reasons.push({ reason: 'b' });
-    if (cause === 'interrupt' || fileArmed(repoDir)) reasons.push({ reason: 'c' });
+    const arm = probeArmedInterrupt(repoDir).kind;
+    if (cause === 'interrupt' || arm === 'set') reasons.push({ reason: 'c' });
     // S4 replaces this fail-closed stub with the approve-time frozen check.
     if (frozen && run.frozenCheck.has(step)) reasons.push({ reason: 'e', detail: 'the approve-time frozen check is not available' });
-    if (lr === null || run.stateUnreadable) reasons.push({ reason: 'h' });
-    if (run.failedEffect !== null) reasons.push({ reason: 'i' });
+    const marker = run.failedEffect;
+    if (marker?.state === 'unknown') reasons.push({ reason: 'h', detail: marker.detail });
+    else if (run.stateUnsaved) reasons.push({ reason: 'h', detail: 'the run\'s gate state could not be saved' });
+    else if (arm === 'unreadable') reasons.push({ reason: 'h', detail: 'the interrupt arm could not be read' });
+    else if (lr === null) reasons.push({ reason: 'h' });
+    if (marker?.state === 'set') reasons.push({ reason: 'i' });
     return reasons;
   };
 
@@ -339,7 +347,9 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     if (!inProgress) return { ok: false, runEnded: true };
     if (d.abandoned) return { ok: false, abandoned: true };
-    if (fileArmed(repoDir)) return { ok: false, reasons: ['c'] };
+    const arm = probeArmedInterrupt(repoDir).kind;
+    if (arm === 'set') return { ok: false, reasons: ['c'] };
+    if (arm === 'unreadable') return { ok: false, reasons: ['h'] };
     d.claimed = true;
     return { ok: true };
   };
@@ -352,13 +362,15 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const buildRun = (repoKey: string, start: StartRun, identity: RunIdentity): AutoRun => {
     const auto: AutoRun = {
       identity,
-      stateUnreadable: false,
+      stateUnsaved: false,
+      humanDecisions: 0,
       atRunEnd: false,
       steps: start.definition.steps,
       bound: new Map(),
       frozenCheck: new Set(),
       loopRun: null,
       failedEffect: null,
+      relaunchHalt: null,
       gateSeq: 0,
       pendingGate: null,
       deciding: null,
@@ -378,7 +390,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         res = null;
       }
       auto.bound.set(step.id, { authority: 'auto', loop: step.loop });
-      if (isFrozenCheckCompletion(res?.completion)) auto.frozenCheck.add(step.id);
+      if (res === null || isFrozenCheckCompletion(res.completion)) auto.frozenCheck.add(step.id);
     }
     return auto;
   };
@@ -396,14 +408,14 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     if (identity === null || start === null) return undefined;
     const run = buildRun(repoKey, start, identity);
-    const persisted = readGateRunState(repoKey);
+    const persisted = isAuto(run) ? readGateRunState(repoKey) : ({ kind: 'absent' } as const);
     if (persisted.kind === 'unreadable') {
-      run.stateUnreadable = true;
-      run.failedEffect = { state: 'set', detail: 'the run\'s gate state could not be read', reported: false };
+      run.failedEffect = { state: 'unknown', detail: 'the run\'s gate state could not be read', reported: false };
     } else if (persisted.kind === 'ok' && sameRun(persisted.state.run, identity)) {
       const lr = persisted.state.loopRun;
       run.loopRun = lr === null ? null : { ...lr, recorded: new Set(lr.recorded) };
       run.failedEffect = persisted.state.failedEffect;
+      run.relaunchHalt = persisted.state.relaunchHalt;
     }
     runs.set(repoKey, run);
     resumeGate(repoKey, run);
@@ -418,12 +430,26 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       return;
     }
     if (state === null || state.status !== 'complete' || state.verdict === undefined || !honouredAuto(run, state.step)) return;
+    let leftGate: boolean;
+    try {
+      leftGate = !deps.runInProgressAt(repoDir, state.step) || isPolishActiveForStep(repoDir, state.step);
+    } catch {
+      leftGate = false;
+    }
+    if (leftGate) return;
     nextGate(run);
     const key = { step: state.step, turnKey: state.turnKey, gateSeq: run.gateSeq };
+    const gate: RelaunchHalt = { step: state.step, turnKey: state.turnKey, round: state.round ?? null };
+    const prior = run.relaunchHalt;
+    const written = prior !== null && prior.step === gate.step && prior.turnKey === gate.turnKey && prior.round === gate.round;
+    if (!written) {
+      run.relaunchHalt = gate;
+      persist(repoDir, run);
+    }
     const verdictHalt = verdictReason(state.verdict);
     const reasons: Reason[] = [{ reason: 'j' }, ...(verdictHalt !== null ? [{ reason: verdictHalt }] : [])];
     for (const r of evaluate(repoDir, run, state.step, 'verdict', true)) if (!reasons.some((x) => x.reason === r.reason)) reasons.push(r);
-    halt(repoDir, run, key, reasons);
+    halt(repoDir, run, key, reasons, { write: !written });
   };
 
   const runFor = (repoKey: string): AutoRun | undefined => runs.get(repoKey) ?? rebuild(repoKey);
@@ -435,8 +461,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const view: FlowAutoGateView = {
       deciding: sameGate(run.deciding, step, turnKey, run.gateSeq),
       hung: sameGate(run.hung, step, turnKey, run.gateSeq),
-      haltGeneric: shown.some((r) => GENERIC_REASONS.has(r.reason)),
-      haltReasons: shown.filter((r) => !GENERIC_REASONS.has(r.reason)),
+      haltReasons: shown,
       ...(run.failedEffect !== null ? { failedEffect: { state: run.failedEffect.state, detail: run.failedEffect.detail } } : {}),
     };
     return view;
@@ -480,6 +505,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run === undefined) return;
       run.loopRun = { step, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
       run.atRunEnd = false;
+      run.relaunchHalt = null;
       nextGate(run);
       persist(repoKey, run);
     },
@@ -488,6 +514,10 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run === undefined) return;
       nextGate(run);
       clearDeciding(run);
+      if (run.relaunchHalt !== null) {
+        run.relaunchHalt = null;
+        persist(repoDir, run);
+      }
       run.pendingGate = { step, turnKey, gateSeq: run.gateSeq, verdict, cause };
       if (!honouredAuto(run, step) || verdict !== 'clean' || cause !== 'verdict') return;
       const key = { step, turnKey, gateSeq: run.gateSeq };
@@ -523,10 +553,8 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const lr = run?.loopRun ?? null;
       if (run === undefined || lr === null || lr.step !== step) return;
       const haltOnFailedLoopRun = (): void => {
-        if (!honouredAuto(run, step)) {
-          persist(repoDir, run);
-          return;
-        }
+        persist(repoDir, run);
+        if (!honouredAuto(run, step)) return;
         halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'b' }]);
         lr.recorded.add('b');
         persist(repoDir, run);
@@ -554,25 +582,30 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     },
     interruptArmed(repoDir, step) {
       const run = runFor(repoDir);
-      if (run !== undefined && isAuto(run)) return fileArmed(repoDir);
+      if (run !== undefined && isAuto(run)) return probeArmedInterrupt(repoDir).kind === 'set';
       return readArmedInterrupt(repoDir)?.step === step;
     },
     consumeInterrupt(repoDir) {
-      clearInterrupt(repoDir);
+      const failed = consume(repoDir);
+      if (failed !== null) bestEffort(() => deps.emitError?.(repoDir, failed));
     },
-    humanAttempt(repoKey) {
-      const d = runs.get(repoKey)?.deciding;
-      if (d) d.humanAttempted = true;
-    },
-    atGate(repoKey, step) {
-      return runFor(repoKey)?.loopRun?.step === step;
-    },
-    humanDecided(repoKey) {
+    humanDecision(repoKey, step, turnKey) {
       const run = runFor(repoKey);
-      if (run === undefined || run.failedEffect === null) return;
-      run.failedEffect = null;
-      persist(repoKey, run);
-      push(repoKey);
+      if (run === undefined) return () => {};
+      const d = run.deciding;
+      if (d !== null && d.step === step && (turnKey === null || d.turnKey === turnKey)) d.humanAttempted = true;
+      const atGate = run.loopRun?.step === step || run.haltShown?.step === step;
+      run.humanDecisions += 1;
+      return (landed) => {
+        run.humanDecisions -= 1;
+        if (runs.get(repoKey) !== run) return;
+        if (landed && atGate && run.failedEffect !== null) {
+          run.failedEffect = null;
+          persist(repoKey, run);
+          push(repoKey);
+        }
+        if (run.atRunEnd) reportRunEnd(repoKey, run);
+      };
     },
     flowTransitioned(repoKey, after) {
       const run = runFor(repoKey);

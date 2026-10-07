@@ -200,8 +200,8 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
 
 // §27.9.1 N9b.5(e) (#137) — a view carrying `autoGate` that stops needing a human ends that stop, so the next stop notifies.
 describe('createLoopNotifier — distinct auto-gate stops (§27.9.1)', () => {
-  const DECIDING = { deciding: true, hung: false, haltGeneric: false, haltReasons: [] };
-  const HALTED = { deciding: false, hung: false, haltGeneric: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] };
+  const DECIDING = { deciding: true, hung: false, haltReasons: [] };
+  const HALTED = { deciding: false, hung: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] };
 
   it('a human-needed stop, then a deciding gate, then another human-needed stop with the same status and iteration notifies twice', () => {
     const { notifier, notify } = harness();
