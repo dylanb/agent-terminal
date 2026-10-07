@@ -34,6 +34,7 @@ const MATERIALITY_MARKER = 'Raise a finding only where';
 const SCOPE_MARKER = 'beyond what the ticket requires';
 const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
+const ESSENTIAL_MARKER = "the repo's standards make essential to this change";
 const OPERATOR_DECISION = 'Operator decision (';
 
 describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
@@ -49,6 +50,14 @@ describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
     const security = read(`${POLISH_LOOP}/charter/security.md`);
     expect(security).toContain(ADVERSARY_MARKER);
     expect(security).toContain('needs a human');
+  });
+
+  it('the intent reviewer counts only what the ticket or a standard makes essential, not a general principle', () => {
+    for (const loop of ['plan-loop', LOOP, POLISH_LOOP]) {
+      const intent = read(`${loop}/charter/intent.md`);
+      expect(intent, loop).toContain(ESSENTIAL_MARKER);
+      expect(intent, loop).toContain('a likely future need');
+    }
   });
 
   it('the plan is written at contract altitude, and maintainability no longer demands code-level detail', () => {

@@ -20,5 +20,7 @@ equal-quality rewording of an already-faithful clause, is not a finding; flaggin
 next round's work (§27.6).
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
-behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for
-is itself a finding — ask for it to be cut, never extended.
+behavior, hardening, or structure is justified only by what the acceptance criteria require or what
+the repo's standards make essential to this change. Anything else is itself a finding — ask for it to be
+cut, never extended. A general principle, a likely future need, or an earlier review's request does not
+make an addition essential.
