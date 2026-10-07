@@ -2,7 +2,7 @@
 
 import type { ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import type { FlowAutoGateView } from '../shared/ipc';
-import type { FlowLike, TransitionKind } from '../shared/audit';
+import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import type { AutoHaltReason } from '../shared/gateAuthority';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -65,7 +65,7 @@ export interface AutoGate {
   atGate(repoKey: string, step: string): boolean;
   /** §27.9.1 N9b.5(d) — a human decision or manual Advance landed at the run's current gate. */
   humanDecided(repoKey: string): void;
-  flowTransitioned(repoKey: string, kind: TransitionKind, before: FlowLike, after: FlowLike): void;
+  flowTransitioned(repoKey: string, after: FlowLike): void;
   attachApprove(approve: EngineApprove): void;
   isAutoRun(repoKey: string): boolean;
   autoGateViewFor: AutoGateViewFor;
@@ -77,7 +77,6 @@ export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
   return r.def.work.completion ? { completion: r.def.work.completion } : {};
 }
 
-// Until S3–S5 land their letter-keyed rows, these reasons show as the one generic row.
 const GENERIC_REASONS: ReadonlySet<AutoHaltReason> = new Set(['k', 'l']);
 
 type Reason = { reason: AutoHaltReason; detail?: string };
@@ -523,7 +522,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const run = runFor(repoDir);
       const lr = run?.loopRun ?? null;
       if (run === undefined || lr === null || lr.step !== step) return;
-      const haltB = (): void => {
+      const haltOnFailedLoopRun = (): void => {
         if (!honouredAuto(run, step)) {
           persist(repoDir, run);
           return;
@@ -534,7 +533,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       };
       if (event === 'error') {
         lr.endedInError = true;
-        haltB();
+        haltOnFailedLoopRun();
         return;
       }
       if (event === 'retried') {
@@ -547,7 +546,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       }
       if (event === 'accepted') {
         lr.acceptedFailure = true;
-        haltB();
+        haltOnFailedLoopRun();
         return;
       }
       lr.needsAHuman = event.roundReport === null || reportNeedsAHuman(event.roundReport) !== false;
@@ -575,7 +574,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       persist(repoKey, run);
       push(repoKey);
     },
-    flowTransitioned(repoKey, _kind, _before, after) {
+    flowTransitioned(repoKey, after) {
       const run = runFor(repoKey);
       if (run === undefined) return;
       run.atRunEnd = reachedRunEnd(run, after);

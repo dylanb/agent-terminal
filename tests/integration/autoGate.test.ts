@@ -1261,14 +1261,17 @@ describe('autoGate — the failed-effect marker across gates of either authority
     currentStep = STEP;
   });
 
-  function runnersFor(rig: Rig): ReturnType<typeof composeHumanDecisionRunners> {
+  function runnersFor(rig: Rig): ReturnType<typeof composeHumanDecisionRunners<string>> {
     expect(typeof composeHumanDecisionRunners).toBe('function');
     return composeHumanDecisionRunners(rig.gate, {
       decide: async (repoKey: string, step: string, turnKey: string, option: GateDecisionOption) => {
         decisions.push({ repoKey, step, turnKey, option });
         return true;
       },
-      advance: (repoKey: string) => void advanced.push(repoKey),
+      advance: (repoKey: string) => {
+        advanced.push(repoKey);
+        return `advanced:${repoKey}`;
+      },
       currentStep: () => currentStep,
     });
   }
@@ -1342,7 +1345,7 @@ describe('autoGate — the failed-effect marker across gates of either authority
     await markerSet(rig);
     await enterAndReach(rig, 'human-step');
     currentStep = 'human-step';
-    expect(runners.advance(repoDir, 'human-step')).toBe(true);
+    expect(runners.advance(repoDir, 'human-step')).toBe(`advanced:${repoDir}`);
     expect(advanced).toEqual([repoDir]);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();
 
@@ -1356,7 +1359,7 @@ describe('autoGate — the failed-effect marker across gates of either authority
     await markerSet(rig, [STEPS_MARKER[0], STEPS_MARKER[2], STEPS_MARKER[3]]);
     currentStep = 'third';
     rig.gate.beginLoopRun(repoDir, 'third');
-    expect(runners.advance(repoDir, STEP)).toBe(false);
+    expect(runners.advance(repoDir, STEP)).toBeNull();
     expect(advanced).toEqual([]);
     await reachGate(rig, 'clean', 'verdict', repoDir, 'third');
     const v = rig.view();

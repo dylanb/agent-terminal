@@ -78,7 +78,7 @@ export function composeEngineApprove(
 export function composeRecordFlowTransition(audit: Pick<AuditRecorder, 'recordTransition'>, autoGate: AutoGate): RecordFlowTransition {
   return (repoKey: string, kind: TransitionKind, before, after, start) => {
     audit.recordTransition(repoKey, kind, before, after, start);
-    autoGate.flowTransitioned(repoKey, kind, before, after);
+    autoGate.flowTransitioned(repoKey, after);
   };
 }
 
@@ -104,20 +104,20 @@ export function composeRunInProgressAt(): AutoGateDeps['runInProgressAt'] {
   };
 }
 
-export interface HumanDecisionRunnerDeps {
+export interface HumanDecisionRunnerDeps<View> {
   decide: GateDecisionRun;
-  advance: (repoKey: string) => void;
+  advance: (repoKey: string) => View;
   currentStep: (repoKey: string) => string | null;
 }
 
-export interface HumanDecisionRunners {
+export interface HumanDecisionRunners<View> {
   decide: GateDecisionRun;
-  /** The strip's manual Advance; false when it was refused. */
-  advance: (repoKey: string, step?: string) => boolean;
+  /** The strip's manual Advance; null when it was refused. */
+  advance: (repoKey: string, step?: string) => View | null;
 }
 
 /** The four gate-decision runners and the manual Advance, as the human decides them (§27.9.1 N9b.5(d)/(e)). */
-export function composeHumanDecisionRunners(autoGate: AutoGate, deps: HumanDecisionRunnerDeps): HumanDecisionRunners {
+export function composeHumanDecisionRunners<View>(autoGate: AutoGate, deps: HumanDecisionRunnerDeps<View>): HumanDecisionRunners<View> {
   return {
     decide: async (repoKey, step, turnKey, option, note) => {
       const atGate = autoGate.atGate(repoKey, step);
@@ -126,10 +126,10 @@ export function composeHumanDecisionRunners(autoGate: AutoGate, deps: HumanDecis
       return landed;
     },
     advance: (repoKey, step) => {
-      if (step !== undefined && deps.currentStep(repoKey) !== step) return false;
-      deps.advance(repoKey);
+      if (step !== undefined && deps.currentStep(repoKey) !== step) return null;
+      const view = deps.advance(repoKey);
       autoGate.humanDecided(repoKey);
-      return true;
+      return view;
     },
   };
 }

@@ -1036,14 +1036,13 @@ async function createWindow(): Promise<void> {
     run: runAppGateDecisionRaw,
   });
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
-  const manualAdvances = new Map<string, FlowStateView>();
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
     advance: (repoKey) => {
       const pre = withDerived(repoKey, flow.state(repoKey));
       const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
       recordFlowTransition(repoKey, 'advance', pre, view);
-      manualAdvances.set(repoKey, view);
+      return view;
     },
     currentStep: (repoKey) => flow.state(repoKey).stepName,
   });
@@ -1261,11 +1260,10 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        if (!humanRunners.advance(m.repoKey, m.step)) {
+        const view = humanRunners.advance(m.repoKey, m.step);
+        if (view === null) {
           return trackLoop(m.repoKey, { ...pre, notice: 'Not advanced: the flow has moved past the step you advanced.' });
         }
-        const view = manualAdvances.get(m.repoKey) ?? withDerived(m.repoKey, flow.state(m.repoKey));
-        manualAdvances.delete(m.repoKey);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop
           ? 'Advanced while the loop still needs you.'
