@@ -171,6 +171,14 @@ export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | {
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
   repoDir: string;
+  /** The running flow's name: its own loop folder in the operator tier is consulted before the shared one. */
+  flow?: string;
+}
+
+/** §27.15. A flow's own loop folder under a loop-def root, or null for a flow name that is not a single safe
+ *  path segment. The installer writes here and the resolver reads here. */
+export function flowLoopsDir(loopsRoot: string, flow: string): string | null {
+  return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
 
 const ALLOWED_TOP_KEYS = new Set([
@@ -475,6 +483,11 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
   // pushed as a candidate.
   if (ctx.tiers.operator !== null) {
     const jail = resolveOwnedDirJail(ctx.tiers.operator);
+    const flowDir = ctx.flow === undefined ? null : flowLoopsDir(ctx.tiers.operator, ctx.flow);
+    if (jail !== null && flowDir !== null) {
+      const defDir = path.join(flowDir, name);
+      candidates.push({ tierRoot: ctx.tiers.operator, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: 'operator', jail });
+    }
     if (jail !== null) {
       const defDir = path.join(ctx.tiers.operator, name);
       candidates.push({ tierRoot: ctx.tiers.operator, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: 'operator', jail });

@@ -2638,9 +2638,11 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
+  // The shared loop folder an older app reads is left alone (§27.15).
+  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
 
@@ -2787,7 +2789,7 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   const ex = join(process.cwd(), 'example');
   const conflicting =
     seedConflicts(join(ex, 'flows', 'feature-dev-v2'), join(home, '.agent-terminal')) +
-    seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
+    seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2', 'feature-dev-v2')) +
     seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
@@ -5186,6 +5188,31 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+});
+
+test('a §27 step resolves its loop from the running flow’s own loop folder before the shared one (§27.15)', { tag: '@ownapp' }, async () => {
+  // The bundle's plan-loop is valid; only the `v2-work` flow's own folder carries a def this app refuses. The
+  // refusal naming that def's version is the proof the step read the flow's folder, not the shared tiers.
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-flowloops-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-flowloops-home-'));
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-flowloops-config-'));
+  const flowDef = join(config, 'loops-v2', 'v2-work', 'plan-loop', 'plan-loop.yaml');
+  mkdirSync(dirname(flowDef), { recursive: true });
+  writeFileSync(flowDef, 'version: v9-flow-folder\n');
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: config, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toContainText('v9-flow-folder', { timeout: 10_000 });
+  expect(existsSync(appRunState(repo))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, config]) rmSync(dir, { recursive: true, force: true });
 });
 
 test('a §27 work turn with no valid artifact retries then errors, offering all three route-out affordances; Accept advances a present artifact without re-running (§27.12 / AC5,7)', { tag: '@ownapp' }, async () => {

@@ -9,6 +9,7 @@ import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
 import {
+  FEATURE_DEV_ID,
   resolveExampleCommandsDir,
   resolveExampleFlowsDir,
   resolveFeatureDevFlowDir,
@@ -18,6 +19,7 @@ import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
+import { flowLoopsDir } from './loopDefV2';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -215,7 +217,10 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
-    target: (_flow, cfg) => userConfigLoopsV2Dir(cfg),
+    target: (_flow, cfg) => {
+      const root = userConfigLoopsV2Dir(cfg);
+      return root === null ? null : flowLoopsDir(root, FEATURE_DEV_ID);
+    },
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },

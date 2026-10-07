@@ -6,6 +6,8 @@ import yaml from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst, flowHomeDir } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
+import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 
 const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
@@ -261,6 +263,43 @@ describe('the install is global — a repo-local override never redirects where 
       if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     } finally {
       rmSync(otherRepo, { recursive: true, force: true });
+    }
+  });
+});
+
+// §27.15 — the shipped flow's loops land in its own folder, so a flow that binds the same loop names from the
+// shared folder (and an older app, which reads only that) keeps the definitions it had.
+describe('the install seeds the shipped flow’s own loop folder, never the shared one', () => {
+  const operatorRoot = (): string => userConfigLoopsV2Dir(configRoot) as string;
+  const sharedDef = (name: string): string => path.join(operatorRoot(), name, `${name}.yaml`);
+  const OLD_DEF = 'name: an-older-definition\n';
+
+  it('leaves a shared operator def byte-for-byte unchanged', () => {
+    const name = boundLoopNames()[0];
+    mkdirSync(path.dirname(sharedDef(name)), { recursive: true });
+    writeFileSync(sharedDef(name), OLD_DEF);
+
+    expect(applyInstallExamples(dirs, ['flow', 'appLoops', 'commands']).ok).toBe(true);
+
+    expect(readFileSync(sharedDef(name), 'utf8')).toBe(OLD_DEF);
+  });
+
+  it('resolves every bound loop of the shipped flow from that flow’s folder, over a shared operator def', () => {
+    for (const name of boundLoopNames()) {
+      mkdirSync(path.dirname(sharedDef(name)), { recursive: true });
+      writeFileSync(sharedDef(name), OLD_DEF);
+    }
+    applyInstallExamples(dirs, []);
+    const flowFolder = path.join(realpathSync(configRoot), path.relative(configRoot, operatorRoot()), FEATURE_DEV_ID);
+
+    for (const name of boundLoopNames()) {
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: { operator: operatorRoot(), appBundled: BUNDLE_APP_LOOPS, retired: null },
+        flow: FEATURE_DEV_ID,
+      });
+      expect(resolved.ok, `${name}: ${resolved.ok ? '' : resolved.reason}`).toBe(true);
+      if (resolved.ok) expect(resolved.def.work.recipe.startsWith(flowFolder + path.sep), name).toBe(true);
     }
   });
 });
