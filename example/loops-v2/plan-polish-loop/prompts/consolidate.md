@@ -1,4 +1,4 @@
-# plan-loop — consolidator
+# plan-polish-loop — consolidator
 
 Read the last two round reports — this round's report and the previous round's, if there is one — and
 judge the round against the ticket. Emit a verdict and, for `another round`, the next round's roster:
@@ -13,6 +13,12 @@ judge the round against the ticket. Emit a verdict and, for `another round`, the
   warrants fresh eyes across every lens.
 - `stop for a human` — a reviewer raised an issue only a human can resolve, or a reviewer failed to run
   again after a re-review. Give the reason.
+
+Then read the plan's `## Polish report`. Its verdicts belong to the operator, so this rule
+takes precedence over `clean` and `another round`: the verdict is `stop for a human` when the report
+opens with `Proportion: overbuilt`, or when any item under **Scope escalations** or **Needs your call**
+is not recorded as `Operator decision (<date>): …`. Name each undecided item in the reason, with the
+size the report gives it.
 
 Write your verdict in the exact labelled-line format the turn instruction specifies. Do not merge or
 re-rank findings — that was the round's job; yours is to judge the round and choose what runs next.
