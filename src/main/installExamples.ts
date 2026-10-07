@@ -146,7 +146,7 @@ function flowFiles(bundleDir: string): Plan {
 const unsafeCatalogId = (p: string, name: string): Error =>
   new Error(`the bundled examples are damaged: the catalog entry ${JSON.stringify(name)} at ${p} is not a valid flow id`);
 
-/** An existing-but-empty catalog root (CWE-754): the shipped catalog always carries feature-dev and at least
+/** An existing-but-empty catalog root (CWE-754): the shipped catalog always carries feature-dev-v2 and at least
  *  one more (§18.1/§18.7.1), so a zero-flow tree is a mispackaged bundle. It is a named refusal — never
  *  resolved as zero files and reported as a successful install of nothing (§18.1). `null` stays reserved for
  *  an ABSENT tree (the `Plan` contract), so present-but-empty gets its own reason rather than "missing". */

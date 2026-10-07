@@ -2694,7 +2694,7 @@ test('installing the bundled examples seeds a catalog of >1 flow at the resolver
         .sort()
     : [];
   expect(entries.length).toBeGreaterThanOrEqual(2);
-  expect(entries).toContain('feature-dev');
+  expect(entries).toContain('feature-dev-v2');
   for (const id of entries) {
     expect(existsSync(join(catalog, id, 'flow.yaml'))).toBe(true);
   }
@@ -2786,7 +2786,7 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   };
   const ex = join(process.cwd(), 'example');
   const conflicting =
-    seedConflicts(join(ex, 'flows', 'feature-dev'), join(home, '.agent-terminal')) +
+    seedConflicts(join(ex, 'flows', 'feature-dev-v2'), join(home, '.agent-terminal')) +
     seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
     seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
@@ -7461,7 +7461,7 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; poli
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
 function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   const { dir } = seedFlowRepoBase(prefix, {
-    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'), 'utf8'),
     flowState: `step: ${startStep}\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n`,
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
@@ -7847,7 +7847,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-const EPIC_CHAIN_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml');
+const EPIC_CHAIN_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml');
 
 function seedEpicChainRepo(prefix: string, opts: { catalogEntry?: { home: string; id: string; name: string } } = {}): string {
   const flowYaml = readFileSync(EPIC_CHAIN_FLOW_SOURCE, 'utf8');

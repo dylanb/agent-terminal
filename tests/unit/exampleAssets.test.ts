@@ -15,13 +15,13 @@ describe('resolveFeatureDevFlowDir', () => {
   it('resolves to the feature-dev catalog entry in a packaged app', () => {
     expect(
       resolveFeatureDevFlowDir({ packaged: true, resourcesPath: '/app/resources' }),
-    ).toBe(path.join('/app/resources', 'example', 'flows', 'feature-dev'));
+    ).toBe(path.join('/app/resources', 'example', 'flows', 'feature-dev-v2'));
   });
 
-  it('resolves to example/flows/feature-dev under the app path in an unpackaged build', () => {
+  it('resolves to example/flows/feature-dev-v2 under the app path in an unpackaged build', () => {
     expect(
       resolveFeatureDevFlowDir({ packaged: false, appPath: '/out/main' }),
-    ).toBe(path.join('/out/main', 'example', 'flows', 'feature-dev'));
+    ).toBe(path.join('/out/main', 'example', 'flows', 'feature-dev-v2'));
   });
 
   it('resolves to a real flow.yaml when the app path is a fixture root (no repo-relative path)', () => {
@@ -29,7 +29,7 @@ describe('resolveFeatureDevFlowDir', () => {
     // a real flow.yaml — the resolution contract, not a hardcoded example/ path.
     const fixtureRoot = path.resolve(__dirname, '..', '..'); // repo root standing in for appPath
     const dir = resolveFeatureDevFlowDir({ packaged: false, appPath: fixtureRoot });
-    expect(readFileSync(path.join(dir, 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
+    expect(readFileSync(path.join(dir, 'flow.yaml'), 'utf8')).toContain('name: feature-dev-v2\n');
   });
 });
 

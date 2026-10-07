@@ -314,8 +314,8 @@ describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
   const flowDir = resolveFeatureDevFlowDir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
   const flow = load(readFileSync(join(flowDir, 'flow.yaml'), 'utf8')) as ShippedFlow;
 
-  it('keeps the name feature-dev', () => {
-    expect(flow.name).toBe('feature-dev');
+  it('keeps the name feature-dev-v2', () => {
+    expect(flow.name).toBe('feature-dev-v2');
   });
 
   it('chains groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice in order', () => {

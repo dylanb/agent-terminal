@@ -44,7 +44,7 @@ import {
 // the installer walks a tree. Every expected file set is enumerated FROM THE BUNDLE, never hard-coded:
 // a hard-coded list silently under-installs the next bundle refresh.
 
-const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
@@ -871,7 +871,7 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       const load = loadFlowDefinitionLocalFirst(localWithoutFlow, home);
       expect(load.ok).toBe(true);
       if (!load.ok) return;
-      expect(load.definition.name).toBe('feature-dev');
+      expect(load.definition.name).toBe('feature-dev-v2');
       const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
       expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
     } finally {
