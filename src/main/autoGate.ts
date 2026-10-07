@@ -15,6 +15,7 @@ import type { LoopDefV2Result } from './loopDefV2';
 import { clearInterrupt, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt } from './appLoopState';
 import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
+
 export interface DefResolution {
   completion?: 'red' | 'green' | 'refactor';
 }
@@ -171,6 +172,14 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       return `the interrupt could not be cleared: ${errMsg(e)}`;
     }
   };
+
+  const consumeOrReport = (repoDir: string): void => {
+    const failed = consume(repoDir);
+    if (failed !== null) bestEffort(() => deps.emitError?.(repoDir, failed));
+  };
+
+  const clearFailedAt = (run: AutoRun, step: string): boolean =>
+    run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'c' && r.detail !== undefined);
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
   const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean } = { write: true }): void => {
@@ -583,8 +592,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       return readArmedInterrupt(repoDir)?.step === step;
     },
     consumeInterrupt(repoDir) {
-      const failed = consume(repoDir);
-      if (failed !== null) bestEffort(() => deps.emitError?.(repoDir, failed));
+      consumeOrReport(repoDir);
     },
     humanDecision(repoKey, step, turnKey) {
       const run = runFor(repoKey);
@@ -592,15 +600,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const d = run.deciding;
       if (d !== null && d.step === step && (turnKey === null || d.turnKey === turnKey)) d.humanAttempted = true;
       const atGate = run.loopRun?.step === step || run.haltShown?.step === step;
-      const clearFailed = run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'c' && r.detail !== undefined);
+      const clearFailed = clearFailedAt(run, step);
       run.humanDecisions += 1;
       return (landed) => {
         run.humanDecisions -= 1;
         if (runs.get(repoKey) !== run) return;
-        if (landed && clearFailed) {
-          const failed = consume(repoKey);
-          if (failed !== null) bestEffort(() => deps.emitError?.(repoKey, failed));
-        }
+        if (landed && clearFailed) consumeOrReport(repoKey);
         if (landed && atGate && run.failedEffect !== null) {
           run.failedEffect = null;
           persist(repoKey, run);

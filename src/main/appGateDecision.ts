@@ -184,7 +184,7 @@ export async function runAppGateDecision(
   }
   // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
-  // and the operator can retry. Returns whether the stand-down was entered (§27.9.1 N9b.5(d)).
+  // and the operator can retry (§27.9.1 N9b.5(d)).
   if (option === 'polish') {
     let entered = false;
     try {

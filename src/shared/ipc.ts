@@ -719,7 +719,7 @@ export interface FlowRequestMsg {
   repoKey: string;
 }
 
-/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional per §27.15. */
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.176. */
 export interface FlowAdvanceMsg extends FlowRequestMsg {
   step?: string;
 }
