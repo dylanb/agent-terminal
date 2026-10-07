@@ -1117,3 +1117,67 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
     expect(reasonRows()).toEqual([]);
   });
 });
+
+// §27.9.1 N9b.5(d) / N9b.6 — the S2 auto-gate elements: the (a), (b), (g), (h), (i) rows with their detail, and the
+// failed-effect marker (#137 S2).
+describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
+  const idle: FlowAutoGateView = { deciding: false, hung: false, haltGeneric: false, haltReasons: [] };
+  const autoGateView = (autoGate: FlowAutoGateView): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'request-changes'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', humanNeeded: true, autoGate });
+  const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
+  const marker = (): HTMLElement | null => host.querySelector<HTMLElement>('[data-failed-effect]');
+
+  it.each(['a', 'b', 'g', 'h', 'i'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row carrying its detail', (reason) => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason, detail: 'the engine saw this' }] }), 'plan');
+    const rows = [...host.querySelectorAll<HTMLElement>(`[data-auto-halt-reason="${reason}"]`)];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain(autoHaltReasonLabel(reason));
+    expect(rows[0].textContent).toContain('the engine saw this');
+  });
+
+  it('a halt naming every S2 letter at once shows one row per letter and no generic row', () => {
+    mount().render(autoGateView({ ...idle, haltReasons: (['a', 'b', 'g', 'h', 'i'] as const).map((reason) => ({ reason })) }), 'plan');
+    expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'g', 'h', 'i']);
+    expect(host.querySelector('[data-auto-halt-generic]')).toBeNull();
+  });
+
+  it.each(['set', 'unknown'] as const)('a `%s` failed-effect marker shows `[data-failed-effect]` with its state and failure text, beside the gate buttons', (state) => {
+    mount().render(autoGateView({ ...idle, failedEffect: { state, detail: 'gh update-issue-body exited 1' } }), 'plan');
+    const el = marker();
+    expect(el).not.toBeNull();
+    expect(el!.getAttribute('data-failed-effect')).toBe(state);
+    expect(el!.textContent).toContain('gh update-issue-body exited 1');
+    expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull();
+  });
+
+  it('a view with no failed-effect marker shows no `[data-failed-effect]` (negative pair)', () => {
+    mount().render(autoGateView(idle), 'plan');
+    expect(marker()).toBeNull();
+  });
+
+  it('the marker appears and goes away in place on the same mounted panel as the view changes', () => {
+    const panel = mount();
+    panel.render(autoGateView(idle), 'plan');
+    expect(marker()).toBeNull();
+    panel.render(autoGateView({ ...idle, failedEffect: { state: 'set', detail: 'first failure' } }), 'plan');
+    expect(marker()).not.toBeNull();
+    expect(marker()!.textContent).toContain('first failure');
+    panel.render(autoGateView({ ...idle, failedEffect: { state: 'unknown', detail: 'second failure' } }), 'plan');
+    expect(marker()?.getAttribute('data-failed-effect')).toBe('unknown');
+    expect(marker()?.textContent).toContain('second failure');
+    panel.render(autoGateView(idle), 'plan');
+    expect(marker()).toBeNull();
+  });
+
+  it('a halt detail and a marker detail carrying markup and control characters render as literal, stripped text (CWE-79)', () => {
+    const hostile = '<img src=x onerror=alert(1)>\u001b[31m';
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'b', detail: hostile }], failedEffect: { state: 'set', detail: hostile } }), 'plan');
+    expect(host.querySelector('img')).toBeNull();
+    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="b"]')!;
+    expect(row.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(row.textContent).not.toContain('\u001b');
+    expect(marker()).not.toBeNull();
+    expect(marker()!.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(marker()!.textContent).not.toContain('\u001b');
+  });
+});

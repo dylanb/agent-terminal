@@ -433,13 +433,13 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(String(onError.mock.calls[0][0])).toContain('cannot write');
   });
 
-  it('Advance completes the flow (Completed active) and shows Restart, scoped to the repo', async () => {
+  it('Advance completes the flow (Completed active) and shows Restart, scoped to the repo and the step it showed (#137 S2)', async () => {
     const deps = fakeFlow('in_progress');
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     control()!.click();
     await vi.waitFor(() => expect(stateOf(2)).toBe('active'));
-    expect(deps.advance).toHaveBeenCalledWith('/repo');
+    expect(deps.advance).toHaveBeenCalledWith('/repo', '/repo-step');
     expect(control()!.textContent).toBe('Restart');
   });
 

@@ -163,6 +163,11 @@ export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
+/** flow:advance (§6, #137 S2). */
+export function isValidFlowAdvance(m: unknown): m is FlowRequestMsg {
+  return isValidFlowRequest(m);
+}
+
 /** flow:provideInput — the typed input answers persisted to flow-state (§18.4 / §24.2.3 T3). */
 export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
   return (

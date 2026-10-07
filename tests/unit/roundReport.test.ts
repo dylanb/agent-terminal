@@ -5,10 +5,12 @@ import {
   exampleRoundReport,
   failedReviewers,
   reportHasFailedReviewer,
+  reportNeedsAHuman,
   roundReportProblems,
   roundReportWellFormed,
   type RoundReportSpec,
 } from '../../src/shared/roundReport';
+import { roundReportWithDisposition } from '../helpers/roundReports';
 
 // §27.5 — the round report is a serialized Markdown vocabulary with ONE writer (the fixer) and multiple
 // readers (this slice's completion validator, N4's consolidator). The well-formedness predicate lives once
@@ -297,5 +299,22 @@ describe('roundReportProblems — names each defect (§27.5/§27.12)', () => {
     for (const r of [exampleRoundReport(SPEC), '', report('### review-principal\n\n_no findings_\n')]) {
       expect(roundReportWellFormed(r, SPEC)).toBe(roundReportProblems(r, SPEC).length === 0);
     }
+  });
+});
+
+// §27.9.1 N9b.6(a) — AC3 (#137 S2): the one predicate the gate controller reads a round report's `needs a human` through.
+describe('reportNeedsAHuman — whether a round report records a `needs a human` disposition', () => {
+  it('is true when an issue carries `needs a human`', () => {
+    expect(reportNeedsAHuman(roundReportWithDisposition(['summary'], SPEC.roster, 'needs a human'))).toBe(true);
+  });
+
+  it('is false when every issue carries a settled disposition, and for a report with no issues', () => {
+    expect(reportNeedsAHuman(roundReportWithDisposition(['summary'], SPEC.roster, 'fixed'))).toBe(false);
+    expect(reportNeedsAHuman(exampleRoundReport({ ...SPEC, roster: SPEC.roster }))).toBe(false);
+  });
+
+  it('is null when an issue\'s disposition is outside the closed set, so the caller fails toward (a)', () => {
+    const report = roundReportWithDisposition(['summary'], SPEC.roster, 'fixed').replace(`${REPORT_GRAMMAR.dispositionLabel}: fixed`, `${REPORT_GRAMMAR.dispositionLabel}: maybe later`);
+    expect(reportNeedsAHuman(report)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { load } from 'js-yaml';
-import { auditGateEntries, autoGateFlowYaml, loopRoster, seedRepoCatalogFlow, seedTrustedFlow, type AutoGateLoop } from '../e2e/autoGateHarness';
+import { auditGateEntries, autoGateFlowYaml, loopRoster, seedTrustedFlow, type AutoGateLoop } from '../e2e/autoGateHarness';
 import { loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { readActiveFlow } from '../../src/main/activeFlowPointer';
@@ -67,13 +67,6 @@ describe('catalog seeds', () => {
     expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'auto-trusted' });
   });
 
-  it('seedRepoCatalogFlow lands the entry in the repo tier and makes it active', () => {
-    const home = tmp('agh-home-');
-    const repo = tmp('agh-repo-');
-    seedRepoCatalogFlow(repo, 'auto-repo', autoGateFlowYaml([{ id: 'done', kind: 'manual' }]));
-    expect(resolveCatalogEntry({ worktreeDir: repo, globalRoot: home }, 'auto-repo')).toMatchObject({ ok: true, tier: 'repo' });
-    expect(readActiveFlow(repo)).toEqual({ kind: 'value', id: 'auto-repo' });
-  });
 });
 
 describe('auditGateEntries', () => {

@@ -3,14 +3,10 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   createResolveRunDefinition,
-  resolveBoundSource,
   type PointerRead,
   type CatalogResolution,
 } from '../../src/main/resolveRunDefinition';
-import { FLOW_DEF_FILE, flowCatalogDir, type FlowLoad } from '../../src/main/flow';
-import { createRunResolver } from '../../src/main/runResolver';
-import { writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { resolveCatalogEntry } from '../../src/main/flowCatalog';
+import { FLOW_DEF_FILE, type FlowLoad } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 
@@ -149,67 +145,3 @@ describe('resolveRunDefinition — flow-definition precedence (§18.7.3)', () =>
     expect(result.load.ok).toBe(false);
   });
 });
-
-// §27.9.1 N9b.2 — #137 S1 "Tell the legs apart": the resolution names whether its flow source is operator ground
-// (a global catalog entry, the leg-3 global fallback) or repo content (a per-repo catalog entry, the leg-2 local
-// flow.yaml, a held-run `fallback` disposition), through the production resolver over real on-disk sources.
-describe('resolveRunDefinition — the flow source trust of each leg (#137 S1, §27.9.1 N9b.2)', () => {
-  const fx = createWorktreeFixture();
-  const catalog = createCatalogFixture();
-  afterEach(() => {
-    fx.cleanup();
-    catalog.cleanup();
-  });
-
-  const roots = () => {
-    const wt = fx.makeWorktree('trust-wt');
-    const globalDir = fx.makeWorktree('trust-global');
-    fx.writeFlowHome(globalDir, { name: 'global-fallback', stepIds: ['g'] });
-    catalog.addEntryWithSteps(flowCatalogDir(globalDir), 'global-entry', ['a']);
-    catalog.addEntryWithSteps(flowCatalogDir(wt), 'repo-entry', ['b']);
-    return { wt, globalDir };
-  };
-
-  it('leg 1, a global catalog entry, is operator ground', () => {
-    const { wt, globalDir } = roots();
-    writeActiveFlow(wt, 'global-entry');
-    expect(createRunResolver(globalDir)(wt)).toMatchObject({ binding: { source: 'catalog', tier: 'global' }, flowSourceTrust: 'operator' });
-  });
-
-  it('leg 1, a per-repo catalog entry, is repo content', () => {
-    const { wt, globalDir } = roots();
-    writeActiveFlow(wt, 'repo-entry');
-    expect(createRunResolver(globalDir)(wt)).toMatchObject({ binding: { source: 'catalog', tier: 'repo' }, flowSourceTrust: 'repo' });
-  });
-
-  it('leg 2, a worktree-local flow.yaml, is repo content', () => {
-    const { wt, globalDir } = roots();
-    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l'] });
-    const r = createRunResolver(globalDir)(wt);
-    expect(definitionNameOf(r.load)).toBe('local-flow');
-    expect(r.flowSourceTrust).toBe('repo');
-  });
-
-  it('leg 3, the global fallback, is operator ground', () => {
-    const { wt, globalDir } = roots();
-    const r = createRunResolver(globalDir)(wt);
-    expect(definitionNameOf(r.load)).toBe('global-fallback');
-    expect(r.flowSourceTrust).toBe('operator');
-  });
-
-  it('a bound source re-resolved for a begun run carries the same trust: global catalog operator, non-catalog local repo, held-run fallback repo', () => {
-    const { wt, globalDir } = roots();
-    const entry = (id: string, tier?: 'repo' | 'global') => resolveCatalogEntry({ worktreeDir: wt, globalRoot: globalDir }, id, tier);
-    expect(resolveBoundSource({ source: 'catalog', tier: 'global', id: 'global-entry' }, entry, wt, globalDir).flowSourceTrust).toBe('operator');
-    expect(resolveBoundSource({ source: 'catalog', tier: 'repo', id: 'repo-entry' }, entry, wt, globalDir).flowSourceTrust).toBe('repo');
-    expect(resolveBoundSource({ source: 'non-catalog' }, entry, wt, globalDir).flowSourceTrust).toBe('operator');
-    fx.writeFlowHome(wt, { name: 'local-flow', stepIds: ['l'] });
-    expect(resolveBoundSource({ source: 'non-catalog' }, entry, wt, globalDir).flowSourceTrust).toBe('repo');
-    expect(resolveBoundSource({ source: 'fallback' }, entry, wt, globalDir).flowSourceTrust).toBe('repo');
-  });
-});
-
-function definitionNameOf(load: FlowLoad): string {
-  if (!load.ok) throw new Error(`expected a resolved definition, got error: ${load.error}`);
-  return load.definition.name;
-}

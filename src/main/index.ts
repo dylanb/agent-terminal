@@ -132,7 +132,7 @@ import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
-import { createAutoGate, defResolutionOf, START_CAPTURE_TIMEOUT_MS } from './autoGate';
+import { createAutoGate, defResolutionOf } from './autoGate';
 import type { LoopBinding } from '../shared/loopNamespace';
 import {
   composeCurrentRun,
@@ -378,7 +378,7 @@ async function createWindow(): Promise<void> {
       autoGateTimers.delete(h.id);
     },
   });
-  const observedResolveDef = composeObservedResolveDef(autoGate, appDefContext);
+  const observedResolveDef = composeObservedResolveDef(appDefContext);
   const recordFlowTransition = composeRecordFlowTransition(
     { recordTransition: (repoKey, kind, before, after, start) => audit.recordTransition(repoKey, kind, before, after, start) },
     autoGate,
@@ -1040,12 +1040,11 @@ async function createWindow(): Promise<void> {
     autoGate,
     resolveForStart: (repoKey) => {
       const r = resolveRun(repoKey);
-      return r.load.ok ? { definition: r.load.definition, flowSourceTrust: r.flowSourceTrust ?? 'repo', binding: r.binding } : null;
+      return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
     start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
     now: () => Date.now(),
     record: recordFlowTransition,
-    captureTimeoutMs: START_CAPTURE_TIMEOUT_MS,
   });
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
@@ -1124,7 +1123,6 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowArmInterrupt(m)) return;
         try {
           armInterrupt(m.repoKey, m.step);
-          autoGate.armInterrupt(m.repoKey, m.step);
         } catch (e) {
           send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}` });
           return;

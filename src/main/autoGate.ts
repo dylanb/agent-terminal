@@ -1,43 +1,28 @@
-// §27.9.1 — the engine-held gate controller: who decides an `auto` step's gate, from engine-held inputs only.
+// §27.9.1 — the gate controller: who decides an `auto` step's gate.
 
-import { execFileSync } from 'node:child_process';
 import type { ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import type { FlowAutoGateView } from '../shared/ipc';
 import { autoHaltAuditCmd } from '../shared/audit';
 import type { AutoHaltReason } from '../shared/gateAuthority';
-import { isGitObjectId } from '../shared/appBootstrap';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
 import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGateDecision';
 import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
-import { loopDefIdentity, type LoopDefV2Result } from './loopDefV2';
+import type { LoopDefV2Result } from './loopDefV2';
 import { clearInterrupt, readArmedInterrupt } from './appLoopState';
-import { commandEnvironment } from './appCommand';
-import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
 import { errMsg } from './errno';
-import { NO_LAZY_FETCH_ENV, OBJECT_SOURCE_HARDENING } from './frozenTests';
 
 // §27.9.1 N9b.5(e)
 export const AUTO_GATE_DECISION_DEFAULT_MS = 300_000;
-// §27.9.1 N9b.7(a)
-export const START_CAPTURE_TIMEOUT_MS = 5_000;
 
-export type DefTier = 'repo' | 'operator' | 'app-bundled';
-export interface DefIdentity {
-  name: string;
-  digest: string;
-}
 export interface DefResolution {
-  tier: DefTier;
-  identity: DefIdentity | null;
   completion?: 'red' | 'green' | 'refactor';
 }
 
 export interface StartRun {
   definition: FlowDefinition;
-  flowSourceTrust: 'operator' | 'repo';
   binding?: DispositionRead;
 }
 
@@ -60,30 +45,27 @@ export interface AutoGateDeps {
 }
 
 export interface AutoGate {
-  bindAtStart(repoKey: string, run: StartRun, startedAt: number, captureTrustedGlobsCommit: (repoDir: string) => string | null): void;
+  bindAtStart(repoKey: string, run: StartRun, startedAt: number): void;
   discardStart(repoKey: string): void;
   commitStart(repoKey: string): void;
   endRun(repoKey: string): void;
-  clearAuthority(repoKey: string): void;
   beginLoopRun(repoKey: string, step: string): void;
-  observeDefResolution(repoKey: string, name: string, result: DefResolution | null): void;
   gateReaching(repoDir: string, step: string, turnKey: string, verdict: ConsolidatorVerdict, cause: GateCause): void;
   gateReached(repoDir: string, step: string, turnKey: string): void;
   gateNotReached(repoDir: string, step: string, turnKey: string): void;
   loopRunEvent(repoDir: string, step: string, turnKey: string, event: LoopRunEvent): void;
   interruptArmed(repoDir: string, step: string): boolean;
   consumeInterrupt(repoDir: string): void;
-  armInterrupt(repoKey: string, step: string): void;
   humanAttempt(repoKey: string): void;
   attachApprove(approve: EngineApprove): void;
   isAutoRun(repoKey: string): boolean;
   autoGateViewFor: AutoGateViewFor;
 }
 
-/** The `DefResolution` the controller compares, read off a def resolution (§27.9.1 N9b.2(b)). */
+/** The `DefResolution` the controller reads off a def resolution. */
 export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
   if (!r.ok) return null;
-  return { tier: r.tier ?? 'repo', identity: loopDefIdentity(r), ...(r.def.work.completion ? { completion: r.def.work.completion } : {}) };
+  return r.def.work.completion ? { completion: r.def.work.completion } : {};
 }
 
 // Until S2–S4 land their letter-keyed rows, every other reason shows as the one generic row.
@@ -108,9 +90,6 @@ interface Deciding extends GateKey {
 
 interface LoopRun {
   step: string;
-  repoTierSeen: boolean;
-  identityMismatch: boolean;
-  identityUnread: boolean;
   endedInError: boolean;
   acceptedFailure: boolean;
   needsAHuman: boolean;
@@ -119,15 +98,10 @@ interface LoopRun {
 
 interface AutoRun {
   steps: FlowDefinition['steps'];
-  cleared: boolean;
   bound: Map<string, { authority: 'auto' | 'human'; loop: string }>;
-  untrusted: Set<string>;
-  defIdentity: Map<string, DefIdentity | null>;
   frozenCheck: Set<string>;
   heldBinding: DispositionRead | undefined;
-  trustedGlobsCommit: string | null;
   loopRun: LoopRun | null;
-  arm: string | null;
   failedEffect: { state: 'set' | 'unknown'; detail: string } | null;
   gateSeq: number;
   pendingGate: (GateKey & { verdict: ConsolidatorVerdict; cause: GateCause }) | null;
@@ -138,8 +112,6 @@ interface AutoRun {
 
 const sameGate = (a: GateKey | null, step: string, turnKey: string, gateSeq: number): boolean =>
   a !== null && a.step === step && a.turnKey === turnKey && a.gateSeq === gateSeq;
-
-const sameIdentity = (a: DefIdentity | null, b: DefIdentity | null): boolean => a !== null && b !== null && a.name === b.name && a.digest === b.digest;
 
 const isFrozenCheckCompletion = (c: DefResolution['completion']): boolean => c === 'green' || c === 'refactor';
 
@@ -159,7 +131,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const push = (repoKey: string): void => bestEffort(() => deps.onViewChanged(repoKey));
 
   const isAuto = (run: AutoRun): boolean => [...run.bound.values()].some((b) => b.authority === 'auto');
-  const honouredAuto = (run: AutoRun, step: string): boolean => !run.cleared && run.bound.get(step)?.authority === 'auto';
+  const honouredAuto = (run: AutoRun, step: string): boolean => run.bound.get(step)?.authority === 'auto';
   const fileArmed = (repoDir: string): boolean => {
     try {
       return readArmedInterrupt(repoDir) !== null;
@@ -174,14 +146,13 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     run.deciding = null;
   };
 
-  const consume = (run: AutoRun, repoDir: string): void => {
-    run.arm = null;
+  const consume = (repoDir: string): void => {
     bestEffort(() => clearInterrupt(repoDir));
   };
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
   const halt = (repoDir: string, run: AutoRun, key: GateKey, reasons: Reason[], opts: { write: boolean } = { write: true }): void => {
-    if (reasons.some((r) => r.reason === 'c')) consume(run, repoDir);
+    if (reasons.some((r) => r.reason === 'c')) consume(repoDir);
     const lr = run.loopRun;
     const recordedAlready = lr !== null && lr.step === key.step && reasons.every((r) => lr.recorded.has(r.reason));
     if (opts.write && !recordedAlready) bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd(reasons), 0));
@@ -190,34 +161,29 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     push(repoDir);
   };
 
-  /** The approve-site trust checks (§27.9.1 N9b.2(c)): only ever lowered. */
-  const trustReasons = (repoDir: string, run: AutoRun, step: string): Reason[] => {
-    const lr = run.loopRun;
-    const lowered =
-      !honouredAuto(run, step) ||
-      run.untrusted.has(step) ||
-      (lr !== null && lr.step === step && (lr.repoTierSeen || lr.identityMismatch)) ||
-      sourceLowered(repoDir, run, step);
+  /** §27.9.1 N9b.2(c) */
+  const loweredReasons = (repoDir: string, run: AutoRun, step: string): Reason[] => {
+    const lowered = !honouredAuto(run, step) || sourceLowered(repoDir, run, step);
     return lowered ? [{ reason: 'g' }] : [];
   };
 
   const sourceLowered = (repoDir: string, run: AutoRun, step: string): boolean => {
     const current = deps.currentRun(repoDir, run.heldBinding);
-    if (current === null || current.flowSourceTrust !== 'operator') return true;
+    if (current === null) return true;
     return current.definition.steps.find((s) => s.id === step)?.gateAuthority !== 'auto';
   };
 
-  /** §27.9.1 N9b.6 (a)–(j), evaluated from engine-held values; `frozen` adds the approve-only frozen check. */
+  /** §27.9.1 N9b.6 (a)–(j); `frozen` adds the approve-only frozen check. */
   const evaluate = (repoDir: string, run: AutoRun, step: string, cause: GateCause, frozen: boolean): Reason[] => {
     const reasons: Reason[] = [];
     const lr = run.loopRun !== null && run.loopRun.step === step ? run.loopRun : null;
     if (lr === null || lr.needsAHuman) reasons.push({ reason: 'a' });
     if (lr !== null && (lr.endedInError || lr.acceptedFailure)) reasons.push({ reason: 'b' });
-    if (cause === 'interrupt' || run.arm !== null || fileArmed(repoDir)) reasons.push({ reason: 'c' });
+    if (cause === 'interrupt' || fileArmed(repoDir)) reasons.push({ reason: 'c' });
     // S4 replaces this fail-closed stub with the approve-time frozen check.
     if (frozen && run.frozenCheck.has(step)) reasons.push({ reason: 'e', detail: 'the approve-time frozen check is not available' });
-    reasons.push(...trustReasons(repoDir, run, step));
-    if (lr === null || lr.identityUnread || run.trustedGlobsCommit === null || (run.defIdentity.get(step) ?? null) === null) reasons.push({ reason: 'h' });
+    reasons.push(...loweredReasons(repoDir, run, step));
+    if (lr === null) reasons.push({ reason: 'h' });
     if (run.failedEffect !== null) reasons.push({ reason: 'i' });
     return reasons;
   };
@@ -311,7 +277,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       boundLoop: bound.loop,
       humanAttempted: () => d.humanAttempted,
       claimAccept: () => claim(repoDir, run, d),
-      checkDef: (r) => checkDef(run, d.step, r),
+      checkDef: (r) => checkDef(r),
     };
     d.approveStarted = true;
     let pending: Promise<GateApproveOutcome>;
@@ -339,10 +305,10 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (!inProgress) return { ok: false, runEnded: true };
     if (d.abandoned) return { ok: false, abandoned: true };
     const late: AutoHaltReason[] = [];
-    if (run.arm !== null || fileArmed(repoDir)) late.push('c');
+    if (fileArmed(repoDir)) late.push('c');
     let lowered: boolean;
     try {
-      lowered = trustReasons(repoDir, run, d.step).length > 0;
+      lowered = loweredReasons(repoDir, run, d.step).length > 0;
     } catch {
       lowered = true;
     }
@@ -352,14 +318,9 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     return { ok: true };
   };
 
-  /** §27.9.1 N9b.5(c) — the def the approve resolved must be the one Start held for this step. */
-  const checkDef = (run: AutoRun, step: string, r: LoopDefV2Result): string | null => {
-    if (!r.ok) return r.reason;
-    if (r.tier === undefined || r.tier === 'repo') return 'the def resolved from a repo tier';
-    const held = run.defIdentity.get(step) ?? null;
-    const now = loopDefIdentity(r);
-    if (held === null || now === null) return 'the def identity held at Start is missing';
-    return sameIdentity(held, now) ? null : 'the def changed since Start';
+  /** §27.9.1 N9b.5(c) */
+  const checkDef = (r: LoopDefV2Result): string | null => {
+    return r.ok ? null : r.reason;
   };
 
   const autoGateViewFor: AutoGateViewFor = (repoKey, step, turnKey) => {
@@ -383,19 +344,14 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   };
 
   return {
-    bindAtStart(repoKey, run, _startedAt, captureTrustedGlobsCommit) {
+    bindAtStart(repoKey, run, _startedAt) {
       replaced.set(repoKey, runs.get(repoKey));
       const auto: AutoRun = {
         steps: run.definition.steps,
-        cleared: false,
         bound: new Map(),
-        untrusted: new Set(),
-        defIdentity: new Map(),
         frozenCheck: new Set(),
         heldBinding: run.binding,
-        trustedGlobsCommit: null,
         loopRun: null,
-        arm: null,
         failedEffect: null,
         gateSeq: 0,
         pendingGate: null,
@@ -410,28 +366,13 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
           continue;
         }
         let res: DefResolution | null = null;
-        if (run.flowSourceTrust === 'operator') {
-          try {
-            res = deps.resolveDef(repoKey, step.loop);
-          } catch {
-            res = null;
-          }
-        }
-        if (run.flowSourceTrust !== 'operator' || res?.tier === 'repo') {
-          auto.bound.set(step.id, { authority: 'human', loop: step.loop });
-          auto.untrusted.add(step.id);
-          continue;
+        try {
+          res = deps.resolveDef(repoKey, step.loop);
+        } catch {
+          res = null;
         }
         auto.bound.set(step.id, { authority: 'auto', loop: step.loop });
-        auto.defIdentity.set(step.id, res?.identity ?? null);
         if (isFrozenCheckCompletion(res?.completion)) auto.frozenCheck.add(step.id);
-      }
-      if (isAuto(auto)) {
-        try {
-          auto.trustedGlobsCommit = captureTrustedGlobsCommit(repoKey);
-        } catch {
-          auto.trustedGlobsCommit = null;
-        }
       }
       runs.set(repoKey, auto);
     },
@@ -452,30 +393,11 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       clearDeciding(run);
       runs.delete(repoKey);
     },
-    clearAuthority(repoKey) {
-      const run = runs.get(repoKey);
-      if (run !== undefined) run.cleared = true;
-    },
     beginLoopRun(repoKey, step) {
       const run = runs.get(repoKey);
       if (run === undefined) return;
-      run.loopRun = { step, repoTierSeen: false, identityMismatch: false, identityUnread: false, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
+      run.loopRun = { step, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
       nextGate(run);
-    },
-    observeDefResolution(repoKey, name, result) {
-      const run = runs.get(repoKey);
-      const lr = run?.loopRun ?? null;
-      if (run === undefined || lr === null) return;
-      const bound = run.bound.get(lr.step);
-      if (bound === undefined) return;
-      if (result === null || name !== bound.loop) lr.identityMismatch = true;
-      else if (result.tier === 'repo') lr.repoTierSeen = true;
-      else if (bound.authority === 'auto') {
-        const held = run.defIdentity.get(lr.step) ?? null;
-        if (held === null) return;
-        if (result.identity === null) lr.identityUnread = true;
-        else if (!sameIdentity(held, result.identity)) lr.identityMismatch = true;
-      }
     },
     gateReaching(repoDir, step, turnKey, verdict, cause) {
       const run = runs.get(repoDir);
@@ -536,17 +458,11 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     },
     interruptArmed(repoDir, step) {
       const run = runs.get(repoDir);
-      if (run !== undefined && isAuto(run)) return run.arm !== null || fileArmed(repoDir);
+      if (run !== undefined && isAuto(run)) return fileArmed(repoDir);
       return readArmedInterrupt(repoDir)?.step === step;
     },
     consumeInterrupt(repoDir) {
-      const run = runs.get(repoDir);
-      if (run !== undefined) run.arm = null;
       clearInterrupt(repoDir);
-    },
-    armInterrupt(repoKey, step) {
-      const run = runs.get(repoKey);
-      if (run !== undefined) run.arm = step;
     },
     humanAttempt(repoKey) {
       const d = runs.get(repoKey)?.deciding;
@@ -561,18 +477,4 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     },
     autoGateViewFor,
   };
-}
-
-/** §27.9.1 N9b.7(a) — the commit the run's test globs are trusted at, captured at Start; null on any failure. */
-export function captureTrustedGlobsCommit(repoDir: string, timeoutMs: number): string | null {
-  try {
-    const out = execFileSync(
-      'git',
-      [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir()), 'rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'],
-      { cwd: repoDir, encoding: 'utf8', env: commandEnvironment(NO_LAZY_FETCH_ENV), timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim();
-    return isGitObjectId(out) ? out : null;
-  } catch {
-    return null;
-  }
 }

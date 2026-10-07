@@ -9,7 +9,7 @@ import { createFlowStateStore } from '../../src/main/flowState';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
 import { auditFilePath } from '../../src/main/auditPaths';
 import { auditTimestamp, parseAuditStream } from '../../src/shared/audit';
-import { createAutoGate, START_CAPTURE_TIMEOUT_MS } from '../../src/main/autoGate';
+import { createAutoGate } from '../../src/main/autoGate';
 import { composeRecordFlowTransition, composeStartTransition } from '../../src/main/autoGateComposition';
 
 // #137 — a run's identity (its flow's `name:` and its Start instant) is written into flow-state at Start and kept
@@ -94,12 +94,11 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
       resolveForStart: (repoKey) => {
         const load = resolve(repoKey).load;
         if (!load.ok) throw new Error(load.error);
-        return { definition: load.definition, flowSourceTrust: 'repo' };
+        return { definition: load.definition };
       },
       start: (repoKey, opts) => mgr.start(repoKey, opts),
       now: () => startedAt,
       record: composeRecordFlowTransition(audit, gate),
-      captureTimeoutMs: START_CAPTURE_TIMEOUT_MS,
     });
 
     flowStart(wt);

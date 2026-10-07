@@ -5,10 +5,10 @@ import type { FlowStateView } from '../shared/ipc';
 import type { TransitionKind } from '../shared/audit';
 import { runAppApprove, type AppGateDecisionDeps, type ApproveDecider, type GateApproveOutcome } from './appGateDecision';
 import type { AuditRecorder } from './auditRecorder';
-import { captureTrustedGlobsCommit, defResolutionOf, type AutoGate, type AutoGateDeps, type StartRun } from './autoGate';
+import { type AutoGate, type AutoGateDeps, type StartRun } from './autoGate';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from './loopDefV2';
 import type { LoopBinding } from '../shared/loopNamespace';
-import { markedBindingRefusal } from './gateDecisionGuard';
+import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
 import { createBoundSourceResolver } from './runResolver';
 import { createFlowStateStore } from './flowState';
 
@@ -22,7 +22,6 @@ export interface StartTransitionDeps {
   start: (repoKey: string, opts: { startedAt: number; run?: StartRun }) => FlowStateView;
   now: () => number;
   record: RecordFlowTransition;
-  captureTimeoutMs: number;
 }
 
 /** The `flowStart` transition: one clock read and one resolution, bound before the first step is entered. */
@@ -31,7 +30,7 @@ export function composeStartTransition(deps: StartTransitionDeps): (repoKey: str
     const startedAt = deps.now();
     const run = deps.resolveForStart(repoKey);
     if (run === null) return deps.start(repoKey, { startedAt });
-    deps.autoGate.bindAtStart(repoKey, run, startedAt, (dir) => captureTrustedGlobsCommit(dir, deps.captureTimeoutMs));
+    deps.autoGate.bindAtStart(repoKey, run, startedAt);
     let view: FlowStateView;
     try {
       view = deps.start(repoKey, { startedAt, run });
@@ -49,16 +48,12 @@ export function composeStartTransition(deps: StartTransitionDeps): (repoKey: str
   };
 }
 
-/** The one def resolver every production resolution goes through, each one reported to the controller. */
-export function composeObservedResolveDef(autoGate: AutoGate, ctxFor: (repoDir: string) => LoopDefV2Context): ObservedResolveDef {
-  return (repoDir, name) => {
-    const r = resolveLoopDefV2(name, ctxFor(repoDir));
-    autoGate.observeDefResolution(repoDir, name, defResolutionOf(r));
-    return r;
-  };
+/** The one def resolver every production resolution goes through. */
+export function composeObservedResolveDef(ctxFor: (repoDir: string) => LoopDefV2Context): ObservedResolveDef {
+  return (repoDir, name) => resolveLoopDefV2(name, ctxFor(repoDir));
 }
 
-/** The loop-step entry's resolution: a fresh loop run begins before its first resolution is observed. */
+/** The loop-step entry's resolution: a fresh loop run begins before its first resolution. */
 export function composeLoopBindingResolve(autoGate: AutoGate, observedResolveDef: ObservedResolveDef): (repoKey: string, step: string, name: string) => LoopDefV2Result {
   return (repoKey, step, name) => {
     autoGate.beginLoopRun(repoKey, step);
@@ -92,7 +87,7 @@ export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'
   return (repoDir, heldBinding) => {
     if (heldBinding === undefined) return null;
     const r = resolveBound(repoDir, heldBinding);
-    return r.load.ok && r.flowSourceTrust !== undefined ? { definition: r.load.definition, flowSourceTrust: r.flowSourceTrust, binding: heldBinding } : null;
+    return r.load.ok ? { definition: r.load.definition, binding: heldBinding } : null;
   };
 }
 
@@ -100,5 +95,28 @@ export function composeRunInProgressAt(): AutoGateDeps['runInProgressAt'] {
   return (repoDir, step) => {
     const persisted = createFlowStateStore(repoDir).read();
     return persisted !== null && persisted.status === 'in_progress' && persisted.step === step;
+  };
+}
+
+export interface HumanDecisionRunnerDeps {
+  decide: GateDecisionRun;
+  advance: (repoKey: string) => void;
+  currentStep: (repoKey: string) => string | null;
+}
+
+export interface HumanDecisionRunners {
+  decide: GateDecisionRun;
+  /** The strip's manual Advance; false when it was refused. */
+  advance: (repoKey: string, step?: string) => boolean;
+}
+
+/** The four gate-decision runners and the manual Advance, as the human decides them. */
+export function composeHumanDecisionRunners(_autoGate: AutoGate, deps: HumanDecisionRunnerDeps): HumanDecisionRunners {
+  return {
+    decide: (repoKey, step, turnKey, option, note) => deps.decide(repoKey, step, turnKey, option, note),
+    advance: (repoKey) => {
+      deps.advance(repoKey);
+      return true;
+    },
   };
 }

@@ -4,7 +4,6 @@
 // the two things engine selection keys on.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -169,26 +168,7 @@ export interface LoopDefV2 {
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
 export type LoopDefTier = 'repo' | 'operator' | 'app-bundled';
 
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; tier?: LoopDefTier; defFile?: string } | { ok: false; reason: string };
-
-/** §27.9.1 N9b.2(b) — the def's name and a digest of the def file and every recipe and charter it names, in
- *  the def's order. No tier or path enters it, so the bundled→operator byte copy keeps it equal. `null` for a
- *  repo-tier or failed resolution, or when any of those files cannot be read. */
-export function loopDefIdentity(r: LoopDefV2Result): { name: string; digest: string } | null {
-  if (!r.ok || r.tier === undefined || r.tier === 'repo' || r.defFile === undefined) return null;
-  const files = [r.defFile, r.def.work.recipe, r.def.consolidator, ...r.def.reviewers.map((rv) => rv.charter)];
-  const hash = createHash('sha256');
-  try {
-    for (const f of files) {
-      const bytes = readFileSync(f);
-      hash.update(`${bytes.length}\0`);
-      hash.update(bytes);
-    }
-  } catch {
-    return null;
-  }
-  return { name: r.def.name, digest: hash.digest('hex') };
-}
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | { ok: false; reason: string };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
@@ -527,7 +507,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, tier: tierName, defFile: confinedDefPath.path };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot };
     } catch (e) {
       if (e instanceof DefError) return { ok: false, reason: e.message };
       return { ok: false, reason: e instanceof Error ? e.message : String(e) };

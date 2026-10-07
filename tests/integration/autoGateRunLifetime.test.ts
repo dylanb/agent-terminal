@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createAutoGate, START_CAPTURE_TIMEOUT_MS, type AutoGate, type DefResolution, type StartRun } from '../../src/main/autoGate';
+import { createAutoGate, type AutoGate, type DefResolution, type StartRun } from '../../src/main/autoGate';
 import {
   composeCurrentRun,
   composeEngineApprove,
@@ -16,8 +16,7 @@ import {
 import { catalogEntryDefFile, createFlowManager, flowHomeDir, FLOW_DEF_FILE, type FlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
-import { activeFlowPointerFile, writeActiveFlow } from '../../src/main/activeFlowPointer';
-import { readRunBinding } from '../../src/main/runDisposition';
+import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
 import { auditFilePath } from '../../src/main/auditPaths';
@@ -26,7 +25,7 @@ import { createWorktreeLock } from '../../src/main/worktreeLock';
 import { createHeldRunRecovery } from '../../src/main/heldRunRecovery';
 import { createPendingNotices } from '../../src/main/pendingNotices';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
-import { loopDefIdentity, resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
+import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
 import { stepScopedAdvance, type AppGateDecisionDeps, type ApproveDecider } from '../../src/main/appGateDecision';
 import { gateDecisionDecider, gateDecisionKind, parseAuditStream } from '../../src/shared/audit';
@@ -36,12 +35,9 @@ import { createGitRepoFixture } from '../helpers/gitRepo';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { productionRecoveryDeps } from '../helpers/heldRunRecoveryDeps';
 import { createVirtualClock } from '../helpers/virtualClock';
-import { installPathGitStub } from '../helpers/pathGitStub';
-import { shellQuote } from '../../src/shared/shellQuote';
 
-// §27.9.1 N9b.2, N9b.5(b), N9b.7(a) — #137 Impl-slice 1, plan rows "Terminate ends the engine-held run", "Restart
-// and Undo keep authority", "Bind before entry", "Missing trusted globs commit (h) at Start" and "Only lowered,
-// never raised", driven through the production Start composition over the real flow manager, run resolver, flow
+// §27.9.1 N9b.2, N9b.5(b), N9b.8 — #137 plan rows "Terminate ends the engine-held run", "Restart and Undo
+// keep authority", "Bind before entry", authority read from the run's bound flow, and a relaunch keeping it, driven through the production Start composition over the real flow manager, run resolver, flow
 // lifecycle, §25 recorder and git.
 
 const LOOP = 'plan-loop';
@@ -117,12 +113,6 @@ function committedRepo(prefix: string): string {
   return wt;
 }
 
-function unbornRepo(prefix: string): string {
-  const wt = git.makeGitRepo(prefix);
-  mkdirSync(flowHomeDir(wt), { recursive: true });
-  return wt;
-}
-
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
 };
@@ -137,8 +127,10 @@ interface RigOpts {
   pointer?: string | null;
   authority?: 'auto' | 'human';
   startClock?: () => number;
-  captureTimeoutMs?: number;
   start?: (flow: FlowManager) => FlowManager['start'];
+  /** The app relaunched over this rig's worktree, catalog and §25 root: every in-memory part is new. */
+  relaunchOf?: Rig;
+  approveThrows?: () => boolean;
 }
 
 interface Rig {
@@ -155,6 +147,7 @@ interface Rig {
   persisted: () => ReturnType<ReturnType<typeof createFlowStateStore>['read']>;
   reachGate: (verdict: ConsolidatorVerdict) => Promise<void>;
   gateEntries: (startedAt: number, flow?: string) => string[] | null;
+  relaunch: () => Rig;
 }
 
 function makeRig(opts: RigOpts = {}): Rig {
@@ -168,21 +161,24 @@ function makeRig(opts: RigOpts = {}): Rig {
   const ctxFor = (dir: string) => ({ tiers: tiers(), repoDir: dir });
   const plantedResolution = (dir: string): DefResolution | null => {
     const r = resolveLoopDefV2(LOOP, ctxFor(dir));
-    return r.ok ? { tier: r.tier ?? 'app-bundled', identity: loopDefIdentity(r) } : null;
+    return r.ok ? {} : null;
   };
 
-  const wt = opts.wt ?? committedRepo('autogate-life-wt');
-  const globalDir = fx.makeWorktree('autogate-life-global');
-  writeGlobalEntry(globalDir, FLOW_ID, flowYaml(FLOW_NAME, opts.authority ?? 'auto'));
-  if (opts.pointer !== null) writeActiveFlow(wt, opts.pointer ?? FLOW_ID);
-  const auditRoot = tempDir('autogate-life-audit-');
+  const prior = opts.relaunchOf;
+  const wt = prior?.wt ?? opts.wt ?? committedRepo('autogate-life-wt');
+  const globalDir = prior?.globalDir ?? fx.makeWorktree('autogate-life-global');
+  if (prior === undefined) {
+    writeGlobalEntry(globalDir, FLOW_ID, flowYaml(FLOW_NAME, opts.authority ?? 'auto'));
+    if (opts.pointer !== null) writeActiveFlow(wt, opts.pointer ?? FLOW_ID);
+  }
+  const auditRoot = prior?.auditRoot ?? tempDir('autogate-life-audit-');
 
   const clock = createVirtualClock(0);
   const recorder = createAuditRecorder({ root: auditRoot, now: () => new Date(T0 + 1_000), flowName: () => null });
   const resolve = createRunResolver(globalDir);
   const held = new Map<string, StartRun>();
-  const toRun = (r: { load: ReturnType<typeof resolve>['load']; binding?: DispositionRead; flowSourceTrust?: StartRun['flowSourceTrust'] }): StartRun | null =>
-    r.load.ok ? { definition: r.load.definition, flowSourceTrust: r.flowSourceTrust as StartRun['flowSourceTrust'], binding: r.binding } : null;
+  const toRun = (r: { load: ReturnType<typeof resolve>['load']; binding?: DispositionRead }): StartRun | null =>
+    r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
 
   const approvals: Approval[] = [];
   let flow!: FlowManager;
@@ -195,7 +191,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
   });
-  const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(gate, ctxFor));
+  const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({
     globalDir,
     loadDefinition: (repoKey) => resolve(repoKey),
@@ -229,6 +225,7 @@ function makeRig(opts: RigOpts = {}): Rig {
   const engineApprove = composeEngineApprove(approveDepsFor, () => 'app');
   gate.attachApprove((dir, step, turnKey, decider) => {
     approvals.push({ step, decider: decider.kind });
+    if (opts.approveThrows?.()) throw new Error('approve threw before settling');
     return engineApprove(dir, step, turnKey, decider);
   });
 
@@ -262,11 +259,10 @@ function makeRig(opts: RigOpts = {}): Rig {
     start: (repoKey, o) => start(repoKey, o),
     now: opts.startClock ?? (() => T0),
     record: composeRecordFlowTransition(recorder, gate),
-    captureTimeoutMs: opts.captureTimeoutMs ?? START_CAPTURE_TIMEOUT_MS,
   });
 
   const engineLike = { activeRepoDir: () => wt, resume: () => {}, liveErrorFor: () => null };
-  return {
+  const rig: Rig = {
     wt,
     globalDir,
     auditRoot,
@@ -289,7 +285,9 @@ function makeRig(opts: RigOpts = {}): Rig {
       if (!existsSync(file)) return null;
       return parseAuditStream(readFileSync(file, 'utf8')).events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
     },
+    relaunch: () => makeRig({ relaunchOf: rig }),
   };
+  return rig;
 }
 
 const engineEntries = (kind: string) => (cmds: string[] | null): string[] | null =>
@@ -312,15 +310,6 @@ function expectRunEnded(rig: Rig): void {
   expect(rig.view()).not.toHaveProperty('autoGate');
   expect(rig.persisted()?.startedAt).toBeUndefined();
   expect(rig.persisted()?.flow).toBeUndefined();
-}
-
-async function expectGenericHalt(rig: Rig): Promise<void> {
-  await rig.reachGate('clean');
-  expect(rig.approvals).toEqual([]);
-  const v = rig.view();
-  expect(v.humanNeeded).toBe(true);
-  expect(v.autoGate?.haltGeneric).toBe(true);
-  expect(engineDecisions(rig.gateEntries(T0))).toEqual([]);
 }
 
 describe('autoGate — Terminate ends the engine-held run through the flow lifecycle (#137 S1)', () => {
@@ -472,75 +461,9 @@ describe('autoGate — bind before entry, through the Start composition (#137 S1
     expect(rig.view()).not.toHaveProperty('autoGate');
   });
 
-  it('(d) a Start capture held past its timeout: the Start still begins and the clean `auto` gate halts with no engine approve', async () => {
-    const wt = committedRepo('autogate-life-held-capture');
-    installPathGitStub([{ argvPrefix: ['rev-parse'], script: 'exec sleep 10' }]);
-    const rig = makeRig({ wt, captureTimeoutMs: 200 });
-    const began = Date.now();
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    expect(Date.now() - began).toBeLessThan(2_000);
-    await expectGenericHalt(rig);
-  });
-
-  it('(d) the same flow with the capture unheld, composed with START_CAPTURE_TIMEOUT_MS, advances', async () => {
-    const rig = makeRig({ captureTimeoutMs: START_CAPTURE_TIMEOUT_MS });
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    await rig.reachGate('clean');
-    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
-    expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
-  });
-
-  it('(e) the active-flow pointer rewritten during the Start capture: the run is the flow the Start resolved, its clean gate advances, and its record and §25 header name it', async () => {
-    const wt = committedRepo('autogate-life-pointer-race');
-    const rig = makeRig({ wt });
-    writeGlobalEntry(rig.globalDir, 'other-flow', flowYaml('Other Flow', 'auto'));
-    const otherPointer = join(tempDir('autogate-life-other-pointer-'), 'wt');
-    mkdirSync(flowHomeDir(otherPointer), { recursive: true });
-    writeActiveFlow(otherPointer, 'other-flow');
-    const pointerFile = activeFlowPointerFile(wt);
-    installPathGitStub([{ argvPrefix: ['rev-parse'], script: `cp ${shellQuote(activeFlowPointerFile(otherPointer))} ${shellQuote(pointerFile)}` }]);
-
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    expect(readFileSync(pointerFile, 'utf8')).toBe(readFileSync(activeFlowPointerFile(otherPointer), 'utf8'));
-    expect(rig.persisted()?.flow).toBe(FLOW_NAME);
-    expect(readRunBinding(rig.wt)).toEqual(rig.resolvedAtStart()?.binding);
-    await rig.reachGate('clean');
-    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
-    expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
-    const file = auditFilePath(rig.auditRoot, rig.wt, FLOW_NAME, new Date(T0));
-    expect(existsSync(file)).toBe(true);
-    expect(parseAuditStream(readFileSync(file, 'utf8')).header?.flow).toBe(rig.persisted()?.flow);
-  });
 });
 
-describe('autoGate — a missing trusted globs commit at Start (h) (#137 S1)', () => {
-  it('an unborn-HEAD repo: the Start succeeds and the clean `auto` gate halts with the generic row, no engine approve and no commit', async () => {
-    const rig = makeRig({ wt: unbornRepo('autogate-life-unborn') });
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    await expectGenericHalt(rig);
-    expect(() => git.git(rig.wt, ['rev-parse', '--verify', '--quiet', 'HEAD'])).toThrow();
-  });
-
-  it('a git refusal of the capture\'s rev-parse: the Start succeeds and the clean `auto` gate halts with the generic row', async () => {
-    const wt = committedRepo('autogate-life-refused-capture');
-    const head = git.git(wt, ['rev-parse', 'HEAD']);
-    installPathGitStub([{ argvPrefix: ['rev-parse'], stderr: 'fatal: refused\n', exitCode: 128 }]);
-    const rig = makeRig({ wt });
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    await expectGenericHalt(rig);
-    vi.unstubAllEnvs();
-    expect(git.git(wt, ['rev-parse', 'HEAD'])).toBe(head);
-  });
-});
-
-describe('autoGate — only lowered, never raised, over the real run resolver (#137 S1, N9b.2(c))', () => {
-  it('the global catalog entry edited after Start to drop `gate_authority: auto`: its clean gate halts with no engine approve', async () => {
-    const rig = makeRig();
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    writeGlobalEntry(rig.globalDir, FLOW_ID, flowYaml(FLOW_NAME));
-    await expectGenericHalt(rig);
-  });
-
+describe('autoGate — authority read from the run\'s bound flow, over the real run resolver (N9b.2(c))', () => {
   it('the active-flow pointer moved to a worktree-local copy declaring `auto`: the run keeps its bound source and its clean gate advances', async () => {
     const rig = makeRig();
     expect(rig.flowStart(rig.wt).status).toBe('in_progress');
@@ -564,21 +487,81 @@ describe('autoGate — only lowered, never raised, over the real run resolver (#
     expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
   });
 
-  it('on that leg-3 run, a worktree-local flow.yaml declaring `auto` written mid-run lowers it: the clean gate halts', async () => {
-    const rig = makeRig({ pointer: null });
-    writeFileSync(join(flowHomeDir(rig.globalDir), FLOW_DEF_FILE), flowYaml(FLOW_NAME, 'auto'));
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    writeFileSync(join(flowHomeDir(rig.wt), FLOW_DEF_FILE), flowYaml(FLOW_NAME, 'auto'));
-    await expectGenericHalt(rig);
+});
+
+describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
+  it('an `auto` run relaunched mid-loop: its clean gate after the relaunch is engine-approved, recorded in the run\'s own §25 file', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+
+    const rig = before.relaunch();
+    expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
+    await rig.reachGate('clean');
+    expect(rig.approvals.map((a) => [a.step, a.decider])).toEqual([[STEP, 'engine']]);
+    expect(rig.flow.state(rig.wt).stepName).toBe('next');
+    expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
+    expect(engineHalts(rig.gateEntries(T0))).toEqual([]);
   });
 
-  it('never raised: a step bound `human` at Start, whose entry later declares `auto`, waits for a human (negative; paired with the advance rows above)', async () => {
-    const rig = makeRig({ authority: 'human' });
-    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
-    writeGlobalEntry(rig.globalDir, FLOW_ID, flowYaml(FLOW_NAME, 'auto'));
+  it('a `human` run relaunched mid-loop stays human: its clean gate waits with no engine state (negative pair)', async () => {
+    const before = makeRig({ authority: 'human' });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+
+    const rig = before.relaunch();
+    expect(rig.gate.isAutoRun(rig.wt)).toBe(false);
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().humanNeeded).toBe(true);
+    expect(rig.view()).not.toHaveProperty('autoGate');
+  });
+
+  it('an `auto` gate reached clean before the relaunch, its engine approve never run, halts with (j) after it: no engine approve, and the letter is shown at the gate', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+
+    const rig = before.relaunch();
+    await flush();
+    expect(rig.approvals).toEqual([]);
+    const v = rig.view();
+    expect(v.humanNeeded).toBe(true);
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+    expect(v.autoGate?.haltGeneric ?? false).toBe(false);
+    expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
+  });
+
+  it('a `human` gate reached before the relaunch shows no (j) after it (negative pair)', async () => {
+    const before = makeRig({ authority: 'human' });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+
+    const rig = before.relaunch();
+    await flush();
+    expect(rig.view().autoGate?.haltReasons ?? []).toEqual([]);
+    expect((rig.gateEntries(T0) ?? []).filter((c) => gateDecisionDecider(c) === 'engine')).toEqual([]);
+  });
+
+  it('a failed-effect marker set before the relaunch is shown after it (N9b.5(d))', async () => {
+    const before = makeRig({ approveThrows: () => true });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    await before.reachGate('clean');
+    expect(before.view().autoGate?.failedEffect?.state).toBe('set');
+
+    const rig = before.relaunch();
+    await flush();
+    expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
+  });
+
+  it('a failed-effect marker set before the relaunch halts the run\'s next clean `auto` gate after it with (i)', async () => {
+    const before = makeRig({ approveThrows: () => true });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    await before.reachGate('clean');
+    expect(before.view().autoGate?.failedEffect?.state).toBe('set');
+
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('i');
   });
 });
 

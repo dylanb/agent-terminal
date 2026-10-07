@@ -12,13 +12,9 @@
 // diff output. Both fail TOWARD the check firing (CWE-20/770): a bad baseline, an empty glob list, a
 // non-object-id baseline, or an unresolvable HEAD reject rather than reading as "nothing changed".
 
-import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { run, runBuffer } from './appBootstrapCommand';
 import { decodeUtf8Strict } from './decodeUtf8Strict';
-import { coreExecHardeningArgs } from './gitHardening';
 import { matchesAnyGlob } from '../shared/globMatch';
 import {
   parseLoopCapabilities,
@@ -33,20 +29,6 @@ import { isUnderAppStateDir } from './appStateDirs';
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
 // capabilities-file-times-diff amplification (CWE-400).
 const MAX_MATCH_WORK = 100_000_000;
-
-// The object-source hardening every §28 git READ shares (CWE-345/829): ignore repo-planted refs/replace/* so a
-// tamper cannot substitute the compared objects, and deny every transport so a partial-clone lazy-fetch cannot
-// run an agent-configured promisor command (with the GIT_NO_LAZY_FETCH env backstop). ONE definition every §28
-// git read in this module uses — the two path detections and the baseline-capabilities read — so the posture
-// cannot be present in one and absent in another. The working-tree read reaches it on every RED completion
-// attempt, retries included.
-export const OBJECT_SOURCE_HARDENING = ['--no-replace-objects', '-c', 'protocol.allow=never'];
-export const NO_LAZY_FETCH_ENV = { GIT_NO_LAZY_FETCH: '1' };
-
-/** A fresh, unpredictable, never-created hooks dir: with core.hooksPath pointed here no hook can run. */
-function freshDisabledHooksDir(): string {
-  return join(tmpdir(), `agent-terminal-frozen-hooks-${randomUUID()}`);
-}
 
 /** Match `paths` against `testGlobs`, bounding aggregate glob-match work against MAX_MATCH_WORK (CWE-400) — the
  *  guard BOTH detections share, so the bound cannot be present in one and absent in its twin. globMatch bounds
@@ -119,7 +101,6 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   if (testGlobs.length === 0) throw new Error('frozen-tests: testGlobs is empty');
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
 
-  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
   // Shared diff flags: names only (no patch → no textconv/external-diff), NUL-delimited raw pathname BYTES (git
   // does not C-quote, decoded strictly), renames decomposed to delete+add (§28.5.1), a changed gitlink shown
   // regardless of a repo-local diff.ignoreSubmodules, and the revision(s) neutralized against option-injection.
@@ -127,24 +108,19 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
 
   if (head === undefined) {
     // §28.5.3 — baseline ↔ WORKING TREE (one revision). `git diff <baseline>` reports tracked changes but NEVER
-    // lists untracked files, so a brand-new test authored this turn would be missed — union `ls-files -o` (which
-    // lists names only, no re-hash, so it is filter-free) to catch it.
-    // SECURITY: the one-revision diff re-hashes changed files vs the working tree, so a repo-planted
-    // `filter.<driver>.clean` can run on every GREEN completion — the SAME accepted residual as
-    // `workingTreeTestPaths`/the §28.3 commit (the agent already runs the repo's code in-turn); no new boundary.
+    // lists untracked files, so a brand-new test authored this turn would be missed — union `ls-files -o` to
+    // catch it.
     const diffOut = await runBuffer(
       'git',
-      [...harden, ...diffFlags, `${baseline}^{commit}`],
+      [...diffFlags, `${baseline}^{commit}`],
       repoDir,
       'frozen-tests working-tree diff failed',
-      NO_LAZY_FETCH_ENV,
     );
     const untrackedOut = await runBuffer(
       'git',
-      [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
+      ['ls-files', '-o', '--exclude-standard', '-z'],
       repoDir,
       'frozen-tests ls-files failed',
-      NO_LAZY_FETCH_ENV,
     );
     return matchedTestPaths([...strictDecodeNulPaths(diffOut), ...strictDecodeNulPaths(untrackedOut)], testGlobs);
   }
@@ -153,14 +129,12 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
   const stdout = await runBuffer(
     'git',
     [
-      ...harden,
       ...diffFlags,
       `${baseline}^{commit}`, // peel to a commit: git accepts a bare tree/blob object id as a diff operand, so a
       `${head}^{commit}`, //     non-commit operand would diff instead of failing toward the check firing
     ],
     repoDir,
     'frozen-tests diff failed',
-    NO_LAZY_FETCH_ENV, // fail CLOSED on a missing object: never lazy-fetch from the (untrusted) promisor remote
   );
   return matchedTestPaths(strictDecodeNulPaths(stdout), testGlobs);
 }
@@ -180,31 +154,27 @@ type BaselineCapabilitiesResult =
 
 /** The test_globs as they stood in the RED baseline's COMMITTED loop-capabilities.yaml — a fixed git object
  *  the checked agent cannot narrow after the baseline is recorded, unlike the working tree it controls. Read
- *  as a raw blob (cat-file, no textconv), with the same no-replace / no-lazy-fetch hardening as the diff. */
+ *  as a raw blob (cat-file, no textconv). */
 async function baselineCapabilities(repoDir: string, baseline: string): Promise<BaselineCapabilitiesResult> {
   // A bad baseline is corrupted loop state (fail toward firing), NOT a degradable capabilities "malformed" —
   // reject exactly as changedTestPaths does for the same input, so callers never confuse the two.
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
-  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
-  const env = NO_LAZY_FETCH_ENV;
   // A bad baseline is fail-toward-firing: rev-parse REJECTS (throws), never degrades to "absent".
   await run(
     'git',
-    [...harden, 'rev-parse', '--verify', '--end-of-options', `${baseline}^{commit}`],
+    ['rev-parse', '--verify', '--end-of-options', `${baseline}^{commit}`],
     repoDir,
     'frozen-tests: baseline commit does not resolve',
-    env,
   );
   // Determine ABSENCE by listing the tree: an empty listing means the config is genuinely not in a readable
-  // baseline (degrade). An ls-tree failure — the tree/blob unreadable, e.g. a partial clone with lazy fetch
-  // disabled — is NOT absence; it propagates and rejects (fail toward firing), as does a read of a path that
+  // baseline (degrade). An ls-tree failure — the tree/blob unreadable, e.g. a partial clone missing the object —
+  // is NOT absence; it propagates and rejects (fail toward firing), as does a read of a path that
   // ls-tree just proved is present.
   const listed = await run(
     'git',
-    [...harden, 'ls-tree', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
+    ['ls-tree', '--end-of-options', baseline, LOOP_CAPABILITIES_FILENAME],
     repoDir,
     'frozen-tests: baseline tree read failed',
-    env,
   );
   if (listed.trim().length === 0) {
     return { ok: false, cause: 'absent', reason: 'no loop-capabilities.yaml in the baseline commit' };
@@ -220,10 +190,9 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   // working-tree loader (MAX_CAPABILITIES_BYTES shared), and never exceeds the subprocess stdout buffer below.
   const sizeOut = await run(
     'git',
-    [...harden, 'cat-file', '-s', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
+    ['cat-file', '-s', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
     repoDir,
     'frozen-tests: baseline capabilities size read failed',
-    env,
   );
   const size = Number(sizeOut.trim());
   if (!Number.isInteger(size) || size > MAX_CAPABILITIES_BYTES) {
@@ -231,10 +200,9 @@ async function baselineCapabilities(repoDir: string, baseline: string): Promise<
   }
   const blob = await runBuffer(
     'git',
-    [...harden, 'cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
+    ['cat-file', 'blob', `${baseline}:${LOOP_CAPABILITIES_FILENAME}`],
     repoDir,
     'frozen-tests: baseline capabilities read failed',
-    env,
   );
   let text: string;
   try {
@@ -269,7 +237,7 @@ export type WorkingTreeTestPathsResult =
   | { ok: false; cause: 'absent' | 'malformed' | 'confinement'; reason: string };
 
 /** The test-glob paths this turn ADDED LINES to in the working tree vs HEAD — the RED "a failing test was
- *  authored" check (§28.5.2a), run BEFORE the RED commit (the commit is the approve side-effect). Two hardened
+ *  authored" check (§28.5.2a), run BEFORE the RED commit (the commit is the approve side-effect). Two
  *  reads, unioned: a `--numstat` diff of tracked files (kept only where added-lines > 0) plus every untracked
  *  file. Neither mutates the index — the check must never stage into the working tree the live agent shares.
  *  Fails TOWARD the check firing (CWE-20/770): an empty glob list or an unresolvable HEAD reject.
@@ -278,14 +246,7 @@ export type WorkingTreeTestPathsResult =
  *  turn that only DELETES a test, or only removes lines from one (e.g. strips assertions), authored no failing
  *  test — counting it would be the dangerous false-pass the gate exists to prevent. This is why the tracked arm
  *  is `--numstat` here, not the `--name-only` the commit↔commit `changedTestPaths` correctly uses (where a
- *  deletion IS a real change to a frozen test).
- *
- *  SECURITY — the tracked `git diff` arm compares the working tree to HEAD, so git re-hashes a changed file and
- *  can run a repo-planted `filter.<driver>.clean` (in-tree `.gitattributes` + config), on EVERY RED completion
- *  attempt including retries (not once, as on the S2 approve commit). It is the SAME lever the S2 commit
- *  side-effect documents-and-accepts (the agent already runs the repo's own code in-turn), so no NEW trust
- *  boundary — but the higher firing frequency is the novel delta. The `ls-files -o` arm lists names only (no
- *  hashing), so it is filter-free. */
+ *  deletion IS a real change to a frozen test). */
 export async function workingTreeTestPaths(query: {
   repoDir: string;
   testGlobs: readonly string[];
@@ -293,23 +254,17 @@ export async function workingTreeTestPaths(query: {
   const { repoDir, testGlobs } = query;
   if (testGlobs.length === 0) throw new Error('working-tree tests: testGlobs is empty');
 
-  // The SAME object-source hardening the commit↔commit read carries (OBJECT_SOURCE_HARDENING + NO_LAZY_FETCH_ENV):
-  // `git diff HEAD` re-hashes and looks up the HEAD tree, so a repo-planted replace-ref or promisor would steer
-  // or run under a naive read exactly as on the sibling path.
-  const harden = [...OBJECT_SOURCE_HARDENING, ...coreExecHardeningArgs(freshDisabledHooksDir())];
   const trackedOut = await runBuffer(
     'git',
-    [...harden, 'diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
+    ['diff', '--numstat', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options', 'HEAD'],
     repoDir,
     'working-tree tests: git diff failed',
-    NO_LAZY_FETCH_ENV,
   );
   const untrackedOut = await runBuffer(
     'git',
-    [...harden, 'ls-files', '-o', '--exclude-standard', '-z'],
+    ['ls-files', '-o', '--exclude-standard', '-z'],
     repoDir,
     'working-tree tests: git ls-files failed',
-    NO_LAZY_FETCH_ENV,
   );
 
   // `--numstat -z` records are `<added>\t<deleted>\t<path>` per NUL-terminated entry (no renames → no split

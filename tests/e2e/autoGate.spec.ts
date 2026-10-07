@@ -10,7 +10,7 @@ import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { recordBaselineCommit } from '../../src/main/appLoopState';
-import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit, type StepScript } from './fakeTools';
+import { exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, type StepScript } from './fakeTools';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -87,11 +87,20 @@ interface Launched {
   logFile: string;
 }
 
-/** Launch the app on a fresh HOME with the fake tools first on PATH, `cd` into `repo` and host the fake agent. */
-async function launchInto(prefix: string, repo: string, home: string, agent: StepScript & { stepId: string }, extraEnv: Record<string, string> = {}): Promise<Launched> {
+/** Launch the app on `home` with the fake tools first on PATH, `cd` into `repo` and host the fake agent. `control`
+ *  is the strip control the repo's flow shows on arrival: `Start` for a fresh run, null for a relaunched one. */
+async function launchInto(
+  prefix: string,
+  repo: string,
+  home: string,
+  agent: (StepScript & { stepId: string }) | Record<string, StepScript>,
+  extraEnv: Record<string, string> = {},
+  control: 'Start' | null = 'Start',
+): Promise<Launched> {
   const { binDir, logFile } = seedFakeGhGit(`${prefix}bin-`, { realCommitOps: true });
   cleanup.push(binDir);
-  seedFakeAgentV2(binDir, agent);
+  if ('stepId' in agent && typeof agent.stepId === 'string') seedFakeAgentV2(binDir, agent as StepScript & { stepId: string });
+  else seedFakeAgentSteps(binDir, agent as Record<string, StepScript>);
   app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${tmp(`${prefix}ud-`)}`],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, ...extraEnv },
@@ -99,7 +108,7 @@ async function launchInto(prefix: string, repo: string, home: string, agent: Ste
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(page.locator('.xterm-rows')).not.toHaveText('', { timeout: FIRST_PAINT_MS });
   await typeCommand(`cd ${shellQuote(repo)}`);
-  await expect(flowControl()).toHaveText('Start', { timeout: UI_MS });
+  if (control !== null) await expect(flowControl()).toHaveText(control, { timeout: UI_MS });
   await typeCommand('fake-agent');
   return { home, repo, logFile };
 }
@@ -121,6 +130,18 @@ async function countAlertInsertions(): Promise<void> {
   });
 }
 const alertInsertions = (): Promise<number> => page.evaluate(() => (window as unknown as { __alertInsertions: number }).__alertInsertions);
+
+/** Record every `CH.flowOnLoopError` error reason the renderer receives from now on (the dialog host shows only the latest). */
+async function recordLoopErrors(): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __loopErrors: string[] };
+    w.__loopErrors = [];
+    window.flow.onLoopError((reason, kind) => {
+      if (kind === 'error') w.__loopErrors.push(reason);
+    });
+  });
+}
+const loopErrors = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __loopErrors: string[] }).__loopErrors);
 
 /** The gate commands of the repo's one §25 run file, read without a run identity (the test makes exactly one Start). */
 function runGateCmds(home: string, repo: string): string[] {
@@ -232,28 +253,6 @@ test('an auto step running a green-completion loop halts its clean gate with (e)
   expect(entries.flatMap((e) => parseAutoHaltReasons(e.cmd) ?? [])).toEqual(['e']);
 });
 
-test('pinning: a worktree-local copy of the same auto flow is untrusted: its clean gate waits for the human (AC1 trust leg)', { tag: '@ownapp' }, async () => {
-  test.setTimeout(loopTestBudget(5, 0));
-  const home = tmp('agent-term-e2e-137-local-home-');
-  const repo = seedAutoGateRepo('agent-term-e2e-137-local-', 'red', { localFlowYaml: autoGateFlowYaml(AUTO_RED_THEN_MANUAL) });
-  cleanup.push(repo);
-  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
-  await launchInto('agent-term-e2e-137-local-', repo, home, redAgent());
-  await countAlertInsertions();
-
-  await flowControl().click();
-
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
-  await openLoopPanel();
-  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
-  // The gate buttons also render while the engine decides, so wait for the settled human-needed signal first.
-  await expect.poll(alertInsertions, { timeout: UI_MS }).toBeGreaterThanOrEqual(1);
-  await expect(loopPanel().locator('[data-auto-deciding]')).toHaveCount(0);
-  expect(flowState(repo)).toMatch(/^step: red$/m);
-  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
-  expect(runGateCmds(home, repo).filter((c) => gateDecisionKind(c)?.kind === 'decision' && gateDecisionDecider(c) === 'engine')).toEqual([]);
-});
-
 test('an invalid gate_authority fails the flow load: an unknown value, and the field on a manual step (AC6)', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + 8 * UI_MS);
   const home = tmp('agent-term-e2e-137-ac6-home-');
@@ -354,4 +353,380 @@ test('a manual Advance while a human approve runs its side-effect moves the flow
   // The approve writes its `decision` entry then advances in one main-process turn; this round-trip is answered only after that turn.
   await page.evaluate((k) => window.flow.state(k), repo);
   expect(flowState(repo)).toMatch(/^step: next$/m);
+});
+
+// ── #137 S2: the visible halt reasons (a), (b), (i), and the run-end report ──
+
+const errorDialog = () => page.locator('#flow-error-host .flow-modal');
+
+/** Dismiss every blocking loop-error dialog currently shown, so the panel behind it can be opened. */
+async function dismissLoopErrors(): Promise<void> {
+  while ((await errorDialog().count()) > 0 && (await errorDialog().first().isVisible())) {
+    await errorDialog().first().locator('.dismiss').click();
+  }
+}
+
+const autoHaltReasons = (home: string, repo: string): (string[] | null)[] =>
+  auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt').map((e) => parseAutoHaltReasons(e.cmd));
+const engineDecisions = (home: string, repo: string): string[] =>
+  auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine').map((e) => e.cmd);
+
+const NO_VERDICT = 'this consolidator output carries no verdict at all\n';
+const STALL_ENV = { APP_TURN_TIMEOUT_MS: '60000' };
+
+test('auto gate halts with each visible reason: (a) a round recording `needs a human` holds the clean gate, with one alert (AC3)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(5, 0));
+  const home = tmp('agent-term-e2e-137-a-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-a-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  await launchInto('agent-term-e2e-137-a-', repo, home, { ...redAgent(), reviews: ['needs-human'] });
+  await countAlertInsertions();
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="a"]')).toBeVisible({ timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
+  await expect.poll(alertInsertions, { timeout: UI_MS }).toBe(1);
+  expect(engineDecisions(home, repo)).toEqual([]);
+  expect(autoHaltReasons(home, repo).map((r) => r?.includes('a'))).toEqual([true]);
+  await page.evaluate((k) => window.flow.state(k), repo);
+  expect(await alertInsertions()).toBe(1);
+});
+
+test('auto gate halts with each visible reason: (b) the error stop of an `auto` step shows (b) and does not advance (AC4 i)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(5, 0));
+  const home = tmp('agent-term-e2e-137-b-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-b-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  await launchInto('agent-term-e2e-137-b-', repo, home, redAgent([NO_VERDICT]), STALL_ENV);
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toBeVisible({ timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
+  expect(engineDecisions(home, repo)).toEqual([]);
+  expect(autoHaltReasons(home, repo).map((r) => r?.includes('b'))).toEqual([true]);
+});
+
+test('(b): a review round the operator Accepts out of its error at an `auto` step holds the step: (b) shown, no advance (AC4 ii)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(6, 0));
+  const home = tmp('agent-term-e2e-137-b2-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-b2-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  await launchInto('agent-term-e2e-137-b2-', repo, home, { ...redAgent(), review: 'omit-persona' }, STALL_ENV);
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toBeVisible({ timeout: LOOP_ROUND_MS });
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
+  expect(engineDecisions(home, repo)).toEqual([]);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('b'))).toHaveLength(1);
+});
+
+test('(b) negative: a Retry out of the error stop whose round then comes back clean advances the `auto` step (AC4 iii, N9b.6(b))', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(6, 0));
+  const home = tmp('agent-term-e2e-137-b3-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-b3-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  await launchInto(
+    'agent-term-e2e-137-b3-',
+    repo,
+    home,
+    { ...redAgent(), consolidateAttempts: [NO_VERDICT, NO_VERDICT, exampleConsolidatorOutput('clean', loopRoster('red-loop'))] },
+    STALL_ENV,
+  );
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await loopPanel().locator('[data-app-route-out="retry"]').click({ timeout: UI_MS });
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: done$/m);
+  expect(engineDecisions(home, repo)).toHaveLength(1);
+});
+
+test('(b) negative: at the `human` step of a run that also binds an `auto` step, an error stop shows no halt reason and writes no engine entry (AC4 iv)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(5, 0));
+  const home = tmp('agent-term-e2e-137-b4-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-b4-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-then-auto', autoGateFlowYaml([
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'human' },
+    { id: 'red2', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  await launchInto('agent-term-e2e-137-b4-', repo, home, redAgent([NO_VERDICT]), STALL_ENV);
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason]')).toHaveCount(0);
+  expect(auditGateEntries(home, repo).filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toEqual([]);
+});
+
+test('(b) negative: at the `human` step of a run that also binds an `auto` step, an Accepted failed review round shows no halt reason and writes no engine entry (AC4 iv)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(6, 0));
+  const home = tmp('agent-term-e2e-137-b4a-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-b4a-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-then-auto', autoGateFlowYaml([
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'human' },
+    { id: 'red2', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  await launchInto('agent-term-e2e-137-b4a-', repo, home, { ...redAgent(), review: 'omit-persona' }, STALL_ENV);
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
+  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: complete$/m);
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason]')).toHaveCount(0);
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(auditGateEntries(home, repo).filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toEqual([]);
+});
+
+const GROOM_AGENT: StepScript = { artifactRel: GROOMED_REL, work: 'complete', roster: loopRoster('groom-loop') };
+
+test('auto gate halts with each visible reason: (i) a failed `gh` effect of an engine approve is marked at the next gate, which halts (AC13)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(6, 0));
+  const home = tmp('agent-term-e2e-137-i-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-i-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const { stepId: _red, ...red } = redAgent();
+  const { logFile } = await launchInto('agent-term-e2e-137-i-', repo, home, { groom: GROOM_AGENT, red }, { FAKE_GH_FAIL_ACTION: 'update-issue-body' });
+
+  await flowControl().click();
+
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
+  expect(readIf(logFile)).toMatch(/gh issue edit/);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="i"]')).toBeVisible();
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toHaveLength(1);
+});
+
+test('a human approve at a gate showing the failed-effect marker clears it: the next `auto` gate is engine-approved with no (i) (AC13, N9b.5(d))', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(8, 2) + 2 * LOOP_ROUND_MS);
+  const home = tmp('agent-term-e2e-137-clear-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-clear-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-human-red-auto-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'human' },
+    { id: 'red2', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const { stepId: _red, ...red } = redAgent();
+  await launchInto('agent-term-e2e-137-clear-', repo, home, {
+    groom: GROOM_AGENT,
+    red,
+    // red2 authors a test file of its own: red's phase commit already carries `tests/red_added.test.ts`.
+    red2: { ...red, writeTest: false, extraShell: { work: [`mkdir -p tests; printf '%s\\n' 'test("red2", () => { expect(1).toBe(2); });' > tests/red2_added.test.ts`] } },
+  }, { FAKE_GH_FAIL_ACTION: 'update-issue-body' });
+
+  await flowControl().click();
+
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
+  await approveOption().click({ timeout: UI_MS });
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red2$/m);
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) }).toMatch(/^step: done$/m);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toEqual([]);
+  expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
+});
+
+test('the strip\'s manual Advance at a gate showing the failed-effect marker clears it: the next `auto` gate is engine-approved with no (i) (AC13, N9b.5(d))', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(8, 2) + 2 * LOOP_ROUND_MS);
+  const home = tmp('agent-term-e2e-137-advclear-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-advclear-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-human-red-auto-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'human' },
+    { id: 'red2', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const { stepId: _red, ...red } = redAgent();
+  await launchInto('agent-term-e2e-137-advclear-', repo, home, {
+    groom: GROOM_AGENT,
+    red,
+    red2: { ...red, writeTest: false, extraShell: { work: [`mkdir -p tests; printf '%s\\n' 'test("red2", () => { expect(1).toBe(2); });' > tests/red2_added.test.ts`] } },
+  }, { FAKE_GH_FAIL_ACTION: 'update-issue-body' });
+
+  await flowControl().click();
+
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await flowControl().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red2$/m);
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) }).toMatch(/^step: done$/m);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toEqual([]);
+  expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
+});
+
+test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances (N9b.5(d))', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(3, 1));
+  const home = tmp('agent-term-e2e-137-staleadv-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-staleadv-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-groom-finalize', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
+    { id: 'finalize', kind: 'manual' },
+  ]));
+  await launchInto('agent-term-e2e-137-staleadv-', repo, home, { stepId: 'groom', artifactRel: GROOMED_REL, work: 'complete', roster: loopRoster('groom-loop') });
+  const advance = (step: string): Promise<unknown> =>
+    page.evaluate(
+      ([key, s]) => (window.flow.advance as (repoKey: string, step?: string) => Promise<unknown>)(key, s),
+      [repo, step] as const,
+    );
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await advance('finalize');
+  expect(flowState(repo)).toMatch(/^step: groom$/m);
+  await advance('groom');
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+});
+
+test('a failed effect on the last auto step is shown at run end: the failure reaches the operator and one (i) entry is recorded (AC13)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(6, 0));
+  const home = tmp('agent-term-e2e-137-end-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-end-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-end', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'finalize', kind: 'manual' },
+  ]));
+  await launchInto('agent-term-e2e-137-end-', repo, home, { stepId: 'groom', ...GROOM_AGENT }, { FAKE_GH_FAIL_ACTION: 'update-issue-body' });
+  await recordLoopErrors();
+
+  await flowControl().click();
+
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: finalize$/m);
+  await expect(errorDialog().first()).toBeVisible({ timeout: UI_MS });
+  // The approve's own side-effect failure is one delivery; reaching the run's end with the marker set is another.
+  await expect.poll(async () => (await loopErrors()).length, { timeout: UI_MS }).toBe(2);
+  await expect.poll(() => autoHaltReasons(home, repo), { timeout: UI_MS }).toEqual([['i']]);
+  expect(auditGateEntries(home, repo).filter((e) => parseAutoHaltReasons(e.cmd) !== null).map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
+
+  await dismissLoopErrors();
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await flowControl().click();
+  await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
+  await page.evaluate((k) => window.flow.state(k), repo);
+  expect(autoHaltReasons(home, repo)).toEqual([['i']]);
+  expect(await loopErrors()).toHaveLength(2);
+});
+
+test('a relaunch keeps the run\'s authority: after a relaunch at a human gate, the run\'s later `auto` gate is engine-approved (N9b.8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * (WINDOW_TIMEOUT_MS + FIRST_PAINT_MS) + 2 * LOOP_ROUND_MS + 2 * APPROVE_ADVANCE_MS + 6 * UI_MS);
+  const home = tmp('agent-term-e2e-137-relaunch-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-relaunch-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-groom-auto-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const { stepId: _red, ...red } = redAgent();
+  const agent = { groom: GROOM_AGENT, red };
+  await launchInto('agent-term-e2e-137-relaunch-', repo, home, agent);
+
+  await flowControl().click();
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: clean/m);
+  await openLoopPanel();
+  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+
+  await app?.close();
+  app = undefined;
+  await launchInto('agent-term-e2e-137-relaunch-', repo, home, agent, {}, null);
+  await openLoopPanel();
+  await approveOption().click({ timeout: UI_MS });
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
+
+  const redDecisions = auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(redDecisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
+  const groomDecisions = auditGateEntries(home, repo, { step: 'groom' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(groomDecisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+});
+
+test('an `auto` gate the run had reached before a relaunch halts with (j) after it: the letter is shown, one engine (j) entry is recorded, and a human decides it (N9b.8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * (WINDOW_TIMEOUT_MS + FIRST_PAINT_MS) + LOOP_ROUND_MS + APPROVE_ADVANCE_MS + 6 * UI_MS);
+  const home = tmp('agent-term-e2e-137-j-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-j-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const agent = redAgent([exampleConsolidatorOutput('stop for a human', loopRoster('red-loop'))]);
+  await launchInto('agent-term-e2e-137-j-', repo, home, agent);
+
+  await flowControl().click();
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: stop for a human');
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="stop-for-a-human"]')).toBeVisible({ timeout: UI_MS });
+
+  await app?.close();
+  app = undefined;
+  await launchInto('agent-term-e2e-137-j-', repo, home, agent, {}, null);
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="j"]')).toBeVisible({ timeout: UI_MS });
+  await expect(page.locator('#flow-strip .spill')).toHaveClass(/\bawait\b/, { timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  await expect.poll(() => autoHaltReasons(home, repo).filter((r) => r?.includes('j')), { timeout: UI_MS }).toHaveLength(1);
+
+  await approveOption().click({ timeout: UI_MS });
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
+  const decisions = auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
 });

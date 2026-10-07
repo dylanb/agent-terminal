@@ -276,17 +276,12 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
  * masked by the global. (Flow STATE, by contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  return loadFlowDefinitionLocalFirstFrom(localDir, globalDir).load;
-}
-
-/** `loadFlowDefinitionLocalFirst`, naming which of the two files it loaded (§27.9.1 N9b.2(a)). */
-export function loadFlowDefinitionLocalFirstFrom(localDir: string, globalDir: string): { load: FlowLoad; from: 'local' | 'global' } {
-  if (hasFlowDefinition(localDir)) return { load: loadFlowDefinition(localDir), from: 'local' };
+  if (hasFlowDefinition(localDir)) return loadFlowDefinition(localDir);
   // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
   // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
   // exists do we report the local (absent) error, so a bad value is never reported as a missing flow (§B.3).
-  if (hasFlowDefinition(globalDir)) return { load: loadFlowDefinition(globalDir), from: 'global' };
-  return { load: loadFlowDefinition(localDir), from: 'local' }; // neither exists: report the local (absent) error
+  if (hasFlowDefinition(globalDir)) return loadFlowDefinition(globalDir);
+  return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
 /** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */

@@ -3,11 +3,10 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { load } from 'js-yaml';
 import type { Page } from '@playwright/test';
 import type { FlowStateView } from '../../src/shared/ipc';
-import { catalogEntryDefFile } from '../../src/main/flow';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
@@ -78,17 +77,9 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   return dir;
 }
 
-/** An operator-catalog flow (the global tier under `home`) made active for `repo` — an N9b.2-trusted run. */
+/** An operator-catalog flow (the global tier under `home`) made active for `repo`. */
 export function seedTrustedFlow(home: string, repo: string, id: string, yaml: string): void {
   writeCatalogEntry(home, id, yaml);
-  writeActiveFlow(repo, id);
-}
-
-/** A flow in `repo`'s own per-repo catalog made active for it — the untrusted repo-content case. */
-export function seedRepoCatalogFlow(repo: string, id: string, yaml: string): void {
-  const file = catalogEntryDefFile(repo, id);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, yaml);
   writeActiveFlow(repo, id);
 }
 

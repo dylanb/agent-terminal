@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { loopDefIdentity, resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
+import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 
 // A minimal, valid §27 (v2) def as YAML. Helpers below mutate one line at a time so each escape /
@@ -606,62 +606,3 @@ describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5
   });
 });
 
-// #137 S1, plan "Shared definitions" — the tier a def resolved from, and the one def identity Start and every
-// loop-run resolution compare (§27.9.1 N9b.2(b)).
-describe('resolveLoopDefV2 — the resolved tier and loopDefIdentity (#137 S1)', () => {
-  it('names the tier each resolution came from', () => {
-    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
-    expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir })).toMatchObject({ ok: true, tier: 'app-bundled' });
-    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
-    expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir })).toMatchObject({ ok: true, tier: 'operator' });
-    plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
-    writeFileSync(join(repoDir, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
-    expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir })).toMatchObject({ ok: true, tier: 'repo' });
-  });
-
-  it('is equal across a byte copy of the bundled def into the operator tier, and differs after an operator recipe edit', () => {
-    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
-    const bundled = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(bundled).toMatchObject({ name: 'plan-loop', digest: expect.any(String) });
-
-    cpSync(join(appDir, 'loops-v2', 'plan-loop'), join(opDir, 'loops-v2', 'plan-loop'), { recursive: true });
-    const copied = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
-    expect(copied.ok && copied.tierRoot).toBe(join(opDir, 'loops-v2'));
-    expect(loopDefIdentity(copied)).toEqual(bundled);
-
-    writeFileSync(join(opDir, 'loops-v2', 'plan-loop', 'prompts', 'work.md'), 'do different work\n');
-    const recipeEdited = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(recipeEdited).not.toBeNull();
-    expect(recipeEdited).not.toEqual(bundled);
-  });
-
-  it('differs after an edit to the def YAML itself, and after a consolidator recipe edit', () => {
-    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
-    const before = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(before).not.toBeNull();
-    writeFileSync(join(opDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'), `${VALID_DEF}# edited after Start\n`);
-    const yamlEdited = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(yamlEdited).not.toBeNull();
-    expect(yamlEdited).not.toEqual(before);
-
-    writeFileSync(join(opDir, 'loops-v2', 'plan-loop', 'prompts', 'consolidate.md'), 'judge differently\n');
-    const consolidatorEdited = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(consolidatorEdited).not.toBeNull();
-    expect(consolidatorEdited).not.toEqual(yamlEdited);
-  });
-
-  it('differs after a reviewer charter edit, and is null for a repo-tier or failed resolution', () => {
-    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
-    const before = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(before).not.toBeNull();
-    writeFileSync(join(opDir, 'loops-v2', 'plan-loop', 'charter', 'security.md'), '# security, edited\n');
-    const charterEdited = loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }));
-    expect(charterEdited).not.toBeNull();
-    expect(charterEdited).not.toEqual(before);
-
-    plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
-    writeFileSync(join(repoDir, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
-    expect(loopDefIdentity(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }))).toBeNull();
-    expect(loopDefIdentity({ ok: false, reason: 'no def' })).toBeNull();
-  });
-});
