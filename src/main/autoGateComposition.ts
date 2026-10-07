@@ -113,7 +113,7 @@ export interface HumanDecisionRunnerDeps<View> {
 export interface HumanDecisionRunners<View> {
   decide: GateDecisionRun;
   /** The strip's manual Advance; null when it was refused. */
-  advance: (repoKey: string, step: string) => View | null;
+  advance: (repoKey: string, step: string | undefined) => View | null;
 }
 
 /** The four gate-decision runners and the manual Advance, as the human decides them (§27.9.1 N9b.5(d)/(e)). */
@@ -129,8 +129,9 @@ export function composeHumanDecisionRunners<View>(autoGate: AutoGate, deps: Huma
         settled(landed);
       }
     },
-    advance: (repoKey, step) => {
-      if (deps.currentStep(repoKey) !== step) return null;
+    advance: (repoKey, named) => {
+      const step = deps.currentStep(repoKey);
+      if (step === null || (named !== undefined && named !== step)) return null;
       const settled = autoGate.humanDecision(repoKey, step, null);
       let landed = false;
       try {

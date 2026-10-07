@@ -16,8 +16,8 @@ The repo basename and the flow name are each reduced to a filesystem-safe segmen
 ~/.agent-terminal/
   audit/
     agent-terminal/                         # repo basename
-      feature-dev_2026-06-23T10-00-01Z.yaml # one run
-      feature-dev_2026-06-25T14-12-00Z.yaml # a later re-run
+      feature-dev_2026-06-23T10-00-01.500Z.yaml # one run
+      feature-dev_2026-06-25T14-12-00.000Z.yaml # a later re-run
 ```
 
 ### 25.3 File format — YAML multi-document stream (D-audit-3)

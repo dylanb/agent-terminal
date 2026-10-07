@@ -10,6 +10,7 @@ import { createAuditRecorder } from '../../src/main/auditRecorder';
 import { auditFilePath } from '../../src/main/auditPaths';
 import { auditTimestamp, parseAuditStream } from '../../src/shared/audit';
 import { createAutoGate } from '../../src/main/autoGate';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import { composeRecordFlowTransition, composeStartTransition } from '../../src/main/autoGateComposition';
 
 // #137 — a run's identity (its flow's `name:` and its Start instant) is written into flow-state at Start and kept
@@ -88,6 +89,7 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
       onViewChanged: () => {},
       setTimer: () => ({ id: 0 }),
       clearTimer: () => {},
+      decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
     });
     const flowStart = composeStartTransition({
       autoGate: gate,

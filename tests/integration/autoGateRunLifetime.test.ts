@@ -16,6 +16,7 @@ import {
 } from '../../src/main/autoGateComposition';
 import { catalogEntryDefFile, createFlowManager, flowHomeDir, FLOW_DEF_FILE, type FlowManager } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -200,6 +201,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     emitError: (_dir, reason) => void errors.push(reason),
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
+    decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
   });
   const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({
@@ -482,6 +484,29 @@ describe('autoGate — authority read from the run\'s bound flow, over the real 
     mkdirSync(dirname(local), { recursive: true });
     writeFileSync(local, flowYaml(FLOW_NAME, 'auto'));
     writeActiveFlow(rig.wt, 'local-copy');
+    await rig.reachGate('clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
+  });
+
+  it('a run bound at Start to a per-repo catalog entry declaring `auto` advances its clean gate, over a `human` global catalog', async () => {
+    const rig = makeRig({ authority: 'human', pointer: 'repo-flow' });
+    const entry = catalogEntryDefFile(rig.wt, 'repo-flow');
+    mkdirSync(dirname(entry), { recursive: true });
+    writeFileSync(entry, flowYaml(FLOW_NAME, 'auto'));
+    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
+    expect(rig.resolvedAtStart()?.binding).toMatchObject({ source: 'catalog', id: 'repo-flow' });
+    await rig.reachGate('clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);
+  });
+
+  it('a run bound at Start to a worktree-local `flow.yaml` declaring `auto` advances its clean gate, over a `human` global fallback', async () => {
+    const rig = makeRig({ authority: 'human', pointer: null });
+    writeFileSync(join(flowHomeDir(rig.globalDir), FLOW_DEF_FILE), flowYaml(FLOW_NAME, 'human'));
+    mkdirSync(flowHomeDir(rig.wt), { recursive: true });
+    writeFileSync(join(flowHomeDir(rig.wt), FLOW_DEF_FILE), flowYaml(FLOW_NAME, 'auto'));
+    expect(rig.flowStart(rig.wt).status).toBe('in_progress');
     await rig.reachGate('clean');
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
     expect(engineDecisions(rig.gateEntries(T0))).toHaveLength(1);

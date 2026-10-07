@@ -15,10 +15,6 @@ import type { LoopDefV2Result } from './loopDefV2';
 import { clearInterrupt, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt } from './appLoopState';
 import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
-
-// §27.9.1 N9b.5(e)
-export const AUTO_GATE_DECISION_DEFAULT_MS = 300_000;
-
 export interface DefResolution {
   completion?: 'red' | 'green' | 'refactor';
 }
@@ -46,7 +42,7 @@ export interface AutoGateDeps {
   emitError?: (repoDir: string, reason: string) => void;
   setTimer: (cb: () => void, ms: number) => AutoGateTimer;
   clearTimer: (handle: AutoGateTimer) => void;
-  decisionBoundMs?: number;
+  decisionBoundMs: number;
 }
 
 export interface AutoGate {
@@ -523,7 +519,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (!honouredAuto(run, step) || verdict !== 'clean' || cause !== 'verdict') return;
       const key = { step, turnKey, gateSeq: run.gateSeq };
       const d: Deciding = { ...key, humanAttempted: false, approveStarted: false, claimed: false, abandoned: false, ended: false, timer: { id: -1 } };
-      d.timer = deps.setTimer(() => onBound(repoDir, run, d), AUTO_GATE_DECISION_DEFAULT_MS);
+      d.timer = deps.setTimer(() => onBound(repoDir, run, d), deps.decisionBoundMs);
       run.deciding = d;
     },
     gateReached(repoDir, step, turnKey) {
@@ -596,10 +592,15 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const d = run.deciding;
       if (d !== null && d.step === step && (turnKey === null || d.turnKey === turnKey)) d.humanAttempted = true;
       const atGate = run.loopRun?.step === step || run.haltShown?.step === step;
+      const clearFailed = run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'c' && r.detail !== undefined);
       run.humanDecisions += 1;
       return (landed) => {
         run.humanDecisions -= 1;
         if (runs.get(repoKey) !== run) return;
+        if (landed && clearFailed) {
+          const failed = consume(repoKey);
+          if (failed !== null) bestEffort(() => deps.emitError?.(repoKey, failed));
+        }
         if (landed && atGate && run.failedEffect !== null) {
           run.failedEffect = null;
           persist(repoKey, run);

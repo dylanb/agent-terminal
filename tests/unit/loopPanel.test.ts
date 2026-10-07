@@ -1095,6 +1095,12 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
     expect(rows[0].textContent).toContain(label);
   });
 
+  it('the halt reasons sit inside a live region, so the hand-off to the human is announced (WCAG 4.1.3)', () => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
+    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="c"]');
+    expect(row?.closest('[role="status"], [aria-live="polite"], [aria-live="assertive"]')).not.toBeNull();
+  });
+
   it('the three reasons S1 renders carry three distinct shared labels', () => {
     expect(new Set((['stop-for-a-human', 'c', 'e'] as const).map(autoHaltReasonLabel)).size).toBe(3);
   });

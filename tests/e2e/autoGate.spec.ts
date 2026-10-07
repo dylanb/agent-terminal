@@ -616,7 +616,7 @@ test('the strip\'s manual Advance at a gate showing the failed-effect marker cle
   expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
 });
 
-test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances (N9b.5(d))', { tag: '@ownapp' }, async () => {
+test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances, and one naming no step advances the current step (N9b.5(d), §6 v2.176)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 1));
   const home = tmp('agent-term-e2e-137-staleadv-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-137-staleadv-', 'groom', { ticket: '176' });
@@ -640,6 +640,9 @@ test('flow:advance through the preload carries the step the strip showed: an Adv
   expect(flowState(repo)).toMatch(/^step: groom$/m);
   await advance('groom');
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+  // §6 v2.176 — a request naming no step advances the current one.
+  await page.evaluate((key) => window.flow.advance(key), repo);
+  await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
 });
 
 test('a failed effect on the last auto step is shown at run end: the failure reaches the operator and one (i) entry is recorded (AC13)', { tag: '@ownapp' }, async () => {

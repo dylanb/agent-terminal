@@ -657,7 +657,8 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
 
   it('enters the polish stand-down (app-owned state) and neither accepts, runs a side-effect, nor advances', async () => {
     const { deps, rec } = mkDeps({ gate: POLISH_GATE });
-    await decide(deps, 'polish');
+    // N9b.5(d)/(c) — a polish that landed is a human decision at the gate: the runners clear what it showed.
+    await expect(decide(deps, 'polish')).resolves.toBe(true);
     expect(rec.polishEnters).toEqual([{ repoDir: '/repo', step: 'plan' }]); // the stand-down for the named step
     expect(rec.accepts).toEqual([]);
     expect(rec.sideEffects).toEqual([]);
@@ -667,7 +668,7 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
 
   it('is inert when the bound def does not declare polish (validated at the operation, AC9)', async () => {
     const { deps, rec } = mkDeps({}); // approve-only default def
-    await decide(deps, 'polish');
+    await expect(decide(deps, 'polish')).resolves.toBe(false);
     expect(rec.polishEnters).toEqual([]);
   });
 

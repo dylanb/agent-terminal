@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  AUTO_GATE_DECISION_DEFAULT_MS,
   createAutoGate,
+  defResolutionOf,
   type AutoGate,
   type AutoGateDeps,
   type DefResolution,
@@ -43,7 +43,7 @@ import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
-import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
+import { AUTO_GATE_DECISION_DEFAULT_MS, resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 // §27.9.1 N9b.4–N9b.6, N9b.9 — Impl-slice 1 of #137: the engine-held gate controller driven at its own
 // boundary (the approve operation it invokes, the §25 entries it writes, the view it feeds the strip, panel and
@@ -487,12 +487,13 @@ describe('autoGate — the interrupt arm is run-scoped in a run with an `auto` s
     return { rig, engine };
   }
 
-  it('an arm naming another step, at the consolidation of `auto` step Y: Y\'s gate halts with (c), no engine approve, and the arm file is consumed', async () => {
+  it('an arm naming another step, at the consolidation of `auto` step Y that says `another round`: Y stops at its gate with (c), no engine approve, and the arm file is consumed', async () => {
     const { rig, engine } = wiredWith(loopSteps('auto'));
     h.driveToConsolidateInjected(engine);
     armInterrupt(h.repo, 'some-earlier-step');
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, exampleConsolidatorOutput('another round', ROSTER));
     await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', round: 1 });
     expect(rig.approvals).toEqual([]);
     expectLetterShown(rig.view(h.repo), 'c');
     expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('c');
@@ -717,6 +718,27 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
   });
 
+  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included (v2.175 (9)).
+  it('a def only in the repo tier: the clean gate is engine-decided with no halt', async () => {
+    rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
+    plantDef(DEF_YAML, join(repoDir, 'loops'));
+    writeFileSync(join(repoDir, '.agent-loop.yaml'), `loops:\n  ${LOOP}: loops/${LOOP}/${LOOP}.yaml\n`);
+    const atStart = resolveLoopDefV2(LOOP, ctxFor(repoDir));
+    expect(atStart).toMatchObject({ ok: true, tierRoot: repoDir });
+
+    const rig = makeRig();
+    const observed = composeObservedResolveDef(ctxFor);
+    const preparerResolve = composeLoopBindingResolve(rig.gate, observed);
+    defNow = defResolutionOf(observed(repoDir, LOOP));
+    current = startRun(loopSteps('auto'));
+    rig.gate.bindAtStart(repoDir, current, 0);
+    rig.gate.commitStart(repoDir);
+    expect(preparerResolve(repoDir, STEP, LOOP)).toMatchObject({ ok: true, tierRoot: repoDir });
+    await reachGate(rig, 'clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    expect(autoHalts(rig)).toEqual([]);
+  });
+
   // Plan AC5 row (S2): the first-run leg deletes the operator config root before Start.
   it.each([
     ['an existing operator root', false],
@@ -906,6 +928,71 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     mkdirSync(arm);
     expect(() => rig.gate.consumeInterrupt(repoDir)).not.toThrow();
     expect(rig.errors.map((e) => e.reason).join('\n')).toMatch(/could not be cleared/);
+  });
+
+  describe('a human decision at the (c) gate retries a failed interrupt clear (N9b.6(c))', () => {
+    const decideAt = (rig: Rig, lands = true): Promise<boolean> =>
+      composeHumanDecisionRunners(rig.gate, { decide: async () => lands, advance: () => 'advanced', currentStep: () => STEP }).decide(repoDir, STEP, TURN, 'approve');
+
+    it('negative pair: a human decision at a gate halted without (c) leaves an arm made there in place', async () => {
+      const rig = makeRig();
+      startTrusted(rig);
+      await reachGate(rig, 'stop for a human');
+      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).not.toContain('c');
+      armInterrupt(repoDir, STEP);
+      await expect(decideAt(rig)).resolves.toBe(true);
+      expect(existsSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!)).toBe(true);
+    });
+
+    it('negative pair: a human decision at a (c) gate whose clear succeeded leaves an arm made afterwards in place', async () => {
+      const rig = makeRig();
+      startTrusted(rig);
+      armInterrupt(repoDir, STEP);
+      await reachGate(rig, 'clean', 'interrupt');
+      const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c');
+      expect(c).toBeDefined();
+      expect(c?.detail).toBeUndefined();
+      armInterrupt(repoDir, STEP);
+      await expect(decideAt(rig)).resolves.toBe(true);
+      expect(existsSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!)).toBe(true);
+    });
+
+    it('negative pair: a human decision that did not land at the (c) gate leaves the arm in place', async () => {
+      const rig = makeRig();
+      const arm = await haltOnUnclearableArm(rig);
+      rmSync(arm, { recursive: true });
+      armInterrupt(repoDir, STEP);
+      await expect(decideAt(rig, false)).resolves.toBe(false);
+      expect(existsSync(arm)).toBe(true);
+    });
+
+    async function haltOnUnclearableArm(rig: Rig): Promise<string> {
+      startTrusted(rig);
+      armInterrupt(repoDir, STEP);
+      const arm = loopAreaFile(repoDir, 'armed-interrupt.yaml')!;
+      rmSync(arm);
+      mkdirSync(arm);
+      await reachGate(rig, 'clean', 'interrupt');
+      expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c')?.detail ?? '').toMatch(/could not be cleared/);
+      return arm;
+    }
+
+    it('a clear that now succeeds leaves no arm behind', async () => {
+      const rig = makeRig();
+      const arm = await haltOnUnclearableArm(rig);
+      rmSync(arm, { recursive: true });
+      armInterrupt(repoDir, STEP);
+      await expect(decideAt(rig)).resolves.toBe(true);
+      expect(existsSync(arm)).toBe(false);
+    });
+
+    it('a clear that still fails is surfaced', async () => {
+      const rig = makeRig();
+      await haltOnUnclearableArm(rig);
+      expect(rig.errors.map((e) => e.reason).join('\n')).not.toMatch(/could not be cleared/);
+      await decideAt(rig);
+      expect(rig.errors.map((e) => e.reason).join('\n')).toMatch(/could not be cleared/);
+    });
   });
 
   it('(e): an `auto` step whose def could not be resolved when the run was bound is still frozen-checked, so its clean gate halts (N9b.7(c))', async () => {
@@ -1377,6 +1464,7 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       onViewChanged: () => {},
       setTimer: (cb, ms) => clock.setTimer(cb, ms),
       clearTimer: (h) => clock.clearTimer(h),
+      decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
     });
     const observed = composeObservedResolveDef((dir) => ({ tiers: tiers(), repoDir: dir }));
     const record = composeRecordFlowTransition({ recordTransition: () => {} }, gate);
@@ -1579,7 +1667,7 @@ describe('autoGate — (b) at the error stop itself (AC4, #137 S2)', () => {
 describe('autoGate — the failed-effect marker across gates of either authority (AC13, N9b.5(d), #137 S2)', () => {
   const decisions: { repoKey: string; step: string; turnKey: string; option: string }[] = [];
   const advanced: string[] = [];
-  let currentStep = STEP;
+  let currentStep: string | null = STEP;
   beforeEach(() => {
     decisions.length = 0;
     advanced.length = 0;
@@ -1676,6 +1764,25 @@ describe('autoGate — the failed-effect marker across gates of either authority
 
     await enterAndReach(rig, 'third');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP, 'third']);
+  });
+
+  it('a manual Advance naming no step, through the composed runners, advances the current step and clears the marker its gate showed (§27.15)', async () => {
+    const rig = makeRig();
+    const runners = runnersFor(rig);
+    await markerSet(rig);
+    await enterAndReach(rig, 'human-step');
+    currentStep = 'human-step';
+    expect(runners.advance(repoDir, undefined)).toBe(`advanced:${repoDir}`);
+    expect(advanced).toEqual([repoDir]);
+    expect(rig.view().autoGate?.failedEffect).toBeUndefined();
+  });
+
+  it('a manual Advance naming no step, with no current step, is refused and advances nothing', async () => {
+    const rig = makeRig();
+    const runners = runnersFor(rig);
+    currentStep = null;
+    expect(runners.advance(repoDir, undefined)).toBeNull();
+    expect(advanced).toEqual([]);
   });
 
   it('a stale manual Advance naming a step the flow has left is refused: no advance, and the gate it did not see keeps the marker and halts with (i)', async () => {

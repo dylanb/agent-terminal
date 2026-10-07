@@ -380,6 +380,7 @@ async function createWindow(): Promise<void> {
       if (t !== undefined) clearTimeout(t);
       autoGateTimers.delete(h.id);
     },
+    decisionBoundMs: config.autoGateDecisionMs,
   });
   const observedResolveDef = composeObservedResolveDef(appDefContext);
   const appEngine = createAppLoopEngine({

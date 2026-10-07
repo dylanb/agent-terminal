@@ -184,17 +184,19 @@ export async function runAppGateDecision(
   }
   // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
-  // and the operator can retry. One-way (no human input to lose), so the result is ignored by the caller.
+  // and the operator can retry. Returns whether the stand-down was entered (§27.9.1 N9b.5(d)).
   if (option === 'polish') {
+    let entered = false;
     try {
       deps.enterPolish(repoDir, step);
       humanAudit('decision', 0);
+      entered = true;
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       deps.emitError(`could not enter polish: ${reason}`);
     }
     deps.onViewChanged();
-    return false;
+    return entered;
   }
   // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
   // slice's RED step (reopenSlice) so the operator can redo missed work. One-way like polish (no note to lose):

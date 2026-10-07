@@ -541,7 +541,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
             li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
             halt.append(li);
           }
-          body.append(halt);
+          const region = doc.createElement('div');
+          region.setAttribute('role', 'status');
+          region.append(halt);
+          body.append(region);
         }
         // §27.9.1 N9b.5(d)
         if (ag.failedEffect) {
