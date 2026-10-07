@@ -89,9 +89,15 @@ describe('plan-polish work turn', () => {
     for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(body, token).toContain(token);
   });
 
-  it('audits the defensive surface: names the adversary, sources every defence, and does not treat review history as authority', () => {
+  it('audits everything built beyond the acceptance criteria, not only defences, and routes the unsourced to the operator', () => {
     const body = recipe();
-    for (const marker of ['Name the adversary', 'Source every defence', 'Review history is evidence, not authority']) {
+    for (const marker of [
+      'Source every addition',
+      'Prefer the simpler shape',
+      'Name the adversary',
+      'Review history is evidence, not authority',
+      'a likely future need',
+    ]) {
       expect(body, marker).toContain(marker);
     }
   });
