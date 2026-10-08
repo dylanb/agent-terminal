@@ -65,14 +65,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'sub',
-      'Install the bundled feature-dev flow, its app loop definitions, and commands so a new instance can render and run them.',
+      'Install the bundled feature-dev-v2 flow, its app loop definitions, and commands so a new instance can render and run them.',
     ),
   );
 
   const card = el('div', 'kprofile');
   const txt = el('div');
   txt.append(
-    el('div', 'kp-label', 'feature-dev flow'),
+    el('div', 'kp-label', 'feature-dev-v2 flow'),
     el(
       'div',
       'kp-help',
@@ -81,7 +81,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   );
   const btn = el('button', 'pill signal', 'Install examples');
   btn.type = 'button';
-  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev flow');
+  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev-v2 flow');
   card.append(txt, btn);
 
   const status = el('div', 'cli-status');

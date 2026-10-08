@@ -8,6 +8,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
@@ -1750,7 +1751,7 @@ function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
 // (§18.3/§18.4): entering prompts via the modal, Confirm injects `agent-loop pickup <input>`
 // (subject to the §19.3 busy refusal) and persists the value.
 // A §27 loop step (explicit `loop_namespace: app`) with a REQUIRED github-ticket input, so entering it
-// opens the typed-input modal (§18.4). Bound to `impl-loop`, which declares NO `pickup:` block, so entry
+// opens the typed-input modal (§18.4). Bound to `infra-loop`, which declares NO `pickup:` block, so entry
 // runs only a work turn (no git/gh bootstrap ports) — the input-resolution and input-clearing behaviours
 // under test are engine-neutral and unaffected by that turn.
 function seedBootstrapFlowRepo(prefix: string): string {
@@ -1761,7 +1762,7 @@ function seedBootstrapFlowRepo(prefix: string): string {
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
-      '  - id: plan\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n' +
+      '  - id: plan\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
   return dir;
@@ -1971,9 +1972,7 @@ test('the fake gh serves the knob ticket for every realistic issue-view form, an
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
-// defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
-const exampleConfigDir = join(process.cwd(), 'example');
+const exampleConfigDir = seedSharedExampleConfig();
 
 // §24.2.3 T7 — refs come from the flow's TYPED INPUTS now (§18.4); the retired engine's state-mirror
 // source (linked_issues/pr) went with the bridge (§F item 12). A pre-loop MANUAL `groom` step then a
@@ -2638,9 +2637,11 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'plan-polish-loop', 'plan-polish-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  // The shared loop folder an older app reads is left alone (§27.8).
+  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
 
@@ -2694,7 +2695,7 @@ test('installing the bundled examples seeds a catalog of >1 flow at the resolver
         .sort()
     : [];
   expect(entries.length).toBeGreaterThanOrEqual(2);
-  expect(entries).toContain('feature-dev');
+  expect(entries).toContain('feature-dev-v2');
   for (const id of entries) {
     expect(existsSync(join(catalog, id, 'flow.yaml'))).toBe(true);
   }
@@ -2786,7 +2787,7 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   };
   const ex = join(process.cwd(), 'example');
   const conflicting =
-    seedConflicts(join(ex, 'flows', 'feature-dev'), join(home, '.agent-terminal')) +
+    seedConflicts(join(ex, 'flows', 'feature-dev-v2'), join(home, '.agent-terminal')) +
     seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
     seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
@@ -3078,7 +3079,7 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
 }
 
 // The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
-// the round report must account for and the sections it must carry (example/loops-v2/plan-loop/plan-loop.yaml).
+// the round report must account for and the sections it must carry (example/loops-v2/plan-only/plan-loop/plan-loop.yaml).
 const PLAN_V2_ROSTER = [
   'review-plan-principal',
   'review-plan-security',
@@ -3507,9 +3508,9 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
 });
 
 // §27.10/§27.9 / N6 (sub-ticket 1) — a pre-bootstrapped two-`app`-loop flow: an app plan-loop step (declaring a
-// `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app impl-loop step,
+// `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app infra-loop step,
 // which declares its `plan` artifact as a typed input (§27.10). plan-loop writes plan.md at the very path
-// impl-loop reads it, so on approve→advance impl-loop's work turn is entered carrying plan-loop's output.
+// infra-loop reads it, so on approve→advance infra-loop's work turn is entered carrying plan-loop's output.
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -3518,7 +3519,7 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-chain\nsteps:\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n' +
-      '  - id: implement\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
+      '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n',
   );
   writeFileSync(
     join(dir, '.agent-terminal', 'flow-state.yaml'),
@@ -4223,6 +4224,9 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
 // operator once, and runs to its gate — while the retired tree is left byte-for-byte untouched (§B.6).
 test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its def, notifies once and drives to its gate — AC 6 tracer (c)/(d) (§B.6 / AC 5)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-tracer-cd-');
+  // Named as the shipped flow whose bundled folder carries plan-loop, so the bundle answers (§27.8).
+  const flowFile = join(repo, '.agent-terminal', 'flow.yaml');
+  writeFileSync(flowFile, readFileSync(flowFile, 'utf8').replace(/^name: .*$/m, 'name: plan-only'));
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-cd-home-'));
   // A config carrying ONLY the retired operator tier (loops/), and NO surviving loops-v2/ — the un-migrated
   // machine AC 5 / AC 6 exist for.
@@ -4232,7 +4236,7 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   const retiredDef = join(retiredDir, 'plan-loop.yaml');
   const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
   writeFileSync(retiredDef, retiredContent);
-  const migratedDef = join(config, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
+  const migratedDef = join(config, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml');
   expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
@@ -4248,7 +4252,8 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   await typeCommand('fake-agent');
   await flowControl().click(); // Start → enter the app plan-loop step: resolves from the app bundle → migrates
 
-  // (d) the app wrote its OWN copy of the def into the SURVIVING tier (loops-v2), and told the operator once.
+  // (d) the app wrote its OWN copy of the def into the flow's folder in the SURVIVING tier (loops-v2), and told
+  // the operator once.
   await expect.poll(() => existsSync(migratedDef), { timeout: 15_000 }).toBe(true);
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('Copied the built-in', { timeout: 10_000 });
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('plan-loop');
@@ -4846,13 +4851,13 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
-  // AC1 — approve runs plan-loop's side-effect and advances to impl-loop, whose work turn is entered carrying
-  // plan-loop's approved output (plan.md) as impl-loop's typed input (§27.10).
+  // AC1 — approve runs plan-loop's side-effect and advances to infra-loop, whose work turn is entered carrying
+  // plan-loop's approved output (plan.md) as infra-loop's typed input (§27.10).
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement'); // advanced onto the next app loop
   await expect
     .poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 })
-    .toContain(`- plan: ${APP_ARTIFACT_REL}`); // impl-loop's work turn carries plan-loop's output as its input
+    .toContain(`- plan: ${APP_ARTIFACT_REL}`); // infra-loop's work turn carries plan-loop's output as its input
 
   // The chained transition is recorded once in the §25 audit, naming the step it chained INTO (§6 identity).
   await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBe(1);
@@ -5186,6 +5191,36 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+});
+
+test('a §27 step resolves its loop from the running flow’s own loop folder before the shared one (§27.8)', { tag: '@ownapp' }, async () => {
+  // The bundle's plan-loop is valid; only the `v2-work` flow's own folder carries a def this app refuses. The
+  // refusal naming that def's version is the proof the step read the flow's folder, not the shared tiers.
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-flowloops-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-flowloops-home-'));
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-flowloops-config-'));
+  const flowDef = join(config, 'loops-v2', 'v2-work', 'plan-loop', 'plan-loop.yaml');
+  mkdirSync(dirname(flowDef), { recursive: true });
+  writeFileSync(flowDef, 'version: v9-flow-folder\n');
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: config, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toContainText('v9-flow-folder', { timeout: 10_000 });
+  expect(existsSync(appRunState(repo))).toBe(false);
+
+  // The loop view resolves the same flow-folder def the step did, so it shows the same refusal.
+  await errorDialog.locator('.dismiss').click();
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('v9-flow-folder', { timeout: 10_000 });
+
+  await app.close();
+  for (const dir of [repo, home, config]) rmSync(dir, { recursive: true, force: true });
 });
 
 test('a §27 work turn with no valid artifact retries then errors, offering all three route-out affordances; Accept advances a present artifact without re-running (§27.12 / AC5,7)', { tag: '@ownapp' }, async () => {
@@ -7461,7 +7496,7 @@ function seedFullTddChainAgent(binDir: string, opts: { implSlices?: number; poli
 // pre-completed so every phase loop runs on this repo's one branch (the §28.5.1 slice key).
 function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   const { dir } = seedFlowRepoBase(prefix, {
-    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'), 'utf8'),
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'), 'utf8'),
     flowState: `step: ${startStep}\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n`,
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
@@ -7847,7 +7882,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-const EPIC_CHAIN_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml');
+const EPIC_CHAIN_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml');
 
 function seedEpicChainRepo(prefix: string, opts: { catalogEntry?: { home: string; id: string; name: string } } = {}): string {
   const flowYaml = readFileSync(EPIC_CHAIN_FLOW_SOURCE, 'utf8');

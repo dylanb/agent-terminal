@@ -6,8 +6,11 @@ import yaml from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst, flowHomeDir } from '../../src/main/flow';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
+import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
+import { bundledFlowOf } from '../helpers/bundledLoops';
 
-const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 
 function walk(dir: string, base: string = dir): string[] {
@@ -17,7 +20,7 @@ function walk(dir: string, base: string = dir): string[] {
   );
 }
 
-/** The loop names the bundled feature-dev flow binds — read from the flow, never hard-coded. */
+/** The loop names the bundled feature-dev-v2 flow binds — read from the flow, never hard-coded. */
 function boundLoopNames(): string[] {
   const doc = yaml.load(readFileSync(path.join(BUNDLE_FLOW, 'flow.yaml'), 'utf8')) as {
     steps: { kind: string; loop?: string }[];
@@ -56,6 +59,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
           appBundled: BUNDLE_APP_LOOPS,
           retired: null,
         },
+        flow: FEATURE_DEV_ID,
       });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
@@ -64,11 +68,11 @@ describe('after the install, every loop name the shipped flow binds resolves on 
 
   it('has no operator definition before install, then installs every bound definition there', () => {
     for (const name of boundLoopNames()) {
-      expect(existsSync(path.join(appLoopsTargetDir(), name, `${name}.yaml`))).toBe(false);
+      expect(existsSync(path.join(appLoopsTargetDir(), FEATURE_DEV_ID, name, `${name}.yaml`))).toBe(false);
     }
     applyInstallExamples(dirs, []);
     for (const name of boundLoopNames()) {
-      expect(existsSync(path.join(appLoopsTargetDir(), name, `${name}.yaml`))).toBe(true);
+      expect(existsSync(path.join(appLoopsTargetDir(), FEATURE_DEV_ID, name, `${name}.yaml`))).toBe(true);
     }
   });
 
@@ -78,6 +82,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
         tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null },
+        flow: FEATURE_DEV_ID,
       });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
@@ -143,7 +148,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
   });
 
   it('joins file-producing steps by one id and path, then leaves implementation commit-producing', () => {
-    const defs = ['groom-loop', 'plan-loop', 'impl-loop'].map((name) => {
+    const defs = ['groom-loop', 'plan-bundle-loop', 'integration-slice-loop'].map((name) => {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
         tiers: {
@@ -151,6 +156,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
           appBundled: BUNDLE_APP_LOOPS,
           retired: null,
         },
+        flow: FEATURE_DEV_ID,
       });
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) throw new Error(resolved.reason);
@@ -167,7 +173,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
 
   it('installs the §27 defs into the operator tier', () => {
     applyInstallExamples(dirs, []);
-    for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
+    for (const name of ['groom-loop', 'plan-loop', 'integration-slice-loop']) {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
         tiers: {
@@ -175,6 +181,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
           appBundled: BUNDLE_APP_LOOPS,
           retired: null,
         },
+        flow: bundledFlowOf(name),
       });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
@@ -256,11 +263,65 @@ describe('the install is global — a repo-local override never redirects where 
     // install buys: the def is readable from any repo, not only the one that carried the override.
     const otherRepo = mkdtempSync(path.join(tmpdir(), 'install-res-other-'));
     try {
-      const resolved = resolveLoopDefV2('plan-loop', { repoDir: otherRepo, tiers: tiers() });
+      const resolved = resolveLoopDefV2('plan-loop', { repoDir: otherRepo, tiers: tiers(), flow: bundledFlowOf('plan-loop') });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     } finally {
       rmSync(otherRepo, { recursive: true, force: true });
+    }
+  });
+});
+
+// §27.8 — the shipped flow's loops land in its own folder, so a flow that binds the same loop names from the
+// shared folder (and an older app, which reads only that) keeps the definitions it had.
+describe('the install seeds the shipped flow’s own loop folder, never the shared one', () => {
+  const operatorRoot = (): string => userConfigLoopsV2Dir(configRoot) as string;
+  const sharedDef = (name: string): string => path.join(operatorRoot(), name, `${name}.yaml`);
+  const OLD_DEF = 'name: an-older-definition\n';
+
+  it('leaves a shared operator def byte-for-byte unchanged', () => {
+    const name = boundLoopNames()[0];
+    mkdirSync(path.dirname(sharedDef(name)), { recursive: true });
+    writeFileSync(sharedDef(name), OLD_DEF);
+
+    expect(applyInstallExamples(dirs, ['flow', 'appLoops', 'commands']).ok).toBe(true);
+
+    expect(readFileSync(sharedDef(name), 'utf8')).toBe(OLD_DEF);
+  });
+
+  it('resolves every bound loop of the shipped flow from that flow’s folder, over a shared operator def', () => {
+    for (const name of boundLoopNames()) {
+      mkdirSync(path.dirname(sharedDef(name)), { recursive: true });
+      writeFileSync(sharedDef(name), OLD_DEF);
+    }
+    applyInstallExamples(dirs, []);
+    const flowFolder = path.join(realpathSync(configRoot), path.relative(configRoot, operatorRoot()), FEATURE_DEV_ID);
+
+    for (const name of boundLoopNames()) {
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: { operator: operatorRoot(), appBundled: BUNDLE_APP_LOOPS, retired: null },
+        flow: FEATURE_DEV_ID,
+      });
+      expect(resolved.ok, `${name}: ${resolved.ok ? '' : resolved.reason}`).toBe(true);
+      if (resolved.ok) expect(resolved.def.work.recipe.startsWith(flowFolder + path.sep), name).toBe(true);
+    }
+  });
+});
+
+describe('the install seeds every shipped flow’s loops into that flow’s own folder', () => {
+  it('resolves plan-only’s loops from its own operator folder after the install', () => {
+    applyInstallExamples(dirs, []);
+    const operator = userConfigLoopsV2Dir(configRoot) as string;
+    const planOnlyFolder = path.join(realpathSync(configRoot), path.relative(configRoot, operator), 'plan-only');
+    for (const name of ['groom-loop', 'plan-loop']) {
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: { operator, appBundled: path.join(home, 'no-bundle'), retired: null },
+        flow: 'plan-only',
+      });
+      expect(resolved.ok, `${name}: ${resolved.ok ? '' : resolved.reason}`).toBe(true);
+      if (resolved.ok) expect(resolved.def.work.recipe.startsWith(planOnlyFolder + path.sep), name).toBe(true);
     }
   });
 });

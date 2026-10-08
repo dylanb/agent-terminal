@@ -335,10 +335,14 @@ async function createWindow(): Promise<void> {
   let unwatchAppTurnDone: (() => void) | null = null;
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
-  const appDefContext = (repoDir: string): LoopDefV2Context => ({
-    tiers: resolveAppLoopDefTiers(iconLoc),
-    repoDir,
-  });
+  const appDefContext = (repoDir: string): LoopDefV2Context => {
+    const load = resolveActiveDefinition(repoDir);
+    return {
+      tiers: resolveAppLoopDefTiers(iconLoc),
+      repoDir,
+      ...(load.ok ? { flow: load.definition.name } : {}),
+    };
+  };
   let lifecycle: FlowLifecycle;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
@@ -565,11 +569,7 @@ async function createWindow(): Promise<void> {
     // and app-bundled tiers and produce its whole run-less/failure view. Tier roots are chosen by the
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
-    readAppLoopView: (repoKey, name) =>
-      provideAppLoopView(appEngine, name, {
-        tiers: resolveAppLoopDefTiers(iconLoc),
-        repoDir: repoKey,
-      }),
+    readAppLoopView: (repoKey, name) => provideAppLoopView(appEngine, name, appDefContext(repoKey)),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
@@ -917,7 +917,7 @@ async function createWindow(): Promise<void> {
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
         // §28.4.1/§28.8.1 — every approve whose def declares the `plan` output re-sources `slices`, the last one
-        // winning: in feature-dev that is the plan-polish approve, so the polished plan decides the count the
+        // winning: in feature-dev-v2 that is the plan-polish approve, so the polished plan decides the count the
         // refactor loop-back reads. resolveInputs sets the input WITHOUT re-entering the step (re-entering a
         // planning step here would restart its loop).
         sourceSliceCount: (repoDir, def) => {

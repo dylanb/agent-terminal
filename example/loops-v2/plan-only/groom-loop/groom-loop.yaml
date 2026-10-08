@@ -1,0 +1,28 @@
+version: v2
+name: groom-loop
+work:
+  recipe: prompts/work.md
+  artifact: groomed-ticket
+reviewers:
+  - persona: review-plan-intent
+    charter: charter/intent.md
+    tools: [Read, Grep, Glob]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: update-issue-body
+        artifact: groomed-ticket
+  - option: request-changes
+  - option: redo
+  - option: polish
+outputs:
+  - id: groomed-ticket
+    path: groomed-ticket.md

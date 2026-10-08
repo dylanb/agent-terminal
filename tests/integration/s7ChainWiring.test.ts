@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { load } from 'js-yaml';
-import { resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
+import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
@@ -12,15 +12,17 @@ import { createGitRepoFixture } from '../helpers/gitRepo';
 
 // §28.10 S7 (§28.2)
 
-const SOURCE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+const BUNDLE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+const SOURCE_TREE = join(BUNDLE_TREE, FEATURE_DEV_ID);
 
 type Completion = 'red' | 'green' | 'refactor';
 
 interface PersonaRow {
   persona: string;
   charter: string;
-  // `source` present ⇒ the charter is a byte-copy of another loop's charter, pinned against drift by
-  // C8/C4b; absent ⇒ authored in this loop's own dir (S6).
+  // `source` present ⇒ the charter is a byte-copy of another feature-dev-v2 loop's charter, pinned against
+  // drift by C8/C4b; absent ⇒ authored in this loop's own dir. Sources never cross into another flow's folder
+  // (§27.8: each flow's loops change independently).
   source?: { loop: string; charter: string };
 }
 
@@ -46,16 +48,18 @@ const GREEN_LANES = ['principal', 'tests', 'security', 'taint', 'reliability', '
 const REFACTOR_LANES = ['principal', 'tests', 'reliability', 'architecture'] as const;
 const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'] as const;
 
-const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-loop', charter: `plan-loop/charter/${lane}.md` } });
-const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'impl-loop', charter: `impl-loop/charter/${lane}.md` } });
+const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
+const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'integration-slice-loop', charter: `integration-slice-loop/charter/${lane}.md` } });
 const fromPlanBundle = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-bundle-loop', charter: `plan-bundle-loop/charter/${lane}.md` } });
 const fromPlanPolish = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const authored = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md` });
+const authoredPlan = (lane: string): PersonaRow => authored(`review-plan-${lane}`, lane);
+const authoredImpl = (lane: string): PersonaRow => authored(`impl-review-${lane}`, lane);
 
 export const CHAIN: readonly LoopRow[] = [
   {
     name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: [], pickup: true,
-    consolidateSource: 'plan-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
+    consolidateSource: 'plan-bundle-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
     polish: 'defer',
     personas: [plan('principal'), plan('intent'), authored('review-plan-tracer-slicer', 'tracer-slicer')],
   },
@@ -64,7 +68,7 @@ export const CHAIN: readonly LoopRow[] = [
     consolidateSource: 'plan-polish-loop', input: PLAN_INPUT, output: null,
     polish: 'fix',
     personas: [
-      ...PLAN_LANES.map(plan),
+      ...PLAN_LANES.map(authoredPlan),
       authored('review-plan-test-architect', 'test-architect'),
       authored('review-plan-determinism', 'determinism'),
       fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer'),
@@ -72,7 +76,7 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'infra-loop', kind: 'impl', completion: null, gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: null,
     polish: 'defer',
     personas: [
       ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
@@ -81,27 +85,27 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'red-loop', kind: 'phase', completion: 'red', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.md' },
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.md' },
     polish: 'defer',
     personas: [...['tests', 'intent'].map(impl), authored('impl-review-red-authenticity', 'red-authenticity')],
   },
   {
     name: 'green-loop', kind: 'phase', completion: 'green', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.md' },
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.md' },
     polish: 'defer',
     personas: [...GREEN_LANES.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
   },
   {
     name: 'refactor-loop', kind: 'phase', completion: 'refactor', gate: ['commit'], pickup: false,
-    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: null,
     polish: 'defer',
     personas: [...REFACTOR_LANES.map(impl)],
   },
   {
     name: 'integration-slice-loop', kind: 'impl', completion: null, gate: ['commit', 'gh'], pickup: false,
-    consolidateSource: 'impl-loop', input: PLAN_INPUT, output: null,
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: null,
     polish: 'fix',
-    personas: [...IMPL_LANES.map(impl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
+    personas: [...IMPL_LANES.map(authoredImpl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
   },
 ];
 
@@ -172,7 +176,8 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
 const WIRED = ['plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
 
 const REPO_DIR = resolve(__dirname, '..', '..');
-const resolveDef = (name: string) => resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir: REPO_DIR });
+const resolveDef = (name: string) =>
+  resolveLoopDefV2(name, { tiers: { operator: null, appBundled: BUNDLE_TREE, retired: null }, repoDir: REPO_DIR, flow: FEATURE_DEV_ID });
 
 function mustResolve(name: string): LoopDefV2 {
   const r = resolveDef(name);
@@ -314,8 +319,8 @@ describe('s7 shipped flow — the full-TDD chain (§28.2, C1)', () => {
   const flowDir = resolveFeatureDevFlowDir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
   const flow = load(readFileSync(join(flowDir, 'flow.yaml'), 'utf8')) as ShippedFlow;
 
-  it('keeps the name feature-dev', () => {
-    expect(flow.name).toBe('feature-dev');
+  it('keeps the name feature-dev-v2', () => {
+    expect(flow.name).toBe('feature-dev-v2');
   });
 
   it('chains groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice in order', () => {
