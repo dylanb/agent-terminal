@@ -68,13 +68,13 @@ function confinedChild(rootDir: string, seg: string): string | null {
 /** Copy `<appBundledDir>/<defRel>/**` into `<operatorDir>/<defRel>/` once, all-or-nothing (§B.6). Returns the
  *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
  *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
- *  a tier root does not resolve or its `<root>/<name>` escapes it, or the source raced away after it
+ *  a tier root does not resolve or its `<root>/<defRel>` escapes it, or the source raced away after it
  *  resolved. NEVER throws. */
 export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): string | null {
   const { name, defRel, appBundledDir, operatorDir, stageDir } = params;
   try {
     // The bundle is an installed artifact this build did not necessarily write, so the read is confined
-    // exactly as the write is: a `..` or a symlink at `<root>/<name>` that escapes yields no path, so the
+    // exactly as the write is: a `..` or a symlink at `<root>/<defRel>` that escapes yields no path, so the
     // read walks only what stays inside the bundle and the copy lands only inside the operator tier (§B.6).
     const destDir = confinedChild(operatorDir, defRel);
     const srcDir = confinedChild(appBundledDir, defRel);
@@ -101,7 +101,8 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
  *  so keying on silence would copy the app bundle into the operator's own tier at a cloned repo's request,
  *  where it then outranks the bundle for every repo forever (CWE-829/CWE-732). Returns the one-shot notice, or
  *  `null` when no migration fires (a repo/operator-tier resolution, a refused operator root, or a nameless
- *  step). Only `step.loop` and `resolved.tierRoot` are read — the narrowest slice the decision needs. */
+ *  step). Only `step.loop`, `resolved.tierRoot` and `resolved.defDir` are read — the narrowest slice the
+ *  decision needs. */
 export function migrateBundledLoopDefOnEntry(
   step: { loop?: string },
   resolved: { tierRoot: string; defDir: string },

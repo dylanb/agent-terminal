@@ -272,7 +272,7 @@ describe('the install is global — a repo-local override never redirects where 
   });
 });
 
-// §27.15 — the shipped flow's loops land in its own folder, so a flow that binds the same loop names from the
+// §27.8 — the shipped flow's loops land in its own folder, so a flow that binds the same loop names from the
 // shared folder (and an older app, which reads only that) keeps the definitions it had.
 describe('the install seeds the shipped flow’s own loop folder, never the shared one', () => {
   const operatorRoot = (): string => userConfigLoopsV2Dir(configRoot) as string;

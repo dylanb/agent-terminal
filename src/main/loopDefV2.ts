@@ -175,9 +175,8 @@ export interface LoopDefV2Context {
   flow?: string;
 }
 
-/** §27.15. A flow's own loop folder under a loop-def root, or null for a flow name that is not a single safe
- *  path segment. The installer writes here and the resolver reads here. */
-export function flowLoopsDir(loopsRoot: string, flow: string): string | null {
+/** §27.8. */
+function flowLoopsDir(loopsRoot: string, flow: string): string | null {
   return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
 

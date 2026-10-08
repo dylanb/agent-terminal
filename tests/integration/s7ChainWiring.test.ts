@@ -22,7 +22,7 @@ interface PersonaRow {
   charter: string;
   // `source` present ⇒ the charter is a byte-copy of another feature-dev-v2 loop's charter, pinned against
   // drift by C8/C4b; absent ⇒ authored in this loop's own dir. Sources never cross into another flow's folder
-  // (§27.15: each flow's loops change independently).
+  // (§27.8: each flow's loops change independently).
   source?: { loop: string; charter: string };
 }
 

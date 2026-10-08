@@ -97,7 +97,7 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
   });
 });
 
-// §27.15 — every bundled loop def lives in the folder of the shipped flow that binds it, so one flow's loops
+// §27.8 — every bundled loop def lives in the folder of the shipped flow that binds it, so one flow's loops
 // can change without changing another's, and an install never writes the shared operator folder.
 describe('bundled loop defs are grouped by the shipped flow that binds them', () => {
   const FLOWS_TREE = resolveExampleFlowsDir({ packaged: false, appPath: repoDir });

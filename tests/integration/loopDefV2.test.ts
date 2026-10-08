@@ -606,9 +606,9 @@ describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5
   });
 });
 
-// §27.15 — a flow's own loop folder, `<operator>/<flow>/<name>/`, lets two flows that bind the same loop name
+// §27.8 — a flow's own loop folder, `<operator>/<flow>/<name>/`, lets two flows that bind the same loop name
 // run different definitions of it. The reviewer roster tells the two planted variants apart from the outside.
-describe('resolveLoopDefV2 — the running flow’s own loop folder (§27.15)', () => {
+describe('resolveLoopDefV2 — the running flow’s own loop folder (§27.8)', () => {
   const ONE_REVIEWER_DEF = VALID_DEF.replace(
     '  - persona: review-plan-security\n    charter: charter/security.md\n    tools: [Read, Grep, Glob, Bash]\n',
     '',

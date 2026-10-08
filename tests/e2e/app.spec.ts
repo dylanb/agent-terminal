@@ -2640,7 +2640,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'plan-polish-loop', 'plan-polish-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
-  // The shared loop folder an older app reads is left alone (§27.15).
+  // The shared loop folder an older app reads is left alone (§27.8).
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
@@ -5193,7 +5193,7 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a §27 step resolves its loop from the running flow’s own loop folder before the shared one (§27.15)', { tag: '@ownapp' }, async () => {
+test('a §27 step resolves its loop from the running flow’s own loop folder before the shared one (§27.8)', { tag: '@ownapp' }, async () => {
   // The bundle's plan-loop is valid; only the `v2-work` flow's own folder carries a def this app refuses. The
   // refusal naming that def's version is the proof the step read the flow's folder, not the shared tiers.
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-flowloops-');
@@ -5213,6 +5213,11 @@ test('a §27 step resolves its loop from the running flow’s own loop folder be
   const errorDialog = page.locator('#flow-error-host .flow-modal');
   await expect(errorDialog).toContainText('v9-flow-folder', { timeout: 10_000 });
   expect(existsSync(appRunState(repo))).toBe(false);
+
+  // The loop view resolves the same flow-folder def the step did, so it shows the same refusal.
+  await errorDialog.locator('.dismiss').click();
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('v9-flow-folder', { timeout: 10_000 });
 
   await app.close();
   for (const dir of [repo, home, config]) rmSync(dir, { recursive: true, force: true });

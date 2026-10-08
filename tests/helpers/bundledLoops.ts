@@ -1,4 +1,4 @@
-// §27.15 — `example/loops-v2/<flow>/<loop>/`.
+// §27.8 — `example/loops-v2/<flow>/<loop>/`.
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
