@@ -44,7 +44,9 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     HOLD_WAIT_FN +
     // FAKE_GIT_HOLD_REV/FAKE_GIT_HOLD: while the hold file exists, hold every invocation in which some argv element
     // contains the rev, logging `held <pid> <argv>` first and `released <pid>` (or `expired <pid>`, exit 1) after.
-    'if [ -n "$FAKE_GIT_HOLD_REV" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -e "$FAKE_GIT_HOLD" ]; then for a in "$@"; do case "$a" in *"$FAKE_GIT_HOLD_REV"*) hold_wait "$FAKE_GIT_HOLD" "git $*" || exit 1; break;; esac; done; fi\n' +
+    // With FAKE_GIT_HOLD_REV unset, the rev is the hold file's first line, for a rev known only mid-run.
+    'hold_rev="$FAKE_GIT_HOLD_REV"; if [ -z "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -s "$FAKE_GIT_HOLD" ]; then hold_rev=$(head -n 1 "$FAKE_GIT_HOLD"); fi\n' +
+    'if [ -n "$hold_rev" ] && [ -n "$FAKE_GIT_HOLD" ] && [ -e "$FAKE_GIT_HOLD" ]; then for a in "$@"; do case "$a" in *"$hold_rev"*) hold_wait "$FAKE_GIT_HOLD" "git $*" || exit 1; break;; esac; done; fi\n' +
     // Skip ALL leading git GLOBAL options so `$1` is the subcommand real git would dispatch: the bootstrap
     // port's throwaway `--git-dir <tmp>`, the neutralizing `-c <k=v>` pairs, and `--no-replace-objects` (the §28
     // reads' tamper-evidence flag — workingTreeTestPaths/changedTestPaths/baselineCapabilities send it ahead of
@@ -214,6 +216,8 @@ export interface StepScript {
   // 50 ms: `<sentinel>.abandon` present → exits with no action; the sentinel gone → does the `work` action;
   // 30 s elapsed → exits with no action, so an unreleased hold fails its test on that test's own assertion.
   hold?: { sentinel: string };
+  // Holds every consolidate turn of this step the same way, with its own sentinel.
+  holdConsolidate?: { sentinel: string };
   // The review roster/sections the step's loop declares (default: the plan-loop's).
   roster?: string[];
   sections?: string[];
@@ -259,6 +263,20 @@ const HOLD_CAP_S = 30;
 const doneSignal = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${DONE_REL}`;
 const byTurn = (counter: string, entries: string[] | undefined): string =>
   entries && entries.length > 0 ? `case "$${counter}" in ${entries.map((e, i) => `${i + 1}) ${e} ;;`).join(' ')} esac` : ':';
+
+/** Runs `action` in the background once `sentinel` is deleted (see `StepScript.hold`), so the agent keeps reading. */
+function heldAction(sentinelPath: string, action: string): string {
+  const sentinel = shellQuote(sentinelPath);
+  const abandon = shellQuote(`${sentinelPath}.abandon`);
+  const pids = shellQuote(`${sentinelPath}.pids`);
+  return (
+    `( pid=$(exec sh -c 'echo $PPID'); printf '%s\\n' "$pid" >> ${pids}; ` +
+    `end=$((SECONDS + ${HOLD_CAP_S})); while :; do ` +
+    `if [ -e ${abandon} ]; then exit 0; fi; ` +
+    `if [ ! -e ${sentinel} ]; then [ -e ${abandon} ] && exit 0; ${action}; exit 0; fi; ` +
+    `if [ "$SECONDS" -ge "$end" ]; then exit 0; fi; sleep 0.05; done ) </dev/null &`
+  );
+}
 
 function stepArms(stepId: string, opts: StepScript): string[] {
   const turnKey = `work-${stepId}`;
@@ -314,16 +332,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
       : [...workBody, byTurn('n', opts.extraShell?.work), ...(signals ? [doneSignal(turnKey)] : [])]
           .filter((s) => s.length > 0)
           .join('; ');
-  const sentinel = opts.hold ? shellQuote(opts.hold.sentinel) : '';
-  const abandon = opts.hold ? shellQuote(`${opts.hold.sentinel}.abandon`) : '';
-  const pids = opts.hold ? shellQuote(`${opts.hold.sentinel}.pids`) : '';
-  const workAct = opts.hold
-    ? `${count(turnKey, 'n')}; ( pid=$(exec sh -c 'echo $PPID'); printf '%s\\n' "$pid" >> ${pids}; ` +
-      `end=$((SECONDS + ${HOLD_CAP_S})); while :; do ` +
-      `if [ -e ${abandon} ]; then exit 0; fi; ` +
-      `if [ ! -e ${sentinel} ]; then [ -e ${abandon} ] && exit 0; ${workAction}; exit 0; fi; ` +
-      `if [ "$SECONDS" -ge "$end" ]; then exit 0; fi; sleep 0.05; done ) </dev/null &`
-    : `${count(turnKey, 'n')}; ${workAction}`;
+  const workAct = opts.hold ? `${count(turnKey, 'n')}; ${heldAction(opts.hold.sentinel, workAction)}` : `${count(turnKey, 'n')}; ${workAction}`;
 
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
@@ -362,11 +371,14 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   // The consolidator writes its verdict output (round-keyed) then signals.
   const verdictCase = (opts.verdicts ?? []).map((v, i) => `${i + 1}) OUTB='${b64(v)}' ;;`).join(' ');
   const attemptCase = (opts.consolidateAttempts ?? []).map((v, i) => `${i + 1}) OUTB='${b64(v)}' ;;`).join(' ');
-  const consolidateAct =
-    `${count(consolidateKey, 'n')}; mkdir -p .agent-terminal; printf x >> .agent-terminal/consolidate-runs; ` +
+  const consolidateAction =
+    'mkdir -p .agent-terminal; printf x >> .agent-terminal/consolidate-runs; ' +
     `r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; case "$n" in ${attemptCase} esac; ` +
     'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
     `${byTurn('n', opts.extraShell?.consolidate)}; ${doneSignal(consolidateKey)}`;
+  const consolidateAct = opts.holdConsolidate
+    ? `${count(consolidateKey, 'n')}; ${heldAction(opts.holdConsolidate.sentinel, consolidateAction)}`
+    : `${count(consolidateKey, 'n')}; ${consolidateAction}`;
 
   return [
     `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;`,

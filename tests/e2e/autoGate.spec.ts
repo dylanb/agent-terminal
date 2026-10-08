@@ -9,7 +9,7 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
-import { recordBaselineCommit } from '../../src/main/appLoopState';
+import { readChangedTests, recordBaselineCommit, recordChangedTests } from '../../src/main/appLoopState';
 import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
@@ -22,6 +22,7 @@ import {
   seedAutoGateRepo,
   seedTrustedFlow,
   type AutoGateStep,
+  type GateEntry,
 } from './autoGateHarness';
 
 // #137 — §27.9.1 per-step gate authority: an `auto` loop step's clean gate is decided by the engine through the
@@ -233,28 +234,75 @@ test('an auto gate whose verdict is stop for a human halts at the gate, names th
   expect(engineEntries.map((e) => gateDecisionKind(e.cmd)?.kind)).toEqual(['auto-halt']);
 });
 
-// Plan S1 "No intermediate commit is unsafe": the completion is read from the shipped `green-loop` def through
-// the app's own wiring, so a production resolution that drops `work.completion` advances here.
-test('an auto step running a green-completion loop halts its clean gate with (e) until the frozen check lands: no engine approve, no commit (S1 stub)', { tag: '@ownapp' }, async () => {
-  test.setTimeout(loopTestBudget(3, 0));
-  const home = tmp('agent-term-e2e-137-e-home-');
-  const repo = seedAutoGateRepo('agent-term-e2e-137-e-', 'green');
-  cleanup.push(repo);
-  recordBaselineCommit(repo, gitIn(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), gitIn(repo, 'rev-parse', 'HEAD'));
-  seedTrustedFlow(home, repo, 'auto-green', autoGateFlowYaml([{ id: 'green', kind: 'loop', loop: 'green-loop', authority: 'auto' }, { id: 'done', kind: 'manual' }]));
-  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
-  await launchInto('agent-term-e2e-137-e-', repo, home, { stepId: 'green', artifactRel: GREEN_RESULT_REL, work: 'green', touchTest: false, roster: loopRoster('green-loop') });
+// #137 S4 — §27.9.1 N9b.7: the engine's own frozen check at the approve of an `auto` GREEN step, against the
+// phase baseline. The completion is read from the shipped `green-loop` def through the app's own wiring.
+const AUTO_GREEN_THEN_MANUAL: AutoGateStep[] = [
+  { id: 'green', kind: 'loop', loop: 'green-loop', authority: 'auto' },
+  { id: 'done', kind: 'manual' },
+];
+const greenAgent = (over: Partial<StepScript> = {}): StepScript => ({
+  artifactRel: GREEN_RESULT_REL,
+  work: 'green',
+  touchTest: false,
+  roster: loopRoster('green-loop'),
+  ...over,
+});
+const haltRows = () => loopPanel().locator('[data-auto-halt-reason]');
+const autoHaltsAt = (home: string, repo: string, step: string): GateEntry[] =>
+  auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt');
 
+async function startAutoGreen(prefix: string, agent: StepScript): Promise<{ home: string; repo: string; baseline: string }> {
+  const home = tmp(`${prefix}home-`);
+  const repo = seedAutoGateRepo(prefix, 'green');
+  cleanup.push(repo);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  recordBaselineCommit(repo, gitIn(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), baseline);
+  seedTrustedFlow(home, repo, 'auto-green', autoGateFlowYaml(AUTO_GREEN_THEN_MANUAL));
+  await launchInto(prefix, repo, home, { green: agent });
   await flowControl().click();
+  return { home, repo, baseline };
+}
+
+test('auto GREEN halts on frozen-test change and on unavailable check: a control round that edits no test is engine-approved (AC12)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 1));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-137-frozen-ok-', greenAgent());
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) })
+    .toMatch(/^step: done$/m);
+  const entries = auditGateEntries(home, repo, { step: 'green' });
+  expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision').map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
+  expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
+});
+
+test('auto GREEN halts on frozen-test change and on unavailable check: a round that edited a test halts with (d) and the flag lists the file (AC12)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(3, 0));
+  const { home, repo, baseline } = await startAutoGreen('agent-term-e2e-137-frozen-d-', greenAgent({ touchTest: true }));
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="e"]')).toBeVisible({ timeout: UI_MS });
+  await expect(haltRows().first()).toBeVisible({ timeout: UI_MS });
+  expect(autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['d']]);
+  await expect(loopPanel().locator('[data-auto-halt-reason="d"]')).toBeVisible();
+  expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
   expect(flowState(repo)).toMatch(/^step: green$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
-  const entries = auditGateEntries(home, repo);
-  expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
-  expect(entries.flatMap((e) => parseAutoHaltReasons(e.cmd) ?? [])).toEqual(['e']);
+});
+
+test('auto GREEN halts on frozen-test change and on unavailable check: `loop-capabilities.yaml` removed before the approve halts with (e) naming it, not (b) (AC12)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(3, 0));
+  const { home, repo, baseline } = await startAutoGreen('agent-term-e2e-137-frozen-e-', greenAgent({ extraShell: { consolidate: ['rm -f loop-capabilities.yaml'] } }));
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await openLoopPanel();
+  await expect(haltRows().first()).toBeVisible({ timeout: UI_MS });
+  const halts = autoHaltsAt(home, repo, 'green');
+  expect(halts.map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['e']]);
+  expect(halts[0].cmd).toContain('loop-capabilities.yaml');
+  await expect(loopPanel().locator('[data-auto-halt-reason="e"]')).toContainText('loop-capabilities.yaml');
+  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toHaveCount(0);
+  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
 });
 
 test('an invalid gate_authority fails the flow load: an unknown value, and the field on a manual step (AC6)', { tag: '@ownapp' }, async () => {
@@ -905,4 +953,139 @@ test('auto gate concurrency, epic preview: an `auto` plan-bundle gate on an epic
     () => auditGateEntries(home, repo, { run }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'confirm').map((e) => gateDecisionDecider(e.cmd)),
     { timeout: UI_MS },
   ).toEqual(['human']);
+});
+
+// #137 S4 — the approve-time frozen check held on the phase baseline (RED's phase commit) by the fake git's
+// FAKE_GIT_HOLD, the only window before the engine's identity check and claim. The hold file is created only
+// once GREEN's consolidate turn is running (held by the fake agent), after every turn-completion frozen read.
+const AUTO_RED_THEN_AUTO_GREEN: AutoGateStep[] = [
+  { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+  { id: 'green', kind: 'loop', loop: 'green-loop', authority: 'auto' },
+  { id: 'done', kind: 'manual' },
+];
+const RUN_STATE_REL = '.agent-terminal/loop/run-state.yaml';
+const heldNaming = (logFile: string, rev: string): boolean => readIf(logFile).split('\n').some((l) => /^held \d+ git /.test(l) && l.includes(rev));
+const STEADY_MS = 2_000;
+const STEADY_POLL_MS = 100;
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/** Every `held <pid>` read the shim logged has exited, whether released, expired or aborted. */
+const heldReadsDone = (logFile: string): boolean =>
+  readIf(logFile).split('\n').flatMap((l) => /^held (\d+) /.exec(l)?.[1] ?? []).every((p) => !pidAlive(Number(p)));
+
+/** Asserts `read()` equals `expected` throughout `STEADY_MS`, so a late write is seen rather than raced. */
+async function expectSteady<T>(read: () => T, expected: T): Promise<void> {
+  const end = Date.now() + STEADY_MS;
+  do {
+    expect(read() as unknown).toEqual(expected);
+    await new Promise((r) => setTimeout(r, STEADY_POLL_MS));
+  } while (Date.now() < end);
+  expect(read() as unknown).toEqual(expected);
+}
+
+interface HeldGreen {
+  home: string;
+  repo: string;
+  baseline: string;
+  logFile: string;
+  release: () => void;
+}
+
+async function startHeldGreen(prefix: string): Promise<HeldGreen> {
+  const home = tmp(`${prefix}home-`);
+  const repo = seedAutoGateRepo(prefix, 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red-auto-green', autoGateFlowYaml(AUTO_RED_THEN_AUTO_GREEN));
+  const holdDir = tmp(`${prefix}hold-`);
+  const sentinel = join(holdDir, 'consolidate');
+  const gitHold = join(holdDir, 'git');
+  writeFileSync(sentinel, '');
+  const { stepId: _red, ...red } = redAgent();
+  const { logFile } = await launchInto(prefix, repo, home, { red, green: greenAgent({ holdConsolidate: { sentinel } }) }, { FAKE_GIT_HOLD: gitHold });
+
+  await flowControl().click();
+
+  await expect
+    .poll(() => {
+      const rs = runState(repo);
+      return /^step: green$/m.test(rs) && /^turn_key: consolidate-green$/m.test(rs) && /^status: working$/m.test(rs) && readIf(`${sentinel}.pids`).trim().length > 0;
+    }, { timeout: 2 * LOOP_ROUND_MS + APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) })
+    .toBe(true);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  writeFileSync(gitHold, `${baseline}\n`);
+  rmSync(sentinel, { force: true });
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: green$[\s\S]*^status: complete$/m);
+  await openLoopPanel();
+  await expect
+    .poll(async () => heldNaming(logFile, baseline) || (await haltRows().count()) > 0, { timeout: UI_MS, message: gateDiagnosis(home, repo) })
+    .toBe(true);
+  return { home, repo, baseline, logFile, release: () => rmSync(gitHold, { force: true }) };
+}
+
+test('auto gate concurrency, held frozen check: a human approve during the held check wins over the engine (AC10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 2) + 2 * LOOP_ROUND_MS);
+  const { home, repo, baseline, logFile, release } = await startHeldGreen('agent-term-e2e-137-human-first-');
+  try {
+    await approveOption().click({ timeout: UI_MS });
+    await expect
+      .poll(() => auditGateEntries(home, repo, { step: 'green' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'human'), { timeout: APPROVE_ADVANCE_MS })
+      .toHaveLength(1);
+    await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
+    recordChangedTests(repo, 'earlier-step', ['tests/earlier.test.ts']);
+    await expect.poll(() => heldReadsDone(logFile), { message: 'the human approve aborts the held git read', timeout: UI_MS }).toBe(true);
+  } finally {
+    release();
+  }
+
+  await expect.poll(() => heldReadsDone(logFile), { timeout: UI_MS }).toBe(true);
+  await expectSteady(() => auditGateEntries(home, repo, { step: 'green' }).filter((e) => gateDecisionDecider(e.cmd) === 'engine').map((e) => e.cmd), []);
+  await expectSteady(() => readChangedTests(repo), { step: 'earlier-step', paths: ['tests/earlier.test.ts'] });
+  expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+  const green = auditGateEntries(home, repo, { step: 'green' });
+  expect(green.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision').map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+  expect(heldNaming(logFile, baseline)).toBe(true);
+});
+
+test('auto gate concurrency, held frozen check: a rewritten run-state loop refuses the engine approve with (l) (AC13)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 1) + 2 * LOOP_ROUND_MS);
+  const { home, repo, baseline, logFile, release } = await startHeldGreen('agent-term-e2e-137-l-');
+  const runStateFile = join(repo, RUN_STATE_REL);
+  writeFileSync(runStateFile, readFileSync(runStateFile, 'utf8').replace(/^loop: .*$/m, 'loop: red-loop'));
+  release();
+
+  await expect
+    .poll(() => autoHaltsAt(home, repo, 'green').flatMap((e) => parseAutoHaltReasons(e.cmd) ?? []), { timeout: APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) })
+    .toContain('l');
+  await expect(loopPanel().locator('[data-auto-halt-reason="l"]')).toContainText('red-loop', { timeout: UI_MS });
+  const green = auditGateEntries(home, repo, { step: 'green' });
+  expect(green.filter((e) => gateDecisionKind(e.cmd)?.kind === 'side-effect')).toEqual([]);
+  await expect.poll(() => heldReadsDone(logFile), { timeout: UI_MS }).toBe(true);
+  await expectSteady(() => [autoHaltsAt(home, repo, 'green').length, gitIn(repo, 'rev-parse', 'HEAD')], [1, baseline]);
+  expect(heldNaming(logFile, baseline)).toBe(true);
+});
+
+test('auto gate concurrency, held frozen check: an interrupt armed during the held check halts with (c) and (l) at the claim, and is consumed (N9b.5(c))', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 1) + 2 * LOOP_ROUND_MS);
+  const { home, repo, baseline, logFile, release } = await startHeldGreen('agent-term-e2e-137-arm-held-');
+  const armFile = join(repo, ARMED_REL);
+  await page.evaluate(([repoKey]) => window.flow.armInterrupt(repoKey, 'green'), [repo] as const);
+  await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(true);
+  release();
+
+  await expect
+    .poll(() => autoHaltsAt(home, repo, 'green').map((e) => [...(parseAutoHaltReasons(e.cmd) ?? [])].sort()), { timeout: APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) })
+    .toEqual([['c', 'l']]);
+  await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(false);
+  await expect.poll(() => heldReadsDone(logFile), { timeout: UI_MS }).toBe(true);
+  await expectSteady(() => [gitIn(repo, 'rev-parse', 'HEAD'), /^step: green$/m.test(flowState(repo))], [baseline, true]);
+  expect(heldNaming(logFile, baseline)).toBe(true);
 });

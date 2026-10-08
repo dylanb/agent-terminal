@@ -79,6 +79,21 @@ describe('fake gh/git shims', () => {
     expect(readIf(logFile)).toMatch(new RegExp(`^released ${call.p.pid}$`, 'm'));
   });
 
+  it('FAKE_GIT_HOLD with no FAKE_GIT_HOLD_REV holds the git calls naming the rev written in the hold file, and no other', async () => {
+    const { binDir, logFile, env } = shims();
+    const hold = join(binDir, 'git-hold');
+    const sha = 'fedcba987654';
+    writeFileSync(hold, `${sha}\n`);
+    const held: NodeJS.ProcessEnv = { ...env, FAKE_GIT_HOLD: hold };
+    delete held.FAKE_GIT_HOLD_REV;
+    const call = start(join(binDir, 'git'), ['diff', '--name-only', `${sha}^{commit}`], held);
+    await vi.waitFor(() => expect(readIf(logFile)).toMatch(new RegExp(`^held ${call.p.pid} git diff --name-only ${sha}`, 'm')), { timeout: 5000 });
+    expect(run(join(binDir, 'git'), ['rev-parse', 'HEAD'], held).status).toBe(0);
+    expect(call.p.exitCode).toBeNull();
+    rmSync(hold);
+    expect(await call.exited).toBe(0);
+  }, 15_000);
+
   it('a git call naming the rev is not held once the hold file is gone', () => {
     const { binDir, env } = shims();
     const sha = 'abc123def456';
@@ -167,6 +182,26 @@ describe('the per-step fake agent', () => {
     rmSync(sentinel);
     await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe('work-h'), { timeout: 5000 });
   });
+
+  it('a held consolidate turn records its pid, keeps the agent reading, and writes its verdict only once the sentinel is deleted', async () => {
+    const sentinel = join(tmp('fake-agent-hold-'), 'hold');
+    writeFileSync(sentinel, '');
+    const binDir = tmp('fake-agent-bin-');
+    const repo = tmp('fake-agent-repo-');
+    seedFakeAgentSteps(binDir, { h: { artifactRel: '.agent-terminal/loop/artifacts/h.md', work: 'complete', holdConsolidate: { sentinel } } });
+    const send = agent(binDir, repo);
+    await turn(send, repo, 'work-h');
+    rmSync(doneFile(repo), { force: true });
+    send('turn-done:consolidate-h');
+    await vi.waitFor(() => expect(readIf(`${sentinel}.pids`)).toMatch(/^\d+\n$/), { timeout: 5000 });
+    send('/clear');
+    await vi.waitFor(() => expect(existsSync(join(repo, '.agent-terminal/clear-seen'))).toBe(true), { timeout: 5000 });
+    expect(existsSync(doneFile(repo))).toBe(false);
+    expect(existsSync(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe(false);
+    rmSync(sentinel);
+    await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe('consolidate-h'), { timeout: 5000 });
+    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe('verdict: clean\n');
+  }, 15_000);
 
   it('an abandoned hold exits with no action even when the sentinel is then deleted', async () => {
     const sentinel = join(tmp('fake-agent-hold-'), 'hold');
