@@ -32,11 +32,23 @@ const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
 const ESSENTIAL_MARKER = "the repo's standards make essential to this change";
 const OPERATOR_DECISION = 'Operator decision (';
+const BUNDLE_ALTITUDE_MARKER = "this plan's own tests would catch";
+const OVERREACH_MARKER = 'no acceptance criterion names';
 
 describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   for (const f of charters) {
     it(`${f} carries the materiality floor`, () => expect(read(f)).toContain(MATERIALITY_MARKER));
     it(`${f} treats additions beyond the ticket as a finding`, () => expect(read(f)).toContain(SCOPE_MARKER));
+  }
+
+  // §28.8.1 — the bundle review checks the draft is complete and well-sliced; a mechanism bug the plan's own
+  // tests would catch, or an addition no acceptance criterion names, is not work for that review to grow.
+  for (const f of charters.filter((c) => c.startsWith(`${LOOP}/`))) {
+    it(`${f} leaves mechanism defects to the implementation's tests`, () => expect(read(f)).toContain(BUNDLE_ALTITUDE_MARKER));
+    it(`${f} routes an addition no acceptance criterion names to a human`, () => {
+      expect(read(f)).toContain(OVERREACH_MARKER);
+      expect(read(f)).toContain('needs a human decision');
+    });
   }
 
   it('the work recipe forbids adding scope beyond the ticket', () =>

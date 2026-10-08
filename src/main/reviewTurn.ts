@@ -9,7 +9,7 @@ import { boundaryCommand, sliceBriefLines } from './appWorkTurn';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
+import { DISPOSITIONS, FIXED_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -183,6 +183,13 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       'your fixes edit, not the issue body on GitHub. The issue is the intent the artifact must honour, not the',
       'thing under review: it can still hold text the artifact has since fixed, and grading it re-raises those',
       'findings. Make every fix in that file.',
+      '',
+      'When a finding is that a mechanism this document specifies is wrong — an internal helper, how a command\'s',
+      'arguments are parsed, a path or platform quirk — fix it by replacing that mechanism with the contract it',
+      'must meet and the test that proves it, never by specifying the mechanism in more detail: each added detail',
+      'is new surface the next round reviews. A fix that would add a defence against an adversary the ticket does',
+      'not name, or a new state, outcome, or field that no acceptance criterion names, is',
+      `\`${NEEDS_HUMAN_DISPOSITION}\`, never \`${FIXED_DISPOSITION}\`.`,
     );
   }
   lines.push(

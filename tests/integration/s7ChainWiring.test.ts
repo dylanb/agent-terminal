@@ -50,7 +50,6 @@ const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintain
 
 const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'integration-slice-loop', charter: `integration-slice-loop/charter/${lane}.md` } });
-const fromPlanBundle = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-bundle-loop', charter: `plan-bundle-loop/charter/${lane}.md` } });
 const fromPlanPolish = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const authored = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md` });
 const authoredPlan = (lane: string): PersonaRow => authored(`review-plan-${lane}`, lane);
@@ -61,7 +60,9 @@ export const CHAIN: readonly LoopRow[] = [
     name: 'plan-bundle-loop', kind: 'plan', completion: null, gate: [], pickup: true,
     consolidateSource: 'plan-bundle-loop', input: { id: 'groomed-ticket', path: 'groomed-ticket.md' }, output: null,
     polish: 'defer',
-    personas: [plan('principal'), plan('intent'), authored('review-plan-tracer-slicer', 'tracer-slicer')],
+    // Authored here, not copied: §28.8.1's bundle review leaves mechanism to the implementation's tests,
+    // which plan-polish's and integration-slice's charters do not.
+    personas: [authoredPlan('principal'), authoredPlan('intent'), authored('review-plan-tracer-slicer', 'tracer-slicer')],
   },
   {
     name: 'plan-polish-loop', kind: 'plan', completion: null, gate: ['gh', 'promote'], pickup: false,
@@ -71,7 +72,7 @@ export const CHAIN: readonly LoopRow[] = [
       ...PLAN_LANES.map(authoredPlan),
       authored('review-plan-test-architect', 'test-architect'),
       authored('review-plan-determinism', 'determinism'),
-      fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer'),
+      authored('review-plan-tracer-slicer', 'tracer-slicer'),
     ],
   },
   {
@@ -105,7 +106,7 @@ export const CHAIN: readonly LoopRow[] = [
     name: 'integration-slice-loop', kind: 'impl', completion: null, gate: ['commit', 'gh'], pickup: false,
     consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: null,
     polish: 'fix',
-    personas: [...IMPL_LANES.map(authoredImpl), fromPlanBundle('review-plan-tracer-slicer', 'tracer-slicer')],
+    personas: [...IMPL_LANES.map(authoredImpl), fromPlanPolish('review-plan-tracer-slicer', 'tracer-slicer')],
   },
 ];
 
