@@ -75,6 +75,9 @@ export interface ReviewAndFixPromptReq {
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
   ticket?: number;
+  /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
+   *  or a phase-result file (the reviewers then pull the diff themselves). */
+  subjectRel?: string;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
   sliceBrief?: SliceBrief;
 }
@@ -159,12 +162,29 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket and its charter —',
-    'no diff, no plan, no prior review. Each pulls what it needs with tools. Receive their findings into your',
-    'own context, then fix or dismiss each per the criterion below.',
+    ...(req.subjectRel !== undefined
+      ? [
+          'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket, the subject below,',
+          'and its charter — no diff, no prior review. Each pulls what it needs with tools. Receive their findings',
+          'into your own context, then fix or dismiss each per the criterion below.',
+        ]
+      : [
+          'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket and its charter —',
+          'no diff, no plan, no prior review. Each pulls what it needs with tools. Receive their findings into your',
+          'own context, then fix or dismiss each per the criterion below.',
+        ]),
   );
   // §19.1 — bind the turn to the engine-resolved ticket it hands each reviewer (one shared source).
   if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
+  if (req.subjectRel !== undefined) {
+    lines.push(
+      '',
+      `SUBJECT — tell each reviewer to grade ${req.subjectRel}, the artifact this loop's work turn produced and`,
+      'your fixes edit, not the issue body on GitHub. The issue is the intent the artifact must honour, not the',
+      'thing under review: it can still hold text the artifact has since fixed, and grading it re-raises those',
+      'findings. Make every fix in that file.',
+    );
+  }
   lines.push(
     '',
     // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on

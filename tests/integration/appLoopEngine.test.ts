@@ -1374,6 +1374,27 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(injected[injected.length - 1]).toContain(`check-artifact report ${roundReportRel(1)} --sections summary --roster ${ROSTER.join(',')}`);
   });
 
+  // §27.4 — the reviewers grade the work turn's artifact, so a groom round never re-reviews the stale issue body.
+  it('the review prompt names the work artifact as the reviewers\' subject', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const prompt = injected[injected.length - 1];
+    expect(prompt).toContain(binding('plan', artifactPath).rel);
+    expect(prompt).toMatch(/not the issue body/i);
+  });
+
+  it('a commit-producing loop\'s review prompt names no artifact subject', () => {
+    defResult = resolved(commitDef());
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected[injected.length - 1];
+    expect(prompt).toContain('review-and-fix');
+    expect(prompt).not.toMatch(/not the issue body/i);
+  });
+
   // §27.12 — a present-but-malformed report is repaired, not re-reviewed: the retry names each problem and
   // asks for the report alone, so the reviewers do not run a second time.
   it('a malformed report is retried as a report repair naming each problem, not a re-review', () => {

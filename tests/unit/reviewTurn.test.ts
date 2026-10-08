@@ -101,6 +101,22 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     expect(composeReviewAndFixPrompt(req())).not.toContain('this loop is working GitHub issue'); // absent when none resolved
   });
 
+  // §27.4 — a loop whose work turn produces a file artifact is reviewing THAT file: the issue body on GitHub
+  // still holds the pre-work text until the gate's side-effect writes the artifact back, so a reviewer that
+  // grades the issue re-raises findings the artifact already fixed.
+  it('names the loop\'s work artifact as the subject each reviewer grades, not the live issue body', () => {
+    const subject = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    const p = composeReviewAndFixPrompt({ ...req(), ticket: 180, subjectRel: subject });
+    expect(p).toMatch(/grade .*groomed-ticket\.md.*not the issue body/is);
+    expect(p).not.toContain('handing each ONLY the ticket and its charter');
+  });
+
+  it('names no artifact subject for a loop whose product is commits', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), ticket: 180 });
+    expect(p).not.toContain('.agent-terminal/loop/artifacts/');
+    expect(p).not.toMatch(/not the issue body/i);
+  });
+
   it('tells the fixer exactly the closed disposition set the predicate accepts (one value, one spelling)', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const d of DISPOSITIONS) expect(p).toContain(d);
