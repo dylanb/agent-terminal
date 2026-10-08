@@ -536,7 +536,7 @@ const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
  *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
  *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
  *  filesystem error never aborts the accept. */
-/** §28.5.1 — the RED phase's recorded commit and the branch that keys its slice. */
+/** §28.5.1 */
 export interface PhaseBaseline {
   branch: string;
   sha: string;
