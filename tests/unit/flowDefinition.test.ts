@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   loadFlowDefinition,
+  loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
   createFlowMachine,
   type FlowLoad,
@@ -178,6 +179,24 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
       expect(load.error).toContain('done');
       expect(load.error).toContain('gate_authority');
     }
+  });
+
+  // #137 AC16
+  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-bundle and integration-slice, `auto` on every other loop step', () => {
+    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'));
+    expect(load.ok).toBe(true);
+    if (!load.ok) return;
+    expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
+      preparation: null,
+      groom: 'auto',
+      'plan-bundle': 'human',
+      infra: 'auto',
+      red: 'auto',
+      green: 'auto',
+      refactor: 'auto',
+      'integration-slice': 'human',
+      finalize: null,
+    });
   });
 
   it('fails the load on a non-string gate_authority', () => {

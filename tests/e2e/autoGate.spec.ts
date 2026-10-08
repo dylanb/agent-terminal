@@ -14,7 +14,7 @@ import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { load } from 'js-yaml';
-import { b64, exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, type StepScript } from './fakeTools';
+import { b64, exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, seedFullTddChainAgent, type StepScript } from './fakeTools';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -93,18 +93,19 @@ interface Launched {
 }
 
 /** Launch the app on `home` with the fake tools first on PATH, `cd` into `repo` and host the fake agent. `control`
- *  is the strip control the repo's flow shows on arrival: `Start` for a fresh run, null for a relaunched one. */
+ *  is the strip control the repo's flow shows on arrival: `Start` for a fresh run, `Restart` for a `done` one, null for a relaunched one. */
 async function launchInto(
   prefix: string,
   repo: string,
   home: string,
-  agent: (StepScript & { stepId: string }) | Record<string, StepScript>,
+  agent: (StepScript & { stepId: string }) | Record<string, StepScript> | ((binDir: string) => void),
   extraEnv: Record<string, string> = {},
-  control: 'Start' | null = 'Start',
+  control: 'Start' | 'Restart' | null = 'Start',
 ): Promise<Launched> {
   const { binDir, logFile } = seedFakeGhGit(`${prefix}bin-`, { realCommitOps: true });
   cleanup.push(binDir);
-  if ('stepId' in agent && typeof agent.stepId === 'string') seedFakeAgentV2(binDir, agent as StepScript & { stepId: string });
+  if (typeof agent === 'function') agent(binDir);
+  else if ('stepId' in agent && typeof agent.stepId === 'string') seedFakeAgentV2(binDir, agent as StepScript & { stepId: string });
   else seedFakeAgentSteps(binDir, agent as Record<string, StepScript>);
   app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${tmp(`${prefix}ud-`)}`],
@@ -783,6 +784,151 @@ test('an `auto` gate the run had reached before a relaunch halts with (j) after 
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
   const decisions = auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
   expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+});
+
+test('a failed `gh` effect of an `auto` approve survives a relaunch before the next gate: that gate shows the marker and halts with (i) (AC15(iii), N9b.5(d), N9b.8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * (WINDOW_TIMEOUT_MS + FIRST_PAINT_MS) + 2 * LOOP_ROUND_MS + APPROVE_ADVANCE_MS + 6 * UI_MS);
+  const home = tmp('agent-term-e2e-137-i-relaunch-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-i-relaunch-', 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-groom-red', autoGateFlowYaml([
+    { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'auto' },
+    { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },
+    { id: 'done', kind: 'manual' },
+  ]));
+  const { stepId: _red, ...red } = redAgent();
+  const { logFile } = await launchInto('agent-term-e2e-137-i-relaunch-', repo, home, { groom: GROOM_AGENT, red: { ...red, work: 'noop' } }, { FAKE_GH_FAIL_ACTION: 'update-issue-body' });
+
+  await flowControl().click();
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS }).toMatch(/^step: red$[\s\S]*status: working/m);
+  expect(readIf(logFile)).toMatch(/gh issue edit/);
+
+  await app?.close();
+  app = undefined;
+  await launchInto('agent-term-e2e-137-i-relaunch-', repo, home, { groom: GROOM_AGENT, red }, {}, null);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await loopPanel().locator('[data-app-route-out="retry"]').click({ timeout: UI_MS });
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
+  await dismissLoopErrors();
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="i"]')).toBeVisible();
+  expect(flowState(repo)).toMatch(/^step: red$/m);
+  expect(auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toHaveLength(1);
+});
+
+test('restart keeps the run\'s auto authority: after a relaunch, Restart from `done` of an `auto` run engine-approves its clean gate again, with no (j) (N9b.2(c), N9b.8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * (WINDOW_TIMEOUT_MS + FIRST_PAINT_MS) + 2 * LOOP_ROUND_MS + 2 * APPROVE_ADVANCE_MS + 6 * UI_MS);
+  const home = tmp('agent-term-e2e-137-restart-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-137-restart-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const agent = {
+    ...redAgent(),
+    writeTest: false,
+    extraShell: { work: [`mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(1).toBe(2); });' > tests/red_$RANDOM$RANDOM.test.ts`] },
+  };
+  await launchInto('agent-term-e2e-137-restart-', repo, home, agent);
+
+  await flowControl().click();
+  await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Restart', { timeout: UI_MS });
+
+  await app?.close();
+  app = undefined;
+  await launchInto('agent-term-e2e-137-restart-', repo, home, agent, {}, 'Restart');
+  await flowControl().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: red$/m);
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
+    .toMatch(/^step: done$/m)
+    .catch((e: unknown) => {
+      throw new Error(`${e instanceof Error ? e.message : String(e)}\n\n${gateDiagnosis(home, repo)}`);
+    });
+
+  const entries = auditGateEntries(home, repo);
+  const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine', 'engine']);
+  expect(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
+});
+
+// ── #137 S5: the shipped `feature-dev` authorities, end to end (AC16) ──
+
+const FEATURE_DEV_YAML = readFileSync(join(exampleConfigDir, 'flows', 'feature-dev', 'flow.yaml'), 'utf8');
+const FEATURE_DEV_AUTO_GATES = 8;
+const FEATURE_DEV_LOOP_RUNS = 10;
+
+function seedFeatureDevRun(prefix: string, home: string): string {
+  const repo = seedAutoGateRepo(prefix, 'groom', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'feature-dev', FEATURE_DEV_YAML);
+  return repo;
+}
+
+/** Wait, bounded, for `step`'s clean gate to wait on the operator; a halt or a stall fails naming what the gate shows. */
+async function awaitHumanGate(home: string, repo: string, step: string, timeout: number): Promise<void> {
+  const atGate = (): boolean => new RegExp(`^step: ${step}$`, 'm').test(flowState(repo)) && new RegExp(`^step: ${step}$[\\s\\S]*verdict: clean`, 'm').test(runState(repo));
+  try {
+    await expect.poll(atGate, { timeout }).toBe(true);
+    await openLoopPanel();
+    await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+  } catch (e) {
+    const halts = await haltRows().evaluateAll((rows) => rows.map((r) => r.getAttribute('data-auto-halt-reason')));
+    throw new Error(`no human gate at ${step}; halt reasons shown: ${JSON.stringify(halts)}\nflow-state.yaml:\n${flowState(repo)}\n${gateDiagnosis(home, repo)}\n${e instanceof Error ? e.message : String(e)}`);
+  }
+  expect(await haltRows().count()).toBe(0);
+}
+
+test('feature-dev run stops only at plan-bundle and integration-slice: every other gate advances alone with its phase commit (AC16)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 6 * UI_MS);
+  const home = tmp('agent-term-e2e-137-fdev-home-');
+  const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-', home);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  const { logFile } = await launchInto('agent-term-e2e-137-fdev-', repo, home, (binDir) => seedFullTddChainAgent(binDir, { implSlices: 2 }));
+
+  await flowControl().click();
+
+  await awaitHumanGate(home, repo, 'plan-bundle', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-bundle$/m);
+
+  await awaitHumanGate(home, repo, 'integration-slice', 8 * LOOP_ROUND_MS + 7 * APPROVE_ADVANCE_MS);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+
+  expect(gitIn(repo, 'log', '--format=%s', `${baseline}..HEAD`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'refactor', 'GREEN', 'RED', 'infra']);
+  expect(readIf(logFile).split('\n').filter((l) => /^gh issue edit \S+ .*--body-file/.test(l))).toHaveLength(1);
+
+  const entries = auditGateEntries(home, repo);
+  const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(2);
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES);
+  for (const step of ['plan-bundle', 'integration-slice']) {
+    const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+    expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
+  }
+  expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
+});
+
+test('feature-dev auto step halts on stop-for-a-human: the shipped flow\'s `groom` gate names the reason and does not advance (AC16, AC2)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 0));
+  const home = tmp('agent-term-e2e-137-fdev-halt-home-');
+  const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-halt-', home);
+  await launchInto('agent-term-e2e-137-fdev-halt-', repo, home, (binDir) => seedFullTddChainAgent(binDir, { verdicts: { groom: ['stop for a human'] } }));
+
+  await flowControl().click();
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: stop for a human/m);
+  await openLoopPanel();
+  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+  await expect.poll(() => autoHaltsAt(home, repo, 'groom').map((e) => parseAutoHaltReasons(e.cmd)), { timeout: UI_MS }).toEqual([['stop-for-a-human']]);
+  await expect(loopPanel().locator('[data-auto-halt-reason="stop-for-a-human"]')).toBeVisible({ timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: groom$/m);
+  expect(auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
 });
 
 // ── #137 S3: concurrency at the gate — the interrupt, the decision bound, the epic preview ──

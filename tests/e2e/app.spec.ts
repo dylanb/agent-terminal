@@ -11,7 +11,7 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
-import { parseAuditStream, gateDecisionAuditCmd, type AuditEvent } from '../../src/shared/audit';
+import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
@@ -6948,6 +6948,29 @@ function seedFullTddChainRepo(prefix: string, startStep = 'groom'): string {
   return dir;
 }
 
+// #137 AC16 — the shipped feature-dev's `auto` steps (§27.9.1): their clean gates advance with no click.
+const FEATURE_DEV_AUTO_STEPS: ReadonlySet<string> = new Set(['groom', 'infra', 'red', 'green', 'refactor']);
+
+// Inside the 60 s default test budget the callers run under, so a gate that never advances fails this poll by name.
+const AUTO_GATE_PASS_MS = 30_000;
+
+/** Wait for the flow to leave `auto` step `step` with no operator click, then require its decision be the engine's.
+ *  `consumes` names the chained input the step's loop must record (§28.10 AC1) while it is the current step. */
+async function passAutoGate(home: string, repo: string, step: string, consumes?: string): Promise<void> {
+  if (consumes) {
+    await expect
+      .poll(() => readIf(appRunState(repo)), { timeout: AUTO_GATE_PASS_MS })
+      .toMatch(new RegExp(`^step: ${step}$[\\s\\S]*chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`, 'm'));
+  }
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: AUTO_GATE_PASS_MS }).not.toContain(`step: ${step}\n`);
+  const deciders = auditRunFiles(home, repo).flatMap((f) =>
+    stepWindowEvents(readAuditRun(home, repo, f).events, step).flatMap((e) =>
+      e.type === 'command' && e.source === 'gate' && gateDecisionKind(e.cmd)?.kind === 'decision' ? [gateDecisionDecider(e.cmd)] : [],
+    ),
+  );
+  expect(deciders, step).toEqual(['engine']);
+}
+
 test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
@@ -6967,6 +6990,7 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   await flowControl().click(); // Start → enter groom
 
   const approveStep = async (step: string, consumes?: string): Promise<void> => {
+    if (FEATURE_DEV_AUTO_STEPS.has(step)) return passAutoGate(home, repo, step, consumes);
     await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
     // §28.10 AC1 — the loop consumed the prior loop's artifact: the engine recorded it as a chained input.
     if (consumes) expect(readIf(appRunState(repo))).toMatch(new RegExp(`chained_inputs:[\\s\\S]*?-\\s*${consumes}(?![\\w-])`));
@@ -7012,7 +7036,8 @@ test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the 
   const repo = seedFullTddChainRepo('agent-term-e2e-slicen-'); // no manual `slices` seed — D3 sources it from the plan
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slicen-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slicen-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir, { implSlices: 2 }); // the plan-bundle plans 2 impl-slices
+  // The plan-bundle plans 2 impl-slices; slice 2's RED stops for a human so its `auto` gate holds the step.
+  seedFullTddChainAgent(binDir, { implSlices: 2, verdicts: { red: ['clean', 'stop for a human'] } });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7026,6 +7051,7 @@ test('§28.4 D1+D2+D3 — the plan-bundle sources the impl-slice count, and the 
   await flowControl().click(); // Start → enter groom
 
   const approveStep = async (step: string): Promise<void> => {
+    if (FEATURE_DEV_AUTO_STEPS.has(step)) return passAutoGate(home, repo, step);
     await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
     if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
     const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
@@ -7078,7 +7104,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   const repo = seedFullTddChainRepo('agent-term-e2e-backtored-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-backtored-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-backtored-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir);
+  seedFullTddChainAgent(binDir, { verdicts: { green: ['stop for a human'] } }); // the `auto` GREEN gate holds for the operator
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7092,6 +7118,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   await flowControl().click(); // Start → enter groom
 
   const approveStep = async (step: string): Promise<void> => {
+    if (FEATURE_DEV_AUTO_STEPS.has(step)) return passAutoGate(home, repo, step);
     await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
     if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
     const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
@@ -7107,8 +7134,8 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   await approveStep('red');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).toContain('step: green');
 
-  // Reach the GREEN gate's clean verdict; then, instead of approving, send the flow BACK TO RED.
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+  // Reach the held GREEN gate; then, instead of approving, send the flow BACK TO RED.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: stop for a human');
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
@@ -7154,7 +7181,7 @@ test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN 
   const repo = seedFullTddChainRepo('agent-term-e2e-redbrief-', 'red'); // the slice phases are all this test needs
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir, { logInjected: true });
+  seedFullTddChainAgent(binDir, { logInjected: true, verdicts: { green: ['stop for a human'] } }); // the `auto` GREEN gate holds for the operator
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7168,10 +7195,11 @@ test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN 
   await flowControl().click();
 
   const openGate = async (): Promise<void> => {
-    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: stop for a human');
     if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   };
   const approveStep = async (step: string): Promise<void> => {
+    if (FEATURE_DEV_AUTO_STEPS.has(step)) return passAutoGate(home, repo, step);
     await openGate();
     // A redone phase can leave nothing new to commit; that benign notice must not block the next gate.
     const notice = page.locator('#flow-error-host .flow-modal');
@@ -7355,14 +7383,12 @@ const EPIC_GATE_DRIVE_MS = EPIC_GATE_WAIT.start + 2 * EPIC_GATE_WAIT.gate + EPIC
 
 // Drive Start → groom → approve groom → plan-bundle reaches its gate. Leaves the panel open at the plan-bundle
 // gate for the caller to inspect/act on.
-async function driveToEpicPlanBundleGate(repo: string): Promise<void> {
+async function driveToEpicPlanBundleGate(repo: string, home: string): Promise<void> {
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
   await typeCommand('fake-agent');
   await flowControl().click(); // Start → enter groom
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toContain('verdict: clean'); // groom at gate
-  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
-  await loopPanel().locator('[data-gate-option="approve"]').click(); // approve groom → enter plan-bundle
+  await passAutoGate(home, repo, 'groom');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-bundle');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toContain('verdict: clean'); // plan-bundle at gate
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
@@ -7380,7 +7406,7 @@ test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
 
   // The plan the agent wrote is classified an epic → the panel names every sub-ticket promotion will create.
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
@@ -7406,7 +7432,7 @@ test('§28.7 S8 — approving an epic plan raises a confirm-first preview; decli
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
 
   // Approve the epic plan → the confirm-first preview is raised (nothing has reached GitHub yet).
   await loopPanel().locator('[data-gate-option="approve"]').click();
@@ -7452,7 +7478,7 @@ test('§28.7 S8 — confirming an epic plan creates the stacked sub-ticket chain
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toBeVisible({ timeout: 15_000 });
@@ -7522,7 +7548,7 @@ test('promoting an epic from a run bound to catalog flow X records neither X\'s 
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: EPIC_PIN_WAIT.firstPaint });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
   expect(readRunBinding(repo), 'the run is bound to catalog flow X').toEqual({ source: 'catalog', tier: 'global', id: EPIC_X.id });
   const plan = readIf(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'));
   expect(plan, 'the epic plan was written').toContain('Slice 1 of the feature');
@@ -7569,7 +7595,7 @@ test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
   await loopPanel().locator('[data-gate-option="approve"]').click();
   const preview = page.getByRole('alertdialog');
   await expect(preview).toBeVisible({ timeout: 15_000 });
@@ -7599,7 +7625,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
   // A leftover, unreadable promotion record (e.g. a partial prior run left garbage). The resumable store is the
   // SOLE guard against duplicate public issues, so #124 refuses at approve — before the confirm preview is raised.
   writeFileSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'), 'this: is: not: valid: yaml: [\n');
@@ -7636,7 +7662,7 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
   // A READABLE partial-promotion record whose recorded split has diverged from the plan (an index the current
   // plan no longer carries). This exercises the REAL gate wiring — readEpicPromotion + promotionRecordStale in
   // index.ts, not an injected stub — so a deleted stale branch would raise the preview here and fail this test.
@@ -7678,7 +7704,7 @@ test('§28.7 S8 — the shipped flow promotes an epic plan end-to-end: preview (
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await driveToEpicPlanBundleGate(repo);
+  await driveToEpicPlanBundleGate(repo, home);
 
   // AC1 — the classification is surfaced at the gate: the panel names every sub-ticket the split will create.
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: 30_000 });
