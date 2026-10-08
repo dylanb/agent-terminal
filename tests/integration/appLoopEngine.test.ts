@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { BUNDLED_LOOPS_ROOT, bundledFlowOf } from '../helpers/bundledLoops';
 import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
@@ -160,7 +160,7 @@ function refactorDefBound(): LoopDefV2 {
 let defResult: LoopDefV2Result;
 /** A resolved §27 def result rooted at the test repo's own temp dir — the honest "resolved-from tier" for
  *  every def these tests hand the engine through `resolveDef`. */
-const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: repo });
+const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: repo, defDir: join(repo, def.name) });
 function makeEngine(
   persistOverride?: (repoDir: string, state: AppLoopRunState) => void,
   predicatesOverride?: LoopCompletionPredicates,
@@ -2274,8 +2274,11 @@ describe('§27 engine — resume routes a stopped (working) turn to the human (C
 // engine + persisted state), NOT by calling resume()/routeOut() directly — a `working` turn that stayed
 // `working` in the view carries no route-out and is human-recoverable only by hand-editing run-state.yaml.
 describe('§27 derived view — a relaunch-stranded turn surfaces a route-out (CWE-703/755)', () => {
-  const appBundled = fileURLToPath(new URL('../../example/loops-v2', import.meta.url));
-  const viewCtx = () => ({ tiers: { operator: null, appBundled, retired: null }, repoDir: repo });
+  const viewCtx = () => ({
+    tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null },
+    repoDir: repo,
+    flow: bundledFlowOf('plan-loop'),
+  });
 
   it('derives a persisted `working` consolidator turn to a routable error over a fresh engine', () => {
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'working', round: 2 }, FIXED);

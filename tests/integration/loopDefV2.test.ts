@@ -650,6 +650,24 @@ describe('resolveLoopDefV2 — the running flow’s own loop folder (§27.15)', 
     expect(personas(r)).toEqual(['review-plan-principal', 'review-plan-security']);
   });
 
+  it('resolves the flow’s bundled folder over the shared operator def', () => {
+    plantDef(join(appDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
+  it('resolves the flow’s operator folder over its bundled folder', () => {
+    plantDef(join(opDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(appDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
   it('skips the flow folder for a flow name that is not a single safe path segment', () => {
     plantDef(join(opDir, 'escaped'), 'plan-loop', ONE_REVIEWER_DEF);
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);

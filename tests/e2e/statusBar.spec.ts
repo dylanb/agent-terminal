@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordDisposition } from '../../src/main/runDisposition';
+import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 
 let app: ElectronApplication;
 let page: Page;
@@ -17,9 +18,9 @@ const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 const flowStepName = () => page.locator('#flow-strip .flow.vert .stn').nth(1).locator('.nm');
 const flowControl = () => page.locator('#flow-strip .flow-control');
 
-// The §27 loop defs (impl-loop, …) resolve from the bundled example config, so a seeded loop step binds a
-// real def with gate options — the app-bundle resolution the §27 tests rely on.
-const exampleConfigDir = join(process.cwd(), 'example');
+// The shipped §27 loop defs resolve from a shared example config, so a seeded loop step binds a real def with
+// gate options.
+const exampleConfigDir = seedSharedExampleConfig();
 
 async function launch(): Promise<void> {
   app = await electron.launch({
@@ -57,7 +58,7 @@ function temp(prefix: string): string {
 // A repo whose flow sits AT the §27 loop's clean consolidator gate — a human-needed state (§27.9). The flow
 // is persisted already on the loop step (in_progress) with a run-state at the gate, so a passive load
 // reconstructs the human-needed loop view WITHOUT an entry action re-driving a turn (the §27 resume path
-// never re-drives a reached gate). `impl-loop` resolves from the bundled example config. Returns the
+// never re-drives a reached gate). `infra-loop` resolves from the shared example config. Returns the
 // run-state path — the file the app itself never writes.
 function seedLoopAtGateRepo(prefix: string): { dir: string; runStateFile: string } {
   const dir = temp(prefix);
@@ -65,7 +66,7 @@ function seedLoopAtGateRepo(prefix: string): { dir: string; runStateFile: string
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n',
   );
   writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: in_progress\n');
   recordDisposition(dir, { source: 'non-catalog' });
@@ -74,7 +75,7 @@ function seedLoopAtGateRepo(prefix: string): { dir: string; runStateFile: string
   const runStateFile = join(loopDir, 'run-state.yaml');
   writeFileSync(
     runStateFile,
-    'schema_version: 1\nloop: impl-loop\nstep: build\nturn_key: consolidate-build\nstatus: complete\nverdict: clean\nround: 1\n',
+    'schema_version: 1\nloop: infra-loop\nstep: build\nturn_key: consolidate-build\nstatus: complete\nverdict: clean\nround: 1\n',
   );
   return { dir, runStateFile };
 }

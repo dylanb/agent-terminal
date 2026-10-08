@@ -84,7 +84,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
-    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
+    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
@@ -611,6 +611,7 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     ok: true as const,
     def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion } },
     tierRoot: '/tmp/tier',
+    defDir: '/tmp/tier/loop',
   });
 
   it('clears the brief on a refactor approve', async () => {

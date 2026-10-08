@@ -166,7 +166,7 @@ export interface LoopDefV2 {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | { ok: false; reason: string };
+export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string } | { ok: false; reason: string };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
@@ -481,23 +481,24 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
   // operator's on a first run) — resolveOwnedDirJail. A tier whose jail is unresolvable FALLS THROUGH to the
   // next tier (an absent ~/.claude must not turn every loop step unresolvable), so a null jail is simply not
   // pushed as a candidate.
-  if (ctx.tiers.operator !== null) {
-    const jail = resolveOwnedDirJail(ctx.tiers.operator);
-    const flowDir = ctx.flow === undefined ? null : flowLoopsDir(ctx.tiers.operator, ctx.flow);
-    if (jail !== null && flowDir !== null) {
-      const defDir = path.join(flowDir, name);
-      candidates.push({ tierRoot: ctx.tiers.operator, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: 'operator', jail });
-    }
-    if (jail !== null) {
-      const defDir = path.join(ctx.tiers.operator, name);
-      candidates.push({ tierRoot: ctx.tiers.operator, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: 'operator', jail });
-    }
+  // §27.8 lookup order.
+  const tierCandidates = [
+    { root: ctx.tiers.operator, tierName: 'operator' },
+    { root: ctx.tiers.appBundled, tierName: 'app-bundled' },
+  ].flatMap(({ root, tierName }) => {
+    if (root === null) return [];
+    const jail = resolveOwnedDirJail(root);
+    return jail === null ? [] : [{ root, tierName, jail }];
+  });
+  const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
+    const defDir = path.join(dir, name);
+    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+  };
+  for (const tier of tierCandidates) {
+    const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);
+    if (flowDir !== null) candidates.push(candidateIn(tier, flowDir));
   }
-  const appJail = resolveOwnedDirJail(ctx.tiers.appBundled);
-  if (appJail !== null) {
-    const appDefDir = path.join(ctx.tiers.appBundled, name);
-    candidates.push({ tierRoot: ctx.tiers.appBundled, defDir: appDefDir, defPath: path.join(appDefDir, `${name}.yaml`), tierName: 'app-bundled', jail: appJail });
-  }
+  for (const tier of tierCandidates) candidates.push(candidateIn(tier, tier.root));
 
   for (const { tierRoot, defDir, defPath, tierName, jail } of candidates) {
     const confinedDefPath = confinedRealPathResult(jail, defPath);
@@ -518,7 +519,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir };
     } catch (e) {
       if (e instanceof DefError) return { ok: false, reason: e.message };
       return { ok: false, reason: e instanceof Error ? e.message : String(e) };

@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
-import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { bundledPath, resolveBundledLoop } from '../helpers/bundledLoops';
 import { EPIC_GRAMMAR, POLISH_REPORT_HEADING } from '../../src/shared/epicPlan';
 import { SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 
-const SOURCE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
 const LOOP = 'plan-bundle-loop';
 const POLISH_LOOP = 'plan-polish-loop';
-const read = (rel: string): string => readFileSync(join(SOURCE, rel), 'utf8');
+const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8');
 const charters = [LOOP, POLISH_LOOP].flatMap((loop) =>
-  readdirSync(join(SOURCE, loop, 'charter')).map((f) => `${loop}/charter/${f}`),
+  readdirSync(bundledPath(`${loop}/charter`)).map((f) => `${loop}/charter/${f}`),
 );
-const resolveDef = (name: string) =>
-  resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE, retired: null }, repoDir: resolve(__dirname, '..', '..') });
+const resolveDef = resolveBundledLoop;
 
 // Headings that appear only in the plan-polish method, so a recipe carrying all of them carries the method.
 const POLISH_METHOD_MARKERS = [

@@ -3,9 +3,7 @@ import { exampleInstallDirs } from '../../src/main/installExamples';
 import { INSTALL_DESTINATION_IDS } from '../../src/shared/ipc';
 import { flowHomeDir, flowCatalogDir } from '../../src/main/flow';
 import { userConfigLoopsV2Dir, userConfigCommandsDir } from '../../src/main/userConfig';
-import { flowLoopsDir } from '../../src/main/loopDefV2';
 import {
-  FEATURE_DEV_ID,
   resolveFeatureDevFlowDir,
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
@@ -55,9 +53,11 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
     expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flowCatalog')).toBe(flowCatalogDir(FLOW_HOME));
   });
 
-  it('targets the shipped flow’s own user-config loop folder and the commands directory (§24.2.3/§27.15)', () => {
+  it('targets the user-config app loop definitions and commands directories (§24.2.3)', () => {
+    // The bundle holds only per-flow folders (§27.15), so seeding its tree here lands each flow's loops in
+    // that flow's own folder.
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
-    expect(targetOf(dirs, 'appLoops')).toBe(flowLoopsDir(userConfigLoopsV2Dir('/cfg') as string, FEATURE_DEV_ID));
+    expect(targetOf(dirs, 'appLoops')).toBe(userConfigLoopsV2Dir('/cfg'));
     expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));
   });
 });
