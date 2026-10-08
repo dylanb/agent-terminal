@@ -2232,7 +2232,7 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
 describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen flag)', () => {
   const reviewChained = (): boolean => h.injected.some((s) => s.includes(ROSTER[0]));
   const OID = 'a'.repeat(40);
-  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(h.repo, branch, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => void recordBaselineCommit(h.repo, branch, sha);
   const greenFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const greenDef = (withBinding = true): LoopDefV2 => ({
@@ -2574,7 +2574,7 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
 // GREEN, whose frozen check's baseline guard blocks).
 describe('§28.5.3 — the refactor round completion gate + non-blocking frozen probe', () => {
   const OID = 'a'.repeat(40);
-  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => recordBaselineCommit(h.repo, branch, sha);
+  const seedBaseline = (branch = TEST_BRANCH, sha = OID): void => void recordBaselineCommit(h.repo, branch, sha);
   const refFake = (overrides: Partial<LoopCompletionPredicates> = {}): LoopCompletionPredicates =>
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -2929,7 +2929,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
 describe('§28.5.3 — a GREEN loop review round refreshes the changed-test flag', () => {
   const OID = 'a'.repeat(40);
   const EDITED = 'tests/a.test.ts';
-  const seedBaseline = (): void => recordBaselineCommit(h.repo, TEST_BRANCH, OID);
+  const seedBaseline = (): void => void recordBaselineCommit(h.repo, TEST_BRANCH, OID);
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
   const greenDef = (): LoopDefV2 => ({
     ...fileDef(),

@@ -536,15 +536,16 @@ const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
  *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
  *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
  *  filesystem error never aborts the accept. */
-export function recordBaselineCommit(repoDir: string, branch: string, sha: string): void {
+export function recordBaselineCommit(repoDir: string, branch: string, sha: string): { branch: string; sha: string } | null {
   // §28.5.1 — `HEAD` is what `rev-parse --abbrev-ref HEAD` yields on a detached commit; refuse it like a blank
   // branch so the write mirrors currentGitBranch's HEAD→null read (one detached-sentinel rule, not two copies).
-  if (branch.length === 0 || branch === 'HEAD' || !isGitObjectId(sha)) return;
+  if (branch.length === 0 || branch === 'HEAD' || !isGitObjectId(sha)) return null;
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
   if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, branch, sha }))) {
     throw new Error(`cannot write §27 baseline commit: ${path.dirname(file)} is not a real directory`);
   }
+  return { branch, sha };
 }
 
 /** §28.4 D2/#123 — clear the recorded baseline at a slice boundary (a RED phase re-entry). A stale same-branch
@@ -585,6 +586,14 @@ export function readBaselineCommit(repoDir: string): { branch: string; sha: stri
   if (typeof doc.branch !== 'string' || doc.branch.length === 0) return null;
   if (typeof doc.sha !== 'string' || !isGitObjectId(doc.sha)) return null;
   return { branch: doc.branch, sha: doc.sha };
+}
+
+/** §28.5.1 — the recorded baseline when it can prove "same slice" on `branch` (null for a detached HEAD), else null. */
+export function baselineForBranch(
+  baseline: { branch: string; sha: string } | null,
+  branch: string | null,
+): { branch: string; sha: string } | null {
+  return baseline !== null && branch !== null && baseline.branch === branch ? baseline : null;
 }
 
 // §28.5.3/§28.8.3 — the changed-tests flag: the test-glob files the machine detected changed since the RED

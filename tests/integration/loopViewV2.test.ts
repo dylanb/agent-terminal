@@ -563,4 +563,34 @@ describe('provideAppLoopView — per-step gate authority (§27.9.1)', () => {
     expect(view).not.toHaveProperty('autoGate');
     expect(view.humanNeeded).toBe(true);
   });
+
+  describe('a run-state naming another loop (N9b.6(l))', () => {
+    const foreign = (): void =>
+      writeAppLoopState(
+        repoDir,
+        { loop: 'other-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 1, verdict: 'clean' },
+        FIXED,
+      );
+
+    it('carries a halt the engine showed at that gate', () => {
+      plant('plan-loop', ['approve', 'request-changes']);
+      foreign();
+      const halted = { ...idle, haltReasons: [{ reason: 'l' as const, detail: 'the run-state names loop other-loop' }] };
+      const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', halted));
+      expect(view.autoGate).toEqual(halted);
+      expect(view.humanNeeded).toBe(true);
+    });
+
+    it.each([
+      ['the engine is still deciding', { ...idle, deciding: true }],
+      ['the engine has shown no halt', idle],
+    ] as const)('carries no autoGate and keeps the view\'s humanNeeded when %s', (_label, seamView) => {
+      plant('plan-loop', ['approve', 'request-changes']);
+      foreign();
+      const without = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir });
+      const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', seamView));
+      expect(view).not.toHaveProperty('autoGate');
+      expect(view.humanNeeded).toBe(without.humanNeeded);
+    });
+  });
 });

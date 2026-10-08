@@ -24,6 +24,9 @@ import {
 } from '../shared/loopCapabilities';
 import { loadLoopCapabilities } from './loopCapabilities';
 import { isUnderAppStateDir } from './appStateDirs';
+import { baselineForBranch, readBaselineCommit } from './appLoopState';
+import { readGitBranch } from './gitBranch';
+import { errMsg } from './errno';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
 // repos multiply to < 10⁷ (a handful of short globs × a normal diff); this cap (10⁸) only rejects a crafted
@@ -65,7 +68,11 @@ export interface FrozenTestsQuery {
   head?: string;
   /** The repository's test path globs (from loop-capabilities.yaml, §28.5.4). */
   testGlobs: readonly string[];
+  signal?: AbortSignal;
 }
+
+// §27.9.1 N9b.7(c) — a read abandoned mid-flight must not leave an index lock that fails the human approve's commit.
+const GIT_READ_OPTIONS = { env: { GIT_OPTIONAL_LOCKS: '0' } };
 
 /** Decode git's `-z` NUL-separated pathname BYTES into exact paths, or throw. Git pathnames are byte strings
  *  not guaranteed to be UTF-8 (POSIX), so a fatal decoder rejects non-UTF-8 output (fail toward firing) rather
@@ -97,7 +104,8 @@ function isSafeRef(ref: string): boolean {
  *  `workingTreeTestPaths`). Empty when nothing matching changed. Rejects on a git failure or an invalid
  *  baseline/head (fail toward firing, never reads as "∅"). */
 export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[]> {
-  const { repoDir, baseline, head, testGlobs } = query;
+  const { repoDir, baseline, head, testGlobs, signal } = query;
+  const options = { ...GIT_READ_OPTIONS, signal };
   if (testGlobs.length === 0) throw new Error('frozen-tests: testGlobs is empty');
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
 
@@ -115,12 +123,14 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
       [...diffFlags, `${baseline}^{commit}`],
       repoDir,
       'frozen-tests working-tree diff failed',
+      options,
     );
     const untrackedOut = await runBuffer(
       'git',
       ['ls-files', '-o', '--exclude-standard', '-z'],
       repoDir,
       'frozen-tests ls-files failed',
+      options,
     );
     return matchedTestPaths([...strictDecodeNulPaths(diffOut), ...strictDecodeNulPaths(untrackedOut)], testGlobs);
   }
@@ -135,6 +145,7 @@ export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[
     ],
     repoDir,
     'frozen-tests diff failed',
+    options,
   );
   return matchedTestPaths(strictDecodeNulPaths(stdout), testGlobs);
 }
@@ -226,6 +237,24 @@ export async function changedTestPathsFromCapabilities(query: {
   if (!capabilities.ok) return capabilities;
   const paths = await changedTestPaths({ ...query, testGlobs: capabilities.value.testGlobs });
   return { ok: true, paths };
+}
+
+export type ApproveTimeFrozenCheck = { ok: true; paths: string[] } | { ok: false; detail: string };
+
+/** §27.9.1 N9b.7 — the engine's own frozen check at an `auto` approve: the working tree's globs, the working tree
+ *  against the recorded phase baseline. Every way it cannot run is a detail, never "unchanged". */
+export async function approveTimeFrozenCheck(repoDir: string, signal: AbortSignal): Promise<ApproveTimeFrozenCheck> {
+  const capabilities = loadLoopCapabilities(repoDir);
+  if (!capabilities.ok) return { ok: false, detail: `${LOOP_CAPABILITIES_FILENAME} could not be read: ${capabilities.reason}` };
+  const branch = await readGitBranch(repoDir, signal);
+  if (!branch.ok) return { ok: false, detail: `the current branch could not be read: ${branch.detail}` };
+  const baseline = baselineForBranch(readBaselineCommit(repoDir), branch.branch);
+  if (baseline === null) return { ok: false, detail: 'no phase baseline is recorded for this branch (baseline-commit.yaml is absent, unreadable, from another branch, or HEAD is detached)' };
+  try {
+    return { ok: true, paths: await changedTestPaths({ repoDir, baseline: baseline.sha, testGlobs: capabilities.value.testGlobs, signal }) };
+  } catch (e) {
+    return { ok: false, detail: `the git read against the baseline failed: ${errMsg(e)}` };
+  }
 }
 
 /** The working-tree detection's result. Unlike the commit↔commit `ChangedTestPathsResult` (baseline-blob

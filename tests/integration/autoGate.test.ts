@@ -610,6 +610,42 @@ describe('autoGate — verdict and interrupt halts (AC2)', () => {
     expect(v.autoGate?.haltReasons).toEqual([{ reason: 'stop-for-a-human' }]);
   });
 
+  it('a human approve landing on a halted gate leaves it neither human-needed nor showing the halt', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    expect(rig.view().humanNeeded).toBe(true);
+    await composeHumanDecisionRunners(rig.gate, {
+      decide: async (dir, step, turnKey) => {
+        writeAppLoopState(dir, { loop: LOOP, step, turnKey, status: 'accepted' }, FIXED);
+        return true;
+      },
+      advance: () => 'advanced',
+      currentStep: () => STEP,
+    }).decide(repoDir, STEP, TURN, 'approve', undefined);
+    await flush();
+    const v = rig.view();
+    expect(v.autoGate?.haltReasons ?? []).toEqual([]);
+    expect(v.humanNeeded).toBe(false);
+  });
+
+  it.each([
+    ['a request-changes that did not land', STEP, TURN, false],
+    ['a landed decision for another step', 'other-step', TURN, true],
+    ['a landed decision for another turn', STEP, 'other-turn', true],
+  ] as const)('%s leaves the halted gate showing its halt', async (_name, step, turnKey, landed) => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    await composeHumanDecisionRunners(rig.gate, {
+      decide: async () => landed,
+      advance: () => 'advanced',
+      currentStep: () => STEP,
+    }).decide(repoDir, step, turnKey, 'request-changes', undefined);
+    await flush();
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'stop-for-a-human' }]);
+  });
+
   it('`another round` reaching the gate on an interrupt halts with (c) and runs no approve', async () => {
     const rig = makeRig();
     startTrusted(rig);
@@ -1023,26 +1059,6 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     });
   });
 
-  it('(e): an `auto` step whose def could not be resolved when the run was bound is still frozen-checked, so its clean gate halts (N9b.7(c))', async () => {
-    defNow = null;
-    const rig = makeRig();
-    startTrusted(rig);
-    defNow = { ...OPERATOR_DEF, completion: 'green' };
-    await reachGate(rig, 'clean');
-    expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'e');
-  });
-
-  it('(e): an `auto` step whose def read threw when the run was bound is still frozen-checked, so its clean gate halts (N9b.7(c))', async () => {
-    let throwing = true;
-    const rig = makeRig({ defThrows: () => throwing });
-    startTrusted(rig);
-    throwing = false;
-    defNow = { ...OPERATOR_DEF, completion: 'green' };
-    await reachGate(rig, 'clean');
-    expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'e');
-  });
 });
 
 describe('autoGate — every engine approve outcome other than `advanced` halts the gate (N9b.6(k)/(l), #137 S1)', () => {
@@ -2301,7 +2317,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
   /** Holds every git invocation naming the baseline while the hold file exists, logging `held <argv>` first. Every
    *  invocation logs `start <pid>`, and `end <pid>` on an exit its trap sees; an invocation whose pid is gone counts
    *  as ended whatever signal stopped it. */
-  function holdBaselineReads(): { log: string; release: () => void; entered: () => Promise<boolean>; drained: () => Promise<void>; endedWhileHeld: () => Promise<boolean> } {
+  function holdBaselineReads(match: string = baseline): { log: string; release: () => void; entered: () => Promise<boolean>; drained: () => Promise<void>; endedWhileHeld: () => Promise<boolean> } {
     const dir = scratch('autogate-hold-');
     const log = join(dir, 'git.log');
     const hold = join(dir, 'hold');
@@ -2313,7 +2329,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
           argvPrefix: [],
           script:
             `printf 'start %s\\n' "$$" >> ${shellQuote(log)}; trap "printf 'end %s\\n' $$ >> ${shellQuote(log)}" EXIT; trap 'exit 143' TERM INT; ` +
-            `for a in "$@"; do case "$a" in *${baseline}*) printf 'held %s\\n' "$*" >> ${shellQuote(log)}; ` +
+            `for a in "$@"; do case "$a" in *${match}*) printf 'held %s\\n' "$*" >> ${shellQuote(log)}; ` +
             `end=$((SECONDS + 20)); while [ -e ${shellQuote(hold)} ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.02; done; break;; esac; done; ` +
             `${shellQuote(realGit)} "$@"; exit $?`,
         },
@@ -2359,7 +2375,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
       },
       entered: async () => {
         for (let i = 0; i < 500; i += 1) {
-          if (existsSync(log) && readFileSync(log, 'utf8').includes(baseline)) return true;
+          if (existsSync(log) && readFileSync(log, 'utf8').includes(match)) return true;
           await new Promise((r) => setTimeout(r, 20));
         }
         return false;
@@ -2466,8 +2482,10 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
   });
 
   it.each([
-    ['no baseline', () => clearBaselineCommit(repoDir)],
-    ['a `baseline-commit.yaml` that cannot be read', () => writeFileSync(loopAreaFile(repoDir, 'baseline-commit.yaml')!, 'sha: [unclosed\n')],
+    ['no baseline', (): void => clearBaselineCommit(repoDir)],
+    ['a `baseline-commit.yaml` that cannot be read', (): void => writeFileSync(loopAreaFile(repoDir, 'baseline-commit.yaml')!, 'sha: [unclosed\n')],
+    ['a baseline recorded on another branch', (): void => void recordBaselineCommit(repoDir, 'another-branch', baseline)],
+    ['a detached HEAD', (): void => void fixture.git(repoDir, ['checkout', '-q', '--detach'])],
   ] as const)('(e): %s halts with a detail naming the baseline, and leaves the last recorded flag in place', async (_label, plant) => {
     recordChangedTests(repoDir, 'earlier-step', ['tests/earlier.test.ts']);
     const flagBefore = readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8');
@@ -2511,6 +2529,35 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     const rows = rig.view().autoGate?.haltReasons ?? [];
     expect(rows.map((r) => r.reason)).toEqual(['e']);
     expect(rows[0]?.detail ?? '').toMatch(/changed-tests/);
+  });
+
+  it('(d) and (e): a changed test whose flag cannot be written still halts naming the change and its path', async () => {
+    mkdirSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, { recursive: true });
+    editFrozenTest();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect([...letters(rig)].sort()).toEqual(['d', 'e']);
+    expect([...autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c))].sort()).toEqual(['d', 'e']);
+    const rows = rig.view().autoGate?.haltReasons ?? [];
+    expect(rows.map((r) => r.detail ?? '').join('\n')).toContain(FROZEN);
+  });
+
+  it.each([
+    ['could not be resolved', {}, (): void => void (defNow = null)],
+    ['threw', { defThrows: (): boolean => true }, (): void => {}],
+  ] as const)('an `auto` step whose def %s at the gate is still frozen-checked: a changed test halts with (d) (N9b.7(c))', async (_label, rigOpts, plant) => {
+    editFrozenTest();
+    plant();
+    const rig = makeRig(rigOpts);
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(letters(rig)).toContain('d');
+    expect(readChangedTests(repoDir)?.paths).toEqual([FROZEN]);
   });
 
   it('a `red`-completion step with a changed test path runs no check: approved, no (d), no flag written', async () => {
@@ -2565,6 +2612,22 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     held.release();
     await settled(rig);
     expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
+  });
+
+  it.each([
+    ['unreadable', () => writeFileSync(loopAreaFile(repoDir, 'run-state.yaml')!, ': not [yaml\n')],
+    ['absent', () => rmSync(loopAreaFile(repoDir, 'run-state.yaml')!, { force: true })],
+  ] as const)('a run-state that turns %s during the held check has not left the gate: the result still decides it', async (_name, spoil) => {
+    const held = holdBaselineReads();
+    editSource();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
+    spoil();
+    held.release();
+    await held.drained();
+    expect(engineApprovals(rig).length + autoHalts(rig).length, 'the engine decided the gate rather than standing down').toBeGreaterThan(0);
   });
 
   // AC10 — human first wins: the engine stands down for every human channel landing during the held check.
@@ -2655,6 +2718,23 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
       expect(rig.notify).toHaveBeenCalledTimes(1);
       expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
     });
+
+    it.each([true, false])('the bound firing after a human attempt (landed: %s) but before the aborted check settles writes no engine-decided entry', async (landed) => {
+      const held = holdBaselineReads();
+      editFrozenTest();
+      const rig = makeRig();
+      startTrusted(rig);
+      await reachGate(rig, 'clean');
+      expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
+      await humanRunners(rig, landed).decide(repoDir, STEP, TURN, 'approve', undefined);
+      rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS + 1);
+      held.release();
+      await settled(rig);
+      await held.drained();
+      expect(autoHalts(rig)).toEqual([]);
+      expect(engineDecided(rig)).toEqual([]);
+      expect(rig.view().autoGate?.haltReasons ?? []).toEqual([]);
+    });
   });
 
   // Plan row "Policy re-checked at the claim" (N9b.5(c)).
@@ -2710,6 +2790,97 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(autoHalts(rig)).toEqual([]);
     expect(engineDecided(rig)).toEqual([]);
     expect(engineApprovals(rig)).toEqual([]);
+  });
+
+  it('the run-state leaving the gate during the held check with no view pulled: after release, the earlier flag is untouched, and no halt or engine-decided entry exists', async () => {
+    recordChangedTests(repoDir, 'earlier-step', ['tests/earlier.test.ts']);
+    const flagBefore = readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8');
+    const held = holdBaselineReads();
+    editFrozenTest();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
+    writeAppLoopState(repoDir, { loop: LOOP, step: 'next', turnKey: 'work-next', status: 'working' }, FIXED);
+    held.release();
+    await held.drained();
+    await flush();
+    expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
+    expect(autoHalts(rig)).toEqual([]);
+    expect(engineDecided(rig)).toEqual([]);
+    expect(engineApprovals(rig)).toEqual([]);
+  });
+
+  it('the run-state leaving the gate during the held check with no view pulled, then the bound firing: no halt, engine-decided entry or engine approve exists', async () => {
+    recordChangedTests(repoDir, 'earlier-step', ['tests/earlier.test.ts']);
+    const flagBefore = readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8');
+    const held = holdBaselineReads();
+    editFrozenTest();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
+    writeAppLoopState(repoDir, { loop: LOOP, step: 'next', turnKey: 'work-next', status: 'working' }, FIXED);
+    rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS);
+    expect(await held.endedWhileHeld(), 'the bound aborts the in-flight git read').toBe(true);
+    held.release();
+    await held.drained();
+    await flush();
+    expect(autoHalts(rig)).toEqual([]);
+    expect(engineDecided(rig)).toEqual([]);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
+  });
+
+  it('(e): a branch read that fails halts with a detail naming the failed read, not a missing baseline', async () => {
+    disposers.push(installPathGitStub([{ argvPrefix: ['rev-parse', '--abbrev-ref', 'HEAD'], stderr: 'fatal: scripted branch failure\n', exitCode: 128 }]).dispose);
+    editSource();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    const rows = rig.view().autoGate?.haltReasons ?? [];
+    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows[0]?.detail ?? '').not.toMatch(/no phase baseline/);
+    expect(rows[0]?.detail ?? '').toMatch(/branch could not be read/);
+  });
+
+  it('an interrupt armed before the gate survives a clean check: halts with (c) alone, no engine approve, and the arm consumed', async () => {
+    editSource();
+    armInterrupt(repoDir, STEP);
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['c']]);
+    expect(readArmedInterrupt(repoDir)).toBeNull();
+  });
+
+  it('an interrupt armed before the gate survives a detection: (c) and (d) in one entry, no engine approve', async () => {
+    editFrozenTest();
+    armInterrupt(repoDir, STEP);
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'd']]);
+    expect(readArmedInterrupt(repoDir)).toBeNull();
+  });
+
+  it('an interrupt armed before the gate survives a flag that cannot be written: (c) and (e) in one entry, and the arm consumed', async () => {
+    mkdirSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, { recursive: true });
+    editSource();
+    armInterrupt(repoDir, STEP);
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'e']]);
+    expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
   // Plan row "Baseline as persisted" (N9b.7(c)): a RED approve that persists no baseline leaves GREEN's check unable to run.
@@ -2773,5 +2944,40 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['e']]);
     expect(readChangedTests(repoDir)).toBeNull();
     expect(engineApprovals(rig)).toEqual([]);
+  });
+
+  it('a check held on its branch read leaves the gate deciding without blocking main; at the bound it halts with (e) and the read is aborted', async () => {
+    const held = holdBaselineReads('--abbrev-ref');
+    editSource();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(await held.entered(), 'the approve-time frozen check reads the current branch').toBe(true);
+    expect(readFileSync(held.log, 'utf8'), 'the held branch read is still in flight, not waited out on main').not.toMatch(/^end /m);
+    expect(rig.view().autoGate?.deciding).toBe(true);
+    rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS);
+    expect(letters(rig)).toEqual(['e']);
+    expect(rig.view().humanNeeded).toBe(true);
+    expect(await held.endedWhileHeld(), 'the bound aborts the in-flight branch read').toBe(true);
+    held.release();
+    await held.drained();
+    expect(engineApprovals(rig)).toEqual([]);
+    expect(readChangedTests(repoDir)).toBeNull();
+  });
+
+  it('a held check reaching the bound over an interrupt armed before the gate halts with (c) and (e) in one entry, and the arm is consumed', async () => {
+    const held = holdBaselineReads();
+    editSource();
+    armInterrupt(repoDir, STEP);
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
+    rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS);
+    expect([...letters(rig)].sort()).toEqual(['c', 'e']);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'e']]);
+    expect(readArmedInterrupt(repoDir)).toBeNull();
+    held.release();
+    await held.drained();
   });
 });

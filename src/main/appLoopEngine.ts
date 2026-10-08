@@ -33,7 +33,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { AutoGate } from './autoGate';
 
@@ -696,18 +696,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe, so the
-   *  branch-match (the phase-stable slice key crossing the RED→GREEN step boundary) has ONE edit site here. A
-   *  missing, branch-mismatched, or detached-HEAD (null branch) baseline is `no-baseline`. */
+  /** §28.5.1 — the frozen check's shared core, consumed by both the GREEN gate and the refactor probe. */
   const changedTestPathsSinceBaseline = async (
     a: ActiveAppTurn,
   ): Promise<{ kind: 'ok'; paths: string[] } | { kind: 'no-baseline' } | { kind: 'capfail'; cause: 'absent' | 'malformed' }> => {
-    const baseline = deps.readBaseline(a.repoDir);
-    // §28.5.1 — match the recorded baseline BRANCH to the current branch (the phase-stable slice key), not the
-    // flow step: RED and GREEN are distinct steps on one branch. A detached HEAD (null branch) cannot prove
-    // "same slice", so it blocks (fail toward firing).
-    const branch = deps.currentBranch(a.repoDir);
-    if (baseline === null || branch === null || baseline.branch !== branch) return { kind: 'no-baseline' };
+    const baseline = baselineForBranch(deps.readBaseline(a.repoDir), deps.currentBranch(a.repoDir));
+    if (baseline === null) return { kind: 'no-baseline' };
     const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
     if (!changed.ok) return { kind: 'capfail', cause: changed.cause };
     return { kind: 'ok', paths: changed.paths };

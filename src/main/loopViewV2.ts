@@ -147,9 +147,17 @@ export function provideAppLoopView(
 ): FlowLoopView {
   if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
   const view = deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir), resolveDef?.(name));
-  const autoGate = view.appTurn && autoGateViewFor?.(ctx.repoDir, view.appTurn.step, view.appTurn.turnKey);
+  const autoGate = view.appTurn ? autoGateViewFor?.(ctx.repoDir, view.appTurn.step, view.appTurn.turnKey) : haltAtForeignRunState(ctx.repoDir, autoGateViewFor);
   if (!autoGate) return view;
   return { ...view, autoGate, humanNeeded: autoGateHumanNeeded(view, autoGate) };
+}
+
+/** §27.9.1 N9b.6(l) — an engine halt over a run-state naming another loop is still shown at its gate. */
+function haltAtForeignRunState(repoDir: string, autoGateViewFor?: AutoGateViewFor): FlowAutoGateView | undefined {
+  const run = autoGateViewFor && readAppLoopState(repoDir);
+  if (!run) return undefined;
+  const shown = autoGateViewFor(repoDir, run.step, run.turnKey);
+  return shown && shown.haltReasons.length > 0 ? shown : undefined;
 }
 
 /** §27.9.1 N9b.5(e) — the one human-needed derivation for a view carrying `autoGate`. */

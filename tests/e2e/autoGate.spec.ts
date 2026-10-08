@@ -267,7 +267,6 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a control
   test.setTimeout(loopTestBudget(2, 1));
   const { home, repo } = await startAutoGreen('agent-term-e2e-137-frozen-ok-', greenAgent());
 
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await expect
     .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS, message: gateDiagnosis(home, repo) })
     .toMatch(/^step: done$/m);
