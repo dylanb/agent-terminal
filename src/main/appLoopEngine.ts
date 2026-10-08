@@ -33,7 +33,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { AutoGate } from './autoGate';
 
@@ -150,7 +150,7 @@ export interface AppLoopEngineDeps {
   /** §28.5.1 — the RED baseline (SHA + the branch it was recorded on) the GREEN frozen check diffs the working
    *  tree against. Null when unset; the GREEN gate blocks on an absent or branch-mismatched baseline (D-baseline).
    *  A domain seam (composition root wires `readBaselineCommit`). */
-  readBaseline(repoDir: string): { branch: string; sha: string } | null;
+  readBaseline(repoDir: string): PhaseBaseline | null;
   /** §28.4 D2/#123 — clear the recorded baseline at a RED phase entry (a slice boundary), so a stale
    *  same-branch baseline from a prior phase/slice is not stale-matched by the next GREEN/refactor frozen
    *  check. A domain seam (composition root wires `clearBaselineCommit`); the caller wraps it best-effort. */

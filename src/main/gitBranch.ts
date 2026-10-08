@@ -8,6 +8,9 @@ import { commandEnvironment } from './appCommand';
 import { run } from './appBootstrapCommand';
 import { errMsg } from './errno';
 
+// §27.9.1 N9b.7(c) — a read abandoned mid-flight must not leave an index lock that fails the human approve's commit.
+export const LOCK_FREE_GIT_READ_ENV = { GIT_OPTIONAL_LOCKS: '0' };
+
 const branchOrNull = (abbrevRef: string): string | null => {
   const branch = abbrevRef.trim();
   return branch.length === 0 || branch === 'HEAD' ? null : branch;
@@ -28,7 +31,7 @@ export function currentGitBranch(repoDir: string): string | null {
 export async function readGitBranch(repoDir: string, signal: AbortSignal): Promise<{ ok: true; branch: string | null } | { ok: false; detail: string }> {
   try {
     const harden = coreExecHardeningArgs(freshDisabledHooksDir());
-    const out = await run('git', [...harden, 'rev-parse', '--abbrev-ref', 'HEAD'], repoDir, 'git rev-parse --abbrev-ref HEAD failed', { env: { GIT_OPTIONAL_LOCKS: '0' }, signal });
+    const out = await run('git', [...harden, 'rev-parse', '--abbrev-ref', 'HEAD'], repoDir, 'git rev-parse --abbrev-ref HEAD failed', { env: LOCK_FREE_GIT_READ_ENV, signal });
     return { ok: true, branch: branchOrNull(out) };
   } catch (e) {
     return { ok: false, detail: errMsg(e) };

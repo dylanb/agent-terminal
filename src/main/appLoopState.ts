@@ -536,7 +536,13 @@ const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
  *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
  *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
  *  filesystem error never aborts the accept. */
-export function recordBaselineCommit(repoDir: string, branch: string, sha: string): { branch: string; sha: string } | null {
+/** §28.5.1 — the RED phase's recorded commit and the branch that keys its slice. */
+export interface PhaseBaseline {
+  branch: string;
+  sha: string;
+}
+
+export function recordBaselineCommit(repoDir: string, branch: string, sha: string): PhaseBaseline | null {
   // §28.5.1 — `HEAD` is what `rev-parse --abbrev-ref HEAD` yields on a detached commit; refuse it like a blank
   // branch so the write mirrors currentGitBranch's HEAD→null read (one detached-sentinel rule, not two copies).
   if (branch.length === 0 || branch === 'HEAD' || !isGitObjectId(sha)) return null;
@@ -566,7 +572,7 @@ export function clearBaselineCommit(repoDir: string): void {
  *  the branch is their one phase-stable slice identity. The frozen check refuses a DIFFERENT-branch baseline
  *  (another run); a stale SAME-branch baseline from a prior phase/slice is NOT yet refused — there is no clear()
  *  and the key is not per-slice — so it can be matched rather than blocking; tracked in #123. */
-export function readBaselineCommit(repoDir: string): { branch: string; sha: string } | null {
+export function readBaselineCommit(repoDir: string): PhaseBaseline | null {
   const file = loopAreaFile(repoDir, BASELINE_COMMIT_FILE);
   if (file === null) return null;
   let text: string;
@@ -590,9 +596,9 @@ export function readBaselineCommit(repoDir: string): { branch: string; sha: stri
 
 /** §28.5.1 — the recorded baseline when it can prove "same slice" on `branch` (null for a detached HEAD), else null. */
 export function baselineForBranch(
-  baseline: { branch: string; sha: string } | null,
+  baseline: PhaseBaseline | null,
   branch: string | null,
-): { branch: string; sha: string } | null {
+): PhaseBaseline | null {
   return baseline !== null && branch !== null && baseline.branch === branch ? baseline : null;
 }
 

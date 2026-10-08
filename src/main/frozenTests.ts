@@ -25,7 +25,7 @@ import {
 import { loadLoopCapabilities } from './loopCapabilities';
 import { isUnderAppStateDir } from './appStateDirs';
 import { baselineForBranch, readBaselineCommit } from './appLoopState';
-import { readGitBranch } from './gitBranch';
+import { LOCK_FREE_GIT_READ_ENV, readGitBranch } from './gitBranch';
 import { errMsg } from './errno';
 
 // The most (Σ glob chars)·(path chars) matching work one detection may perform across ALL changed paths. Real
@@ -71,9 +71,6 @@ export interface FrozenTestsQuery {
   signal?: AbortSignal;
 }
 
-// §27.9.1 N9b.7(c) — a read abandoned mid-flight must not leave an index lock that fails the human approve's commit.
-const GIT_READ_OPTIONS = { env: { GIT_OPTIONAL_LOCKS: '0' } };
-
 /** Decode git's `-z` NUL-separated pathname BYTES into exact paths, or throw. Git pathnames are byte strings
  *  not guaranteed to be UTF-8 (POSIX), so a fatal decoder rejects non-UTF-8 output (fail toward firing) rather
  *  than let a lossy decode normalize a changed test path into a different one. The trailing empty entry from
@@ -105,7 +102,7 @@ function isSafeRef(ref: string): boolean {
  *  baseline/head (fail toward firing, never reads as "∅"). */
 export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[]> {
   const { repoDir, baseline, head, testGlobs, signal } = query;
-  const options = { ...GIT_READ_OPTIONS, signal };
+  const options = { env: LOCK_FREE_GIT_READ_ENV, signal };
   if (testGlobs.length === 0) throw new Error('frozen-tests: testGlobs is empty');
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
 

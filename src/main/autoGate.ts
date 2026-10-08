@@ -13,7 +13,7 @@ import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
 import { clearInterrupt, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt, recordChangedTests } from './appLoopState';
-import { approveTimeFrozenCheck } from './frozenTests';
+import { approveTimeFrozenCheck, type ApproveTimeFrozenCheck } from './frozenTests';
 import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
 
@@ -376,20 +376,21 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         standDown(repoDir, run);
         return;
       }
-      if (!result.ok) {
-        conclude(repoDir, run, d, [...reasons, { reason: 'e', detail: result.detail }]);
-        return;
-      }
-      const changed: Reason[] = result.paths.length > 0 ? [{ reason: 'd' }] : [];
-      try {
-        recordChangedTests(repoDir, d.step, result.paths);
-      } catch (e) {
-        if (changed.length > 0) changed[0] = { reason: 'd', detail: result.paths.join(', ') };
-        conclude(repoDir, run, d, [...reasons, ...changed, { reason: 'e', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` }]);
-        return;
-      }
-      conclude(repoDir, run, d, [...reasons, ...changed]);
+      conclude(repoDir, run, d, [...reasons, ...frozenCheckReasons(repoDir, d.step, result)]);
     });
+  };
+
+  /** §27.9.1 N9b.6(d)–(e), N9b.7(d) */
+  const frozenCheckReasons = (repoDir: string, step: string, result: ApproveTimeFrozenCheck): Reason[] => {
+    if (!result.ok) return [{ reason: 'e', detail: result.detail }];
+    const changed = result.paths.length > 0;
+    try {
+      recordChangedTests(repoDir, step, result.paths);
+    } catch (e) {
+      const unrecorded: Reason = { reason: 'e', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
+      return changed ? [{ reason: 'd', detail: result.paths.join(', ') }, unrecorded] : [unrecorded];
+    }
+    return changed ? [{ reason: 'd' }] : [];
   };
 
   const conclude = (repoDir: string, run: AutoRun, d: Deciding, reasons: Reason[]): void => {
