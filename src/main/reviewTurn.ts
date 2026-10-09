@@ -190,6 +190,12 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       'is new surface the next round reviews. A fix that would add a defence against an adversary the ticket does',
       'not name, or a new state, outcome, or field that no acceptance criterion names, is',
       `\`${NEEDS_HUMAN_DISPOSITION}\`, never \`${FIXED_DISPOSITION}\`.`,
+      'A finding about behaviour that no test environment in the repository exercises — the host OS when the tests',
+      'run elsewhere, a real external tool the tests replace with a stand-in — is fixed by recording it, with the',
+      'real-run check that verifies it, under the document\'s `Assumptions` heading, never by elaborating a',
+      'workaround. When the document already lists several countermeasures for one guard and a finding is another',
+      'hole in the same guard, the mechanism cannot deliver its criterion: that is',
+      `\`${NEEDS_HUMAN_DISPOSITION}\` (a different mechanism or a narrower criterion), never another patch.`,
     );
   }
   lines.push(

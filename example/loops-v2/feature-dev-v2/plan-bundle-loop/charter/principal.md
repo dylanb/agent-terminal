@@ -28,3 +28,13 @@ Treat as overreach, never as work to add: a defence against an adversary the tic
 state, outcome, or field that no acceptance criterion names, and handling for an interaction between
 acceptance criteria that none of them states. When the plan cannot meet an acceptance criterion without one,
 say it needs a human decision; do not ask for it to be built.
+
+Review cannot settle behaviour that no test environment in the repository exercises — the developer's host
+OS when the tests run elsewhere, or a real external tool the tests replace with a stand-in. The plan lists
+each such behaviour it relies on under an `Assumptions` heading, with the real-run check that verifies it. A
+finding about such behaviour asks for that entry; it never asks the plan to elaborate a workaround.
+
+When the plan already lists several countermeasures for one guard and a finding is another hole in the same
+guard — one more way around the same isolation, one more case the same workaround misses — the finding is
+that the mechanism cannot deliver its acceptance criterion. Say it needs a human decision on the approach (a
+different mechanism, or a narrower criterion), not another patch.

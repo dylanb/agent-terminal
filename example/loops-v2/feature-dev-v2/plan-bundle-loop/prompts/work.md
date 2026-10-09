@@ -20,6 +20,10 @@ Leave function bodies, algorithms, internal helper signatures and library mechan
 where they are reviewed against real code. State each rule once and reference it elsewhere rather than
 restating it.
 
+Under an `Assumptions` heading, list each behaviour the plan relies on that
+no test environment in the repository exercises — the developer's host OS when the tests run elsewhere, a
+real external tool the tests replace with a stand-in — and the real-run check that verifies it.
+
 ## Infrastructure plan
 
 The deterministic test infrastructure the slices need — the harness, fakes, and fixtures — hermetic and

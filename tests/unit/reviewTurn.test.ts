@@ -214,10 +214,20 @@ describe('composeReviewAndFixPrompt — fixing a document subject lifts, never a
     expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(overreachClause);
   });
 
-  it('carries neither clause for a loop whose product is commits, where the mechanism is the work', () => {
+  const assumptionClause = /no\s+test\s+environment\s+in\s+the\s+repository\s+exercises[\s\S]*Assumptions/i;
+  const sameGuardClause = /another\s+hole\s+in\s+the\s+same[\s\S]*`needs a human`/i;
+
+  it('records behaviour no test environment exercises as an assumption rather than elaborating it', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(assumptionClause);
+  });
+
+  it('routes another hole in the same guard to a human as a sign the mechanism is wrong', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(sameGuardClause);
+  });
+
+  it('carries none of these clauses for a loop whose product is commits, where the mechanism is the work', () => {
     const p = composeReviewAndFixPrompt(req());
-    expect(p).not.toMatch(liftClause);
-    expect(p).not.toMatch(overreachClause);
+    for (const clause of [liftClause, overreachClause, assumptionClause, sameGuardClause]) expect(p).not.toMatch(clause);
   });
 });
 

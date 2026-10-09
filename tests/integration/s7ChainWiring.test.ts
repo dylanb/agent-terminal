@@ -48,7 +48,6 @@ const GREEN_LANES = ['principal', 'tests', 'security', 'taint', 'reliability', '
 const REFACTOR_LANES = ['principal', 'tests', 'reliability', 'architecture'] as const;
 const PLAN_LANES = ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'] as const;
 
-const plan = (lane: string): PersonaRow => ({ persona: `review-plan-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const impl = (lane: string): PersonaRow => ({ persona: `impl-review-${lane}`, charter: `charter/${lane}.md`, source: { loop: 'integration-slice-loop', charter: `integration-slice-loop/charter/${lane}.md` } });
 const fromPlanPolish = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md`, source: { loop: 'plan-polish-loop', charter: `plan-polish-loop/charter/${lane}.md` } });
 const authored = (persona: string, lane: string): PersonaRow => ({ persona, charter: `charter/${lane}.md` });
