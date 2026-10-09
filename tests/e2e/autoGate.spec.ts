@@ -931,6 +931,54 @@ test('feature-dev auto step halts on stop-for-a-human: the shipped flow\'s `groo
   expect(auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
 });
 
+test('pinning: feature-dev full chain: auto advance, one visible halt, human-only gates (#137 integration)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 10 * UI_MS);
+  const home = tmp('agent-term-e2e-137-fdev-full-home-');
+  const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-full-', home);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  const { logFile } = await launchInto('agent-term-e2e-137-fdev-full-', repo, home, (binDir) =>
+    seedFullTddChainAgent(binDir, { implSlices: 2, verdicts: { green: ['clean', 'stop for a human'] } }),
+  );
+
+  await flowControl().click();
+
+  await awaitHumanGate(home, repo, 'plan-bundle', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-bundle$/m);
+
+  await expect
+    .poll(() => (auditGateEntries(home, repo).some((e) => parseAutoHaltReasons(e.cmd) !== null) ? autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd)) : null), {
+      timeout: 5 * LOOP_ROUND_MS + 4 * APPROVE_ADVANCE_MS,
+    })
+    .toEqual([['stop-for-a-human']]);
+  expect(gitIn(repo, 'log', '--format=%s', `${baseline}..HEAD`).split('\n')).toEqual(['RED', 'refactor', 'GREEN', 'RED', 'infra']);
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="stop-for-a-human"]')).toBeVisible({ timeout: UI_MS });
+  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: green$/m);
+  await approveOption().click();
+  await expect.poll(() => gitIn(repo, 'log', '-1', '--format=%s'), { timeout: APPROVE_ADVANCE_MS }).toBe('GREEN');
+
+  await awaitHumanGate(home, repo, 'integration-slice', 2 * LOOP_ROUND_MS + APPROVE_ADVANCE_MS);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+
+  expect(gitIn(repo, 'log', '--format=%s', `${baseline}..HEAD`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'refactor', 'GREEN', 'RED', 'infra']);
+  expect(readIf(logFile).split('\n').filter((l) => /^gh issue edit \S+ .*--body-file/.test(l))).toHaveLength(1);
+
+  const entries = auditGateEntries(home, repo);
+  const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(3);
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES - 1);
+  for (const step of ['plan-bundle', 'integration-slice']) {
+    const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+    expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
+  }
+  const atGreen = auditGateEntries(home, repo, { step: 'green' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(atGreen.map((e) => gateDecisionDecider(e.cmd)), 'the second slice\'s green').toEqual(['human']);
+  expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt').map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['stop-for-a-human']]);
+});
+
 // ── #137 S3: concurrency at the gate — the interrupt, the decision bound, the epic preview ──
 
 const ARMED_REL = '.agent-terminal/loop/armed-interrupt.yaml';
