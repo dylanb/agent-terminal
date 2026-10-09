@@ -5,7 +5,8 @@
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
 import type { LoopDefV2, PolishPolicy } from './loopDefV2';
-import { boundaryCommand, sliceBriefLines } from './appWorkTurn';
+import { boundaryCommand, flowDocumentLines, sliceBriefLines } from './appWorkTurn';
+import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
@@ -78,6 +79,9 @@ export interface ReviewAndFixPromptReq {
   /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
    *  or a phase-result file (the reviewers then pull the diff themselves). */
   subjectRel?: string;
+  /** §27.10/§27.4 — the inputs the step carried (id + repo-relative path), named so each reviewer grades
+   *  against them rather than searching the repo for a file of the same name. */
+  inputs?: ChainedInput[];
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
   sliceBrief?: SliceBrief;
 }
@@ -159,20 +163,21 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
  *  done-signal instruction, verifying the report on disk before the done-file (§27.12a). */
 export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   const lines: string[] = [];
+  const carried = (req.inputs ?? []).filter((i) => i.rel !== req.subjectRel);
+  const handed = [
+    'the ticket',
+    ...(req.subjectRel !== undefined ? ['the subject below'] : []),
+    ...(carried.length > 0 ? ['the inputs below'] : []),
+    'its charter',
+  ];
+  const handedText = handed.length === 2 ? handed.join(' and ') : `${handed.slice(0, -1).join(', ')}, and ${handed[handed.length - 1]}`;
+  const withheld = req.subjectRel === undefined && carried.length === 0 ? 'no diff, no plan, no prior review' : 'no diff, no prior review';
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    ...(req.subjectRel !== undefined
-      ? [
-          'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket, the subject below,',
-          'and its charter — no diff, no prior review. Each pulls what it needs with tools. Receive their findings',
-          'into your own context, then fix or dismiss each per the criterion below.',
-        ]
-      : [
-          'Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY the ticket and its charter —',
-          'no diff, no plan, no prior review. Each pulls what it needs with tools. Receive their findings into your',
-          'own context, then fix or dismiss each per the criterion below.',
-        ]),
+    `Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY ${handedText} — ${withheld}.`,
+    'Each pulls what it needs with tools. Receive their findings into your own context, then fix or dismiss each',
+    'per the criterion below.',
   );
   // §19.1 — bind the turn to the engine-resolved ticket it hands each reviewer (one shared source).
   if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
@@ -198,6 +203,15 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       `\`${NEEDS_HUMAN_DISPOSITION}\` (a different mechanism or a narrower criterion), never another patch.`,
     );
   }
+  if (carried.length > 0) {
+    lines.push(
+      '',
+      'INPUTS — the documents this step carried. Tell each reviewer to read them as the reference the work is',
+      'graded against, beside the ticket:',
+      ...carried.map((i) => `  - ${i.id}: ${i.rel}`),
+    );
+  }
+  lines.push(...flowDocumentLines());
   lines.push(
     '',
     // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on

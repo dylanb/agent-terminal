@@ -1125,6 +1125,21 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(prompt).not.toMatch(/not the issue body/i);
   });
 
+  // §27.4 — a commit loop's reviewers grade against the plan it carries; without the path they search the repo
+  // for a `plan.md` and can land on a stale one (#137's gate-probe review read a leftover root plan.md).
+  it('a commit-producing loop\'s review prompt names the inputs the step carried, by path', () => {
+    const planPath = seedInputArtifact(join(h.repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'), '# plan\n');
+    h.defResult = resolved({ ...commitDef(), inputs: [binding('plan', planPath)] });
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = h.injected[h.injected.length - 1];
+    expect(prompt).toContain('review-and-fix');
+    expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md');
+  });
+
   // §27.12 — a present-but-malformed report is repaired, not re-reviewed: the retry names each problem and
   // asks for the report alone, so the reviewers do not run a second time.
   it('a malformed report is retried as a report repair naming each problem, not a re-review', () => {

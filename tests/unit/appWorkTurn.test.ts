@@ -234,6 +234,22 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
 
 });
 
+// §27.4 — the work turn is told where this work's flow documents live, with the code carved out, so a search
+// for "the plan" or "the ticket" never lands on an unrelated file of that name elsewhere in the repo.
+describe('composeAppWorkPrompt (§27.4 — where the flow documents live)', () => {
+  for (const completion of [
+    { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') } as const,
+    null,
+  ]) {
+    it(`says flow documents live only under the loop artifacts directory and carves out the code (${completion ? 'file' : 'commits'} turn)`, () => {
+      const prompt = composeAppWorkPrompt({ recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion });
+      expect(prompt).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
+      expect(prompt).toMatch(/elsewhere in the repository is not this work's/i);
+      expect(prompt).toMatch(/working-tree diff/i);
+    });
+  }
+});
+
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({

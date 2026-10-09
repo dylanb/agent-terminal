@@ -113,7 +113,8 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
 
   it('names no artifact subject for a loop whose product is commits', () => {
     const p = composeReviewAndFixPrompt({ ...req(), ticket: 180 });
-    expect(p).not.toContain('.agent-terminal/loop/artifacts/');
+    expect(p).not.toMatch(/\.agent-terminal\/loop\/artifacts\/[^`\s]+\.md/);
+    expect(p).not.toMatch(/SUBJECT —/);
     expect(p).not.toMatch(/not the issue body/i);
   });
 
@@ -169,6 +170,42 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
 // terminates when a round produces no changes") holds only if an in-scope finding that changes no
 // observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
 // refinement is what manufactures the next round's findings. The composer must state that criterion.
+// §27.4 — reviewers are told where this work's flow documents are, and that the code a loop produces is the
+// working-tree diff, so a search for "the plan" never lands on an unrelated plan.md elsewhere in the repo.
+describe('composeReviewAndFixPrompt — the flow documents and the carried inputs (§27.4)', () => {
+  const req = () => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-green',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+  });
+  const PLAN = { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' };
+  const TICKET = { id: 'groomed-ticket', rel: '.agent-terminal/loop/artifacts/groomed-ticket.md' };
+
+  it('names each carried input by id and path, and no longer says reviewers get no plan', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), inputs: [PLAN, TICKET] });
+    expect(p).toContain(`- plan: ${PLAN.rel}`);
+    expect(p).toContain(`- groomed-ticket: ${TICKET.rel}`);
+    expect(p).not.toMatch(/no plan/i);
+  });
+
+  it('does not list the subject a second time as an input', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), inputs: [PLAN, TICKET], subjectRel: PLAN.rel });
+    expect(p).not.toContain(`- plan: ${PLAN.rel}`);
+    expect(p).toContain(`- groomed-ticket: ${TICKET.rel}`);
+  });
+
+  it('says flow documents live only under the loop artifacts directory, and carves out the code and repo standards', () => {
+    for (const p of [composeReviewAndFixPrompt(req()), composeReviewAndFixPrompt({ ...req(), subjectRel: PLAN.rel })]) {
+      expect(p).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
+      expect(p).toMatch(/elsewhere in the repository is not this work's/i);
+      expect(p).toMatch(/working-tree diff/i);
+    }
+  });
+});
+
 describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
   const req = () => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),

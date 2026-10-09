@@ -12,6 +12,7 @@ import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/p
 import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -115,6 +116,18 @@ export function sliceBriefLines(brief: SliceBrief, audience: 'work' | 'fixer'): 
   ];
 }
 
+/** §27.4 */
+export function flowDocumentLines(): string[] {
+  const dir = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR].join('/');
+  return [
+    '',
+    'FLOW DOCUMENTS — this work\'s flow documents (the groomed ticket, the plan, the RED/GREEN phase results) live',
+    `only under \`${dir}/\`. A file of that kind found elsewhere in the repository is not this work's: ignore it.`,
+    "The code and tests a loop produces are the working-tree diff, and the repository's standards and",
+    'configuration are read where they live.',
+  ];
+}
+
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
  *  instruction to end the artifact with the completion marker, then the shared done-signal instruction
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
@@ -126,6 +139,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
   if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
+  parts.push(...flowDocumentLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {

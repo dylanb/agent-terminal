@@ -283,7 +283,8 @@ type ActiveAppTurn =
       feedback?: string;
       /** §27.4 — the repo-relative work artifact the reviewers grade; absent when the work product is commits
        *  or a phase-result file. */
-      subjectRel?: string;
+      subjectRel?: string;      /** §27.10/§27.4 — the inputs the step carried, named to the reviewers by path. */
+      inputs?: ChainedInput[];
     }
   | {
       phase: 'consolidate';
@@ -909,6 +910,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           checkCommand: deps.artifactCheckCommand(reportCheck(active)),
           ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
           ...(active.subjectRel !== undefined ? { subjectRel: active.subjectRel } : {}),
+          ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
           ...briefFor(active),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
@@ -1039,6 +1041,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const full = reviewRoster(r.def);
     const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
     const subject = r.def.work.completion === undefined ? completionArtifact(r.def) : null;
+    const inputs = chainFor(ctx.repoDir, ctx.stepId, r.def, { kind: 'reconstruct', ids: recordedCarry(ctx.repoDir, ctx.stepId, readAppLoopState(ctx.repoDir)) });
     return {
       phase: 'review',
       repoDir: ctx.repoDir,
@@ -1056,6 +1059,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       ...(chosenRoster ? { chosenRoster } : {}),
       ...(feedback !== undefined ? { feedback } : {}),
       ...(subject !== null ? { subjectRel: subject.rel } : {}),
+      ...(inputs.length > 0 ? { inputs } : {}),
     };
   };
 
