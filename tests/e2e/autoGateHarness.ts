@@ -5,8 +5,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
-import type { Page } from '@playwright/test';
-import type { FlowStateView } from '../../src/shared/ipc';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
@@ -30,7 +28,7 @@ export function loopRoster(loop: AutoGateLoop): string[] {
 }
 
 /** The one flow builder for the auto-gate e2e. A `groom-loop` step always carries a required `github-ticket`
- *  input named `ticket` (supplied at Start by `provideGroomTicket`); an omitted `authority` writes no
+ *  input named `ticket` (pre-supplied by `seedAutoGateRepo`'s `ticket` option); an omitted `authority` writes no
  *  `gate_authority` key. */
 export function autoGateFlowYaml(steps: AutoGateStep[], name = 'auto-gate'): string {
   const lines = [`name: ${JSON.stringify(name)}`, 'steps:'];
@@ -83,11 +81,6 @@ export function seedTrustedFlow(home: string, repo: string, id: string, yaml: st
   writeActiveFlow(repo, id);
 }
 
-/** Supply the groom step's `ticket` input at Start, through the same channel the input modal uses. */
-export function provideGroomTicket(page: Page, repo: string, ticket = '176'): Promise<FlowStateView> {
-  return page.evaluate(([repoKey, t]) => window.flow.provideInput(repoKey, 'groom', { ticket: t }), [repo, ticket] as const);
-}
-
 export interface AuditRunIdentity {
   flow: string;
   startedAt: number;
@@ -98,7 +91,7 @@ export interface GateEntry {
   exit: number | null;
 }
 
-function runIdentity(repo: string): AuditRunIdentity {
+export function runIdentity(repo: string): AuditRunIdentity {
   const file = `${repo}/.agent-terminal/flow-state.yaml`;
   if (!existsSync(file)) throw new Error(`auditGateEntries: ${file} is missing`);
   const doc = load(readFileSync(file, 'utf8')) as { flow?: unknown; started_at?: unknown } | null;

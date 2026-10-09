@@ -179,12 +179,7 @@ export const PLAN_V2_ROSTER = [
   'review-plan-contracts',
 ];
 export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
-// The canonical report generator is the ONE anchor: the fake-agent emits exactly what the shared predicate
-// (which gates the review turn's completion) accepts, so the e2e fixture cannot drift from the engine.
-// `full` accounts for the whole roster (the first persona carries an issue, the second the empty marker —
-// covering AC5's present-empty-still-completes); `omit-persona` drops a persona so the round is malformed.
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
-export const FULL_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, roster: PLAN_V2_ROSTER }));
 // A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
 // consolidator clean-guard keys on.
 const failedReport = (sections: string[], roster: string[]): string => {
@@ -195,7 +190,6 @@ const failedReport = (sections: string[], roster: string[]): string => {
   });
   return parts.join('\n') + '\n';
 };
-export const FAILED_REPORT_B64 = b64(failedReport(PLAN_V2_SECTIONS, PLAN_V2_ROSTER));
 
 export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor';
 export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair';
