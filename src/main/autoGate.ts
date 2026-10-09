@@ -483,10 +483,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     if (identity === null || start === null) return undefined;
     const run = buildRun(start, identity);
-    const persisted = isAuto(run) ? readGateRunState(repoKey) : ({ kind: 'absent' } as const);
-    if (persisted.kind === 'unreadable') {
+    const persisted = isAuto(run) ? readGateRunState(repoKey) : null;
+    if (persisted?.kind === 'unreadable') {
       run.failedEffect = { state: 'unknown', detail: 'the run\'s gate state could not be read', reported: false };
-    } else if (persisted.kind === 'ok' && sameRun(persisted.state.run, identity)) {
+    } else if (persisted?.kind === 'absent') {
+      run.failedEffect = { state: 'unknown', detail: 'the run\'s gate state is missing', reported: false };
+    } else if (persisted?.kind === 'ok' && sameRun(persisted.state.run, identity)) {
       const lr = persisted.state.loopRun;
       run.loopRun = lr === null ? null : { ...lr, recorded: new Set(lr.recorded) };
       run.failedEffect = persisted.state.failedEffect;

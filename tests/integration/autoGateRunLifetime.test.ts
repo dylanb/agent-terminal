@@ -924,6 +924,39 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state could not be read']);
   });
 
+  it('a gate state missing at the relaunch is (h) with the marker shown as unknown, and the run end reports it (N9b.5(b), N9b.5(d))', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    rmSync(loopAreaFile(before.wt, 'gate-run.yaml')!);
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    expect(rig.approvals).toEqual([]);
+    const v = rig.view();
+    expect(v.autoGate?.failedEffect?.state).toBe('unknown');
+    expect(v.autoGate?.haltReasons.find((r) => r.reason === 'engine-input-missing')?.detail).toBe('the run\'s gate state is missing');
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state is missing']);
+  });
+
+  it('negative pair: a gate state present at the relaunch is restored, and its clean gate is engine-approved', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    expect(rig.approvals.map((a) => [a.step, a.decider])).toEqual([[STEP, 'engine']]);
+    expect(rig.errors).toEqual([]);
+  });
+
+  it('a run with no `auto` step relaunched with no gate state reports nothing at its end (N9b.3)', async () => {
+    const before = makeRig({ authority: 'human' });
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    const rig = before.relaunch();
+    await rig.reachGate('clean');
+    rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
+    expect(rig.errors).toEqual([]);
+    expect(rig.view().autoGate?.failedEffect).toBeUndefined();
+  });
+
   it('a run with no `auto` step relaunched over a gate state it cannot read reports nothing at its end (N9b.3)', async () => {
     const before = makeRig({ authority: 'human' });
     expect(before.flowStart(before.wt).status).toBe('in_progress');
