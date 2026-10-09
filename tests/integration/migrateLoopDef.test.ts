@@ -45,7 +45,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
   it('copies the WHOLE def tree into the operator tier and returns a notice naming the def', () => {
     seedBundledDef(appBundledDir);
 
-    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+    const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
 
     expect(notice).not.toBeNull();
     expect(notice).toContain(NAME);
@@ -61,7 +61,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
     mkdirSync(dest, { recursive: true });
     writeFileSync(path.join(dest, `${NAME}.yaml`), 'OPERATOR EDIT\n');
 
-    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+    const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
 
     expect(notice).toBeNull();
     expect(readFileSync(path.join(dest, `${NAME}.yaml`), 'utf8')).toBe('OPERATOR EDIT\n');
@@ -73,7 +73,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
       seedBundledDef(appBundledDir);
       chmodSync(operatorDir, 0o555);
 
-      const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+      const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
 
       expect(notice).not.toBeNull();
       expect(notice).toContain(NAME);
@@ -90,7 +90,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
 
     let notice: string | null = null;
     expect(() => {
-      notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+      notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
     }).not.toThrow();
     expect(notice).not.toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
@@ -105,7 +105,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
     writeFileSync(path.join(outside, 'secret.md'), 'SECRET\n');
     symlinkSync(outside, path.join(appBundledDir, NAME));
 
-    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+    const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
 
     expect(notice).toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
@@ -118,13 +118,13 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
     symlinkSync(path.join(root, 'does-not-exist'), danglingParent);
     const unresolvable = path.join(danglingParent, 'loops-v2');
 
-    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir: unresolvable });
+    const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir: unresolvable });
 
     expect(notice).toBeNull();
   });
 
   it('an absent source def (raced away after it resolved) copies nothing and raises no notice', () => {
-    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+    const notice = migrateBundledLoopDef({ name: NAME, defRel: NAME, appBundledDir, operatorDir });
 
     expect(notice).toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
@@ -142,35 +142,49 @@ describe('migrateBundledLoopDefOnEntry — the trigger fires only when resolutio
     seedBundledDef(appBundledDir); // the bundle HAS the def…
     const repoDir = path.join(root, 'a-cloned-repo');
     // …but resolution stopped at the repo tier (the repo's own registry answered first)
-    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: repoDir }, tiers());
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: repoDir, defDir: path.join(repoDir, NAME) }, tiers());
     expect(notice).toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
   });
 
   it('does NOT migrate a def that resolved from the OPERATOR tier (they already have their own)', () => {
     seedBundledDef(appBundledDir);
-    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: operatorDir }, tiers());
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: operatorDir, defDir: path.join(operatorDir, NAME) }, tiers());
     expect(notice).toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
   });
 
   it('does NOT migrate when the operator tier is refused (null) — there is nowhere to write', () => {
     seedBundledDef(appBundledDir);
-    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir }, { appBundled: appBundledDir, operator: null });
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir, defDir: path.join(appBundledDir, NAME) }, { appBundled: appBundledDir, operator: null });
     expect(notice).toBeNull();
   });
 
   it('does NOT migrate a step that carries no loop name', () => {
     seedBundledDef(appBundledDir);
-    const notice = migrateBundledLoopDefOnEntry({}, { tierRoot: appBundledDir }, tiers());
+    const notice = migrateBundledLoopDefOnEntry({}, { tierRoot: appBundledDir, defDir: path.join(appBundledDir, NAME) }, tiers());
     expect(notice).toBeNull();
   });
 
   it('DOES migrate when resolution stopped at the app-bundled tier and the operator tier exists', () => {
     seedBundledDef(appBundledDir);
-    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir }, tiers());
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir, defDir: path.join(appBundledDir, NAME) }, tiers());
     expect(notice).not.toBeNull();
     expect(notice).toContain(NAME);
     expect(existsSync(path.join(operatorDir, NAME))).toBe(true); // the copy landed in the operator tier
+  });
+
+  it('copies a def found in a flow’s bundled folder into that flow’s operator folder, never the shared one (§27.8)', () => {
+    seedBundledDef(path.join(appBundledDir, 'plan-only'));
+
+    const notice = migrateBundledLoopDefOnEntry(
+      { loop: NAME },
+      { tierRoot: appBundledDir, defDir: path.join(appBundledDir, 'plan-only', NAME) },
+      tiers(),
+    );
+
+    expect(notice).toContain(NAME);
+    expect(readFileSync(path.join(operatorDir, 'plan-only', NAME, 'prompts', 'work.md'), 'utf8')).toBe('# work prompt\n');
+    expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
   });
 });

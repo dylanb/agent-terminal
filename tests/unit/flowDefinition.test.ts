@@ -182,14 +182,15 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   });
 
   // #137 AC16
-  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-bundle and integration-slice, `auto` on every other loop step', () => {
-    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev', 'flow.yaml'));
+  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-polish and integration-slice, `auto` on every other loop step', () => {
+    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'));
     expect(load.ok).toBe(true);
     if (!load.ok) return;
     expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
       preparation: null,
       groom: 'auto',
-      'plan-bundle': 'human',
+      'plan-bundle': 'auto',
+      'plan-polish': 'human',
       infra: 'auto',
       red: 'auto',
       green: 'auto',

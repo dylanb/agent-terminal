@@ -25,7 +25,7 @@ export interface LoopBindingPreparerDeps {
   refuseAndRevert(reason: string): void;
   /** Position 6 — copy the resolved def into the operator tier when it resolved from the app-bundled tier
    *  (AC 5), returning its one-shot notice; `null` for any other tier or when there is nothing to say. */
-  migrateIfBundled(step: FlowStepDef, resolved: { def: LoopDefV2; tierRoot: string }): string | null;
+  migrateIfBundled(step: FlowStepDef, resolved: { def: LoopDefV2; tierRoot: string; defDir: string }): string | null;
 }
 
 export function createLoopBindingPreparer(

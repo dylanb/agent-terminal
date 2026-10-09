@@ -7,11 +7,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { flowCatalogDir, type FlowInputDef } from '../../src/main/flow';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { shellQuote } from '../../src/shared/shellQuote';
+
+const exampleConfigDir = seedSharedExampleConfig();
 
 export interface FlowPickerHarness {
   home: string;
@@ -57,7 +60,7 @@ export function createFlowPickerHarness(): FlowPickerHarness {
     if (launched !== null) throw new Error('the harness app is already running; use relaunch()');
     const app = await electron.launch({
       args: ['out/main/index.js', `--user-data-dir=${userDataDir}`],
-      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: shellHome, APP_HOME_DIR: home },
+      env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: shellHome, APP_HOME_DIR: home, CLAUDE_CONFIG_DIR: exampleConfigDir },
     });
     launched = app;
     running = { app, page: await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS }) };

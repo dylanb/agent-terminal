@@ -251,6 +251,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     loopTurnActive: () => false,
     forgetRunEntry: () => {},
     endRun: composeLifecycleEndRun(gate),
+    releaseLoopTurn: () => {},
     recordTerminate: (repoKey) => recorder.recordTerminate(repoKey),
     clearTodos: () => {},
     clearSliceBrief: () => {},

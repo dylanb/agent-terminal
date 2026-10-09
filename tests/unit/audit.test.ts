@@ -737,7 +737,7 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
     expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'h' }, { reason: 'c' }, { reason: 'h', detail: 'x' }]))).toEqual(['c', 'h']);
   });
 
-  // #137 S2 — v2.175 retired (f) and (g); the letters are not reused.
+  // #137 S2 — v2.184 retired (f) and (g); the letters are not reused.
   it('(f) and (g) are not halt reasons', () => {
     expect(isAutoHaltReason('f')).toBe(false);
     expect(isAutoHaltReason('g')).toBe(false);

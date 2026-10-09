@@ -1,0 +1,67 @@
+# §18.1/§27.10/§28.2
+name: feature-dev-v2
+steps:
+  - id: preparation
+    kind: manual
+  - id: groom
+    kind: loop
+    gate_authority: auto
+    loop: groom-loop
+    loop_namespace: app
+    todo_template: ticket-grooming
+    inputs:
+      - name: ticket
+        type: github-ticket
+        required: true
+  - id: plan-bundle
+    kind: loop
+    gate_authority: auto
+    loop: plan-bundle-loop
+    loop_namespace: app
+    todo_template: plan-loop-review
+  - id: plan-polish
+    kind: loop
+    gate_authority: human
+    loop: plan-polish-loop
+    loop_namespace: app
+    todo_template: plan-loop-review
+  - id: infra
+    kind: loop
+    gate_authority: auto
+    loop: infra-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  # impl-slice×N (§28.2/§28.4): red→green→refactor repeats once per impl-slice. The refactor step's
+  # `repeat` loops back to `red` `slices`-many times (§28.4 loop-back primitive). Until a planning
+  # step resolves the `slices` input from the slice-plan, the count defaults to 1 — a single slice, the
+  # prior behavior — so the directive is inert, never a broken multi-slice chain.
+  - id: red
+    kind: loop
+    gate_authority: auto
+    loop: red-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: green
+    kind: loop
+    gate_authority: auto
+    loop: green-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: refactor
+    kind: loop
+    gate_authority: auto
+    loop: refactor-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+    repeat:
+      back_to: red
+      count_input: slices
+  - id: integration-slice
+    kind: loop
+    gate_authority: human
+    loop: integration-slice-loop
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: finalize
+    kind: manual
+    todo_template: polish

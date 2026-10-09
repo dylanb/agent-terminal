@@ -16,10 +16,10 @@ import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { roundReportWithDisposition } from '../helpers/roundReports';
+import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
+import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 
-// LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
-// defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
-export const exampleConfigDir = join(process.cwd(), 'example');
+export const exampleConfigDir = seedSharedExampleConfig();
 
 // The bound on every shim hold, well below the 60 s test ceiling, so a hold nobody releases fails its test on
 // that test's own assertion. Logs `held <pid> <argv>` first, then `released <pid>`, or `expired <pid>` and
@@ -169,7 +169,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
 }
 
 // The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
-// the round report must account for and the sections it must carry (example/loops-v2/plan-loop/plan-loop.yaml).
+// the round report must account for and the sections it must carry (example/loops-v2/plan-only/plan-loop/plan-loop.yaml).
 export const PLAN_V2_ROSTER = [
   'review-plan-principal',
   'review-plan-security',
@@ -191,7 +191,7 @@ const failedReport = (sections: string[], roster: string[]): string => {
   return parts.join('\n') + '\n';
 };
 
-export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor';
+export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor' | 'ask';
 export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair';
 
 // One step's script for the fake agent (§27.15 test seam).
@@ -199,6 +199,7 @@ export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit
 //          no-marker — artifact WITHOUT the marker + done-file → one work retry then error (no chain).
 //          file-only — marker-bearing artifact but NO done-file → work stall→error with the artifact present.
 //          noop — produce nothing; the turn never completes (only for a turn that must be stranded).
+//          ask — ask the operator a question and wait silently; the operator's `yes` completes the turn.
 //   review: full — a report accounting for the whole roster → the review turn completes (default).
 //           omit-persona — a report dropping a roster persona → one review retry then error.
 //           none — write nothing on the review turn → review stall/retry→error.
@@ -308,7 +309,9 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const workBody: string[] | null =
     opts.work === 'noop'
       ? null
-      : opts.work === 'green'
+      : opts.work === 'ask'
+        ? [bump, `mkdir -p .agent-terminal; : > .agent-terminal/asked; echo 'Question: may I proceed? (yes)'`]
+        : opts.work === 'green'
         ? greenBody
         : opts.work === 'red'
           ? redBody
@@ -319,7 +322,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
               : opts.work === 'no-marker'
                 ? [bump, writeArtifact(false)]
                 : [bump, writeArtifact(true)];
-  const signals = opts.work !== 'noop' && opts.work !== 'file-only';
+  const signals = opts.work !== 'noop' && opts.work !== 'file-only' && opts.work !== 'ask';
   const workAction =
     workBody === null
       ? ':'
@@ -378,6 +381,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
     `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;`,
     `    *turn-done:${reviewKey}*) ${reviewAct} ;;`,
     `    *turn-done:${turnKey}*) ${workAct} ;;`,
+    ...(opts.work === 'ask' ? [`    yes) [ -f .agent-terminal/asked ] && { rm .agent-terminal/asked; ${writeArtifact(true)}; ${doneSignal(turnKey)}; } ;;`] : []),
   ];
 }
 
@@ -461,9 +465,14 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
 }
 // ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
 const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
+// A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the
+// global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
+const CHAIN_LOOP_MS = 15_000;
+export const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
 export const CHAIN_ROSTERS: Record<string, string[]> = {
   groom: ['review-plan-intent'],
-  'plan-bundle': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
+  'plan-bundle': ['review-plan-principal', 'review-plan-intent', 'review-plan-tracer-slicer'],
+  'plan-polish': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
   infra: [...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
   red: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'],
   green: [...CHAIN_IMPL12, 'impl-review-regression-guard'],
@@ -477,7 +486,7 @@ export const CHAIN_ROSTERS: Record<string, string[]> = {
 // consolidate is impl-slice n's. Per-step turn counts live under `binDir`, outside the worktree.
 export function seedFullTddChainAgent(
   binDir: string,
-  opts: { implSlices?: number; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>> } = {},
+  opts: { implSlices?: number; polishedSlices?: number; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>> } = {},
 ): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
@@ -493,6 +502,10 @@ export function seedFullTddChainAgent(
   const workArm: Record<string, string> = {
     groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
     'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
+    // §28.8.1 — with `polishedSlices` the polish turn rewrites the slice block, so a test can tell which gate's count won.
+    'plan-polish': opts.polishedSlices
+      ? `${decode(b64(`# plan\n\n${exampleSlicePlan(opts.polishedSlices)}\n${completionMarker('plan-bundle')}\n${completionMarker('plan-polish')}\n`), `${art}/plan.md`)}; ${done('work-plan-polish')}`
+      : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
     red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
@@ -516,7 +529,7 @@ export function seedFullTddChainAgent(
     );
   };
 
-  const steps = ['groom', 'plan-bundle', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
+  const steps = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
   const cases = steps
     .flatMap((s) => [
       `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,

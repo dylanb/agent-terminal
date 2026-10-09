@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { BUNDLED_LOOPS_ROOT, bundledFlowOf } from '../helpers/bundledLoops';
 import { createAppLoopEngine } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
@@ -31,6 +31,7 @@ import {
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
+import type { FlowStateView } from '../../src/shared/ipc';
 import {
   CONSOLIDATE_KEY,
   createAppLoopEngineHarness,
@@ -252,13 +253,13 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     h.defResult = resolved({ ...fileDef(), report: { sections: ['summary'], polish: 'defer' } });
     const engine = makeEngine();
     driveToReviewInjected(engine);
-    expect(h.injected[h.injected.length - 1]).toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
+    expect(h.injected[h.injected.length - 1]).toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i);
   });
 
   it('§27.8 — a def that fixes polish injects no deferral clause', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
-    expect(h.injected[h.injected.length - 1]).not.toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i);
+    expect(h.injected[h.injected.length - 1]).not.toMatch(/polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i);
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {
@@ -537,6 +538,65 @@ describe('§27 engine — stall (AC6)', () => {
     expect(state?.status).toBe('error');
     expect(state?.errorReason).toMatch(/stall/i);
     // No kill port exists on the engine — the instance's process is untouched by design.
+  });
+
+  it('the agent writing its done file after a stall completes the turn and clears the error (§27.12)', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onStall();
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    writeArtifact(true);
+    engine.onDoneSignal();
+    const state = readAppLoopState(h.repo);
+    expect(state?.status).toBe('working');
+    expect(state?.turnKey).not.toBe(TURN_KEY); // advanced to the review round
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a done file after the operator accepted a stalled turn does not advance it a second time', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    expect(readAppLoopState(h.repo)?.status).toBe('complete');
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('complete');
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a done file after the stalled turn was released (its flow terminated) does not resume it', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.releaseStalledTurn(h.repo);
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('resumed after a stall'), 0);
+  });
+
+  it('a Terminate the flow refuses (it never reset the run) leaves the stalled turn resumable', () => {
+    const engine = makeEngine();
+    h.terminateFlow.mockReturnValueOnce({ outcome: 'refused', cause: 'locked', reason: 'held by a peer', view: {} as FlowStateView });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'terminate');
+    expect(h.terminateFlow).toHaveBeenCalledWith(h.repo);
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
+  });
+
+  it('releasing a different worktree leaves the stalled turn resumable', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.releaseStalledTurn(join(tmpdir(), 'some-other-repo'));
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
   });
 
   it('visible activity re-arms the stall watchdog while in flight (a long streaming turn never stalls)', () => {
@@ -1042,6 +1102,27 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
     expect(h.injected[h.injected.length - 1]).toContain(`check-artifact report ${roundReportRel(1)} --sections summary --roster ${ROSTER.join(',')}`);
+  });
+
+  // §27.4 — the reviewers grade the work turn's artifact, so a groom round never re-reviews the stale issue body.
+  it('the review prompt names the work artifact as the reviewers\' subject', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const prompt = h.injected[h.injected.length - 1];
+    expect(prompt).toContain(binding('plan', h.artifactPath).rel);
+    expect(prompt).toMatch(/not the issue body/i);
+  });
+
+  it('a commit-producing loop\'s review prompt names no artifact subject', () => {
+    h.defResult = resolved(commitDef());
+    const engine = makeEngine();
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = h.injected[h.injected.length - 1];
+    expect(prompt).toContain('review-and-fix');
+    expect(prompt).not.toMatch(/not the issue body/i);
   });
 
   // §27.12 — a present-but-malformed report is repaired, not re-reviewed: the retry names each problem and
@@ -1927,8 +2008,11 @@ describe('§27 engine — resume routes a stopped (working) turn to the human (C
 // engine + persisted state), NOT by calling resume()/routeOut() directly — a `working` turn that stayed
 // `working` in the view carries no route-out and is human-recoverable only by hand-editing run-state.yaml.
 describe('§27 derived view — a relaunch-stranded turn surfaces a route-out (CWE-703/755)', () => {
-  const appBundled = fileURLToPath(new URL('../../example/loops-v2', import.meta.url));
-  const viewCtx = () => ({ tiers: { operator: null, appBundled, retired: null }, repoDir: h.repo });
+  const viewCtx = () => ({
+    tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null },
+    repoDir: h.repo,
+    flow: bundledFlowOf('plan-loop'),
+  });
 
   it('derives a persisted `working` consolidator turn to a routable error over a fresh engine', () => {
     writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'working', round: 2 }, FIXED);
@@ -2152,17 +2236,18 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     expect(reviewChained()).toBe(false); // never fabricated a pass on the done-signal alone
   });
 
-  it('IT-ENGINE-8: a stall during the async RED gate errors the turn; the late gate cannot resurrect it', async () => {
+  it('IT-ENGINE-8: a stall during the async RED gate errors the turn; the late gate still completes it (§27.12)', async () => {
     const { workingTreeTestPaths, resolve } = deferredWorkingTree();
     const engine = makeEngine(undefined, makeFakeCompletionPredicates({ workingTreeTestPaths }));
     enterRed(engine);
     writeResult(examplePhaseResult('failed-assertion'));
     engine.onDoneSignal(); // starts the async gate, awaiting the deferred workingTreeTestPaths
     engine.onStall(); // the runner errors while the gate is still pending
-    expect(h.emitError).toHaveBeenCalled();
-    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late...
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late — the done-signal was real
     await flushRedGate();
-    expect(reviewChained()).toBe(false); // ...but the late runner.onDoneSignal(gate) no-ops (state != in-flight)
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
+    expect(engine.activeTurnKey()).not.toBe('work-plan'); // advanced into the review round
   });
 
   it('IT-ENGINE-8b: a stale gate resolving after a retry rebuilt the turn cannot auto-complete it (identity guard)', async () => {
@@ -2450,7 +2535,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(readAppLoopState(h.repo)?.status).toBe('error'); // refused — the sync clause (passed) is unmet
   });
 
-  it('IT-GREEN-8: a stall during the async gate errors the turn; the late gate records NO flag and cannot resurrect it', async () => {
+  it('IT-GREEN-8: a stall during the async gate errors the turn; the late gate still completes it and records its flag (§27.12)', async () => {
     const { changedTestPaths, resolve } = deferredChangedTestPaths();
     const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
     seedBaseline();
@@ -2459,11 +2544,11 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     engine.onDoneSignal(); // starts the async gate, awaiting the deferred changedTestPaths
     engine.onStall(); // the runner errors while the gate is still pending
     expect(readAppLoopState(h.repo)?.status).toBe('error');
-    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late, with a changed test...
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the gate resolves late, with a changed test
     await flushGate();
-    expect(reviewChained()).toBe(false); // ...the late runner.onDoneSignal(gate) no-ops (state != in-flight)
-    // ...and crucially the stashed flag is NEVER recorded against the errored turn (onComplete never fired):
-    expect(readChangedTests(h.repo)).toBeNull();
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
+    expect(engine.activeTurnKey()).not.toBe(TURN_KEY); // advanced into the review round
+    expect(readChangedTests(h.repo)).toEqual({ step: STEP, paths: ['tests/a.test.ts'] });
   });
 
   it('IT-GREEN-8b: a stale gate resolving after a retry rebuilt the turn records no flag against the fresh turn (identity guard)', async () => {
@@ -2787,7 +2872,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('changed-tests flag record failed'), 1);
   });
 
-  it('IT-REFAC-8: a stall during the probe errors the round; the late probe records NO flag against the errored turn', async () => {
+  it('IT-REFAC-8: a stall during the probe errors the round; the late probe still completes it and records its flag (§27.12)', async () => {
     const { changedTestPaths, resolve } = deferredChangedTestPaths();
     const engine = makeEngine(undefined, makeFakeCompletionPredicates({ changedTestPaths }));
     seedBaseline();
@@ -2797,10 +2882,10 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     engine.onDoneSignal(); // starts the probe, awaiting the deferred changedTestPaths
     engine.onStall(); // the runner errors the review round while the probe is pending
     expect(readAppLoopState(h.repo)?.status).toBe('error');
-    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the probe resolves late, with a changed test...
+    resolve({ ok: true, paths: ['tests/a.test.ts'] }); // the probe resolves late, with a changed test
     await flushGate();
-    expect(completed(engine)).toBe(false); // ...the late runner.onDoneSignal() no-ops (state != in-flight)
-    expect(readChangedTests(h.repo)).toBeNull(); // the stashed flag is NEVER recorded against the errored turn
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(h.repo)).toEqual({ step: STEP, paths: ['tests/a.test.ts'] });
   });
 
   it('IT-REFAC-dedup: a duplicate done-signal while the probe is pending does not burn a second retry attempt', async () => {
@@ -3035,7 +3120,7 @@ describe('§28.5.3 — a GREEN loop review round refreshes the changed-test flag
     expect(readChangedTests(h.repo)).toEqual({ step: STEP, paths: [] });
   });
 
-  it('IT-GREEN-REVIEW-stall: a stall during the probe errors the round; the late probe records nothing', async () => {
+  it('IT-GREEN-REVIEW-stall: a stall during the probe errors the round; the late probe still completes it and records its flag (§27.12)', async () => {
     const engine = makeEngine(undefined, greenReviewFake());
     await driveGreenToReview(engine);
     const { changedTestPaths, resolve } = deferredChangedTestPaths();
@@ -3046,8 +3131,8 @@ describe('§28.5.3 — a GREEN loop review round refreshes the changed-test flag
     expect(readAppLoopState(h.repo)?.status).toBe('error');
     resolve({ ok: true, paths: [EDITED] });
     await flushGate();
-    expect(completed(engine)).toBe(false);
-    expect(readChangedTests(h.repo)).toEqual({ step: STEP, paths: [] });
+    expect(completed(engine)).toBe(true);
+    expect(readChangedTests(h.repo)).toEqual({ step: STEP, paths: [EDITED] });
   });
 
   it('IT-GREEN-REVIEW-dedup: a duplicate done-signal while the probe is pending does not burn a second retry attempt', async () => {

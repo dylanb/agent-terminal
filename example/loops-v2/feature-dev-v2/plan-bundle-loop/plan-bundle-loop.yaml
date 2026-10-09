@@ -1,0 +1,51 @@
+version: v2
+name: plan-bundle-loop
+work:
+  recipe: prompts/work.md
+  artifact: plan
+reviewers:
+  - persona: review-plan-principal
+    charter: charter/principal.md
+    tools: [Read, Grep, Glob]
+  - persona: review-plan-intent
+    charter: charter/intent.md
+    tools: [Read, Grep, Glob]
+  - persona: review-plan-tracer-slicer
+    charter: charter/tracer-slicer.md
+    tools: [Read, Grep, Glob]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+  - boundary: pre-review
+    mode: compact
+    message: Keep the plan and the ticket.
+report:
+  sections: [summary, findings, disposition]
+  polish: defer
+gate:
+  - option: approve
+  - option: request-changes
+  - option: redo
+  - option: polish
+pickup:
+  initial_status: planning
+  branch_template: plan-loop/issue-{issue}
+  initial_labels:
+    - action: remove
+      target: issue
+      label: plan-loop/ready
+    - action: add
+      target: issue
+      label: plan-loop/in-progress
+    - action: add
+      target: pr
+      label: plan-loop/plan-draft
+  on_conflict: wipe-and-retry
+inputs:
+  - id: groomed-ticket
+    path: groomed-ticket.md
+outputs:
+  - id: plan
+    path: plan.md

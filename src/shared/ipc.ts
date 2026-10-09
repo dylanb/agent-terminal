@@ -719,7 +719,7 @@ export interface FlowRequestMsg {
   repoKey: string;
 }
 
-/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.176. */
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.185. */
 export interface FlowAdvanceMsg extends FlowRequestMsg {
   step?: string;
 }
@@ -1143,7 +1143,7 @@ export interface FlowApi {
   /** not_started → in_progress; rejects if not currently not_started. */
   start(repoKey: string): Promise<FlowStateView>;
   /** in_progress → done; rejects if not currently in_progress. `step`, when given, names the step the caller
-   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6 v2.176). */
+   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6 v2.185). */
   advance(repoKey: string, step?: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;

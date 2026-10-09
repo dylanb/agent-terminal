@@ -40,11 +40,9 @@ export interface AppGateDecisionDeps {
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string, step: string): void;
-  /** §28.4.1 — on an approve, resolve the impl-slice count from the plan-bundle's slice-plan into the `slices`
-   *  flow input the refactor loop-back reads (§28.4.1). Data-driven: the composition root reads the count
-   *  only when `def` declares the plan artifact (the plan-bundle's contract), so a non-plan-bundle approve is a
-   *  no-op and cannot overwrite it; and it resolves the input WITHOUT re-entering the step. Best-effort — a
-   *  failure degrades to the count-1 single-slice default (the caller wraps it, never aborting the advance). */
+  /** §28.4.1 — on an approve whose `def` declares the `plan` output, re-source the `slices` flow input from that
+   *  plan WITHOUT re-entering the step; a later planning approve overwrites an earlier one (§28.8.1). Best-effort
+   *  — the caller wraps it, never aborting the advance. */
   sourceSliceCount(repoDir: string, def: LoopDefV2): void;
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
@@ -372,7 +370,8 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   }
 
   // §28.4.1 — source the impl-slice count into the `slices` input BEFORE advancing, so the downstream refactor
-  // loop-back reads the plan-decided count. Best-effort: a failure degrades to the count-1 default (never aborts).
+  // loop-back reads the plan-decided count. Best-effort: on a failure the previously sourced count (or the
+  // count-1 default) stands, and the advance is never aborted.
   try {
     deps.sourceSliceCount(repoDir, r.def);
   } catch (e) {

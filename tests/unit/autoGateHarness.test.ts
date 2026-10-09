@@ -7,6 +7,7 @@ import { auditGateEntries, autoGateFlowYaml, loopRoster, seedTrustedFlow, type A
 import { loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { readActiveFlow } from '../../src/main/activeFlowPointer';
+import { bundledLoopDir } from '../helpers/bundledLoops';
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { auditTimestamp, lifecycleEvents, serializeDoc, type AuditEvent } from '../../src/shared/audit';
 
@@ -49,10 +50,10 @@ describe('autoGateFlowYaml', () => {
 });
 
 describe('loopRoster', () => {
-  it.each<AutoGateLoop>(['groom-loop', 'plan-bundle-loop', 'red-loop', 'green-loop', 'refactor-loop'])(
+  it.each<AutoGateLoop>(['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'red-loop', 'green-loop', 'refactor-loop'])(
     'matches the reviewer personas the shipped %s declares',
     (loop) => {
-      const def = load(readFileSync(join(process.cwd(), 'example', 'loops-v2', loop, `${loop}.yaml`), 'utf8')) as { reviewers: { persona: string }[] };
+      const def = load(readFileSync(join(bundledLoopDir(loop), `${loop}.yaml`), 'utf8')) as { reviewers: { persona: string }[] };
       expect(loopRoster(loop)).toEqual(def.reviewers.map((r) => r.persona));
     },
   );

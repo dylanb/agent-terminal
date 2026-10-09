@@ -14,6 +14,9 @@ export interface MigrateBundledLoopDefParams {
   /** The def name. Held to a single safe path segment by `resolveLoopDefV2` upstream (§B.6); both tier-root
    *  joins below are independently confined (`confinedRealPath`), so a direct caller cannot escape either root. */
   name: string;
+  /** The def directory relative to both tier roots: `<name>`, or `<flow>/<name>` for a flow's own folder
+   *  (§27.8). Confined within each root like `name`. */
+  defRel: string;
   /** The app-bundled tier root the def resolved from (`ctx.tiers.appBundled`). */
   appBundledDir: string;
   /** The operator tier root the copy lands in (`userConfigLoopsV2Dir()` = `ctx.tiers.operator`). */
@@ -62,19 +65,19 @@ function confinedChild(rootDir: string, seg: string): string | null {
   return jail === null ? null : confinedRealPath(jail, path.join(jail, seg));
 }
 
-/** Copy `<appBundledDir>/<name>/**` into `<operatorDir>/<name>/` once, all-or-nothing (§B.6). Returns the
+/** Copy `<appBundledDir>/<defRel>/**` into `<operatorDir>/<defRel>/` once, all-or-nothing (§B.6). Returns the
  *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
  *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
- *  a tier root does not resolve or its `<root>/<name>` escapes it, or the source raced away after it
+ *  a tier root does not resolve or its `<root>/<defRel>` escapes it, or the source raced away after it
  *  resolved. NEVER throws. */
 export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): string | null {
-  const { name, appBundledDir, operatorDir, stageDir } = params;
+  const { name, defRel, appBundledDir, operatorDir, stageDir } = params;
   try {
     // The bundle is an installed artifact this build did not necessarily write, so the read is confined
-    // exactly as the write is: a `..` or a symlink at `<root>/<name>` that escapes yields no path, so the
+    // exactly as the write is: a `..` or a symlink at `<root>/<defRel>` that escapes yields no path, so the
     // read walks only what stays inside the bundle and the copy lands only inside the operator tier (§B.6).
-    const destDir = confinedChild(operatorDir, name);
-    const srcDir = confinedChild(appBundledDir, name);
+    const destDir = confinedChild(operatorDir, defRel);
+    const srcDir = confinedChild(appBundledDir, defRel);
     if (destDir === null || srcDir === null) return null;
     const members = readDefTree(srcDir);
     if (members.length === 0) return null; // source absent/empty (raced away): a copy of nothing is not a def
@@ -98,12 +101,18 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
  *  so keying on silence would copy the app bundle into the operator's own tier at a cloned repo's request,
  *  where it then outranks the bundle for every repo forever (CWE-829/CWE-732). Returns the one-shot notice, or
  *  `null` when no migration fires (a repo/operator-tier resolution, a refused operator root, or a nameless
- *  step). Only `step.loop` and `resolved.tierRoot` are read — the narrowest slice the decision needs. */
+ *  step). Only `step.loop`, `resolved.tierRoot` and `resolved.defDir` are read — the narrowest slice the
+ *  decision needs. */
 export function migrateBundledLoopDefOnEntry(
   step: { loop?: string },
-  resolved: { tierRoot: string },
+  resolved: { tierRoot: string; defDir: string },
   tiers: { appBundled: string; operator: string | null },
 ): string | null {
   if (resolved.tierRoot !== tiers.appBundled || tiers.operator === null || step.loop === undefined) return null;
-  return migrateBundledLoopDef({ name: step.loop, appBundledDir: tiers.appBundled, operatorDir: tiers.operator });
+  return migrateBundledLoopDef({
+    name: step.loop,
+    defRel: path.relative(tiers.appBundled, resolved.defDir),
+    appBundledDir: tiers.appBundled,
+    operatorDir: tiers.operator,
+  });
 }

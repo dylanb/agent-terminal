@@ -606,3 +606,74 @@ describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5
   });
 });
 
+// §27.8 — a flow's own loop folder, `<operator>/<flow>/<name>/`, lets two flows that bind the same loop name
+// run different definitions of it. The reviewer roster tells the two planted variants apart from the outside.
+describe('resolveLoopDefV2 — the running flow’s own loop folder (§27.8)', () => {
+  const ONE_REVIEWER_DEF = VALID_DEF.replace(
+    '  - persona: review-plan-security\n    charter: charter/security.md\n    tools: [Read, Grep, Glob, Bash]\n',
+    '',
+  );
+  const personas = (r: ReturnType<typeof resolveLoopDefV2>): string[] => (r.ok ? r.def.reviewers.map((p) => p.persona) : []);
+
+  it('resolves the def in the flow’s folder over the shared operator def of the same name', () => {
+    plantDef(join(opDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
+  it('resolves the flow’s folder over the app bundle', () => {
+    plantDef(join(opDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
+  it('falls back to the shared operator def when the flow’s folder has none', () => {
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal', 'review-plan-security']);
+  });
+
+  it('never reads another flow’s folder', () => {
+    plantDef(join(opDir, 'loops-v2', 'feature-dev'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal', 'review-plan-security']);
+  });
+
+  it('resolves the flow’s bundled folder over the shared operator def', () => {
+    plantDef(join(appDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
+  it('resolves the flow’s operator folder over its bundled folder', () => {
+    plantDef(join(opDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(appDir, 'loops-v2', 'feature-dev-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: 'feature-dev-v2' });
+
+    expect(personas(r)).toEqual(['review-plan-principal']);
+  });
+
+  it('skips the flow folder for a flow name that is not a single safe path segment', () => {
+    plantDef(join(opDir, 'escaped'), 'plan-loop', ONE_REVIEWER_DEF);
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir, flow: '../escaped' });
+
+    expect(personas(r)).toEqual(['review-plan-principal', 'review-plan-security']);
+  });
+});

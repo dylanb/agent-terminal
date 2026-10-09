@@ -350,10 +350,14 @@ async function createWindow(): Promise<void> {
   let unwatchAppTurnDone: (() => void) | null = null;
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
-  const appDefContext = (repoDir: string): LoopDefV2Context => ({
-    tiers: resolveAppLoopDefTiers(iconLoc),
-    repoDir,
-  });
+  const appDefContext = (repoDir: string): LoopDefV2Context => {
+    const load = resolveActiveDefinition(repoDir);
+    return {
+      tiers: resolveAppLoopDefTiers(iconLoc),
+      repoDir,
+      ...(load.ok ? { flow: load.definition.name } : {}),
+    };
+  };
   let lifecycle: FlowLifecycle;
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
   const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -617,16 +621,7 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      provideAppLoopView(
-        appEngine,
-        name,
-        {
-          tiers: resolveAppLoopDefTiers(iconLoc),
-          repoDir: repoKey,
-        },
-        autoGate.autoGateViewFor,
-        (n) => observedResolveDef(repoKey, n),
-      ),
+      provideAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor, (n) => observedResolveDef(repoKey, n)),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
@@ -851,6 +846,7 @@ async function createWindow(): Promise<void> {
     },
     endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
     clearMonitor: () => {
@@ -969,11 +965,10 @@ async function createWindow(): Promise<void> {
     runCommitSideEffect: createRealAppGateCommit(repoKey),
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
-    // §28.4.1 — source the impl-slice count from the plan-bundle's slice-plan into the `slices` flow input the
-    // refactor loop-back reads. The plan is the def's declared `plan` output — a contract only the plan-bundle
-    // loop carries, so this is inert on every other loop's gate and cannot overwrite the sourced count. An
-    // absent/unreadable/blockless plan yields count 1 (a single-slice run, as before). resolveInputs sets the
-    // input WITHOUT re-entering the step (re-entering plan-bundle here would restart its loop).
+    // §28.4.1/§28.8.1 — every approve whose def declares the `plan` output re-sources `slices`, the last one
+    // winning: in feature-dev-v2 that is the plan-polish approve, so the polished plan decides the count the
+    // refactor loop-back reads. resolveInputs sets the input WITHOUT re-entering the step (re-entering a
+    // planning step here would restart its loop).
     sourceSliceCount: (repoDir, def) => {
       const planBinding = def.outputs.find((o) => o.id === 'plan');
       if (planBinding === undefined) return;

@@ -771,7 +771,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
   });
 
-  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included (v2.175 (9)).
+  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included (v2.184 (9)).
   it('a def only in the repo tier: the clean gate is engine-decided with no halt', async () => {
     rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
     plantDef(DEF_YAML, join(repoDir, 'loops'));
@@ -1521,7 +1521,7 @@ const COMMIT_GATE = { gate: [{ option: 'approve', sideEffects: [{ kind: 'commit'
 function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] } = {}): AppGateDecisionDeps {
   return {
     readRunState: () => GATE_RUN,
-    resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier' }),
+    resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
     refs: () => ({ pr: null, ticket: null, bootstrap: null }),
     runSideEffect: async () => {},
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),

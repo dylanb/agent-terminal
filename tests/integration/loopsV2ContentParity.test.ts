@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan, isEpicPlan, parseEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan, parseSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
@@ -11,10 +11,11 @@ import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 import { composePhaseResultInstruction, phaseResultWellFormed, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
 
 // §28.6 (P6b/P6c) — content-parity pins for the five new charters + work recipes S6 authors under
-// example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
+// feature-dev-v2's folder of example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
 // resolves a def (the §28.10 S6 / S7 boundary).
 
-const SOURCE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+const BUNDLE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
+const SOURCE_TREE = join(BUNDLE_TREE, FEATURE_DEV_ID);
 
 // A dead engine token is a copy-paste leak of engine plumbing into human-facing content: an unfilled `{{…}}`
 // template placeholder from the loops-repo source, or a citation of the retired section. The needle is
@@ -38,14 +39,15 @@ type RecipeRow =
   | { kind: 'plain'; file: string };
 
 const NEW_CHARTERS: readonly CharterRow[] = [
-  { file: 'plan-bundle-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
-  { file: 'plan-bundle-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
+  { file: 'plan-polish-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
+  { file: 'plan-polish-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
   { file: 'plan-bundle-loop/charter/tracer-slicer.md', persona: 'review-plan-tracer-slicer', marker: 'Thin-but-complete' },
   { file: 'red-loop/charter/red-authenticity.md', persona: 'impl-review-red-authenticity', marker: 'Fails for the right reason' },
   { file: 'green-loop/charter/regression-guard.md', persona: 'impl-review-regression-guard', marker: 'No vacuous green' },
 ];
 
-const isPlanningCharter = (c: CharterRow): boolean => c.file.startsWith('plan-bundle-loop/charter/');
+const isPlanningCharter = (c: CharterRow): boolean =>
+  c.file.startsWith('plan-bundle-loop/charter/') || c.file.startsWith('plan-polish-loop/charter/');
 const isPhaseCharter = (c: CharterRow): boolean => c.persona.startsWith('impl-review-');
 
 const NEW_RECIPES: readonly RecipeRow[] = [
@@ -93,7 +95,7 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
   });
 
   it('the source-tree accessor resolves and read() works against the shipped tree', () => {
-    expect(read('impl-loop/impl-loop.yaml')).not.toBeNull();
+    expect(read('plan-bundle-loop/plan-bundle-loop.yaml')).not.toBeNull();
     expect(read('does-not-exist/nope.md')).toBeNull();
   });
 });
@@ -220,7 +222,7 @@ describe('loops-v2 content-parity — S6 content stays present, a dir resolves o
   for (const dir of newDirs) {
     it(`${dir} resolves to a def iff its yaml exists`, () => {
       const wired = existsSync(join(SOURCE_TREE, dir, `${dir}.yaml`));
-      const r = resolveLoopDefV2(dir, { tiers: { operator: null, appBundled: SOURCE_TREE, retired: null }, repoDir });
+      const r = resolveLoopDefV2(dir, { tiers: { operator: null, appBundled: BUNDLE_TREE, retired: null }, repoDir, flow: FEATURE_DEV_ID });
       expect(r.ok).toBe(wired);
       if (!r.ok) expect(r.reason).toContain(`no ${SECTION}27 def named ${dir}`);
     });
@@ -232,7 +234,7 @@ describe('loops-v2 content-parity — S6 content stays present, a dir resolves o
 // composed-prompt-is-a-writer): the recipe embeds a canonical example asserted well-formed against the predicate.
 describe('plan-bundle epic classification content (§28.7)', () => {
   const repoDir = resolve(__dirname, '..', '..');
-  const tiers = { operator: null, appBundled: SOURCE_TREE, retired: null };
+  const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
 
   // The recipe carries more than one fenced ```text example, so each test picks the fence for ITS grammar
   // (by a token only that grammar's block contains) rather than "the first fence".
@@ -271,8 +273,8 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect(charter).toContain(EPIC_GRAMMAR.subTicketsHeading); // '## Sub-tickets' — the epic exception
   });
 
-  it('the approve gate declares the promote side-effect naming the plan artifact', () => {
-    const r = resolveLoopDefV2('plan-bundle-loop', { tiers, repoDir });
+  it('the plan-polish approve gate declares the promote side-effect naming the plan artifact', () => {
+    const r = resolveLoopDefV2('plan-polish-loop', { tiers, repoDir, flow: FEATURE_DEV_ID });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const approve = r.def.gate.find((g) => g.option === 'approve');

@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
-import { completionArtifact } from '../../src/main/appWorkTurn';
+import { BUNDLED_LOOPS_ROOT, bundledFlowOf } from '../helpers/bundledLoops';
 
-// §27.9/§27.13 / N5 — the three shipped §27 loop defs declare an approve gate whose side-effect matches
-// §27.13 (groom → update-issue-body, plan → mark-ready, impl → publish-pr-body), a request-changes option
+// §27.9/§27.13 / N5 — the shipped groom and plan §27 loop defs declare an approve gate whose side-effect
+// matches §27.13 (groom → update-issue-body, plan → mark-ready), a request-changes option
 // (sub-ticket 2) that runs NO gh side-effect, and — sub-ticket 3 — the redo and polish options (also no gh
 // side-effect): redo re-enters the work turn on a clean slate (§27.9/AC5) and polish stands the orchestrator
 // down (§27.9/AC6). The §27-illegal impasse is still never offered.
-
-const APP_BUNDLED = join(process.cwd(), 'example', 'loops-v2');
 
 let repoDir: string;
 beforeEach(() => {
@@ -22,7 +20,7 @@ afterEach(() => {
 });
 
 function resolve(name: string): LoopDefV2Result {
-  return resolveLoopDefV2(name, { tiers: { operator: null, appBundled: APP_BUNDLED, retired: null }, repoDir });
+  return resolveLoopDefV2(name, { tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null }, repoDir, flow: bundledFlowOf(name) });
 }
 
 const gateActions = (r: LoopDefV2Result): Array<{ option: string; actions: string[] }> => {
@@ -52,28 +50,8 @@ describe('shipped §27 loop defs — approve (§27.13 side-effect) + request-cha
     ]);
   });
 
-  it('impl-loop offers approve (publish the PR body), request-changes, redo, polish', () => {
-    const resolved = resolve('impl-loop');
-    expect(gateActions(resolved)).toEqual([
-      { option: 'approve', actions: ['publish-pr-body'] },
-      { option: 'request-changes', actions: [] },
-      { option: 'redo', actions: [] },
-      { option: 'polish', actions: [] },
-    ]);
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) return;
-    expect(completionArtifact(resolved.def)).toBeNull();
-    expect(resolved.def.outputs).toEqual([]);
-    expect(readFileSync(resolved.def.work.recipe, 'utf8')).toMatch(
-      /push .*bootstrapped PR branch/i,
-    );
-    expect(resolved.def.gate[0].sideEffects[0].args).toMatchObject({
-      artifact: 'plan',
-    });
-  });
-
   it('every shipped def now offers redo and polish, and still never the §27-illegal impasse (§27.9/AC5,6,9)', () => {
-    for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
+    for (const name of ['groom-loop', 'plan-loop']) {
       const options = gateActions(resolve(name)).map((g) => g.option);
       expect(options).toContain('redo');
       expect(options).toContain('polish');
@@ -84,7 +62,7 @@ describe('shipped §27 loop defs — approve (§27.13 side-effect) + request-cha
 
 // §28.4.2 — the human back-to-red control is declared on EVERY phase gate (RED / GREEN / refactor /
 // integration-slice), and only there: it re-enters the current slice's RED step, so it makes no sense at the
-// non-phase gates (groom / plan-bundle / plan / impl). Like redo/polish it runs no gh side-effect (one-way).
+// non-phase gates (groom / plan-bundle / plan). Like redo/polish it runs no gh side-effect (one-way).
 describe('shipped §28 PHASE loop defs — the back-to-red control on every phase gate (§28.4.2)', () => {
   for (const name of ['red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
     it(`${name} offers back-to-red with no gh side-effect, alongside approve/request-changes/redo/polish`, () => {

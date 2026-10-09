@@ -101,6 +101,22 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     expect(composeReviewAndFixPrompt(req())).not.toContain('this loop is working GitHub issue'); // absent when none resolved
   });
 
+  // §27.4 — a loop whose work turn produces a file artifact is reviewing THAT file: the issue body on GitHub
+  // still holds the pre-work text until the gate's side-effect writes the artifact back, so a reviewer that
+  // grades the issue re-raises findings the artifact already fixed.
+  it('names the loop\'s work artifact as the subject each reviewer grades, not the live issue body', () => {
+    const subject = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    const p = composeReviewAndFixPrompt({ ...req(), ticket: 180, subjectRel: subject });
+    expect(p).toMatch(/grade .*groomed-ticket\.md.*not the issue body/is);
+    expect(p).not.toContain('handing each ONLY the ticket and its charter');
+  });
+
+  it('names no artifact subject for a loop whose product is commits', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), ticket: 180 });
+    expect(p).not.toContain('.agent-terminal/loop/artifacts/');
+    expect(p).not.toMatch(/not the issue body/i);
+  });
+
   it('tells the fixer exactly the closed disposition set the predicate accepts (one value, one spelling)', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const d of DISPOSITIONS) expect(p).toContain(d);
@@ -175,9 +191,6 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   });
 });
 
-// §27.6/§27.8 — a per-slice loop whose def defers polish: the fixer dismisses polish-only findings as out of
-// scope so a polish-only round changes nothing and reaches `clean`; the integration-slice sweep reviews the
-// whole ticket diff with the full catalog and fixes them there. A def that fixes polish carries no such clause.
 describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
   const req = (polish?: 'fix' | 'defer') => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
@@ -188,10 +201,14 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
     doneRelPath: '.agent-terminal/loop/turn-done',
     ...(polish !== undefined ? { polish } : {}),
   });
-  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*integration-slice/i;
+  const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i;
 
   it('tells the fixer to dismiss polish-only findings as out of scope when the def defers polish', () => {
     expect(composeReviewAndFixPrompt(req('defer'))).toMatch(deferClause);
+  });
+
+  it('names no particular later loop, since more than one loop defers to different ones', () => {
+    expect(composeReviewAndFixPrompt(req('defer'))).not.toMatch(/integration-slice/i);
   });
 
   it('carries no deferral clause when the def fixes polish', () => {

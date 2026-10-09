@@ -675,7 +675,7 @@ test('the strip\'s manual Advance at a gate showing the failed-effect marker cle
   expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
 });
 
-test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances, and one naming no step advances the current step (N9b.5(d), §6 v2.176)', { tag: '@ownapp' }, async () => {
+test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances, and one naming no step advances the current step (N9b.5(d), §6 v2.185)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 1));
   const home = tmp('agent-term-e2e-137-staleadv-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-137-staleadv-', 'groom', { ticket: '176' });
@@ -699,7 +699,7 @@ test('flow:advance through the preload carries the step the strip showed: an Adv
   expect(flowState(repo)).toMatch(/^step: groom$/m);
   await advance('groom');
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
-  // §6 v2.176 — a request naming no step advances the current one.
+  // §6 v2.185 — a request naming no step advances the current one.
   await page.evaluate((key) => window.flow.advance(key), repo);
   await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
 });
@@ -867,14 +867,14 @@ test('restart keeps the run\'s auto authority: after a relaunch, Restart from `d
 
 // ── #137 S5: the shipped `feature-dev` authorities, end to end (AC16) ──
 
-const FEATURE_DEV_YAML = readFileSync(join(exampleConfigDir, 'flows', 'feature-dev', 'flow.yaml'), 'utf8');
-const FEATURE_DEV_AUTO_GATES = 8;
-const FEATURE_DEV_LOOP_RUNS = 10;
+const FEATURE_DEV_YAML = readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'), 'utf8');
+const FEATURE_DEV_AUTO_GATES = 9;
+const FEATURE_DEV_LOOP_RUNS = 11;
 
 function seedFeatureDevRun(prefix: string, home: string): string {
   const repo = seedAutoGateRepo(prefix, 'groom', { ticket: '176' });
   cleanup.push(repo);
-  seedTrustedFlow(home, repo, 'feature-dev', FEATURE_DEV_YAML);
+  seedTrustedFlow(home, repo, 'feature-dev-v2', FEATURE_DEV_YAML);
   return repo;
 }
 
@@ -892,7 +892,7 @@ async function awaitHumanGate(home: string, repo: string, step: string, timeout:
   expect(await haltRows().count()).toBe(0);
 }
 
-test('feature-dev run stops only at plan-bundle and integration-slice: every other gate advances alone with its phase commit (AC16)', { tag: '@ownapp' }, async () => {
+test('feature-dev run stops only at plan-polish and integration-slice: every other gate advances alone with its phase commit (AC16)', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 6 * UI_MS);
   const home = tmp('agent-term-e2e-137-fdev-home-');
   const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-', home);
@@ -901,9 +901,9 @@ test('feature-dev run stops only at plan-bundle and integration-slice: every oth
 
   await flowControl().click();
 
-  await awaitHumanGate(home, repo, 'plan-bundle', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await awaitHumanGate(home, repo, 'plan-polish', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
   await approveOption().click();
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-bundle$/m);
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-polish$/m);
 
   await awaitHumanGate(home, repo, 'integration-slice', 8 * LOOP_ROUND_MS + 7 * APPROVE_ADVANCE_MS);
   await approveOption().click();
@@ -916,7 +916,7 @@ test('feature-dev run stops only at plan-bundle and integration-slice: every oth
   const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(2);
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES);
-  for (const step of ['plan-bundle', 'integration-slice']) {
+  for (const step of ['plan-polish', 'integration-slice']) {
     const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
     expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
   }
@@ -951,9 +951,9 @@ test('pinning: feature-dev full chain: auto advance, one visible halt, human-onl
 
   await flowControl().click();
 
-  await awaitHumanGate(home, repo, 'plan-bundle', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await awaitHumanGate(home, repo, 'plan-polish', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
   await approveOption().click();
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-bundle$/m);
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-polish$/m);
 
   await expect
     .poll(() => (auditGateEntries(home, repo).some((e) => parseAutoHaltReasons(e.cmd) !== null) ? autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd)) : null), {
@@ -979,7 +979,7 @@ test('pinning: feature-dev full chain: auto advance, one visible halt, human-onl
   const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(3);
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES - 1);
-  for (const step of ['plan-bundle', 'integration-slice']) {
+  for (const step of ['plan-polish', 'integration-slice']) {
     const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
     expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
   }
@@ -1106,23 +1106,23 @@ test('auto gate concurrency, bound fallback: APP_AUTO_GATE_DECISION_MS=-5 falls 
 
 const PLAN_REL = '.agent-terminal/loop/artifacts/plan.md';
 
-test('auto gate concurrency, epic preview: an `auto` plan-bundle gate on an epic plan raises the confirm-first preview, shows (k), creates nothing, and the operator\'s confirm is human (AC9)', { tag: '@ownapp' }, async () => {
+test('auto gate concurrency, epic preview: an `auto` plan-polish gate on an epic plan raises the confirm-first preview, shows (k), creates nothing, and the operator\'s confirm is human (AC9)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(8, 2) + LOOP_ROUND_MS);
   const home = tmp('agent-term-e2e-137-k-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-137-k-', 'groom', { ticket: '176' });
   cleanup.push(repo);
-  seedTrustedFlow(home, repo, 'human-groom-auto-plan-bundle', autoGateFlowYaml([
+  seedTrustedFlow(home, repo, 'human-groom-auto-plan-polish', autoGateFlowYaml([
     { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
-    { id: 'plan-bundle', kind: 'loop', loop: 'plan-bundle-loop', authority: 'auto' },
+    { id: 'plan-polish', kind: 'loop', loop: 'plan-polish-loop', authority: 'auto' },
     { id: 'done', kind: 'manual' },
   ]));
-  const epicPlan = `${exampleEpicPlan(2)}\n${completionMarker('plan-bundle')}\n`;
+  const epicPlan = `${exampleEpicPlan(2)}\n${completionMarker('plan-polish')}\n`;
   const { logFile } = await launchInto('agent-term-e2e-137-k-', repo, home, {
     groom: GROOM_AGENT,
-    'plan-bundle': {
+    'plan-polish': {
       artifactRel: PLAN_REL,
       work: 'complete',
-      roster: loopRoster('plan-bundle-loop'),
+      roster: loopRoster('plan-polish-loop'),
       extraShell: { work: [`printf %s '${b64(epicPlan)}' | base64 -d > ${PLAN_REL}`] },
     },
   });
@@ -1132,14 +1132,14 @@ test('auto gate concurrency, epic preview: an `auto` plan-bundle gate on an epic
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: clean/m);
   await openLoopPanel();
   await approveOption().click({ timeout: UI_MS });
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-bundle$/m);
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-bundle$[\s\S]*verdict: clean/m);
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-polish$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-polish$[\s\S]*verdict: clean/m);
   await dismissLoopErrors();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="k"]')).toBeVisible({ timeout: UI_MS });
   expect(readIf(logFile)).not.toContain('issue create');
-  expect(flowState(repo)).toMatch(/^step: plan-bundle$/m);
+  expect(flowState(repo)).toMatch(/^step: plan-polish$/m);
   const run = runIdentity(repo);
   const previews = auditGateEntries(home, repo, { run }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'epic-promotion-preview');
   expect(previews.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);

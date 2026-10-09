@@ -230,6 +230,8 @@ export interface AppLoopEngine {
   /** The live in-memory error for `repoDir`, or null — the view surfaces it when the persisted error write
    *  failed, so the route-out stays reachable (§27.12c). */
   liveErrorFor(repoDir: string): AppLoopLiveError | null;
+  /** §27.12 — the flow for `repoDir` was terminated: a stalled turn there no longer resumes on its done-signal. */
+  releaseStalledTurn(repoDir: string): void;
 }
 
 /** The in-flight §27 turn, a discriminated union on `phase` so the work turn and the chained review-and-fix
@@ -279,6 +281,9 @@ type ActiveAppTurn =
       /** §27.9/AC4 — the operator's request-changes feedback carried into this round, threaded into the
        *  review prompt alongside the reviewers' findings; absent on a consolidator-driven another-round. */
       feedback?: string;
+      /** §27.4 — the repo-relative work artifact the reviewers grade; absent when the work product is commits
+       *  or a phase-result file. */
+      subjectRel?: string;
     }
   | {
       phase: 'consolidate';
@@ -903,6 +908,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           doneRelPath: APP_DONE_REL_PATH,
           checkCommand: deps.artifactCheckCommand(reportCheck(active)),
           ...(reviewTicket !== null ? { ticket: reviewTicket } : {}),
+          ...(active.subjectRel !== undefined ? { subjectRel: active.subjectRel } : {}),
           ...briefFor(active),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
@@ -955,6 +961,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const errored = active;
       hook(() => deps.loopRunEvent?.(errored.repoDir, errored.stepId, errored.turnKey, 'error'));
       deps.emitError(reason);
+    },
+    resumeStalled: () => {
+      if (!active) return;
+      persist('working');
+      deps.audit(active.repoDir, `§27 turn ${active.turnKey} resumed after a stall (done-signal)`, 0);
     },
     onComplete: (turnKey) => {
       if (!active) return;
@@ -1027,6 +1038,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
     const full = reviewRoster(r.def);
     const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
+    const subject = r.def.work.completion === undefined ? completionArtifact(r.def) : null;
     return {
       phase: 'review',
       repoDir: ctx.repoDir,
@@ -1043,6 +1055,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       completion,
       ...(chosenRoster ? { chosenRoster } : {}),
       ...(feedback !== undefined ? { feedback } : {}),
+      ...(subject !== null ? { subjectRel: subject.rel } : {}),
     };
   };
 
@@ -1265,9 +1278,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (a?.completion.kind === 'red') {
         // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
         // re-enter the SYNC runner with the pre-evaluated gate. Guards: `asyncGatePendingFor` dedupes a duplicate
-        // (un-debounced) done-signal while a gate is pending; the runner stays 'in-flight' during the await, so
-        // a concurrent onStall that errors the turn makes this late signal a no-op (runner state guard); and a
-        // turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
+        // (un-debounced) done-signal while a gate is pending; a stall during the await leaves the turn resumable,
+        // so the late gate still resolves it unless the operator accepted or terminated it meanwhile (runner
+        // guard); and a turn that changed under us (a retry rebuilt `active`) is ignored (identity guard).
         if (asyncGatePendingFor === a) return;
         asyncGatePendingFor = a;
         void redAsyncGate(a).then((gate) => {
@@ -1283,11 +1296,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         void greenAsyncGate(a).then(({ gate, changedTests }) => {
           asyncGatePendingFor = null;
           if (active === a) {
-            // A concurrent onStall may have errored `a` while the gate awaited (the runner is then not
-            // 'in-flight', and `active` still points at `a` — onStall does not rebuild it). The stash is still
-            // written here, but it is SAFE: `runner.onDoneSignal(gate)` below no-ops (runner-state guard), so
-            // onComplete never fires for this turn to drain it, and the next work turn's onComplete clears it
-            // unconditionally. IT-GREEN-8 pins that this stashed flag is never recorded against the errored turn.
+            // If the operator accepted or terminated `a` while the gate awaited, `runner.onDoneSignal(gate)` below
+            // no-ops, so onComplete never drains this stash; the next work turn's onComplete clears it.
             stashChangedTests(a, changedTests);
             runner.onDoneSignal(gate);
           }
@@ -1344,6 +1354,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             refuseRouteOut('turn-error', saveFailReason, round);
             return;
           }
+          runner.release();
           deps.audit(repoDir, successAudit, 0);
           hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'accepted'));
           deps.onViewChanged();
@@ -1593,6 +1604,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     activeTurnKey: () => active?.turnKey ?? null,
     activeRepoDir: () => active?.repoDir ?? null,
+    releaseStalledTurn: (repoDir) => {
+      if (active?.repoDir === repoDir) runner.release();
+    },
     liveErrorFor: (repoDir) => {
       if (!liveError || liveError.repoDir !== repoDir) return null;
       const { kind, loop, step, turnKey, reason, round } = liveError;

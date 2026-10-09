@@ -1,20 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { bundledPath } from '../helpers/bundledLoops';
 
 // A review round once returned clean on a unit-only run while the repo's e2e suite was red. Every reviewer
 // whose lane is test evidence must require that all the test types relevant to the in-scope change were
 // actually run, as the repo's own conventions prescribe — never a fixed, repo-specific command.
-const SOURCE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
 // Whitespace-collapsed: a markdown hard wrap is not a content change.
-const read = (rel: string): string => readFileSync(join(SOURCE, rel), 'utf8').replace(/\s+/g, ' ');
+const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8').replace(/\s+/g, ' ');
 
 const RAN_MARKER = 'every test needed to prove the in-scope change has actually been run';
 const CONVENTIONS_MARKER = "the repository's own conventions";
 
 const TEST_EVIDENCE_CHARTERS = [
-  ...['impl-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((l) => `${l}/charter/tests.md`),
+  ...['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((l) => `${l}/charter/tests.md`),
   'red-loop/charter/red-authenticity.md',
   'green-loop/charter/regression-guard.md',
 ];

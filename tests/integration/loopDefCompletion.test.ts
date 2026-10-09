@@ -9,11 +9,12 @@ import {
   requiresResultBinding,
   type LoopDefV2Result,
 } from '../../src/main/loopDefV2';
+import { BUNDLED_LOOPS_ROOT, bundledFlowOf, bundledLoopDir } from '../helpers/bundledLoops';
 
 // §28.4/§28.5.5 — the work.completion discriminator: an additive, closed-set field naming which machine
 // completion predicate a work turn uses (`red` in S3; extends to green/refactor in S4/S5). Parsed by resolving
 // a real def from an operator tier (a patched copy of the bundled groom-loop), no mock parser.
-const APP_BUNDLED = join(process.cwd(), 'example', 'loops-v2');
+const APP_BUNDLED = BUNDLED_LOOPS_ROOT;
 const ARTIFACT_LINE = '  artifact: groomed-ticket\n';
 
 let repoDir: string;
@@ -28,12 +29,16 @@ afterEach(() => {
 });
 
 const resolveBundled = (): LoopDefV2Result =>
-  resolveLoopDefV2('groom-loop', { tiers: { operator: null, appBundled: APP_BUNDLED, retired: null }, repoDir });
+  resolveLoopDefV2('groom-loop', {
+    tiers: { operator: null, appBundled: APP_BUNDLED, retired: null },
+    repoDir,
+    flow: bundledFlowOf('groom-loop'),
+  });
 
 /** Resolve groom-loop from an operator tier whose def yaml has been patched by `patch` (which MUST change it —
  *  asserted, so a fixture that drifts off the bundled yaml fails self-explainingly, not as a downstream mismatch). */
 function resolvePatched(patch: (yaml: string) => string): LoopDefV2Result {
-  cpSync(join(APP_BUNDLED, 'groom-loop'), join(tier, 'groom-loop'), { recursive: true });
+  cpSync(bundledLoopDir('groom-loop'), join(tier, 'groom-loop'), { recursive: true });
   const defPath = join(tier, 'groom-loop', 'groom-loop.yaml');
   const original = readFileSync(defPath, 'utf8');
   const patched = patch(original);

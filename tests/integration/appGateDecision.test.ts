@@ -90,7 +90,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
-    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
+    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
@@ -641,6 +641,7 @@ describe('runAppGateDecision — approve clears the slice brief only at the end 
     ok: true as const,
     def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion } },
     tierRoot: '/tmp/tier',
+    defDir: '/tmp/tier/loop',
   });
 
   it('clears the brief on a refactor approve', async () => {
@@ -816,7 +817,7 @@ describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
 // #137 AC7/AC8 — who decided, at the approve operation: every entry an approve writes, under each decider.
 describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9b.9, #137 AC7/AC8)', () => {
   const refactorRun: AppLoopRunState = { loop: 'refactor-loop', step: 'refactor', turnKey: 'consolidate-refactor', status: 'complete', round: 1, verdict: 'clean' };
-  const refactorDef = { ok: true as const, def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion: 'refactor' as const } }, tierRoot: '/tmp/tier' };
+  const refactorDef = { ok: true as const, def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion: 'refactor' as const } }, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' };
   const throwing = (message: string) => () => {
     throw new Error(message);
   };

@@ -23,6 +23,7 @@ import {
 } from '../../src/main/installExamples';
 import { load as parseYaml } from 'js-yaml';
 import { flowCatalogDir, loadFlowDefinitionLocalFirst } from '../../src/main/flow';
+import { bundledFlowOf } from '../helpers/bundledLoops';
 import {
   isTodoTemplateFile,
   listTodoTemplates,
@@ -44,7 +45,7 @@ import {
 // the installer walks a tree. Every expected file set is enumerated FROM THE BUNDLE, never hard-coded:
 // a hard-coded list silently under-installs the next bundle refresh.
 
-const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev');
+const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v2');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
@@ -74,7 +75,8 @@ let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
 const templateRel = path.join('todo-templates', 'ticket-grooming.md');
-const planDefRel = path.join('plan-loop', 'plan-loop.yaml');
+const planLoopRel = path.join(bundledFlowOf('plan-loop'), 'plan-loop');
+const planDefRel = path.join(planLoopRel, 'plan-loop.yaml');
 const commandRel = 'groom-ticket.md';
 
 // The real bundle resolves from cwd (path.resolve('example', …)), so appPath: process.cwd() yields the
@@ -554,9 +556,9 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
   // anywhere". Confining only as each file is reached would satisfy the refusal but not the guarantee —
   // the destinations planned ahead of the offending one would already be on disk.
   it.each([
-    ["the file's own container", path.join('plan-loop', 'charter')],
-    ['an intermediate ancestor', 'plan-loop'],
-    ['an ancestor two levels below the destination', path.join('plan-loop', 'prompts')],
+    ["the file's own container", path.join(planLoopRel, 'charter')],
+    ['an intermediate ancestor', planLoopRel],
+    ['an ancestor two levels below the destination', path.join(planLoopRel, 'prompts')],
   ])('refuses when %s under the appLoops destination is a symlink, and writes nothing anywhere', (_label, rel) => {
     const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
     try {
@@ -591,8 +593,8 @@ describe('applyInstallExamples — a container that is not a directory is never 
   // would send the user to replace a symbolic link that is not there.
   it('names the unresolvable path, not a link, when a plain file already occupies a container', () => {
     const appLoopsTarget = targetDirOf('appLoops');
-    mkdirSync(appLoopsTarget, { recursive: true });
-    writeFileSync(path.join(appLoopsTarget, 'plan-loop'), 'not a directory');
+    mkdirSync(path.dirname(path.join(appLoopsTarget, planLoopRel)), { recursive: true });
+    writeFileSync(path.join(appLoopsTarget, planLoopRel), 'not a directory');
 
     const res = applyInstallExamples(dirs, ALL);
 
@@ -645,12 +647,12 @@ describe('applyInstallExamples — a container symlink that stays inside the des
     mkdirSync(appLoopsTarget, { recursive: true });
     const realDir = path.join(appLoopsTarget, 'real-plan');
     mkdirSync(realDir);
-    symlinkSync(realDir, path.join(appLoopsTarget, 'plan-loop'));
+    mkdirSync(path.dirname(path.join(appLoopsTarget, planLoopRel)), { recursive: true });
+    symlinkSync(realDir, path.join(appLoopsTarget, planLoopRel));
 
     const res = applyInstallExamples(dirs, []);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // plan-loop/plan-loop.yaml resolves through the in-jail link to real-plan/plan-loop.yaml.
     expect(existsSync(path.join(realDir, 'plan-loop.yaml'))).toBe(true);
     expect(readFileSync(path.join(realDir, 'plan-loop.yaml'))).toEqual(readFileSync(path.join(BUNDLE_APP_LOOPS, planDefRel)));
   });
@@ -871,7 +873,7 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       const load = loadFlowDefinitionLocalFirst(localWithoutFlow, home);
       expect(load.ok).toBe(true);
       if (!load.ok) return;
-      expect(load.definition.name).toBe('feature-dev');
+      expect(load.definition.name).toBe('feature-dev-v2');
       const bundled = parseYaml(readFileSync(path.join(BUNDLE_FLOW, flowRel), 'utf8')) as { steps: { id: string }[] };
       expect(load.definition.steps.map((s) => s.id)).toEqual(bundled.steps.map((s) => s.id));
     } finally {
@@ -950,7 +952,7 @@ describe('the pre-write writability gate covers the containers the write actuall
     // write. Probing only each destination's ROOT detects it only for the root: an unwritable
     // subdirectory the write must enter is found mid-write, after other destinations have landed.
     const appLoops = targetDirOf('appLoops');
-    const nested = path.join(appLoops, 'plan-loop');
+    const nested = path.join(appLoops, planLoopRel);
     mkdirSync(nested, { recursive: true });
     chmodSync(nested, 0o555); // traversable, not writable
     let res: InstallExamplesResult | undefined;
@@ -999,7 +1001,8 @@ describe('a destination root the USER symlinked is followed, not refused — it 
     const outside = path.join(dotfiles, 'outside');
     linkDest('appLoops', real);
     mkdirSync(outside, { recursive: true });
-    symlinkSync(outside, path.join(real, 'plan-loop')); // escapes the RESOLVED root
+    mkdirSync(path.dirname(path.join(real, planLoopRel)), { recursive: true });
+    symlinkSync(outside, path.join(real, planLoopRel)); // escapes the RESOLVED root
 
     const res = applyInstallExamples(dirs, []);
     expect(res.ok).toBe(false);

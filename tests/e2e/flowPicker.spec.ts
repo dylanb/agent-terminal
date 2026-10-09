@@ -161,18 +161,18 @@ function seedLoopEntry(root: string, id: string, stepId: string, input: string):
   mkdirSync(entry, { recursive: true });
   writeFileSync(
     join(entry, FLOW_DEF_FILE),
-    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n` +
+    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n` +
       `    inputs:\n      - name: ${input}\n        type: github-ticket\n        required: true\n`,
   );
 }
 
-// Its first step picks up a ticket through the bundled impl-loop, which has no pickup: entering it fails and rolls back.
+// Its first step picks up a ticket through the shipped infra-loop, which has no pickup: entering it fails and rolls back.
 function seedFailingPickupEntry(root: string, id: string, stepId: string): void {
   const entry = join(flowCatalogDir(root), id);
   mkdirSync(entry, { recursive: true });
   writeFileSync(
     join(entry, FLOW_DEF_FILE),
-    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n    bootstrap: pickup\n` +
+    `name: ${id}\nsteps:\n  - id: ${stepId}\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n    bootstrap: pickup\n` +
       `  - id: ${stepId}-next\n    kind: manual\n`,
   );
 }
