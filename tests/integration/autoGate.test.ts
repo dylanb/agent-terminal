@@ -542,6 +542,32 @@ describe('autoGate — the interrupt arm is run-scoped in a run with an `auto` s
     expect(rig.approvals).toEqual([]);
   });
 
+  it('an unreadable `armed-interrupt.yaml` at the consolidation of `auto` step Y that says `another round`: Y stops at its gate with (h), not (c), and no engine approve', async () => {
+    const { rig, engine } = wiredWith(loopSteps('auto'));
+    h.driveToConsolidateInjected(engine);
+    armInterrupt(h.repo, STEP);
+    writeFileSync(loopAreaFile(h.repo, 'armed-interrupt.yaml')!, 'step: [unclosed\n');
+    h.completeConsolidate(engine, 1, exampleConsolidatorOutput('another round', ROSTER));
+    await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', round: 1 });
+    expect(rig.approvals).toEqual([]);
+    expectReasonShown(rig.view(h.repo), 'engine-input-missing');
+    const recorded = autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? []);
+    expect(recorded).toContain('engine-input-missing');
+    expect(recorded).not.toContain('interrupt-armed');
+  });
+
+  it('in a run that has an `auto` step, an unreadable `armed-interrupt.yaml` at a `human` step Y whose consolidation says `another round`: Y stops at its gate', async () => {
+    const { rig, engine } = wiredWith([loopSteps('human')[0], LATER_AUTO, { id: 'next', kind: 'manual' }]);
+    h.driveToConsolidateInjected(engine);
+    armInterrupt(h.repo, STEP);
+    writeFileSync(loopAreaFile(h.repo, 'armed-interrupt.yaml')!, 'step: [unclosed\n');
+    h.completeConsolidate(engine, 1, exampleConsolidatorOutput('another round', ROSTER));
+    await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', round: 1 });
+    expect(rig.approvals).toEqual([]);
+  });
+
   it('the negative pair: with no arm, that `human` step\'s `another round` starts the next round', async () => {
     const { engine } = wiredWith([loopSteps('human')[0], LATER_AUTO, { id: 'next', kind: 'manual' }]);
     h.driveToConsolidateInjected(engine);
@@ -931,12 +957,12 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expectReasonShown(rig.view(), 'engine-input-missing');
   });
 
-  it('an unreadable `armed-interrupt.yaml` does not hand back at consolidation as an arm; the clean gate that follows halts with (h), not (c)', async () => {
+  it('an unreadable `armed-interrupt.yaml` is reported as unreadable at consolidation, not as an arm; the clean gate that follows halts with (h), not (c)', async () => {
     const rig = makeRig();
     startTrusted(rig);
     armInterrupt(repoDir, STEP);
     writeFileSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!, 'step: [unclosed\n');
-    expect(rig.gate.interruptArmed(repoDir, STEP)).toBe(false);
+    expect(rig.gate.interruptArmed(repoDir, STEP)).toBe('unreadable');
     await reachGate(rig, 'clean');
     const letters = rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? [];
     expect(letters).toContain('engine-input-missing');
@@ -947,7 +973,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     const rig = makeRig();
     startTrusted(rig);
     armInterrupt(repoDir, STEP);
-    expect(rig.gate.interruptArmed(repoDir, STEP)).toBe(true);
+    expect(rig.gate.interruptArmed(repoDir, STEP)).toBe('set');
   });
 
   it('a consume that cannot clear `armed-interrupt.yaml` is shown on the (c) halt (N9b.6(c))', async () => {

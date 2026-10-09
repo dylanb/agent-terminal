@@ -35,7 +35,7 @@ import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolid
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import type { AutoGate } from './autoGate';
+import type { AutoGate, GateCause } from './autoGate';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -1135,7 +1135,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     verdict: ConsolidatorVerdict,
     reason: string | undefined,
     roster: string[],
-    cause: 'verdict' | 'interrupt' = 'verdict',
+    cause: GateCause = 'verdict',
   ): void => {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
@@ -1192,12 +1192,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     // §27.9/AC9 — a queued interrupt for this step routes to the gate regardless of the verdict, still stating
     // the verdict it would otherwise have reached. One-shot: cleared when honored, and recorded as its own §25
     // event so the timeline distinguishes an interrupt-honored gate from a verdict-reached one.
-    const armed = deps.interruptArmed ? deps.interruptArmed(turn.repoDir, turn.stepId) : readArmedInterrupt(turn.repoDir)?.step === turn.stepId;
-    if (armed) {
+    const arm = deps.interruptArmed ? deps.interruptArmed(turn.repoDir, turn.stepId) : readArmedInterrupt(turn.repoDir)?.step === turn.stepId ? 'set' : 'absent';
+    if (arm === 'set') {
       if (deps.consumeInterrupt) deps.consumeInterrupt(turn.repoDir);
       else clearInterrupt(turn.repoDir);
       deps.audit(turn.repoDir, consolidateAuditCmd('interrupt', turn.round, verdict), 0);
       routeConsolidateToGate(turn, verdict, reason, roster, 'interrupt');
+      return;
+    }
+
+    // §27.9.1 N9b.6(h)
+    if (arm === 'unreadable' && verdict === 'another round') {
+      routeConsolidateToGate(turn, verdict, reason, roster, 'arm-unreadable');
       return;
     }
 

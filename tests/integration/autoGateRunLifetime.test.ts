@@ -533,7 +533,7 @@ describe('autoGate — after a relaunch, the interrupt arm stays run-scoped (AC1
 
     const rig = before.relaunch();
     armInterrupt(rig.wt, 'some-earlier-step');
-    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe(true);
+    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe('set');
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
     expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
@@ -547,7 +547,7 @@ describe('autoGate — after a relaunch, the interrupt arm stays run-scoped (AC1
 
     const rig = before.relaunch();
     armInterrupt(rig.wt, 'some-earlier-step');
-    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe(false);
+    expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe('absent');
     expect(readArmedInterrupt(rig.wt)?.step).toBe('some-earlier-step');
   });
 });

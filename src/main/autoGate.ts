@@ -12,7 +12,7 @@ import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGate
 import type { AutoGateViewFor } from './loopViewV2';
 import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
-import { clearInterrupt, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt, recordChangedTests } from './appLoopState';
+import { clearInterrupt, type FlagProbe, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt, recordChangedTests } from './appLoopState';
 import { approveTimeFrozenCheck, type ApproveTimeFrozenCheck } from './frozenTests';
 import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
@@ -26,7 +26,7 @@ export interface StartRun {
   binding?: DispositionRead;
 }
 
-export type GateCause = 'verdict' | 'interrupt';
+export type GateCause = 'verdict' | 'interrupt' | 'arm-unreadable';
 export type LoopRunEvent = 'error' | 'retried' | 'accepted' | { roundReport: string | null };
 export type EngineApprove = (repoDir: string, step: string, turnKey: string, decider: ApproveDecider) => Promise<GateApproveOutcome>;
 export interface AutoGateTimer {
@@ -57,7 +57,7 @@ export interface AutoGate {
   gateReached(repoDir: string, step: string, turnKey: string): void;
   gateNotReached(repoDir: string, step: string, turnKey: string): void;
   loopRunEvent(repoDir: string, step: string, turnKey: string, event: LoopRunEvent): void;
-  interruptArmed(repoDir: string, step: string): boolean;
+  interruptArmed(repoDir: string, step: string): FlagProbe['kind'];
   consumeInterrupt(repoDir: string): void;
   /** §27.9.1 N9b.5(d)/(e) — a human decision attempt or manual Advance at `step`; call the result with whether it landed. */
   humanDecision(repoKey: string, step: string, turnKey: string | null): (landed: boolean) => void;
@@ -74,6 +74,8 @@ export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
 }
 
 type Reason = { reason: AutoHaltReason; detail?: string };
+
+const ARM_UNREADABLE = 'the interrupt arm could not be read';
 
 interface GateKey {
   step: string;
@@ -231,7 +233,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const marker = run.failedEffect;
     if (marker?.state === 'unknown') reasons.push({ reason: 'engine-input-missing', detail: marker.detail });
     else if (run.stateUnsaved) reasons.push({ reason: 'engine-input-missing', detail: 'the run\'s gate state could not be saved' });
-    else if (arm === 'unreadable') reasons.push({ reason: 'engine-input-missing', detail: 'the interrupt arm could not be read' });
+    else if (arm === 'unreadable' || cause === 'arm-unreadable') reasons.push({ reason: 'engine-input-missing', detail: ARM_UNREADABLE });
     else if (lr === null) reasons.push({ reason: 'engine-input-missing' });
     if (marker?.state === 'set') reasons.push({ reason: 'failed-effect' });
     return reasons;
@@ -607,10 +609,11 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run === undefined || pg === null || !sameGate(pg, step, turnKey, run.gateSeq)) return;
       run.pendingGate = null;
       if (!honouredAuto(run, step)) return;
-      const verdictHalt = pg.cause === 'interrupt' ? 'interrupt-armed' : verdictReason(pg.verdict);
+      const verdictHalt = pg.cause === 'interrupt' ? 'interrupt-armed' : pg.cause === 'arm-unreadable' ? 'engine-input-missing' : verdictReason(pg.verdict);
       if (verdictHalt !== null) {
-        const others = evaluate(repoDir, run, step, pg.cause).filter((r) => r.reason !== verdictHalt);
-        halt(repoDir, run, pg, [{ reason: verdictHalt }, ...others]);
+        const held = evaluate(repoDir, run, step, pg.cause);
+        const lead = held.find((r) => r.reason === verdictHalt) ?? { reason: verdictHalt };
+        halt(repoDir, run, pg, [lead, ...held.filter((r) => r !== lead)]);
         return;
       }
       const d = run.deciding;
@@ -658,8 +661,8 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     },
     interruptArmed(repoDir, step) {
       const run = runFor(repoDir);
-      if (run !== undefined && isAuto(run)) return probeArmedInterrupt(repoDir).kind === 'set';
-      return readArmedInterrupt(repoDir)?.step === step;
+      if (run !== undefined && isAuto(run)) return probeArmedInterrupt(repoDir).kind;
+      return readArmedInterrupt(repoDir)?.step === step ? 'set' : 'absent';
     },
     consumeInterrupt(repoDir) {
       consumeOrReport(repoDir);
