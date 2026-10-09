@@ -1081,12 +1081,12 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
   });
 
   it('an approve-outcome halt (l) shows its letter row with the refusal reason, beside the other letters (N9b.6)', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }, { reason: 'l', detail: 'the run-state no longer matches the gate' }] }), 'plan');
-    expect(reasonRows()).toEqual(['c', 'l']);
-    expect(host.querySelector('[data-auto-halt-reason="l"]')?.textContent).toContain('the run-state no longer matches the gate');
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'interrupt-armed' }, { reason: 'approve-not-persisted', detail: 'the run-state no longer matches the gate' }] }), 'plan');
+    expect(reasonRows()).toEqual(['interrupt-armed', 'approve-not-persisted']);
+    expect(host.querySelector('[data-auto-halt-reason="approve-not-persisted"]')?.textContent).toContain('the run-state no longer matches the gate');
   });
 
-  it.each(['stop-for-a-human', 'c', 'e'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row for it', (reason) => {
+  it.each(['stop-for-a-human', 'interrupt-armed', 'frozen-check-unavailable'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row for it', (reason) => {
     mount().render(autoGateView({ ...idle, haltReasons: [{ reason }] }), 'plan');
     const rows = [...host.querySelectorAll<HTMLElement>(`[data-auto-halt-reason="${reason}"]`)];
     expect(rows).toHaveLength(1);
@@ -1096,17 +1096,19 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
   });
 
   it('the halt reasons sit inside a live region, so the hand-off to the human is announced (WCAG 4.1.3)', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
-    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="c"]');
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'interrupt-armed' }] }), 'plan');
+    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="interrupt-armed"]');
     expect(row?.closest('[role="status"], [aria-live="polite"], [aria-live="assertive"]')).not.toBeNull();
   });
 
   it('each lettered halt row shows its N9b.6 letter beside its label; the `stop for a human` verdict carries none', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'stop-for-a-human' }, { reason: 'c' }, { reason: 'l', detail: 'refused' }] }), 'plan');
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'stop-for-a-human' }, { reason: 'interrupt-armed' }, { reason: 'approve-not-persisted', detail: 'refused' }] }), 'plan');
     const text = (r: string): string => host.querySelector<HTMLElement>(`[data-auto-halt-reason="${r}"]`)?.textContent ?? '';
-    expect(text('c')).toBe(`(c) ${autoHaltReasonLabel('c')}`);
-    expect(text('l')).toBe(`(l) ${autoHaltReasonLabel('l')}: refused`);
+    expect(text('interrupt-armed')).toBe(`(c) ${autoHaltReasonLabel('interrupt-armed')}`);
+    expect(text('approve-not-persisted')).toBe(`(l) ${autoHaltReasonLabel('approve-not-persisted')}: refused`);
     expect(text('stop-for-a-human')).toBe(autoHaltReasonLabel('stop-for-a-human'));
+    expect(text('interrupt-armed')).toBe('(c) interrupt armed');
+    expect(text('approve-not-persisted')).toBe('(l) approve did not persist: refused');
   });
 
   it('a gate that halts on the same mounted panel adds its reasons inside the live region that already announced the deciding notice, and keeps focus on the gate (WCAG 4.1.3, 2.4.3)', () => {
@@ -1115,9 +1117,9 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
     const region = host.querySelector<HTMLElement>('[data-auto-deciding]')?.closest('[role="status"]');
     expect(region).not.toBeNull();
     host.querySelector<HTMLElement>('[data-gate-option="approve"]')!.focus();
-    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'interrupt-armed' }] }), 'plan');
     expect(host.querySelector('[data-auto-deciding]')).toBeNull();
-    expect(host.querySelector<HTMLElement>('[data-auto-halt-reason="c"]')?.closest('[role="status"]')).toBe(region);
+    expect(host.querySelector<HTMLElement>('[data-auto-halt-reason="interrupt-armed"]')?.closest('[role="status"]')).toBe(region);
     expect(region!.isConnected).toBe(true);
     expect(host.ownerDocument.activeElement?.getAttribute('data-gate-option')).toBe('approve');
   });
@@ -1131,15 +1133,15 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
   });
 
   it('the three reasons S1 renders carry three distinct shared labels', () => {
-    expect(new Set((['stop-for-a-human', 'c', 'e'] as const).map(autoHaltReasonLabel)).size).toBe(3);
+    expect(new Set((['stop-for-a-human', 'interrupt-armed', 'frozen-check-unavailable'] as const).map(autoHaltReasonLabel)).size).toBe(3);
   });
 
   it('rebuilds the reason rows in place when the reason set changes on the same mounted panel', () => {
     const panel = mount();
-    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
-    expect(reasonRows()).toEqual(['c']);
-    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'e' }] }), 'plan');
-    expect(reasonRows()).toEqual(['e']);
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'interrupt-armed' }] }), 'plan');
+    expect(reasonRows()).toEqual(['interrupt-armed']);
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'frozen-check-unavailable' }] }), 'plan');
+    expect(reasonRows()).toEqual(['frozen-check-unavailable']);
   });
 
   it('a view with no halt reasons shows no `[data-auto-halt-reason]` row (negative pair)', () => {
@@ -1157,7 +1159,7 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   const mount = () => createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
   const marker = (): HTMLElement | null => host.querySelector<HTMLElement>('[data-failed-effect]');
 
-  it.each(['a', 'b', 'h', 'i'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row carrying its detail', (reason) => {
+  it.each(['needs-a-human', 'loop-error', 'engine-input-missing', 'failed-effect'] as const)('a halt on `%s` shows one labelled `[data-auto-halt-reason]` row carrying its detail', (reason) => {
     mount().render(autoGateView({ ...idle, haltReasons: [{ reason, detail: 'the engine saw this' }] }), 'plan');
     const rows = [...host.querySelectorAll<HTMLElement>(`[data-auto-halt-reason="${reason}"]`)];
     expect(rows).toHaveLength(1);
@@ -1166,8 +1168,8 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   });
 
   it('a halt naming every S2 letter at once shows one row per letter', () => {
-    mount().render(autoGateView({ ...idle, haltReasons: (['a', 'b', 'h', 'i'] as const).map((reason) => ({ reason })) }), 'plan');
-    expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'h', 'i']);
+    mount().render(autoGateView({ ...idle, haltReasons: (['needs-a-human', 'loop-error', 'engine-input-missing', 'failed-effect'] as const).map((reason) => ({ reason })) }), 'plan');
+    expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['needs-a-human', 'loop-error', 'engine-input-missing', 'failed-effect']);
   });
 
   it.each([
@@ -1203,9 +1205,9 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
 
   it('a halt detail and a marker detail carrying markup and control characters render as literal, stripped text (CWE-79)', () => {
     const hostile = '<img src=x onerror=alert(1)>\u001b[31m';
-    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'b', detail: hostile }], failedEffect: { state: 'set', detail: hostile } }), 'plan');
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'loop-error', detail: hostile }], failedEffect: { state: 'set', detail: hostile } }), 'plan');
     expect(host.querySelector('img')).toBeNull();
-    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="b"]')!;
+    const row = host.querySelector<HTMLElement>('[data-auto-halt-reason="loop-error"]')!;
     expect(row.textContent).toContain('<img src=x onerror=alert(1)>');
     expect(row.textContent).not.toContain('\u001b');
     expect(marker()).not.toBeNull();

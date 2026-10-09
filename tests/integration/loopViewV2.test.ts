@@ -575,7 +575,7 @@ describe('provideAppLoopView — per-step gate authority (§27.9.1)', () => {
     it('carries a halt the engine showed at that gate', () => {
       plant('plan-loop', ['approve', 'request-changes']);
       foreign();
-      const halted = { ...idle, haltReasons: [{ reason: 'l' as const, detail: 'the run-state names loop other-loop' }] };
+      const halted = { ...idle, haltReasons: [{ reason: 'approve-not-persisted' as const, detail: 'the run-state names loop other-loop' }] };
       const view = provideAppLoopView(engine, 'plan-loop', { tiers: tiers(), repoDir }, seamFor('plan', 'consolidate-plan', halted));
       expect(view.autoGate).toEqual(halted);
       expect(view.humanNeeded).toBe(true);

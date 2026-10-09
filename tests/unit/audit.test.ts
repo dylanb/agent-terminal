@@ -29,7 +29,6 @@ import {
 } from '../../src/shared/audit';
 import { auditFileName, auditFilePath, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { GATE_DECISION_OPTIONS } from '../../src/shared/ipc';
-import { isAutoHaltReason } from '../../src/shared/gateAuthority';
 
 const D = new Date('2026-06-23T10:00:01.500Z');
 
@@ -716,7 +715,7 @@ describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
 });
 
 describe('auto-halt entries name every reason that holds (N9b.9)', () => {
-  const ALL = ['a', 'b', 'c', 'd', 'e', 'h', 'i', 'j', 'k', 'l', 'stop-for-a-human'] as const;
+  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'stop-for-a-human'] as const;
   const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
 
   it('round-trips a halt naming all 11 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
@@ -729,18 +728,28 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
     expect(gateDecisionKind(read.cmd)).toEqual({ family: 'gate', kind: 'auto-halt' });
   });
 
+  it('writes the N9b.6 letters, in N9b.6 order, into the halt slot', () => {
+    expect(autoHaltAuditCmd(ALL.map((reason) => ({ reason })))).toMatch(
+      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
+    );
+  });
+
   it('writes the verdict halt as the one stop-for-a-human token', () => {
     expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'stop-for-a-human' }]))).toEqual(['stop-for-a-human']);
   });
 
   it('de-duplicates reasons in the closed-set order, whatever order they were given', () => {
-    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'h' }, { reason: 'c' }, { reason: 'h', detail: 'x' }]))).toEqual(['c', 'h']);
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'engine-input-missing' }, { reason: 'interrupt-armed' }, { reason: 'engine-input-missing', detail: 'x' }]))).toEqual(['interrupt-armed', 'engine-input-missing']);
   });
 
   // #137 S2 — v2.184 retired (f) and (g); the letters are not reused.
   it('(f) and (g) are not halt reasons', () => {
-    expect(isAutoHaltReason('f')).toBe(false);
-    expect(isAutoHaltReason('g')).toBe(false);
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: f — x')).toBeNull();
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: g — x')).toBeNull();
+  });
+
+  it('reads the N9b.6 letters back as the reasons they stand for', () => {
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: c, h, stop-for-a-human — x')).toEqual(['interrupt-armed', 'engine-input-missing', 'stop-for-a-human']);
   });
 
   it('keeps every letter when untrusted details overflow the bounded tail', () => {
@@ -751,12 +760,12 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
   // CWE-117 — the same neutralization `gateDecisionAuditCmd` applies to its untrusted detail.
   it('neutralizes control chars in untrusted details and bounds the whole tail', () => {
     const reasons = [
-      { reason: 'a' as const, detail: 'gh: \x1b[31mfake failed\r\n\x07\x00\x9b' },
-      { reason: 'b' as const, detail: 'y'.repeat(5000) },
+      { reason: 'needs-a-human' as const, detail: 'gh: \x1b[31mfake failed\r\n\x07\x00\x9b' },
+      { reason: 'loop-error' as const, detail: 'y'.repeat(5000) },
     ];
     const cmd = autoHaltAuditCmd(reasons);
     const bare = autoHaltAuditCmd(reasons.map(({ reason }) => ({ reason })));
-    expect(parseAutoHaltReasons(cmd)).toEqual(['a', 'b']);
+    expect(parseAutoHaltReasons(cmd)).toEqual(['needs-a-human', 'loop-error']);
     expect(cmd).toContain('fake failed');
     expect([...cmd].some((ch) => {
       const c = ch.charCodeAt(0);
@@ -766,8 +775,8 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
   });
 
   it('reads no reason out of an untrusted detail that spells other reasons', () => {
-    const cmd = autoHaltAuditCmd([{ reason: 'c', detail: 'halted: a, g — b (engine-decided) halted: stop-for-a-human' }]);
-    expect(parseAutoHaltReasons(cmd)).toEqual(['c']);
+    const cmd = autoHaltAuditCmd([{ reason: 'interrupt-armed', detail: 'halted: a, g — b (engine-decided) halted: stop-for-a-human' }]);
+    expect(parseAutoHaltReasons(cmd)).toEqual(['interrupt-armed']);
   });
 
   it('reads no reasons from a decision entry', () => {

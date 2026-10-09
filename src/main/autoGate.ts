@@ -182,12 +182,12 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   };
 
   const clearFailedAt = (run: AutoRun, step: string): boolean =>
-    run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'c' && r.detail !== undefined);
+    run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'interrupt-armed' && r.detail !== undefined);
 
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
   const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean } = { write: true }): void => {
-    const failed = held.some((r) => r.reason === 'c') ? consume(repoDir) : null;
-    const reasons = failed === null ? held : held.map((r) => (r.reason === 'c' ? { ...r, detail: failed } : r));
+    const failed = held.some((r) => r.reason === 'interrupt-armed') ? consume(repoDir) : null;
+    const reasons = failed === null ? held : held.map((r) => (r.reason === 'interrupt-armed' ? { ...r, detail: failed } : r));
     const lr = run.loopRun;
     const recordedAlready = lr !== null && lr.step === key.step && reasons.every((r) => lr.recorded.has(r.reason));
     if (opts.write && !recordedAlready) bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd(reasons), 0));
@@ -209,7 +209,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     marker.reported = true;
     persist(repoDir, run);
     bestEffort(() => deps.emitError(repoDir, failedEffectNotice(marker.state, marker.detail)));
-    bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'i' : 'h', detail: marker.detail }]), 0));
+    bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'failed-effect' : 'engine-input-missing', detail: marker.detail }]), 0));
   };
 
   /** §27.9.1 N9b.5(d) — `done`, or a step after which the run has no loop step left. */
@@ -224,16 +224,16 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const evaluate = (repoDir: string, run: AutoRun, step: string, cause: GateCause): Reason[] => {
     const reasons: Reason[] = [];
     const lr = run.loopRun !== null && run.loopRun.step === step ? run.loopRun : null;
-    if (lr === null || lr.needsAHuman) reasons.push({ reason: 'a' });
-    if (lr !== null && (lr.endedInError || lr.acceptedFailure)) reasons.push({ reason: 'b' });
+    if (lr === null || lr.needsAHuman) reasons.push({ reason: 'needs-a-human' });
+    if (lr !== null && (lr.endedInError || lr.acceptedFailure)) reasons.push({ reason: 'loop-error' });
     const arm = probeArmedInterrupt(repoDir).kind;
-    if (cause === 'interrupt' || arm === 'set') reasons.push({ reason: 'c' });
+    if (cause === 'interrupt' || arm === 'set') reasons.push({ reason: 'interrupt-armed' });
     const marker = run.failedEffect;
-    if (marker?.state === 'unknown') reasons.push({ reason: 'h', detail: marker.detail });
-    else if (run.stateUnsaved) reasons.push({ reason: 'h', detail: 'the run\'s gate state could not be saved' });
-    else if (arm === 'unreadable') reasons.push({ reason: 'h', detail: 'the interrupt arm could not be read' });
-    else if (lr === null) reasons.push({ reason: 'h' });
-    if (marker?.state === 'set') reasons.push({ reason: 'i' });
+    if (marker?.state === 'unknown') reasons.push({ reason: 'engine-input-missing', detail: marker.detail });
+    else if (run.stateUnsaved) reasons.push({ reason: 'engine-input-missing', detail: 'the run\'s gate state could not be saved' });
+    else if (arm === 'unreadable') reasons.push({ reason: 'engine-input-missing', detail: 'the interrupt arm could not be read' });
+    else if (lr === null) reasons.push({ reason: 'engine-input-missing' });
+    if (marker?.state === 'set') reasons.push({ reason: 'failed-effect' });
     return reasons;
   };
 
@@ -244,7 +244,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       case 'stop for a human':
         return 'stop-for-a-human';
       case 'another round':
-        return 'c';
+        return 'interrupt-armed';
     }
   };
 
@@ -263,10 +263,10 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     d.abandoned = true;
     const reason: Reason = d.approveStarted
-      ? { reason: 'l', detail: 'the engine approve did not settle within its bound' }
+      ? { reason: 'approve-not-persisted', detail: 'the engine approve did not settle within its bound' }
       : d.checking !== null
-        ? { reason: 'e', detail: 'the approve-time frozen check did not settle within its bound' }
-        : { reason: 'h', detail: 'the gate could not be evaluated' };
+        ? { reason: 'frozen-check-unavailable', detail: 'the approve-time frozen check did not settle within its bound' }
+        : { reason: 'engine-input-missing', detail: 'the gate could not be evaluated' };
     halt(repoDir, run, d, [...(d.checking ?? []), reason]);
   };
 
@@ -295,22 +295,22 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         push(repoDir);
         return;
       case 'preview-raised':
-        halt(repoDir, run, d, [{ reason: 'k' }], { write: false });
+        halt(repoDir, run, d, [{ reason: 'epic-promotion' }], { write: false });
         return;
       case 'blocked':
-        halt(repoDir, run, d, [{ reason: 'k' }]);
+        halt(repoDir, run, d, [{ reason: 'epic-promotion' }]);
         return;
       case 'refused':
-        halt(repoDir, run, d, [{ reason: 'l', detail: detail(outcome.reason) }]);
+        halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: detail(outcome.reason) }]);
         return;
       case 'accept-failed':
-        halt(repoDir, run, d, [{ reason: 'l', detail: detail(outcome.reason) }], { write: false });
+        halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: detail(outcome.reason) }], { write: false });
         return;
       case 'abandoned':
-        halt(repoDir, run, d, [{ reason: 'l', detail: 'the engine approve did not settle within its bound' }]);
+        halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: 'the engine approve did not settle within its bound' }]);
         return;
       case 'refused-late':
-        halt(repoDir, run, d, [...outcome.reasons.map((reason) => ({ reason })), { reason: 'l', detail: 'the gate changed while the engine decided' }]);
+        halt(repoDir, run, d, [...outcome.reasons.map((reason) => ({ reason })), { reason: 'approve-not-persisted', detail: 'the gate changed while the engine decided' }]);
         return;
       case 'run-ended':
       case 'stood-down':
@@ -324,7 +324,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
           push(repoDir);
           return;
         }
-        halt(repoDir, run, d, [{ reason: 'l', detail: detail(outcome.reason) }]);
+        halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: detail(outcome.reason) }]);
         return;
     }
   };
@@ -381,15 +381,15 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
 
   /** §27.9.1 N9b.6(d)–(e), N9b.7(d) */
   const frozenCheckReasons = (repoDir: string, step: string, result: ApproveTimeFrozenCheck): Reason[] => {
-    if (!result.ok) return [{ reason: 'e', detail: result.detail }];
+    if (!result.ok) return [{ reason: 'frozen-check-unavailable', detail: result.detail }];
     const changed = result.paths.length > 0;
     try {
       recordChangedTests(repoDir, step, result.paths);
     } catch (e) {
-      const unrecorded: Reason = { reason: 'e', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
-      return changed ? [{ reason: 'd', detail: result.paths.join(', ') }, unrecorded] : [unrecorded];
+      const unrecorded: Reason = { reason: 'frozen-check-unavailable', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
+      return changed ? [{ reason: 'frozen-tests-changed', detail: result.paths.join(', ') }, unrecorded] : [unrecorded];
     }
-    return changed ? [{ reason: 'd' }] : [];
+    return changed ? [{ reason: 'frozen-tests-changed' }] : [];
   };
 
   const conclude = (repoDir: string, run: AutoRun, d: Deciding, reasons: Reason[]): void => {
@@ -399,7 +399,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     }
     const bound = run.bound.get(d.step);
     if (approve === null || bound === undefined) {
-      halt(repoDir, run, d, [{ reason: 'l', detail: 'engine approve not wired' }]);
+      halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: 'engine approve not wired' }]);
       return;
     }
     const decider: ApproveDecider = {
@@ -429,13 +429,13 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     try {
       inProgress = deps.runInProgressAt(repoDir, d.step);
     } catch {
-      return { ok: false, reasons: ['h'] };
+      return { ok: false, reasons: ['engine-input-missing'] };
     }
     if (!inProgress) return { ok: false, runEnded: true };
     if (d.abandoned) return { ok: false, abandoned: true };
     const arm = probeArmedInterrupt(repoDir).kind;
-    if (arm === 'set') return { ok: false, reasons: ['c'] };
-    if (arm === 'unreadable') return { ok: false, reasons: ['h'] };
+    if (arm === 'set') return { ok: false, reasons: ['interrupt-armed'] };
+    if (arm === 'unreadable') return { ok: false, reasons: ['engine-input-missing'] };
     d.claimed = true;
     return { ok: true };
   };
@@ -520,7 +520,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       persist(repoDir, run);
     }
     const verdictHalt = verdictReason(state.verdict);
-    const reasons: Reason[] = [{ reason: 'j' }, ...(verdictHalt !== null ? [{ reason: verdictHalt }] : [])];
+    const reasons: Reason[] = [{ reason: 'relaunched' }, ...(verdictHalt !== null ? [{ reason: verdictHalt }] : [])];
     for (const r of evaluate(repoDir, run, state.step, 'verdict')) if (!reasons.some((x) => x.reason === r.reason)) reasons.push(r);
     halt(repoDir, run, key, reasons, { write: !written });
   };
@@ -607,7 +607,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run === undefined || pg === null || !sameGate(pg, step, turnKey, run.gateSeq)) return;
       run.pendingGate = null;
       if (!honouredAuto(run, step)) return;
-      const verdictHalt = pg.cause === 'interrupt' ? 'c' : verdictReason(pg.verdict);
+      const verdictHalt = pg.cause === 'interrupt' ? 'interrupt-armed' : verdictReason(pg.verdict);
       if (verdictHalt !== null) {
         const others = evaluate(repoDir, run, step, pg.cause).filter((r) => r.reason !== verdictHalt);
         halt(repoDir, run, pg, [{ reason: verdictHalt }, ...others]);
@@ -631,8 +631,8 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const haltOnFailedLoopRun = (): void => {
         persist(repoDir, run);
         if (!honouredAuto(run, step)) return;
-        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'b' }]);
-        lr.recorded.add('b');
+        halt(repoDir, run, { step, turnKey, gateSeq: run.gateSeq }, [{ reason: 'loop-error' }]);
+        lr.recorded.add('loop-error');
         persist(repoDir, run);
       };
       if (event === 'error') {
@@ -642,7 +642,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       }
       if (event === 'retried') {
         lr.endedInError = false;
-        if (!lr.acceptedFailure) lr.recorded.delete('b');
+        if (!lr.acceptedFailure) lr.recorded.delete('loop-error');
         nextGate(run);
         persist(repoDir, run);
         push(repoDir);

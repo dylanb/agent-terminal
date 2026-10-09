@@ -12,7 +12,7 @@ const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
 const RUN: AppLoopRunState = { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 1, verdict: 'clean' };
 const STATE: GateRunState = {
   run: { flow: 'Auto Flow', startedAt: Date.parse('2026-07-17T12:00:00.000Z') },
-  loopRun: { step: 'plan', endedInError: false, acceptedFailure: true, needsAHuman: false, recorded: ['b'] },
+  loopRun: { step: 'plan', endedInError: false, acceptedFailure: true, needsAHuman: false, recorded: ['loop-error'] },
   failedEffect: { state: 'set', detail: 'gh update-issue-body exited 1', reported: false },
   relaunchHalt: { step: 'plan', turnKey: 'consolidate-plan', round: 1 },
 };
@@ -77,7 +77,7 @@ describe('gate-run.yaml — its own file, first-run, no .gitignore', () => {
 
   it.each([
     ['a wrong schema_version', (t: string) => t.replace(/^schema_version: .*$/m, 'schema_version: 999')],
-    ['an unknown recorded letter', (t: string) => t.replace(/- b$/m, '- z')],
+    ['an unknown recorded reason', (t: string) => t.replace(/- loop-error$/m, '- z')],
     ['a non-boolean flag', (t: string) => t.replace('accepted_failure: true', 'accepted_failure: yes-please')],
     ['an unknown marker state', (t: string) => t.replace('state: set', 'state: maybe')],
     ['a relaunch-halt round that is not a positive integer', (t: string) => t.replace(/^  round: 1$/m, '  round: 0')],

@@ -288,8 +288,8 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a round t
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await openLoopPanel();
   await expect(haltRows().first()).toBeVisible({ timeout: UI_MS });
-  expect(autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['d']]);
-  await expect(loopPanel().locator('[data-auto-halt-reason="d"]')).toBeVisible();
+  expect(autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['frozen-tests-changed']]);
+  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-tests-changed"]')).toBeVisible();
   expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
   expect(flowState(repo)).toMatch(/^step: green$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
@@ -303,10 +303,10 @@ test('auto GREEN halts on frozen-test change and on unavailable check: `loop-cap
   await openLoopPanel();
   await expect(haltRows().first()).toBeVisible({ timeout: UI_MS });
   const halts = autoHaltsAt(home, repo, 'green');
-  expect(halts.map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['e']]);
+  expect(halts.map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['frozen-check-unavailable']]);
   expect(halts[0].cmd).toContain('loop-capabilities.yaml');
-  await expect(loopPanel().locator('[data-auto-halt-reason="e"]')).toContainText('loop-capabilities.yaml');
-  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-check-unavailable"]')).toContainText('loop-capabilities.yaml');
+  await expect(loopPanel().locator('[data-auto-halt-reason="loop-error"]')).toHaveCount(0);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
 });
 
@@ -445,12 +445,12 @@ test('auto gate halts with each visible reason: (a) a round recording `needs a h
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="a"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="needs-a-human"]')).toBeVisible({ timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
   await expect.poll(alertInsertions, { timeout: UI_MS }).toBe(1);
   expect(engineDecisions(home, repo)).toEqual([]);
-  expect(autoHaltReasons(home, repo).map((r) => r?.includes('a'))).toEqual([true]);
+  expect(autoHaltReasons(home, repo).map((r) => r?.includes('needs-a-human'))).toEqual([true]);
   await page.evaluate((k) => window.flow.state(k), repo);
   expect(await alertInsertions()).toBe(1);
 });
@@ -470,11 +470,11 @@ test('auto gate halts with each visible reason: (b) the error stop of an `auto` 
   await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
   await dismissLoopErrors();
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="loop-error"]')).toBeVisible({ timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
   expect(engineDecisions(home, repo)).toEqual([]);
-  expect(autoHaltReasons(home, repo).map((r) => r?.includes('b'))).toEqual([true]);
+  expect(autoHaltReasons(home, repo).map((r) => r?.includes('loop-error'))).toEqual([true]);
 });
 
 test('(b): a review round the operator Accepts out of its error at an `auto` step holds the step: (b) shown, no advance (AC4 ii)', { tag: '@ownapp' }, async () => {
@@ -493,11 +493,11 @@ test('(b): a review round the operator Accepts out of its error at an `auto` ste
   await dismissLoopErrors();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
-  await expect(loopPanel().locator('[data-auto-halt-reason="b"]')).toBeVisible({ timeout: LOOP_ROUND_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="loop-error"]')).toBeVisible({ timeout: LOOP_ROUND_MS });
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
   expect(engineDecisions(home, repo)).toEqual([]);
-  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('b'))).toHaveLength(1);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('loop-error'))).toHaveLength(1);
 });
 
 test('(b) negative: a Retry out of the error stop whose round then comes back clean advances the `auto` step (AC4 iii, N9b.6(b))', { tag: '@ownapp' }, async () => {
@@ -597,10 +597,10 @@ test('auto gate halts with each visible reason: (i) a failed `gh` effect of an e
   await dismissLoopErrors();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
-  await expect(loopPanel().locator('[data-auto-halt-reason="i"]')).toBeVisible();
+  await expect(loopPanel().locator('[data-auto-halt-reason="failed-effect"]')).toBeVisible();
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
-  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toHaveLength(1);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('failed-effect'))).toHaveLength(1);
 });
 
 test('a human approve at a gate showing the failed-effect marker clears it: the next `auto` gate is engine-approved with no (i) (AC13, N9b.5(d))', { tag: '@ownapp' }, async () => {
@@ -635,7 +635,7 @@ test('a human approve at a gate showing the failed-effect marker clears it: the 
     .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
     .toMatch(/^step: done$/m)
     .catch(failWithDiagnosis(home, repo));
-  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toEqual([]);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('failed-effect'))).toEqual([]);
   expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
 });
 
@@ -671,7 +671,7 @@ test('the strip\'s manual Advance at a gate showing the failed-effect marker cle
     .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
     .toMatch(/^step: done$/m)
     .catch(failWithDiagnosis(home, repo));
-  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toEqual([]);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('failed-effect'))).toEqual([]);
   expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
 });
 
@@ -722,7 +722,7 @@ test('a failed effect on the last auto step is shown at run end: the failure rea
   await expect(errorDialog().first()).toBeVisible({ timeout: UI_MS });
   // The approve's own side-effect failure is one delivery; reaching the run's end with the marker set is another.
   await expect.poll(async () => (await loopErrors()).length, { timeout: UI_MS }).toBe(2);
-  await expect.poll(() => autoHaltReasons(home, repo), { timeout: UI_MS }).toEqual([['i']]);
+  await expect.poll(() => autoHaltReasons(home, repo), { timeout: UI_MS }).toEqual([['failed-effect']]);
   expect(auditGateEntries(home, repo).filter((e) => parseAutoHaltReasons(e.cmd) !== null).map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
 
   await dismissLoopErrors();
@@ -730,7 +730,7 @@ test('a failed effect on the last auto step is shown at run end: the failure rea
   await flowControl().click();
   await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
   await page.evaluate((k) => window.flow.state(k), repo);
-  expect(autoHaltReasons(home, repo)).toEqual([['i']]);
+  expect(autoHaltReasons(home, repo)).toEqual([['failed-effect']]);
   expect(await loopErrors()).toHaveLength(2);
 });
 
@@ -786,10 +786,10 @@ test('an `auto` gate the run had reached before a relaunch halts with (j) after 
   app = undefined;
   await launchInto('agent-term-e2e-137-j-', repo, home, agent, {}, null);
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="j"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="relaunched"]')).toBeVisible({ timeout: UI_MS });
   await expect(page.locator('#flow-strip .spill')).toHaveClass(/\bawait\b/, { timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: red$/m);
-  await expect.poll(() => autoHaltReasons(home, repo).filter((r) => r?.includes('j')), { timeout: UI_MS }).toHaveLength(1);
+  await expect.poll(() => autoHaltReasons(home, repo).filter((r) => r?.includes('relaunched')), { timeout: UI_MS }).toHaveLength(1);
 
   await approveOption().click({ timeout: UI_MS });
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: done$/m);
@@ -824,10 +824,10 @@ test('a failed `gh` effect of an `auto` approve survives a relaunch before the n
   await dismissLoopErrors();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
-  await expect(loopPanel().locator('[data-auto-halt-reason="i"]')).toBeVisible();
+  await expect(loopPanel().locator('[data-auto-halt-reason="failed-effect"]')).toBeVisible();
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(auditGateEntries(home, repo, { step: 'red' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
-  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('i'))).toHaveLength(1);
+  expect(autoHaltReasons(home, repo).filter((r) => r?.includes('failed-effect'))).toHaveLength(1);
 });
 
 test('restart keeps the run\'s auto authority: after a relaunch, Restart from `done` of an `auto` run engine-approves its clean gate again, with no (j) (N9b.2(c), N9b.8)', { tag: '@ownapp' }, async () => {
@@ -1035,7 +1035,7 @@ test('auto gate concurrency, interrupt: an arm made at an earlier `human` step t
     .catch(failWithDiagnosis(home, repo));
   await dismissLoopErrors();
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="c"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="interrupt-armed"]')).toBeVisible({ timeout: UI_MS });
   await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(false);
   expect(flowState(repo)).toMatch(/^step: red$/m);
   expect(engineDecisions(home, repo)).toEqual([]);
@@ -1137,7 +1137,7 @@ test('auto gate concurrency, epic preview: an `auto` plan-polish gate on an epic
   await dismissLoopErrors();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: UI_MS });
-  await expect(loopPanel().locator('[data-auto-halt-reason="k"]')).toBeVisible({ timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="epic-promotion"]')).toBeVisible({ timeout: UI_MS });
   expect(readIf(logFile)).not.toContain('issue create');
   expect(flowState(repo)).toMatch(/^step: plan-polish$/m);
   const run = runIdentity(repo);
@@ -1265,9 +1265,9 @@ test('auto gate concurrency, held frozen check: a rewritten run-state loop refus
 
   await expect
     .poll(() => autoHaltsAt(home, repo, 'green').flatMap((e) => parseAutoHaltReasons(e.cmd) ?? []), { timeout: APPROVE_ADVANCE_MS })
-    .toContain('l')
+    .toContain('approve-not-persisted')
     .catch(failWithDiagnosis(home, repo));
-  await expect(loopPanel().locator('[data-auto-halt-reason="l"]')).toContainText('red-loop', { timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="approve-not-persisted"]')).toContainText('red-loop', { timeout: UI_MS });
   const green = auditGateEntries(home, repo, { step: 'green' });
   expect(green.filter((e) => gateDecisionKind(e.cmd)?.kind === 'side-effect')).toEqual([]);
   await expect.poll(() => heldReadsDone(logFile), { timeout: UI_MS }).toBe(true);
@@ -1285,7 +1285,7 @@ test('auto gate concurrency, held frozen check: an interrupt armed during the he
 
   await expect
     .poll(() => autoHaltsAt(home, repo, 'green').map((e) => [...(parseAutoHaltReasons(e.cmd) ?? [])].sort()), { timeout: APPROVE_ADVANCE_MS })
-    .toEqual([['c', 'l']])
+    .toEqual([['approve-not-persisted', 'interrupt-armed']])
     .catch(failWithDiagnosis(home, repo));
   await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(false);
   await expect.poll(() => heldReadsDone(logFile), { timeout: UI_MS }).toBe(true);

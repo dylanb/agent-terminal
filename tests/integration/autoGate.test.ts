@@ -257,8 +257,8 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
 const autoHalts = (rig: Rig): string[] => rig.audits.map((a) => a.cmd).filter((c) => gateDecisionKind(c)?.kind === 'auto-halt');
 const engineDecided = (rig: Rig): string[] => rig.audits.map((a) => a.cmd).filter((c) => gateDecisionDecider(c) === 'engine');
 
-function expectLetterShown(v: FlowLoopView, letter: AutoHaltReason): void {
-  expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain(letter);
+function expectReasonShown(v: FlowLoopView, reason: AutoHaltReason): void {
+  expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain(reason);
 }
 
 /** Bind a trusted run at Start and enter its first loop step, as `composeStartTransition` + the preparer do. */
@@ -328,7 +328,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     armInterrupt(h.repo, STEP);
     h.completeConsolidate(engine, 1, 'verdict: clean\n');
     await flush();
-    expect(rig.view(h.repo).autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('c');
+    expect(rig.view(h.repo).autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
     expect(rig.approvals).toEqual([]);
     expect(engineDecided(rig).filter((c) => gateDecisionKind(c)?.kind === 'decision')).toEqual([]);
     expect(readArmedInterrupt(h.repo)).toBeNull();
@@ -349,9 +349,9 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     const v = rig.view(h.repo);
     expect(v.humanNeeded).toBe(true);
     expect(rig.notify).toHaveBeenCalledTimes(1);
-    expectLetterShown(v, 'a');
+    expectReasonShown(v, 'needs-a-human');
     expect(autoHalts(rig)).toHaveLength(1);
-    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('a');
+    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('needs-a-human');
   });
 
   // §27.9.1 N9b.6 — a reason whose evaluation cannot complete holds: a report the engine cannot re-read is (a).
@@ -407,21 +407,21 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     expect(rig.approvals).toEqual([]);
     const v = rig.view(h.repo);
     expect(v.humanNeeded).toBe(true);
-    expectLetterShown(v, 'b');
+    expectReasonShown(v, 'loop-error');
     expect(rig.notify).toHaveBeenCalledTimes(1);
     expect(autoHalts(rig)).toHaveLength(1);
-    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('b');
+    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('loop-error');
   });
 
   // AC4 (#137 S2): the error stop itself shows and records (b), and the Accept out of it adds no second entry.
   function expectOneBStop(rig: Rig): void {
     const v = rig.view(h.repo);
     expect(v.humanNeeded).toBe(true);
-    expectLetterShown(v, 'b');
+    expectReasonShown(v, 'loop-error');
     expect(rig.notify).toHaveBeenCalledTimes(1);
     const halts = autoHalts(rig);
     expect(halts).toHaveLength(1);
-    expect(parseAutoHaltReasons(halts[0])).toContain('b');
+    expect(parseAutoHaltReasons(halts[0])).toContain('loop-error');
     expect(gateDecisionDecider(halts[0])).toBe('engine');
     expect(rig.approvals).toEqual([]);
   }
@@ -512,8 +512,8 @@ describe('autoGate — the interrupt arm is run-scoped in a run with an `auto` s
     await flush();
     expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', round: 1 });
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(h.repo), 'c');
-    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('c');
+    expectReasonShown(rig.view(h.repo), 'interrupt-armed');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('interrupt-armed');
     expect(readArmedInterrupt(h.repo)).toBeNull();
   });
 
@@ -558,7 +558,7 @@ describe('autoGate — the approve-site (c) consumes the arm (AC11, N9b.6(c), #1
     armInterrupt(repoDir, 'some-other-step');
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'c');
+    expectReasonShown(rig.view(), 'interrupt-armed');
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
@@ -582,7 +582,7 @@ describe('autoGate — the approve-site (c) consumes the arm (AC11, N9b.6(c), #1
     } finally {
       chmodSync(loopDir, 0o755);
     }
-    const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c');
+    const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'interrupt-armed');
     expect(c?.detail ?? '').toMatch(/could not be cleared/);
     expect(readArmedInterrupt(repoDir)?.step).toBe('some-other-step');
     expect(rig.approvals).toEqual([]);
@@ -590,7 +590,7 @@ describe('autoGate — the approve-site (c) consumes the arm (AC11, N9b.6(c), #1
     rig.gate.beginLoopRun(repoDir, 'second');
     await reachGate(rig, 'clean', 'verdict', repoDir, 'second');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'c');
+    expectReasonShown(rig.view(), 'interrupt-armed');
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 });
@@ -650,7 +650,7 @@ describe('autoGate — verdict and interrupt halts (AC2)', () => {
     const rig = makeRig();
     startTrusted(rig);
     await reachGate(rig, 'another round', 'interrupt');
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('c');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
     expect(autoHalts(rig)).toHaveLength(1);
     expect(rig.approvals).toEqual([]);
   });
@@ -679,7 +679,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
     expect(rig.notify).toHaveBeenCalledTimes(1);
-    expectLetterShown(v, letter);
+    expectReasonShown(v, letter);
     expect(autoHalts(rig)).toHaveLength(1);
     expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain(letter);
   }
@@ -699,16 +699,16 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     rig.gate.commitStart(repoDir);
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'a');
-    expectLetterShown(rig.view(), 'h');
-    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toEqual(expect.arrayContaining(['a', 'h']));
+    expectReasonShown(rig.view(), 'needs-a-human');
+    expectReasonShown(rig.view(), 'engine-input-missing');
+    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toEqual(expect.arrayContaining(['needs-a-human', 'engine-input-missing']));
   });
 
   it('(a): a round report recording a `needs a human` disposition halts a clean gate', async () => {
     const rig = makeRig();
     startTrusted(rig);
     rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', { roundReport: roundReportWithDisposition(['summary'], ['p1'], 'needs a human') });
-    await expectHalt(rig, 'a');
+    await expectHalt(rig, 'needs-a-human');
   });
 
   it('(a) negative: a round report whose every disposition is settled leaves a clean gate to the engine approve', async () => {
@@ -725,21 +725,21 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     startTrusted(rig);
     rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', { roundReport: roundReportWithDisposition(['summary'], ['p1'], 'fixed') });
     rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', { roundReport: null });
-    await expectHalt(rig, 'a');
+    await expectHalt(rig, 'needs-a-human');
   });
 
   it('(b): an accepted failed turn holds for the rest of the loop run', async () => {
     const rig = makeRig();
     startTrusted(rig);
     rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', 'accepted');
-    await expectHalt(rig, 'b');
+    await expectHalt(rig, 'loop-error');
   });
 
   it('(b): a loop run that ended in error halts; a Retry clears it and the clean gate is approved', async () => {
     const rig = makeRig();
     startTrusted(rig);
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
-    await expectHalt(rig, 'b');
+    await expectHalt(rig, 'loop-error');
 
     const fresh = makeRig();
     startTrusted(fresh);
@@ -756,7 +756,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     armInterrupt(repoDir, 'some-other-step');
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('c');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
   });
 
   it('a resolution at the preparer leaves the clean gate to the engine', async () => {
@@ -828,7 +828,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       expect(autoHalts(rig)).toEqual([]);
       const shown = rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? [];
       expect(shown).not.toContain('g');
-      expect(shown).not.toContain('l');
+      expect(shown).not.toContain('approve-not-persisted');
     } finally {
       rmSync(operatorRoot, { recursive: true, force: true });
     }
@@ -852,10 +852,10 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals).toHaveLength(1);
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expectLetterShown(v, 'i');
+    expectReasonShown(v, 'failed-effect');
     expect(rig.notify).toHaveBeenCalledTimes(1);
     expect(autoHalts(rig)).toHaveLength(1);
-    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('i');
+    expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('failed-effect');
   });
 
   it('a `red`-completion step is not a frozen-check step, so its clean gate is approved by the engine', async () => {
@@ -877,8 +877,8 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals).toEqual([]);
     const halts = autoHalts(rig);
     expect(halts).toHaveLength(1);
-    expect([...(parseAutoHaltReasons(halts[0]) ?? [])].sort()).toEqual(['a', 'c']);
-    expect((rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).sort()).toEqual(['a', 'c']);
+    expect([...(parseAutoHaltReasons(halts[0]) ?? [])].sort()).toEqual(['interrupt-armed', 'needs-a-human']);
+    expect((rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).sort()).toEqual(['interrupt-armed', 'needs-a-human']);
   });
 
   it('(c) + (e) together on a frozen-check step write exactly one `auto-halt` entry naming both, and two `haltReasons` rows', async () => {
@@ -890,8 +890,8 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals).toEqual([]);
     const halts = autoHalts(rig);
     expect(halts).toHaveLength(1);
-    expect([...(parseAutoHaltReasons(halts[0]) ?? [])].sort()).toEqual(['c', 'e']);
-    expect((rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).sort()).toEqual(['c', 'e']);
+    expect([...(parseAutoHaltReasons(halts[0]) ?? [])].sort()).toEqual(['frozen-check-unavailable', 'interrupt-armed']);
+    expect((rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).sort()).toEqual(['frozen-check-unavailable', 'interrupt-armed']);
   });
 
   it('(h): an `armed-interrupt.yaml` that cannot be parsed, present when the clean gate is decided, halts and runs no approve (N9b.5(b))', async () => {
@@ -901,7 +901,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     writeFileSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!, 'step: [unclosed\n');
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'h');
+    expectReasonShown(rig.view(), 'engine-input-missing');
   });
 
   it.each([
@@ -916,7 +916,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     writeFileSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!, body);
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'h');
+    expectReasonShown(rig.view(), 'engine-input-missing');
   });
 
   it('(h): an `armed-interrupt.yaml` that exists but cannot be read halts a clean verdict gate and runs no approve (N9b.5(b))', async () => {
@@ -928,7 +928,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     mkdirSync(arm);
     await reachGate(rig, 'clean', 'verdict');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'h');
+    expectReasonShown(rig.view(), 'engine-input-missing');
   });
 
   it('an unreadable `armed-interrupt.yaml` does not hand back at consolidation as an arm; the clean gate that follows halts with (h), not (c)', async () => {
@@ -939,8 +939,8 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.gate.interruptArmed(repoDir, STEP)).toBe(false);
     await reachGate(rig, 'clean');
     const letters = rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? [];
-    expect(letters).toContain('h');
-    expect(letters).not.toContain('c');
+    expect(letters).toContain('engine-input-missing');
+    expect(letters).not.toContain('interrupt-armed');
   });
 
   it('negative pair: a readable arm hands back at consolidation', () => {
@@ -958,7 +958,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     rmSync(arm);
     mkdirSync(arm);
     await reachGate(rig, 'clean', 'interrupt');
-    const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c');
+    const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'interrupt-armed');
     expect(c?.detail ?? '').toMatch(/could not be cleared/);
   });
 
@@ -981,7 +981,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       const rig = makeRig();
       startTrusted(rig);
       await reachGate(rig, 'stop for a human');
-      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).not.toContain('c');
+      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).not.toContain('interrupt-armed');
       armInterrupt(repoDir, STEP);
       await expect(decideAt(rig)).resolves.toBe(true);
       expect(existsSync(loopAreaFile(repoDir, 'armed-interrupt.yaml')!)).toBe(true);
@@ -992,7 +992,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       startTrusted(rig);
       armInterrupt(repoDir, STEP);
       await reachGate(rig, 'clean', 'interrupt');
-      const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c');
+      const c = rig.view().autoGate?.haltReasons.find((r) => r.reason === 'interrupt-armed');
       expect(c).toBeDefined();
       expect(c?.detail).toBeUndefined();
       armInterrupt(repoDir, STEP);
@@ -1027,7 +1027,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
       rmSync(arm);
       mkdirSync(arm);
       await reachGate(rig, 'clean', 'interrupt');
-      expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'c')?.detail ?? '').toMatch(/could not be cleared/);
+      expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'interrupt-armed')?.detail ?? '').toMatch(/could not be cleared/);
       return arm;
     }
 
@@ -1063,11 +1063,11 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
 
 describe('autoGate — every engine approve outcome other than `advanced` halts the gate (N9b.6(k)/(l), #137 S1)', () => {
   it.each([
-    ['refused', { kind: 'refused', reason: 'the run-state no longer matches the gate' } as GateApproveOutcome, 1, 'l', 'the run-state no longer matches the gate'],
-    ['accept-failed', { kind: 'accept-failed', reason: 'ENOSPC' } as GateApproveOutcome, 0, 'l', 'ENOSPC'],
-    ['blocked', { kind: 'blocked' } as GateApproveOutcome, 1, 'k', undefined],
-    ['preview-raised', { kind: 'preview-raised' } as GateApproveOutcome, 0, 'k', undefined],
-    ['abandoned', { kind: 'abandoned' } as GateApproveOutcome, 1, 'l', 'the engine approve did not settle within its bound'],
+    ['refused', { kind: 'refused', reason: 'the run-state no longer matches the gate' } as GateApproveOutcome, 1, 'approve-not-persisted', 'the run-state no longer matches the gate'],
+    ['accept-failed', { kind: 'accept-failed', reason: 'ENOSPC' } as GateApproveOutcome, 0, 'approve-not-persisted', 'ENOSPC'],
+    ['blocked', { kind: 'blocked' } as GateApproveOutcome, 1, 'epic-promotion', undefined],
+    ['preview-raised', { kind: 'preview-raised' } as GateApproveOutcome, 0, 'epic-promotion', undefined],
+    ['abandoned', { kind: 'abandoned' } as GateApproveOutcome, 1, 'approve-not-persisted', 'the engine approve did not settle within its bound'],
   ] as const)('%s: human-needed, no longer deciding, its letter and reason shown, no failed-effect marker, and only the `auto-halt` entries the controller owns', async (_label, outcome, entries, letter, detail) => {
     const rig = makeRig();
     startTrusted(rig);
@@ -1088,8 +1088,8 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     await reachGate(rig, 'clean');
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expect(v.autoGate?.haltReasons).toEqual([{ reason: 'l', detail: 'engine approve not wired' }]);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
+    expect(v.autoGate?.haltReasons).toEqual([{ reason: 'approve-not-persisted', detail: 'engine approve not wired' }]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['approve-not-persisted']]);
     expect(rig.approvals).toEqual([]);
   });
 
@@ -1102,7 +1102,7 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     expect(v.humanNeeded).toBe(true);
     expect(v.autoGate?.deciding).toBe(false);
     expect(v.autoGate?.failedEffect?.state).toBe('set');
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['approve-not-persisted']]);
   });
 
   it.each(['onto the next loop step', 'off the gate\'s step'] as const)('an engine approve that rejects after the flow moved %s: the failed-effect marker set and no `auto-halt` entry', async (move) => {
@@ -1136,7 +1136,7 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     });
     await reachGate(rig, 'clean');
     expect(rig.view().humanNeeded).toBe(true);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['l']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['approve-not-persisted']]);
   });
 
   it('an interrupt armed after the evaluation but before the claim is refused at the claim: no accept, human-needed, (c) shown and recorded', async () => {
@@ -1150,8 +1150,8 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     expect(readAppLoopState(repoDir)?.status).toBe('complete');
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toContain('c');
-    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('c');
+    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toContain('interrupt-armed');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('interrupt-armed');
   });
 
   it('an interrupt arm that becomes unreadable after the evaluation but before the claim is refused at the claim: no accept, human-needed, (h) shown and recorded', async () => {
@@ -1166,8 +1166,8 @@ describe('autoGate — every engine approve outcome other than `advanced` halts 
     expect(readAppLoopState(repoDir)?.status).toBe('complete');
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toContain('h');
-    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('h');
+    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toContain('engine-input-missing');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).toContain('engine-input-missing');
   });
 });
 
@@ -1287,7 +1287,7 @@ describe('autoGate — the decision bound is the operator setting (AC14, N9b.5(e
     rig.clock.advanceBy(1);
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toEqual(['l']);
+    expect(v.autoGate?.haltReasons.map((r) => r.reason)).toEqual(['approve-not-persisted']);
     expect(rig.notify).toHaveBeenCalledTimes(1);
   });
 
@@ -1298,7 +1298,7 @@ describe('autoGate — the decision bound is the operator setting (AC14, N9b.5(e
     const release = rig.hold();
     await reachGate(rig, 'clean');
     rig.clock.advanceBy(CONFIGURED_MS);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).toEqual(['l']);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason)).toEqual(['approve-not-persisted']);
     expect(autoHalts(rig)).toHaveLength(1);
     const entries = rig.audits.length;
     release();
@@ -1405,7 +1405,7 @@ describe('autoGate — run lifetime and binding (N9b.2, N9b.5(b))', () => {
     writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'error', errorReason: 'turn stalled' }, FIXED);
     seen.length = 0;
     rig.gate.loopRunEvent(repoDir, STEP, TURN, event);
-    expectLetterShown(rig.view(), 'b');
+    expectReasonShown(rig.view(), 'loop-error');
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((v) => v === true)).toBe(true);
   });
@@ -1440,8 +1440,8 @@ describe('autoGate — run lifetime and binding (N9b.2, N9b.5(b))', () => {
   // The same plan row's (a) leg (S2), and its accepted-failed-review (b) leg: step A halts on its own letter, and the
   // operator's decision there leaves step B's clean gate to the engine.
   it.each([
-    ['a `needs a human` round report (a)', 'a', { roundReport: roundReportWithDisposition(['summary'], ['p1'], 'needs a human') }],
-    ['an accepted failed review round (b)', 'b', 'accepted'],
+    ['a `needs a human` round report (a)', 'needs-a-human', { roundReport: roundReportWithDisposition(['summary'], ['p1'], 'needs a human') }],
+    ['an accepted failed review round (b)', 'loop-error', 'accepted'],
   ] as const)('step A held by %s: A halts on that letter, and step B entered through the preparer is engine-approved with no `auto-halt` of its own', async (_label, letter, event) => {
     const rig = makeRig();
     const preparerResolve = composeLoopBindingResolve(rig.gate, composeObservedResolveDef(ctxFor));
@@ -1456,7 +1456,7 @@ describe('autoGate — run lifetime and binding (N9b.2, N9b.5(b))', () => {
     rig.gate.loopRunEvent(repoDir, STEP, 'review-plan', event);
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), letter);
+    expectReasonShown(rig.view(), letter);
     expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([[letter]]);
 
     expect(preparerResolve(repoDir, 'second', LOOP).ok).toBe(true);
@@ -1712,7 +1712,7 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
     expect(v.autoGate?.deciding).toBe(false);
-    expectLetterShown(v, 'l');
+    expectReasonShown(v, 'approve-not-persisted');
   });
 
   // Plan AC13 row (S4 (l)), through the real `runAppApprove`.
@@ -1736,7 +1736,7 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
     );
     startTrusted(rig);
     await reachGate(rig, 'clean');
-    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'l', detail: expect.stringContaining('ENOSPC') }]);
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'approve-not-persisted', detail: expect.stringContaining('ENOSPC') }]);
     const acceptFailed = approveEntries.filter((c) => gateDecisionKind(c)?.kind === 'accept-failed');
     expect(acceptFailed.map((c) => gateDecisionDecider(c))).toEqual(['engine']);
     const entries = rig.audits.length;
@@ -1818,13 +1818,13 @@ describe('autoGate — (b) at the error stop itself (AC4, #137 S2)', () => {
     writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'error', errorReason: 'turn stalled' }, FIXED);
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
     await flush();
-    expectLetterShown(rig.view(), 'b');
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['b']]);
+    expectReasonShown(rig.view(), 'loop-error');
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['loop-error']]);
 
     writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1 }, FIXED);
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'accepted');
     await flush();
-    expectLetterShown(rig.view(), 'b');
+    expectReasonShown(rig.view(), 'loop-error');
     expect(autoHalts(rig)).toHaveLength(1);
   });
 
@@ -1834,7 +1834,7 @@ describe('autoGate — (b) at the error stop itself (AC4, #137 S2)', () => {
     writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'error', errorReason: 'turn stalled' }, FIXED);
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
     await flush();
-    expectLetterShown(rig.view(), 'b');
+    expectReasonShown(rig.view(), 'loop-error');
     writeAppLoopState(repoDir, { loop: LOOP, step: STEP, turnKey: TURN, status: 'working', round: 1 }, FIXED);
     rig.gate.loopRunEvent(repoDir, STEP, TURN, 'retried');
     await flush();
@@ -1890,7 +1890,7 @@ describe('autoGate — the failed-effect marker across gates of either authority
 
     await enterAndReach(rig, 'third');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP, 'third']);
-    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).not.toContain('i');
+    expect(autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c) ?? [])).not.toContain('failed-effect');
   });
 
   // N9b.5(d): the clearing decision may be at an `auto` gate the marker halted with (i), not only at a `human` one.
@@ -1900,14 +1900,14 @@ describe('autoGate — the failed-effect marker across gates of either authority
     const steps: FlowStepDef[] = [STEPS_MARKER[0], STEPS_MARKER[2], { id: 'fourth', kind: 'loop', loop: LOOP, loopNamespace: 'app', gateAuthority: 'auto' }, STEPS_MARKER[3]];
     await markerSet(rig, steps);
     await enterAndReach(rig, 'third');
-    expectLetterShown(rig.view(), 'i');
+    expectReasonShown(rig.view(), 'failed-effect');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP]);
     await expect(runners.decide(repoDir, 'third', TURN, 'approve')).resolves.toBe(true);
     expect(rig.view().autoGate?.failedEffect).toBeUndefined();
 
     await enterAndReach(rig, 'fourth');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP, 'fourth']);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['i']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
   });
 
   it.each(['request-changes', 'redo', 'back-to-red'] as const)('a `%s` at the marked gate, through the composed runners, clears the marker', async (option) => {
@@ -1974,7 +1974,7 @@ describe('autoGate — the failed-effect marker across gates of either authority
     await reachGate(rig, 'clean', 'verdict', repoDir, 'third');
     const v = rig.view();
     expect(v.autoGate?.failedEffect?.state).toBe('set');
-    expectLetterShown(v, 'i');
+    expectReasonShown(v, 'failed-effect');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP]);
   });
 
@@ -1989,7 +1989,7 @@ describe('autoGate — the failed-effect marker across gates of either authority
     expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
 
     await enterAndReach(rig, 'third');
-    expectLetterShown(rig.view(), 'i');
+    expectReasonShown(rig.view(), 'failed-effect');
     expect(rig.approvals.map((a) => a.step)).toEqual([STEP]);
   });
 });
@@ -2047,7 +2047,7 @@ describe('autoGate — a human decision at the run\'s last loop gate clears the 
     });
     await runners.decide(repoDir, 'human-step', TURN, 'approve');
     expect(rig.errors).toHaveLength(1);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['i']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
   });
 
   it.each(['decide', 'advance'] as const)('a human %s that throws after the advance onto the final step still reports the marker at the run end: one error and one (i) entry', async (which) => {
@@ -2070,7 +2070,7 @@ describe('autoGate — a human decision at the run\'s last loop gate clears the 
     if (which === 'decide') await expect(runners.decide(repoDir, 'human-step', TURN, 'approve')).rejects.toThrow('decision threw');
     else expect(() => runners.advance(repoDir, 'human-step')).toThrow('advance threw');
     expect(rig.errors).toHaveLength(1);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['i']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
   });
 });
 
@@ -2176,8 +2176,8 @@ describe('autoGate — a gate-state write that cannot land is surfaced and fails
     expect(rig.errors[0].reason).toContain('gate state');
     await reachGate(rig, 'clean');
     expect(rig.approvals).toEqual([]);
-    expectLetterShown(rig.view(), 'h');
-    expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'h')?.detail).toBe('the run\'s gate state could not be saved');
+    expectReasonShown(rig.view(), 'engine-input-missing');
+    expect(rig.view().autoGate?.haltReasons.find((r) => r.reason === 'engine-input-missing')?.detail).toBe('the run\'s gate state could not be saved');
   });
 
   it('once a later write lands, the next clean `auto` gate is engine-approved again (recovery pair)', async () => {
@@ -2212,7 +2212,7 @@ describe('autoGate — a run that ends with the marker set reports it (AC13 run 
     expect(rig.errors.map((e) => e.repoDir)).toEqual([repoDir]);
     expect(rig.errors[0].reason).toContain(EFFECT_FAILURE);
     const halts = autoHalts(rig);
-    expect(halts.map((c) => ({ reasons: parseAutoHaltReasons(c), decider: gateDecisionDecider(c) }))).toEqual([{ reasons: ['i'], decider: 'engine' }]);
+    expect(halts.map((c) => ({ reasons: parseAutoHaltReasons(c), decider: gateDecisionDecider(c) }))).toEqual([{ reasons: ['failed-effect'], decider: 'engine' }]);
 
     record(repoDir, 'advance', flowAt(RUN_END_STEPS, 'finalize'), flowAt(RUN_END_STEPS, 'finalize', 'done'));
     expect(rig.errors).toHaveLength(1);
@@ -2227,7 +2227,7 @@ describe('autoGate — a run that ends with the marker set reports it (AC13 run 
     const { record } = recorded(rig);
     record(repoDir, 'advance', flowAt(only, STEP), flowAt(only, STEP, 'done'));
     expect(rig.errors).toHaveLength(1);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['i']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
   });
 
   // Plan row "Run end with a marker": the reopen-slice caller (`reopenSliceFlow`, an `undo` back to the slice's RED
@@ -2245,7 +2245,7 @@ describe('autoGate — a run that ends with the marker set reports it (AC13 run 
     record(repoDir, 'advance', flowAt(RUN_END_STEPS, 'finalize'), flowAt(RUN_END_STEPS, 'finalize', 'done'));
     expect(rig.errors).toHaveLength(1);
     expect(rig.errors[0].reason).toContain(EFFECT_FAILURE);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['i']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['failed-effect']]);
     expect(transitions).toHaveLength(3);
   });
 
@@ -2402,8 +2402,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toEqual(['d']);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['d']]);
+    expect(letters(rig)).toEqual(['frozen-tests-changed']);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['frozen-tests-changed']]);
     expect(rig.view().humanNeeded).toBe(true);
     expect(readChangedTests(repoDir)).toEqual({ step: STEP, paths: [FROZEN] });
   });
@@ -2414,7 +2414,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     fixture.writeRepoFile(repoDir, 'tests/added.test.ts', 'test("added", () => {});\n');
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(letters(rig)).toEqual(['d']);
+    expect(letters(rig)).toEqual(['frozen-tests-changed']);
     expect(readChangedTests(repoDir)?.paths).toEqual(['tests/added.test.ts']);
   });
 
@@ -2426,7 +2426,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toEqual(['d']);
+    expect(letters(rig)).toEqual(['frozen-tests-changed']);
     expect(readChangedTests(repoDir)?.paths).toEqual([FROZEN]);
   });
 
@@ -2451,7 +2451,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').toMatch(/loop-capabilities\.yaml/);
     expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
   });
@@ -2475,7 +2475,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').toMatch(/loop-capabilities\.yaml/);
     expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
   });
@@ -2496,7 +2496,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').toMatch(/baseline/i);
     expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
   });
@@ -2512,7 +2512,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').toMatch(/git|baseline/i);
     expect(readFileSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, 'utf8')).toBe(flagBefore);
   });
@@ -2526,7 +2526,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').toMatch(/changed-tests/);
   });
 
@@ -2538,8 +2538,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect([...letters(rig)].sort()).toEqual(['d', 'e']);
-    expect([...autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c))].sort()).toEqual(['d', 'e']);
+    expect([...letters(rig)].sort()).toEqual(['frozen-check-unavailable', 'frozen-tests-changed']);
+    expect([...autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c))].sort()).toEqual(['frozen-check-unavailable', 'frozen-tests-changed']);
     const rows = rig.view().autoGate?.haltReasons ?? [];
     expect(rows.map((r) => r.detail ?? '').join('\n')).toContain(FROZEN);
   });
@@ -2555,7 +2555,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toContain('d');
+    expect(letters(rig)).toContain('frozen-tests-changed');
     expect(readChangedTests(repoDir)?.paths).toEqual([FROZEN]);
   });
 
@@ -2762,8 +2762,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     held.release();
     await settled(rig);
     expect(readAppLoopState(repoDir)?.status).toBe('complete');
-    expect([...letters(rig)].sort()).toEqual(['c', 'l']);
-    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'l']]);
+    expect([...letters(rig)].sort()).toEqual(['approve-not-persisted', 'interrupt-armed']);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['approve-not-persisted', 'interrupt-armed']]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
@@ -2854,7 +2854,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
     const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.reason)).toEqual(['e']);
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
     expect(rows[0]?.detail ?? '').not.toMatch(/no phase baseline/);
     expect(rows[0]?.detail ?? '').toMatch(/branch could not be read/);
   });
@@ -2867,7 +2867,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['c']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['interrupt-armed']]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
@@ -2879,7 +2879,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'd']]);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['frozen-tests-changed', 'interrupt-armed']]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
@@ -2892,7 +2892,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'e']]);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['frozen-check-unavailable', 'interrupt-armed']]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
@@ -2930,8 +2930,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     editSource();
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c) ?? [])).toEqual([expect.arrayContaining(['e'])]);
-    expect(rig.view().autoGate?.haltReasons?.find((r) => r.reason === 'e')?.detail ?? '').toMatch(/baseline/i);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c) ?? [])).toEqual([expect.arrayContaining(['frozen-check-unavailable'])]);
+    expect(rig.view().autoGate?.haltReasons?.find((r) => r.reason === 'frozen-check-unavailable')?.detail ?? '').toMatch(/baseline/i);
     expect(rig.view().humanNeeded).toBe(true);
     expect(fixture.git(repoDir, ['rev-parse', 'HEAD'])).toBe(redCommit);
   });
@@ -2949,12 +2949,12 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(rig.notify).not.toHaveBeenCalled();
     rig.clock.advanceBy(1);
     expect(rig.view().humanNeeded).toBe(true);
-    expect(letters(rig)).toEqual(['e']);
+    expect(letters(rig)).toEqual(['frozen-check-unavailable']);
     expect(rig.notify).toHaveBeenCalledTimes(1);
     expect(await held.endedWhileHeld(), 'the bound aborts the in-flight git read').toBe(true);
     held.release();
     await held.drained();
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['e']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['frozen-check-unavailable']]);
     expect(readChangedTests(repoDir)).toBeNull();
     expect(engineApprovals(rig)).toEqual([]);
   });
@@ -2969,7 +2969,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readFileSync(held.log, 'utf8'), 'the held branch read is still in flight, not waited out on main').not.toMatch(/^end /m);
     expect(rig.view().autoGate?.deciding).toBe(true);
     rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS);
-    expect(letters(rig)).toEqual(['e']);
+    expect(letters(rig)).toEqual(['frozen-check-unavailable']);
     expect(rig.view().humanNeeded).toBe(true);
     expect(await held.endedWhileHeld(), 'the bound aborts the in-flight branch read').toBe(true);
     held.release();
@@ -2987,8 +2987,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     expect(await held.entered(), 'the approve-time frozen check reads git at the baseline').toBe(true);
     rig.clock.advanceBy(AUTO_GATE_DECISION_DEFAULT_MS);
-    expect([...letters(rig)].sort()).toEqual(['c', 'e']);
-    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['c', 'e']]);
+    expect([...letters(rig)].sort()).toEqual(['frozen-check-unavailable', 'interrupt-armed']);
+    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['frozen-check-unavailable', 'interrupt-armed']]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
     held.release();
     await held.drained();

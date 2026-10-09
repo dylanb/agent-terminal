@@ -4,7 +4,7 @@
 
 import yaml from 'js-yaml';
 import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
-import { AUTO_HALT_REASONS, autoHaltReasonLabel, isAutoHaltReason, type AutoHaltReason } from './gateAuthority';
+import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
 
 export interface AuditHeader {
@@ -492,6 +492,8 @@ export function gateDecisionKind(cmd: string): GateDecisionClass | null {
   return kind === undefined ? null : { family: 'gate', kind, option: head.option };
 }
 
+const haltToken = (r: AutoHaltReason): string => autoHaltLetter(r) ?? r;
+
 /** §27.9.1 N9b.9 — one engine-decided entry naming every halt reason that holds. The letters are a closed set
  *  and come first, never truncated; the untrusted details follow, neutralized and bounded (CWE-117). */
 export function autoHaltAuditCmd(reasons: { reason: AutoHaltReason; detail?: string }[]): string {
@@ -502,7 +504,7 @@ export function autoHaltAuditCmd(reasons: { reason: AutoHaltReason; detail?: str
       return detail === undefined ? autoHaltReasonLabel(r) : `${autoHaltReasonLabel(r)}: ${detail}`;
     })
     .join('; ');
-  return `§27 gate${ENGINE_MARK}${HALT_SLOT}${held.join(', ')} — ${stripStatusControlChars(tail).slice(0, GATE_DETAIL_MAX)}`;
+  return `§27 gate${ENGINE_MARK}${HALT_SLOT}${held.map(haltToken).join(', ')} — ${stripStatusControlChars(tail).slice(0, GATE_DETAIL_MAX)}`;
 }
 
 const HALT_RE = /^§27 gate \(engine-decided\) halted: ([a-z, -]*?) — /;
@@ -510,8 +512,8 @@ const HALT_RE = /^§27 gate \(engine-decided\) halted: ([a-z, -]*?) — /;
 export function parseAutoHaltReasons(cmd: string): AutoHaltReason[] | null {
   const m = HALT_RE.exec(cmd);
   if (m === null) return null;
-  const letters = m[1].split(', ');
-  return letters.every(isAutoHaltReason) ? letters : null;
+  const reasons = m[1].split(', ').map((t) => AUTO_HALT_REASONS.find((r) => haltToken(r) === t));
+  return reasons.every((r): r is AutoHaltReason => r !== undefined) ? reasons : null;
 }
 
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {

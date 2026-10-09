@@ -13,7 +13,7 @@ import { loopGateActionable } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
-import { autoHaltReasonLabel, failedEffectNotice } from '../../shared/gateAuthority';
+import { autoHaltLetter, autoHaltReasonLabel, failedEffectNotice } from '../../shared/gateAuthority';
 import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -362,7 +362,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       for (const { reason, detail } of ag.haltReasons) {
         const li = doc.createElement('li');
         li.dataset.autoHaltReason = reason;
-        const label = reason === 'stop-for-a-human' ? autoHaltReasonLabel(reason) : `(${reason}) ${autoHaltReasonLabel(reason)}`;
+        const letter = autoHaltLetter(reason);
+        const label = letter === null ? autoHaltReasonLabel(reason) : `(${letter}) ${autoHaltReasonLabel(reason)}`;
         li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
         halt.append(li);
       }

@@ -536,7 +536,7 @@ describe('autoGate — after a relaunch, the interrupt arm stays run-scoped (AC1
     expect(rig.gate.interruptArmed(rig.wt, STEP)).toBe(true);
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('c');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
     expect(readArmedInterrupt(rig.wt)).toBeNull();
     expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
   });
@@ -588,7 +588,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(rig.approvals).toEqual([]);
     const v = rig.view();
     expect(v.humanNeeded).toBe(true);
-    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
     expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
   });
 
@@ -623,7 +623,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch();
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('i');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('failed-effect');
   });
   it('a failed-effect marker set before the relaunch, on a run that ends with no further gate, is reported at the run end: one (i) entry and one emission (AC13, N9b.5(d))', async () => {
     const before = makeRig({ approveThrows: () => true });
@@ -634,7 +634,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch();
     await flush();
     expect(rig.view().autoGate?.failedEffect?.state).toBe('set');
-    const iEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('i')).length;
+    const iEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('failed-effect')).length;
     const iBeforeEnd = iEntries();
     rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
     expect(iEntries()).toBe(iBeforeEnd + 1);
@@ -650,7 +650,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch();
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('a');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('needs-a-human');
   });
 
   it('a failed turn Accepted before the relaunch halts the clean `auto` gate after it with (b), and the run keeps one (b) entry', async () => {
@@ -661,8 +661,8 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch();
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('b');
-    const bEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('b'));
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('loop-error');
+    const bEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('loop-error'));
     expect(bEntries).toHaveLength(1);
   });
 
@@ -671,7 +671,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(before.flowStart(before.wt).status).toBe('in_progress');
     writeGateRunState(before.wt, {
       run: { flow: 'Another Flow', startedAt: T0 - 60_000 },
-      loopRun: { step: STEP, endedInError: true, acceptedFailure: true, needsAHuman: true, recorded: ['b'] },
+      loopRun: { step: STEP, endedInError: true, acceptedFailure: true, needsAHuman: true, recorded: ['loop-error'] },
       failedEffect: { state: 'set', detail: 'another run failed', reported: false },
       relaunchHalt: null,
     });
@@ -680,8 +680,8 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     await rig.reachGate('clean');
     const v = rig.view();
     expect(v.autoGate?.failedEffect).toBeUndefined();
-    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['b']));
-    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['i']));
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['loop-error']));
+    expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toEqual(expect.arrayContaining(['failed-effect']));
   });
 
   it('a gate of the same step and turn at a later round than a persisted (j) halt writes its own (j) entry at the next relaunch (AC15(ii))', async () => {
@@ -696,7 +696,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = first.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(2);
   });
 
@@ -732,9 +732,9 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = first.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(1);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
   });
 
   it('once a human decides the (j) gate, the run\'s next clean `auto` gate is engine-approved with no further (j) (AC15(i))', async () => {
@@ -744,14 +744,14 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
 
     const rig = before.relaunch();
     await flush();
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
     const runners = composeHumanDecisionRunners(rig.gate, { decide: async () => true, advance: (k: string) => k, currentStep: () => STEP });
     await runners.decide(rig.wt, STEP, TURN, 'request-changes', 'note');
 
     rig.gate.beginLoopRun(rig.wt, STEP);
     await rig.reachGate('clean');
     expect(rig.approvals.map((a) => [a.step, a.decider])).toEqual([[STEP, 'engine']]);
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(1);
   });
 
@@ -765,11 +765,11 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
     const reasons = rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? [];
-    expect(reasons).toContain('b');
-    expect(reasons).not.toContain('j');
+    expect(reasons).toContain('loop-error');
+    expect(reasons).not.toContain('relaunched');
     const halts = engineHalts(rig.gateEntries(T0)) ?? [];
-    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('b'))).toHaveLength(1);
-    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'))).toEqual([]);
+    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('loop-error'))).toHaveLength(1);
+    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'))).toEqual([]);
   });
 
   it('an `error` stop persisted before the relaunch of an `auto` run is not a reached gate: the rebuild writes no (j) and the next clean gate halts with one (b) (AC15(ii), N9b.9)', async () => {
@@ -782,14 +782,14 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    expect((engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'))).toEqual([]);
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toContain('j');
+    expect((engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'))).toEqual([]);
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).not.toContain('relaunched');
 
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
     const halts = engineHalts(rig.gateEntries(T0)) ?? [];
-    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('b'))).toHaveLength(1);
-    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'))).toEqual([]);
+    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('loop-error'))).toHaveLength(1);
+    expect(halts.filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'))).toEqual([]);
   });
 
   it('a gate halted with (j) after the relaunch, whose next round in the same loop run halts again, writes an entry for that later halt (N9b.9)', async () => {
@@ -818,7 +818,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = first.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(2);
   });
 
@@ -833,7 +833,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = first.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(2);
   });
 
@@ -848,9 +848,9 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
       expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
       await flush();
       expect(rig.errors.some((e) => e.includes('gate state could not be saved'))).toBe(true);
-      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toEqual(expect.arrayContaining(['j', 'h']));
-      const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
-      expect(jEntries.map((c) => parseAutoHaltReasons(c))).toEqual([expect.arrayContaining(['j', 'h'])]);
+      expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toEqual(expect.arrayContaining(['relaunched', 'engine-input-missing']));
+      const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
+      expect(jEntries.map((c) => parseAutoHaltReasons(c))).toEqual([expect.arrayContaining(['relaunched', 'engine-input-missing'])]);
     } finally {
       chmodSync(loopDir, 0o755);
     }
@@ -868,7 +868,7 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = first.relaunch();
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(1);
   });
 
@@ -880,8 +880,8 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const rig = before.relaunch({ runInProgressAtThrows: true });
     expect(rig.gate.isAutoRun(rig.wt)).toBe(true);
     await flush();
-    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('j');
-    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('j'));
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
+    const jEntries = (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('relaunched'));
     expect(jEntries).toHaveLength(1);
   });
 
@@ -911,15 +911,15 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     const v = rig.view();
     expect(v.autoGate?.failedEffect?.state).toBe('unknown');
     const shown = v.autoGate?.haltReasons.map((r) => r.reason) ?? [];
-    expect(shown).toContain('h');
-    expect(shown).not.toContain('i');
-    expect(v.autoGate?.haltReasons.find((r) => r.reason === 'h')?.detail).toBe('the run\'s gate state could not be read');
+    expect(shown).toContain('engine-input-missing');
+    expect(shown).not.toContain('failed-effect');
+    expect(v.autoGate?.haltReasons.find((r) => r.reason === 'engine-input-missing')?.detail).toBe('the run\'s gate state could not be read');
 
-    const hEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('h')).length;
+    const hEntries = (): number => (engineHalts(rig.gateEntries(T0)) ?? []).filter((c) => (parseAutoHaltReasons(c) ?? []).includes('engine-input-missing')).length;
     const hBeforeEnd = hEntries();
     rig.gate.flowTransitioned(rig.wt, { stepName: 'next', status: 'in_progress' });
     const letters = (engineHalts(rig.gateEntries(T0)) ?? []).flatMap((c) => parseAutoHaltReasons(c) ?? []);
-    expect(letters).not.toContain('i');
+    expect(letters).not.toContain('failed-effect');
     expect(hEntries()).toBe(hBeforeEnd + 1);
     expect(rig.errors).toEqual(['A gate side-effect may have failed earlier in this run: the run\'s gate state could not be read']);
   });
