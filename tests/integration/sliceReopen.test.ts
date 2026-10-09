@@ -34,7 +34,7 @@ describe('reopenSliceTransition', () => {
   });
 
   it('records no decision when the flow has no slice start step', () => {
-    const { landed, log } = harness({ status: 'in_progress', stepName: 'green' }, { status: 'in_progress', stepName: 'green' }, null);
+    const { landed, log } = harness({ status: 'in_progress', stepName: 'green' }, { status: 'in_progress', stepName: 'red' }, null);
     expect(landed).toBe(false);
     expect(log).not.toContain('decision');
   });
