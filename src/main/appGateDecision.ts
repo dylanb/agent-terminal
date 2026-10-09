@@ -39,7 +39,7 @@ export interface AppGateDecisionDeps {
    *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
-  advanceFlow(repoDir: string, step?: string): void;
+  advanceFlow(repoDir: string, step: string): void;
   /** §28.4.1 — on an approve, resolve the impl-slice count from the plan-bundle's slice-plan into the `slices`
    *  flow input the refactor loop-back reads (§28.4.1). Data-driven: the composition root reads the count
    *  only when `def` declares the plan artifact (the plan-bundle's contract), so a non-plan-bundle approve is a
@@ -125,7 +125,7 @@ export type ApproveClaim = { ok: true } | { ok: false; abandoned: true } | { ok:
 
 export type ApproveDecider =
   | { kind: 'human' }
-  | { kind: 'engine'; boundLoop: string; humanAttempted(): boolean; claimAccept(): ApproveClaim; checkDef(r: LoopDefV2Result): string | null };
+  | { kind: 'engine'; boundLoop: string; humanAttempted(): boolean; claimAccept(): ApproveClaim };
 
 export const HUMAN_DECIDER: ApproveDecider = { kind: 'human' };
 
@@ -255,10 +255,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
 
   const r = deps.resolveDef(repoDir, run.loop);
   if (!r.ok) return { kind: 'refused', reason: r.reason };
-  if (decider.kind === 'engine') {
-    const defRefusal = decider.checkDef(r);
-    if (defRefusal !== null) return { kind: 'refused', reason: defRefusal };
-  }
   // AC9
   const gateOpt = r.def.gate.find((g) => g.option === option);
   if (!gateOpt) return { kind: 'refused', reason: 'the def declares no approve option' };
@@ -400,6 +396,6 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
 /** §27.9.1 — the approve's advance, scoped to the step it decided: a no-op once the flow has left `step`. */
 export function stepScopedAdvance(currentStep: (repoDir: string) => string | null, advance: (repoDir: string) => void): AppGateDecisionDeps['advanceFlow'] {
   return (repoDir, step) => {
-    if (step === undefined || currentStep(repoDir) === step) advance(repoDir);
+    if (currentStep(repoDir) === step) advance(repoDir);
   };
 }

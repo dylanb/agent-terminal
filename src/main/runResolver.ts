@@ -44,8 +44,3 @@ const catalogEntryFor =
 export function createBoundSourceLoader(globalDir: string): (worktree: string, binding: DispositionRead) => FlowLoad {
   return (worktree, binding) => resolveBoundSource(binding, catalogEntryFor(worktree, globalDir), worktree, globalDir).load;
 }
-
-/** §27.9.1 N9b.2(c) — a begun run's recorded binding re-resolved with its trust, through the same seams. */
-export function createBoundSourceResolver(globalDir: string): (worktree: string, binding: DispositionRead) => ResolvedRunDefinition {
-  return (worktree, binding) => resolveBoundSource(binding, catalogEntryFor(worktree, globalDir), worktree, globalDir);
-}

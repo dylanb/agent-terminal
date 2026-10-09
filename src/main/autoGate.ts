@@ -41,7 +41,7 @@ export interface AutoGateDeps {
   runInProgressAt: (repoDir: string, step: string) => boolean;
   onViewChanged: (repoKey: string) => void;
   /** §27.9.1 N9b.5(d) — the run-end report of a failed effect. */
-  emitError?: (repoDir: string, reason: string) => void;
+  emitError: (repoDir: string, reason: string) => void;
   setTimer: (cb: () => void, ms: number) => AutoGateTimer;
   clearTimer: (handle: AutoGateTimer) => void;
   decisionBoundMs: number;
@@ -153,7 +153,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       run.stateUnsaved = false;
     } catch (e) {
       run.stateUnsaved = true;
-      bestEffort(() => deps.emitError?.(repoDir, `The run's gate state could not be saved: ${errMsg(e)}`));
+      bestEffort(() => deps.emitError(repoDir, `The run's gate state could not be saved: ${errMsg(e)}`));
     }
   };
 
@@ -178,7 +178,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
 
   const consumeOrReport = (repoDir: string): void => {
     const failed = consume(repoDir);
-    if (failed !== null) bestEffort(() => deps.emitError?.(repoDir, failed));
+    if (failed !== null) bestEffort(() => deps.emitError(repoDir, failed));
   };
 
   const clearFailedAt = (run: AutoRun, step: string): boolean =>
@@ -208,7 +208,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (marker === null || marker.reported || run.humanDecisions > 0) return;
     marker.reported = true;
     persist(repoDir, run);
-    bestEffort(() => deps.emitError?.(repoDir, failedEffectNotice(marker.state, marker.detail)));
+    bestEffort(() => deps.emitError(repoDir, failedEffectNotice(marker.state, marker.detail)));
     bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'i' : 'h', detail: marker.detail }]), 0));
   };
 
@@ -220,7 +220,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     return at >= 0 && run.steps.slice(at).every((s) => s.kind !== 'loop');
   };
 
-  /** §27.9.1 N9b.6 (a)–(j) */
+  /** §27.9.1 N9b.6(a)–(c), (h)–(i) */
   const evaluate = (repoDir: string, run: AutoRun, step: string, cause: GateCause): Reason[] => {
     const reasons: Reason[] = [];
     const lr = run.loopRun !== null && run.loopRun.step === step ? run.loopRun : null;
@@ -407,7 +407,6 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       boundLoop: bound.loop,
       humanAttempted: () => d.humanAttempted,
       claimAccept: () => claim(repoDir, run, d),
-      checkDef: (r) => checkDef(r),
     };
     d.approveStarted = true;
     let pending: Promise<GateApproveOutcome>;
@@ -439,11 +438,6 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (arm === 'unreadable') return { ok: false, reasons: ['h'] };
     d.claimed = true;
     return { ok: true };
-  };
-
-  /** §27.9.1 N9b.5(c) */
-  const checkDef = (r: LoopDefV2Result): string | null => {
-    return r.ok ? null : r.reason;
   };
 
   const buildRun = (start: StartRun, identity: RunIdentity): AutoRun => {

@@ -87,6 +87,7 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
       currentRun: () => null,
       runInProgressAt: () => true,
       onViewChanged: () => {},
+      emitError: () => {},
       setTimer: () => ({ id: 0 }),
       clearTimer: () => {},
       decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,

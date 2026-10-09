@@ -531,17 +531,17 @@ export function readSliceBrief(repoDir: string): SliceBrief | null {
 // (CWE-20): a non-object-id sha or blank branch is never persisted/read as a baseline.
 const BASELINE_COMMIT_FILE = 'baseline-commit.yaml';
 
-/** Record `sha` (the phase commit) under `branch` — read by the next phase's frozen check (§28.5.1). A blank
- *  branch, the detached-HEAD sentinel `HEAD`, or a non-object-id sha is inert (never a phantom or garbage
- *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
- *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
- *  filesystem error never aborts the accept. */
 /** §28.5.1 */
 export interface PhaseBaseline {
   branch: string;
   sha: string;
 }
 
+/** Record `sha` (the phase commit) under `branch` — read by the next phase's frozen check (§28.5.1). A blank
+ *  branch, the detached-HEAD sentinel `HEAD`, or a non-object-id sha is inert (never a phantom or garbage
+ *  baseline, CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the
+ *  run-state writer's fail-loud contract; the caller (§28 approve side-effect) MUST wrap it best-effort so a
+ *  filesystem error never aborts the accept. */
 export function recordBaselineCommit(repoDir: string, branch: string, sha: string): PhaseBaseline | null {
   // §28.5.1 — `HEAD` is what `rev-parse --abbrev-ref HEAD` yields on a detached commit; refuse it like a blank
   // branch so the write mirrors currentGitBranch's HEAD→null read (one detached-sentinel rule, not two copies).

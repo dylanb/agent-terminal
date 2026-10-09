@@ -9,7 +9,7 @@ import { type AutoGate, type AutoGateDeps, type StartRun } from './autoGate';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2Result } from './loopDefV2';
 import type { LoopBinding } from '../shared/loopNamespace';
 import { markedBindingRefusal, type GateDecisionRun } from './gateDecisionGuard';
-import { createBoundSourceResolver } from './runResolver';
+import { createBoundSourceLoader } from './runResolver';
 import { createFlowStateStore } from './flowState';
 import { readRunBinding } from './runDisposition';
 
@@ -88,12 +88,12 @@ export function composeLifecycleEndRun(autoGate: AutoGate): (repoKey: string) =>
 }
 
 export function composeCurrentRun(globalRoot: string): AutoGateDeps['currentRun'] {
-  const resolveBound = createBoundSourceResolver(globalRoot);
+  const loadBound = createBoundSourceLoader(globalRoot);
   return (repoDir) => {
     const binding = readRunBinding(repoDir);
     if (binding === null) return null;
-    const r = resolveBound(repoDir, binding);
-    return r.load.ok ? { definition: r.load.definition, binding } : null;
+    const load = loadBound(repoDir, binding);
+    return load.ok ? { definition: load.definition, binding } : null;
   };
 }
 

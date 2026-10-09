@@ -166,8 +166,6 @@ export interface LoopDefV2 {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefTier = 'repo' | 'operator' | 'app-bundled';
-
 export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string } | { ok: false; reason: string };
 
 export interface LoopDefV2Context {
@@ -432,7 +430,7 @@ interface DefCandidate {
   tierRoot: string;
   defDir: string;
   defPath: string;
-  tierName: LoopDefTier;
+  tierName: string;
   jail: string;
 }
 

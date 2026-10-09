@@ -5,8 +5,7 @@
 import { isHumanNeededStatus } from '../../shared/loopStatus';
 import type { FlowLoopView } from '../../shared/ipc';
 
-/** The loop view a tone is read from: a bare status, or the view itself so a view carrying `autoGate`
- *  takes its `await` tone from `humanNeeded` (§27.9.1 N9b.5(e)). */
+/** §27.9.1 N9b.5(e) */
 export type ToneSource = string | Pick<FlowLoopView, 'status' | 'humanNeeded' | 'autoGate'>;
 
 export type SpillTone = 'await' | 'work' | 'settle';

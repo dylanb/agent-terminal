@@ -1570,6 +1570,7 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       currentRun: () => current,
       runInProgressAt: () => true,
       onViewChanged: () => {},
+      emitError: () => {},
       setTimer: (cb, ms) => clock.setTimer(cb, ms),
       clearTimer: (h) => clock.clearTimer(h),
       decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
@@ -1713,8 +1714,6 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
     expect(v.autoGate?.deciding).toBe(false);
     expectLetterShown(v, 'l');
   });
-
-  // Plan S1 `checkDef`: the decider is built from the resolution held at Start, so an edit after Start is refused.
 
   // Plan AC13 row (S4 (l)), through the real `runAppApprove`.
   it('a `persistAccept` that throws: (l) naming the failure, one engine-marked `accept-failed` entry, and no second attempt once timers advance', async () => {

@@ -954,9 +954,6 @@ async function createWindow(): Promise<void> {
     onViewChanged: () => pushFlowChanged(),
   });
 
-  // §27.9/§27.13 / N5 — composition root for the §27 gate decision. Returns the request-changes
-  // delivered/dropped result so the two-way flow:appRequestChanges caller can hold the composer open on a
-  // drop (approve goes through the one-way channel and ignores the result).
   // One deps factory for both deciders' approve (§27.9.1 N9b.5(c)): the gh and commit ports bind their worktree at
   // construction, so each decision gets its own.
   const approveDepsFor = (repoKey: string): AppGateDecisionDeps => ({
@@ -1023,6 +1020,8 @@ async function createWindow(): Promise<void> {
       return epicPromotionCoordinator.maybeBegin(repoDir, def, def.name, step, turnKey, { epic: gateRefs.ticket, pr: gateRefs.pr }, decider);
     },
   });
+  // §27.9/§27.13 / N5 — the request-changes delivered/dropped result lets the two-way flow:appRequestChanges
+  // caller hold the composer open on a drop.
   const runAppGateDecisionRaw = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
     runAppGateDecisionImpl(repoKey, step, turnKey, option, approveDepsFor(repoKey), note);
 

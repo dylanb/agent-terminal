@@ -833,7 +833,7 @@ describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9
     ['an epic preview', { maybeBeginEpicPromotion: () => ({ kind: 'preview-raised' }) }, [['§28 gate approve epic-promotion preview raised', 0]]],
   ];
   const entries = (rec: Recorder): [string, number | null][] => rec.audits.map((a) => [a.cmd, a.exit]);
-  const engineDecider = (loop: string): ApproveDecider => ({ kind: 'engine', boundLoop: loop, humanAttempted: () => false, claimAccept: () => ({ ok: true }), checkDef: () => null });
+  const engineDecider = (loop: string): ApproveDecider => ({ kind: 'engine', boundLoop: loop, humanAttempted: () => false, claimAccept: () => ({ ok: true }) });
 
   it.each(SCENARIOS)('pinning: a human approve with %s writes its pre-#137 entries', async (_name, over, literals) => {
     const { deps, rec } = mkDeps(over);
@@ -896,17 +896,10 @@ describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9
     noEffect(rec);
   });
 
-  it('refuses before any effect when the def check fails', async () => {
-    const { deps, rec } = mkDeps({ maybeBeginEpicPromotion: () => ({ kind: 'preview-raised' }) });
-    const decider: ApproveDecider = { ...engineDecider('plan-loop'), checkDef: () => 'the def changed since Start' } as ApproveDecider;
-    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, decider)).resolves.toEqual({ kind: 'refused', reason: expect.stringContaining('the def changed since Start') });
-    noEffect(rec);
-  });
-
   it.each([
     ['abandoned', { ok: false, abandoned: true }, { kind: 'abandoned' }],
     ['run-ended', { ok: false, runEnded: true }, { kind: 'run-ended' }],
-    ['refused-late', { ok: false, reasons: ['c', 'g'] }, { kind: 'refused-late', reasons: ['c', 'g'] }],
+    ['refused-late', { ok: false, reasons: ['c', 'h'] }, { kind: 'refused-late', reasons: ['c', 'h'] }],
   ] as const)('a refused accept claim returns %s and persists nothing', async (_name, claim, outcome) => {
     const { deps, rec } = mkDeps({});
     const decider: ApproveDecider = { ...engineDecider('plan-loop'), claimAccept: () => claim } as ApproveDecider;
@@ -955,7 +948,7 @@ describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
 
   it.each([
     ['human', (): ApproveDecider => ({ kind: 'human' })],
-    ['engine', (): ApproveDecider => ({ kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }), checkDef: () => null })],
+    ['engine', (): ApproveDecider => ({ kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) })],
   ] as const)('the %s approve of step N whose flow a manual Advance moved to N+1 mid-effects ends at N+1, entered once', async (_name, decider) => {
     const wt = fx.makeWorktree('step-scoped-advance');
     fx.writeFlowHome(wt, { name: 'scoped', stepIds: ['plan', 'next', 'after'] });

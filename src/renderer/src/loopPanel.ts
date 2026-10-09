@@ -518,8 +518,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         body.append(section);
       }
 
-      // §27.9.1 N9b.5(e)/N9b.6 — the engine deciding an `auto` gate, and every reason it halted for. Every string
-      // reaches the DOM through textContent only (CWE-79): the gate's approve button sits beside it.
+      // §27.9.1 N9b.5(e), N9b.6
       if (loop.autoGate) {
         const ag = loop.autoGate;
         if (ag.deciding) {

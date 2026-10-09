@@ -392,36 +392,28 @@ export type GateDecider = 'human' | 'engine';
 
 const ENGINE_MARK = ' (engine-decided)';
 
+const GATE_KIND_SHAPE: Record<GateDecisionAuditKind, { section: '§27' | '§28'; tail: string; detail: boolean }> = {
+  'decision': { section: '§27', tail: '', detail: false },
+  'decision-dropped': { section: '§27', tail: ' dropped: ', detail: true },
+  'side-effect': { section: '§27', tail: ' side-effect: ', detail: true },
+  'side-effect-skipped': { section: '§27', tail: ' side-effect skipped: ', detail: true },
+  'side-effect-failed': { section: '§27', tail: ' side-effect failed: ', detail: true },
+  'accept-failed': { section: '§27', tail: ' accept failed: ', detail: true },
+  'clear-polish-failed': { section: '§27', tail: ' clear-polish failed: ', detail: true },
+  'baseline-record-failed': { section: '§27', tail: ' baseline-record failed: ', detail: true },
+  'source-slices-failed': { section: '§28', tail: ' source-slices failed: ', detail: true },
+  'clear-brief-failed': { section: '§28', tail: ' clear-brief failed: ', detail: true },
+  'epic-promotion-preview': { section: '§28', tail: ' epic-promotion preview raised', detail: false },
+};
+
 export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: GateDecisionOption, detail: string | undefined, decider: GateDecider): string {
   // The detail can carry untrusted content (a def-supplied side-effect action / commit phase label), so it
   // is neutralized before it lands in the append-only §25 stream — the same CWE-117 treatment loopStatus
   // mandates for every human-facing sink and notifyFailedEvent already applies.
   const d = detail === undefined ? '' : stripStatusControlChars(detail).slice(0, GATE_DETAIL_MAX);
   const head = (section: '§27' | '§28'): string => `${section} gate ${option}${decider === 'engine' ? ENGINE_MARK : ''}`;
-  switch (kind) {
-    case 'decision':
-      return head('§27');
-    case 'decision-dropped':
-      return `${head('§27')} dropped: ${d}`;
-    case 'side-effect':
-      return `${head('§27')} side-effect: ${d}`;
-    case 'side-effect-skipped':
-      return `${head('§27')} side-effect skipped: ${d}`;
-    case 'side-effect-failed':
-      return `${head('§27')} side-effect failed: ${d}`;
-    case 'accept-failed':
-      return `${head('§27')} accept failed: ${d}`;
-    case 'clear-polish-failed':
-      return `${head('§27')} clear-polish failed: ${d}`;
-    case 'baseline-record-failed':
-      return `${head('§27')} baseline-record failed: ${d}`;
-    case 'source-slices-failed':
-      return `${head('§28')} source-slices failed: ${d}`;
-    case 'clear-brief-failed':
-      return `${head('§28')} clear-brief failed: ${d}`;
-    case 'epic-promotion-preview':
-      return `${head('§28')} epic-promotion preview raised`;
-  }
+  const shape = GATE_KIND_SHAPE[kind];
+  return `${head(shape.section)}${shape.tail}${shape.detail ? d : ''}`;
 }
 
 /** §28.7 — the epic coordinator's own gate entries. Only a human click writes a confirm or a decline. */
@@ -456,17 +448,6 @@ const OPTION_RE = new RegExp(`^(?:${OPTION_ALT})(?= |$)`);
 const GATE_PREFIX_RE = /^(§2[78]) gate /;
 const EPIC_HEAD_RE = /^§28 epic-promotion( \(engine-decided\))?(?= |$)/;
 
-const GATE_KIND_TAILS: [GateDecisionAuditKind, '§27' | '§28', string][] = [
-  ['decision-dropped', '§27', ' dropped: '],
-  ['side-effect-skipped', '§27', ' side-effect skipped: '],
-  ['side-effect-failed', '§27', ' side-effect failed: '],
-  ['side-effect', '§27', ' side-effect: '],
-  ['accept-failed', '§27', ' accept failed: '],
-  ['clear-polish-failed', '§27', ' clear-polish failed: '],
-  ['baseline-record-failed', '§27', ' baseline-record failed: '],
-  ['source-slices-failed', '§28', ' source-slices failed: '],
-  ['clear-brief-failed', '§28', ' clear-brief failed: '],
-];
 const HALT_SLOT = ' halted: ';
 
 function gateHead(cmd: string): { section: string; option?: GateDecisionOption; engine: boolean; rest: string } | null {
@@ -504,11 +485,11 @@ export function gateDecisionKind(cmd: string): GateDecisionClass | null {
   const head = gateHead(cmd);
   if (head === null) return null;
   if (head.option === undefined) return head.engine && head.section === '§27' && head.rest.startsWith(HALT_SLOT) ? { family: 'gate', kind: 'auto-halt' } : null;
-  const option = head.option;
-  if (head.rest === '' && head.section === '§27') return { family: 'gate', kind: 'decision', option };
-  if (head.rest === ' epic-promotion preview raised' && head.section === '§28') return { family: 'gate', kind: 'epic-promotion-preview', option };
-  const tail = GATE_KIND_TAILS.find(([, section, t]) => section === head.section && head.rest.startsWith(t));
-  return tail === undefined ? null : { family: 'gate', kind: tail[0], option };
+  const kind = (Object.keys(GATE_KIND_SHAPE) as GateDecisionAuditKind[]).find((k) => {
+    const shape = GATE_KIND_SHAPE[k];
+    return shape.section === head.section && (shape.detail ? head.rest.startsWith(shape.tail) : head.rest === shape.tail);
+  });
+  return kind === undefined ? null : { family: 'gate', kind, option: head.option };
 }
 
 /** §27.9.1 N9b.9 — one engine-decided entry naming every halt reason that holds. The letters are a closed set
