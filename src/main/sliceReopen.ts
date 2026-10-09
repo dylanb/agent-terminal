@@ -12,6 +12,8 @@ export interface SliceReopenPorts<V extends SliceReopenView> {
   record(pre: V, after: V): void;
 }
 
+// §28.4.2 / §25 — `reopened` fires before `record` so the human decision entry lands in the gate's step window;
+// recording the re-entry first would attribute the decision to RED's.
 export function reopenSliceTransition<V extends SliceReopenView>(ports: SliceReopenPorts<V>, reopened: () => void): boolean {
   const pre = ports.state();
   if (pre.status !== 'in_progress') return false;

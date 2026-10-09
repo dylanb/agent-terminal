@@ -912,11 +912,10 @@ async function createWindow(): Promise<void> {
     recordFlowTransition(repoKey, 'advance', pre, view);
   };
 
-  // §28.4.2 — the human back-to-red gate control's flow half: reopen the current slice's RED step. A BACKWARD
-  // re-entry, so it borrows `undo`'s transition identity — its §25 diff (a step.entered back at RED) is the only
-  // observable, and no distinct kind is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind
-  // would be untestable vocabulary. Run inside inTransition so the RED step's entry actions re-fire. Mirrors
-  // autoAdvanceFlow: a void engine-driven transition whose view push is the caller's onViewChanged, not this.
+  // §28.4.2 — the human back-to-red gate control's flow half. A BACKWARD re-entry, so it borrows `undo`'s
+  // transition identity — its §25 diff (a step.entered back at RED) is the only observable, and no distinct kind
+  // is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind would be untestable vocabulary.
+  // The view push is the caller's onViewChanged, not this.
   const reopenSliceFlow = (repoKey: string, reopened: () => void): boolean =>
     reopenSliceTransition(
       {
