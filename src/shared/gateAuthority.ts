@@ -27,6 +27,14 @@ export function autoHaltReasonLabel(reason: AutoHaltReason): string {
   return AUTO_HALT_LABELS[reason];
 }
 
+// §27.9.1 N9b.5(d) / N9b.6(h)–(i)
+export type FailedEffectState = 'set' | 'unknown';
+
+export function failedEffectNotice(state: FailedEffectState, detail: string): string {
+  const lead = state === 'set' ? 'A gate side-effect failed earlier in this run' : 'A gate side-effect may have failed earlier in this run';
+  return `${lead}: ${detail}`;
+}
+
 export function isAutoHaltReason(v: string): v is AutoHaltReason {
   return (AUTO_HALT_REASONS as readonly string[]).includes(v);
 }

@@ -903,12 +903,12 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     return before.relaunch();
   }
 
-  it('a gate state that cannot be read at the relaunch is (h) with the marker shown as set: no (i) at the gate, and no (i) entry at the run end', async () => {
+  it('a gate state that cannot be read at the relaunch is (h) with the marker shown as unknown: no (i) at the gate, and no (i) entry at the run end', async () => {
     const rig = relaunchOverUnreadableState();
     await rig.reachGate('clean');
     expect(rig.approvals).toEqual([]);
     const v = rig.view();
-    expect(v.autoGate?.failedEffect?.state).toBe('set');
+    expect(v.autoGate?.failedEffect?.state).toBe('unknown');
     const shown = v.autoGate?.haltReasons.map((r) => r.reason) ?? [];
     expect(shown).toContain('h');
     expect(shown).not.toContain('i');

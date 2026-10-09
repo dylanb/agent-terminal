@@ -49,8 +49,9 @@ export interface AppGateDecisionDeps {
   /** §28.4.2 — the human back-to-red control: re-enter the current slice's RED step, preserving the slice
    *  count (a domain port the composition root wires to flow.reopenSlice inside a §25 transition). Like the
    *  redo/polish family it is NOT approve — no accept, no advance — the flow jumps back and RED re-runs.
-   *  Returns whether the flow is now back at RED. */
-  reopenSlice(repoDir: string): boolean;
+   *  Returns whether the flow is now back at RED. `reopened` runs once the flow is back at RED and before the
+   *  re-entry is recorded (§25), so the decision entry lands in the gate's step window, not RED's. */
+  reopenSlice(repoDir: string, reopened: () => void): boolean;
   /** §28.4.2 — persist the operator's brief for the slice about to be reopened (the composition root keys it to
    *  the current slice). Throws when it cannot be written; the executor then does not reopen. */
   recordSliceBrief(repoDir: string, fromStep: string, text: string): void;
@@ -217,13 +218,11 @@ export async function runAppGateDecision(
     let reopened = false;
     let failure = 'the flow is not at a step that can return to RED';
     try {
-      reopened = deps.reopenSlice(repoDir);
+      reopened = deps.reopenSlice(repoDir, () => humanAudit('decision', 0));
     } catch (e) {
       failure = e instanceof Error ? e.message : String(e);
     }
-    if (reopened) {
-      humanAudit('decision', 0);
-    } else {
+    if (!reopened) {
       if (brief !== undefined) deps.clearSliceBrief(repoDir);
       deps.emitError(`could not reopen the slice: ${failure}`);
     }

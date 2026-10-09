@@ -124,9 +124,10 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
-    reopenSlice: (repoDir) => {
+    reopenSlice: (repoDir, reopened) => {
       rec.reopens.push(repoDir);
       rec.order.push('reopen');
+      reopened();
       return true;
     },
     recordSliceBrief: (repoDir, fromStep, text) => {
@@ -517,6 +518,29 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
     expect(rec.advances).toEqual([]); // it goes BACKWARD, never advances off the step
     expect(rec.audits.some((a) => a.cmd.includes('back-to-red') && a.exit === 0)).toBe(true);
     expect(rec.views).toBeGreaterThan(0); // the view refreshes so the operator sees the flow back at RED
+  });
+
+  // §25 — the decision belongs to the GREEN gate it was made at, so it precedes the RED re-entry it caused.
+  it('records the back-to-red decision once the slice has reopened and before the RED re-entry is recorded', async () => {
+    const log: string[] = [];
+    const { deps } = mkDeps({
+      run: GREEN_RUN,
+      gate: BACK_TO_RED_GATE,
+      audit: (_r, cmd) => void log.push(cmd),
+      reopenSlice: (_repoDir, reopened) => {
+        reopened();
+        log.push('step.entered red');
+        return true;
+      },
+    });
+    await expect(atGreen(deps)).resolves.toBe(true);
+    expect(log).toEqual([gateDecisionAuditCmd('decision', 'back-to-red', undefined, 'human'), 'step.entered red']);
+  });
+
+  it('records no back-to-red decision when the reopen does not land', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE, reopenSlice: () => false });
+    await expect(atGreen(deps)).resolves.toBe(false);
+    expect(rec.audits.filter((a) => a.cmd.includes('back-to-red'))).toEqual([]);
   });
 
   it('is inert when the bound def does not declare back-to-red (validated at the operation, AC9)', async () => {

@@ -5,6 +5,7 @@ steps:
     kind: manual
   - id: groom
     kind: loop
+    gate_authority: auto
     loop: groom-loop
     loop_namespace: app
     todo_template: ticket-grooming
@@ -14,11 +15,13 @@ steps:
         required: true
   - id: plan-bundle
     kind: loop
+    gate_authority: human
     loop: plan-bundle-loop
     loop_namespace: app
     todo_template: plan-loop-review
   - id: infra
     kind: loop
+    gate_authority: auto
     loop: infra-loop
     loop_namespace: app
     todo_template: impl-loop-review
@@ -28,16 +31,19 @@ steps:
   # prior behavior — so the directive is inert, never a broken multi-slice chain.
   - id: red
     kind: loop
+    gate_authority: auto
     loop: red-loop
     loop_namespace: app
     todo_template: impl-loop-review
   - id: green
     kind: loop
+    gate_authority: auto
     loop: green-loop
     loop_namespace: app
     todo_template: impl-loop-review
   - id: refactor
     kind: loop
+    gate_authority: auto
     loop: refactor-loop
     loop_namespace: app
     todo_template: impl-loop-review
@@ -46,6 +52,7 @@ steps:
       count_input: slices
   - id: integration-slice
     kind: loop
+    gate_authority: human
     loop: integration-slice-loop
     loop_namespace: app
     todo_template: impl-loop-review

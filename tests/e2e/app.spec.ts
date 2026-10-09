@@ -7167,6 +7167,23 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
       { timeout: 15_000 },
     )
     .toBeGreaterThanOrEqual(2);
+  // §25 — the human back-to-red decision is recorded in the GREEN gate's step window, and not in the RED it reopened.
+  const humanBackToRed = (step: string): number =>
+    auditRunFiles(home, repo).reduce(
+      (n, f) =>
+        n +
+        stepWindowEvents(readAuditRun(home, repo, f).events, step).filter(
+          (e) =>
+            e.type === 'command' &&
+            e.source === 'gate' &&
+            gateDecisionKind(e.cmd)?.kind === 'decision' &&
+            gateDecisionDecider(e.cmd) === 'human' &&
+            e.cmd.includes('back-to-red'),
+        ).length,
+      0,
+    );
+  await expect.poll(() => humanBackToRed('green'), { timeout: 15_000 }).toBe(1);
+  expect(humanBackToRed('red')).toBe(0);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

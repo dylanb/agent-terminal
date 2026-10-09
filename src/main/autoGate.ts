@@ -4,7 +4,7 @@ import type { ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import type { FlowAutoGateView } from '../shared/ipc';
 import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
-import type { AutoHaltReason } from '../shared/gateAuthority';
+import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
@@ -110,7 +110,7 @@ interface AutoRun {
   steps: FlowDefinition['steps'];
   bound: Map<string, { authority: 'auto' | 'human'; loop: string }>;
   loopRun: LoopRun | null;
-  failedEffect: { state: 'set' | 'unknown'; detail: string; reported: boolean } | null;
+  failedEffect: { state: FailedEffectState; detail: string; reported: boolean } | null;
   relaunchHalt: RelaunchHalt | null;
   gateSeq: number;
   pendingGate: (GateKey & { verdict: ConsolidatorVerdict; cause: GateCause }) | null;
@@ -208,8 +208,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     if (marker === null || marker.reported || run.humanDecisions > 0) return;
     marker.reported = true;
     persist(repoDir, run);
-    const lead = marker.state === 'set' ? 'A gate side-effect failed earlier in this run' : 'A gate side-effect may have failed earlier in this run';
-    bestEffort(() => deps.emitError?.(repoDir, `${lead}: ${marker.detail}`));
+    bestEffort(() => deps.emitError?.(repoDir, failedEffectNotice(marker.state, marker.detail)));
     bestEffort(() => deps.audit(repoDir, autoHaltAuditCmd([{ reason: marker.state === 'set' ? 'i' : 'h', detail: marker.detail }]), 0));
   };
 

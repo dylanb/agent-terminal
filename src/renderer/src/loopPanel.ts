@@ -13,7 +13,7 @@ import { loopGateActionable } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
-import { autoHaltReasonLabel } from '../../shared/gateAuthority';
+import { autoHaltReasonLabel, failedEffectNotice } from '../../shared/gateAuthority';
 import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -552,8 +552,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           marker.className = 'failed-effect';
           marker.dataset.failedEffect = ag.failedEffect.state;
           marker.setAttribute('role', 'status');
-          const lead = ag.failedEffect.state === 'set' ? 'A gate side-effect failed earlier in this run' : 'A gate side-effect may have failed earlier in this run';
-          marker.textContent = stripDisplayControlChars(`${lead}: ${ag.failedEffect.detail}`);
+          marker.textContent = stripDisplayControlChars(failedEffectNotice(ag.failedEffect.state, ag.failedEffect.detail));
           body.append(marker);
         }
       }

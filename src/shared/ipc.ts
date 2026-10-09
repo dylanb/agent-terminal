@@ -7,7 +7,7 @@ import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
 import type { StartednessSignal } from './flowStarted';
 import type { HeldRunView } from './runHold';
-import type { AutoHaltReason } from './gateAuthority';
+import type { AutoHaltReason, FailedEffectState } from './gateAuthority';
 
 export type SessionId = string;
 
@@ -456,7 +456,7 @@ export interface FlowAutoGateView {
   deciding: boolean;
   hung: boolean;
   haltReasons: { reason: AutoHaltReason; detail?: string }[];
-  failedEffect?: { state: 'set' | 'unknown'; detail: string };
+  failedEffect?: { state: FailedEffectState; detail: string };
 }
 
 /** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip

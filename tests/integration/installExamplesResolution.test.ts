@@ -95,7 +95,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     const loaded = loadFlowDefinitionLocalFirst(repo, home);
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
-    const implStep = (id: string, loop: string) => ({ id, kind: 'loop', loop, loopNamespace: 'app', todoTemplate: 'impl-loop-review' });
+    const implStep = (id: string, loop: string, gateAuthority: 'auto' | 'human') => ({ id, kind: 'loop', loop, gateAuthority, loopNamespace: 'app', todoTemplate: 'impl-loop-review' });
     expect(loaded.definition.steps).toEqual([
       { id: 'preparation', kind: 'manual' },
       {
@@ -104,6 +104,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         loop: 'groom-loop',
         loopNamespace: 'app',
         todoTemplate: 'ticket-grooming',
+        gateAuthority: 'auto',
         inputs: [
           { name: 'ticket', type: 'github-ticket', required: true },
         ],
@@ -114,13 +115,14 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         loop: 'plan-bundle-loop',
         loopNamespace: 'app',
         todoTemplate: 'plan-loop-review',
+        gateAuthority: 'human',
       },
-      implStep('infra', 'infra-loop'),
-      implStep('red', 'red-loop'),
-      implStep('green', 'green-loop'),
+      implStep('infra', 'infra-loop', 'auto'),
+      implStep('red', 'red-loop', 'auto'),
+      implStep('green', 'green-loop', 'auto'),
       // §28.4 loop-back: refactor repeats the RED→GREEN→refactor slice `slices`-many times (impl-slice×N).
-      { ...implStep('refactor', 'refactor-loop'), repeat: { backTo: 'red', countInput: 'slices' } },
-      implStep('integration-slice', 'integration-slice-loop'),
+      { ...implStep('refactor', 'refactor-loop', 'auto'), repeat: { backTo: 'red', countInput: 'slices' } },
+      implStep('integration-slice', 'integration-slice-loop', 'human'),
       { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
     ]);
   });

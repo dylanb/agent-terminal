@@ -122,6 +122,7 @@ import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactChec
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
+import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context } from './loopDefV2';
@@ -916,13 +917,16 @@ async function createWindow(): Promise<void> {
   // observable, and no distinct kind is (lifecycleEvents is kind-agnostic past `start`), so a new TransitionKind
   // would be untestable vocabulary. Run inside inTransition so the RED step's entry actions re-fire. Mirrors
   // autoAdvanceFlow: a void engine-driven transition whose view push is the caller's onViewChanged, not this.
-  const reopenSliceFlow = (repoKey: string): boolean => {
-    const pre = flow.state(repoKey);
-    if (pre.status !== 'in_progress') return false;
-    const view = inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey));
-    recordFlowTransition(repoKey, 'undo', pre, view);
-    return view.status === 'in_progress' && view.stepName === flow.sliceStartStep(repoKey);
-  };
+  const reopenSliceFlow = (repoKey: string, reopened: () => void): boolean =>
+    reopenSliceTransition(
+      {
+        state: () => flow.state(repoKey),
+        reopen: () => inTransition(repoKey, appLoopEntryFor('undo'), () => flow.reopenSlice(repoKey)),
+        sliceStartStep: () => flow.sliceStartStep(repoKey),
+        record: (pre, view) => recordFlowTransition(repoKey, 'undo', pre, view),
+      },
+      reopened,
+    );
 
   // §28.7
   const epicPromotionCoordinator = createEpicPromotionCoordinator({
@@ -986,7 +990,7 @@ async function createWindow(): Promise<void> {
       flow.resolveInputs(repoDir, { slices: String(implSliceCount(planText)) });
     },
     // §28.4.2 — the human back-to-red control jumps the flow back to the slice's RED step (never advances).
-    reopenSlice: (repoDir) => reopenSliceFlow(repoDir),
+    reopenSlice: (repoDir, reopened) => reopenSliceFlow(repoDir, reopened),
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
     recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
     clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),

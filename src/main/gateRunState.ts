@@ -9,7 +9,7 @@ import { APP_LOOP_STATE_SCHEMA, loopAreaFile } from './appLoopState';
 import { createFlowStateStore } from './flowState';
 import { isRecord } from './yamlRecord';
 import { isErrno } from './errno';
-import { isAutoHaltReason, type AutoHaltReason } from '../shared/gateAuthority';
+import { isAutoHaltReason, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 
 const GATE_RUN_FILE = 'gate-run.yaml';
 
@@ -27,7 +27,7 @@ export interface PersistedLoopRun {
 }
 
 export interface PersistedFailedEffect {
-  state: 'set' | 'unknown';
+  state: FailedEffectState;
   detail: string;
   reported: boolean;
 }

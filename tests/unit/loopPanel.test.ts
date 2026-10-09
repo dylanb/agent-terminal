@@ -1141,12 +1141,15 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
     expect([...host.querySelectorAll<HTMLElement>('[data-auto-halt-reason]')].map((r) => r.getAttribute('data-auto-halt-reason'))).toEqual(['a', 'b', 'h', 'i']);
   });
 
-  it.each(['set', 'unknown'] as const)('a `%s` failed-effect marker shows `[data-failed-effect]` with its state and failure text, beside the gate buttons', (state) => {
+  it.each([
+    ['set', 'A gate side-effect failed earlier in this run: gh update-issue-body exited 1'],
+    ['unknown', 'A gate side-effect may have failed earlier in this run: gh update-issue-body exited 1'],
+  ] as const)('a `%s` failed-effect marker shows `[data-failed-effect]` with its state and its own wording, beside the gate buttons', (state, text) => {
     mount().render(autoGateView({ ...idle, failedEffect: { state, detail: 'gh update-issue-body exited 1' } }), 'plan');
     const el = marker();
     expect(el).not.toBeNull();
     expect(el!.getAttribute('data-failed-effect')).toBe(state);
-    expect(el!.textContent).toContain('gh update-issue-body exited 1');
+    expect(el!.textContent).toBe(text);
     expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull();
   });
 
