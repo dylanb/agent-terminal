@@ -2598,6 +2598,20 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(lines.filter((l) => !l.startsWith('0 '))).toEqual([]);
   });
 
+  it('every git read of the check runs under the repo\'s own git config: no hooks-path or fsmonitor override (v2.184 (10))', async () => {
+    const log = join(scratch('autogate-config-'), 'git.log');
+    const stub = installPathGitStub([{ argvPrefix: [], script: `printf '%s\\n' "$*" >> ${shellQuote(log)}` }]);
+    disposers.push(stub.dispose);
+    editSource();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    const lines = (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter((l) => l.length > 0);
+    expect(lines.some((l) => l.includes('rev-parse --abbrev-ref HEAD'))).toBe(true);
+    expect(lines.filter((l) => /core\.(hooksPath|fsmonitor)=/.test(l))).toEqual([]);
+  });
+
   it('the real check, held on the baseline: a `held` line naming it is logged before the gate settles, and releasing the hold lets it settle', async () => {
     const held = holdBaselineReads();
     editSource();

@@ -191,6 +191,17 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
       expect(readFileSync(file, 'utf8')).toContain('refactor: 0'); // strict write left the un-round-trippable doc intact
     });
 
+    it('write-side strict validation rejects an ill-typed flow name that the lenient read drops', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\nflow: 5\n';
+      writeFileSync(file, before);
+      const store = createFlowStateStore(dir);
+      expect(store.read()).not.toHaveProperty('flow');
+      expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
     it('clears the name without disturbing the progression', () => {
       const store = createFlowStateStore(dir);
       store.write({ step: 'plan', status: 'in_progress', title: 'gone' });

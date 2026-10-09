@@ -1101,6 +1101,35 @@ describe('docked loop panel — the S1 auto-gate rows (§27.9.1)', () => {
     expect(row?.closest('[role="status"], [aria-live="polite"], [aria-live="assertive"]')).not.toBeNull();
   });
 
+  it('each lettered halt row shows its N9b.6 letter beside its label; the `stop for a human` verdict carries none', () => {
+    mount().render(autoGateView({ ...idle, haltReasons: [{ reason: 'stop-for-a-human' }, { reason: 'c' }, { reason: 'l', detail: 'refused' }] }), 'plan');
+    const text = (r: string): string => host.querySelector<HTMLElement>(`[data-auto-halt-reason="${r}"]`)?.textContent ?? '';
+    expect(text('c')).toBe(`(c) ${autoHaltReasonLabel('c')}`);
+    expect(text('l')).toBe(`(l) ${autoHaltReasonLabel('l')}: refused`);
+    expect(text('stop-for-a-human')).toBe(autoHaltReasonLabel('stop-for-a-human'));
+  });
+
+  it('a gate that halts on the same mounted panel adds its reasons inside the live region that already announced the deciding notice, and keeps focus on the gate (WCAG 4.1.3, 2.4.3)', () => {
+    const panel = mount();
+    panel.render(autoGateView({ ...idle, deciding: true }, false), 'plan');
+    const region = host.querySelector<HTMLElement>('[data-auto-deciding]')?.closest('[role="status"]');
+    expect(region).not.toBeNull();
+    host.querySelector<HTMLElement>('[data-gate-option="approve"]')!.focus();
+    panel.render(autoGateView({ ...idle, haltReasons: [{ reason: 'c' }] }), 'plan');
+    expect(host.querySelector('[data-auto-deciding]')).toBeNull();
+    expect(host.querySelector<HTMLElement>('[data-auto-halt-reason="c"]')?.closest('[role="status"]')).toBe(region);
+    expect(region!.isConnected).toBe(true);
+    expect(host.ownerDocument.activeElement?.getAttribute('data-gate-option')).toBe('approve');
+  });
+
+  it('a failed-effect marker that appears on the same mounted panel lands inside the existing live region', () => {
+    const panel = mount();
+    panel.render(autoGateView({ ...idle, deciding: true }, false), 'plan');
+    const region = host.querySelector<HTMLElement>('[data-auto-deciding]')?.closest('[role="status"]');
+    panel.render(autoGateView({ ...idle, hung: true, failedEffect: { state: 'set', detail: 'gh exited 1' } }), 'plan');
+    expect(host.querySelector<HTMLElement>('[data-failed-effect]')?.closest('[role="status"]')).toBe(region);
+  });
+
   it('the three reasons S1 renders carry three distinct shared labels', () => {
     expect(new Set((['stop-for-a-human', 'c', 'e'] as const).map(autoHaltReasonLabel)).size).toBe(3);
   });

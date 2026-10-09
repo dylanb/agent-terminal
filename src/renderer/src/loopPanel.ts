@@ -7,7 +7,7 @@
 // button per gate option, firing the injected appGateDecision with the step+turn identity it acts on, §6).
 // A §27 request-changes / redo detours through its composer (composeFeedback / composeRedo).
 
-import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
+import type { FlowAutoGateView, FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { loopGateActionable } from '../../shared/loopGate';
 import { stripDisplayControlChars } from '../../shared/controlChars';
@@ -115,7 +115,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate ? [loop.autoGate.deciding, loop.autoGate.haltReasons, loop.autoGate.failedEffect ?? null] : null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate !== undefined] : null,
   ]);
 }
 
@@ -125,7 +125,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   // Live nodes patched without a teardown (mirrors flowStrip), and the ref rows whose detail is still
   // unresolved so a structurally-unchanged push can re-attempt them (githubRefs never caches a null —
   // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
-  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement | null; ldl: HTMLElement; reasonAnchor: HTMLElement; body: HTMLElement } | null = null;
+  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement | null; ldl: HTMLElement; reasonAnchor: HTMLElement; body: HTMLElement; autoGate: { region: HTMLElement; key: string } | null } | null = null;
   let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
 
   /** §27.12 — the `reason` row. On the patch path (a status→error transition on an already-rendered view) it
@@ -343,6 +343,42 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     return { el: row, retry: attempt, resolved: () => resolved };
   }
 
+  const syncAutoGate = (live: { region: HTMLElement; key: string }, ag: FlowAutoGateView): void => {
+    const key = JSON.stringify([ag.deciding, ag.haltReasons, ag.failedEffect ?? null]);
+    if (live.key === key) return;
+    live.key = key;
+    const nodes: HTMLElement[] = [];
+    if (ag.deciding) {
+      const notice = doc.createElement('p');
+      notice.className = 'auto-deciding';
+      notice.dataset.autoDeciding = '';
+      notice.textContent = 'The engine is deciding this gate — you can still decide it yourself.';
+      nodes.push(notice);
+    }
+    if (ag.haltReasons.length > 0) {
+      const halt = doc.createElement('ul');
+      halt.className = 'auto-halt';
+      halt.setAttribute('aria-label', 'why this gate needs you');
+      for (const { reason, detail } of ag.haltReasons) {
+        const li = doc.createElement('li');
+        li.dataset.autoHaltReason = reason;
+        const label = reason === 'stop-for-a-human' ? autoHaltReasonLabel(reason) : `(${reason}) ${autoHaltReasonLabel(reason)}`;
+        li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
+        halt.append(li);
+      }
+      nodes.push(halt);
+    }
+    // §27.9.1 N9b.5(d)
+    if (ag.failedEffect) {
+      const marker = doc.createElement('p');
+      marker.className = 'failed-effect';
+      marker.dataset.failedEffect = ag.failedEffect.state;
+      marker.textContent = stripDisplayControlChars(failedEffectNotice(ag.failedEffect.state, ag.failedEffect.detail));
+      nodes.push(marker);
+    }
+    live.region.replaceChildren(...nodes);
+  };
+
   /** Update the live loop values + re-attempt any unresolved ref, with no teardown so focus and the
    *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
   function patchInPlace(loop: FlowLoopView | null): void {
@@ -357,6 +393,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
       syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
       syncVerdictRows(liveLoop.ldl, liveLoop.reasonAnchor, loop);
+      if (liveLoop.autoGate && loop.autoGate) syncAutoGate(liveLoop.autoGate, loop.autoGate);
       syncAppRouteOut(liveLoop.body, loop);
       syncCatalog(liveLoop.body, loop);
       syncArmInterrupt(liveLoop.body, loop);
@@ -450,7 +487,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         ldl.append(iterRow);
       }
       const reasonAnchor = iterRow ?? statusRow;
-      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow?.querySelector('.lv') ?? null, ldl, reasonAnchor, body };
+      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow?.querySelector('.lv') ?? null, ldl, reasonAnchor, body, autoGate: null };
       // §27.12 — WHY a turn stopped, adjacent to `status: error`. Present only in error; the surviving run
       // state drops the reason on recovery.
       syncReasonRow(ldl, reasonAnchor, loop.errorReason);
@@ -518,41 +555,14 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         body.append(section);
       }
 
-      // §27.9.1 N9b.5(e), N9b.6
+      // §27.9.1 N9b.5(e), N9b.6 — WCAG 4.1.3
       if (loop.autoGate) {
-        const ag = loop.autoGate;
-        if (ag.deciding) {
-          const notice = doc.createElement('p');
-          notice.className = 'auto-deciding';
-          notice.dataset.autoDeciding = '';
-          notice.setAttribute('role', 'status');
-          notice.textContent = 'The engine is deciding this gate — you can still decide it yourself.';
-          body.append(notice);
-        }
-        if (ag.haltReasons.length > 0) {
-          const halt = doc.createElement('ul');
-          halt.className = 'auto-halt';
-          halt.setAttribute('aria-label', 'why this gate needs you');
-          for (const { reason, detail } of ag.haltReasons) {
-            const li = doc.createElement('li');
-            li.dataset.autoHaltReason = reason;
-            const label = autoHaltReasonLabel(reason);
-            li.textContent = stripDisplayControlChars(detail === undefined ? label : `${label}: ${detail}`);
-            halt.append(li);
-          }
-          const region = doc.createElement('div');
-          region.setAttribute('role', 'status');
-          region.append(halt);
-          body.append(region);
-        }
-        // §27.9.1 N9b.5(d)
-        if (ag.failedEffect) {
-          const marker = doc.createElement('p');
-          marker.className = 'failed-effect';
-          marker.dataset.failedEffect = ag.failedEffect.state;
-          marker.setAttribute('role', 'status');
-          marker.textContent = stripDisplayControlChars(failedEffectNotice(ag.failedEffect.state, ag.failedEffect.detail));
-          body.append(marker);
+        const region = doc.createElement('div');
+        region.setAttribute('role', 'status');
+        body.append(region);
+        if (liveLoop) {
+          liveLoop.autoGate = { region, key: '' };
+          syncAutoGate(liveLoop.autoGate, loop.autoGate);
         }
       }
 
