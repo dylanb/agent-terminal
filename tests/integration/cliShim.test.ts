@@ -19,7 +19,7 @@ let realCwd: string;
 /** A stand-in "app binary" that records the APP_LAUNCH_DIR it was launched with, then exits. */
 function recorderShim(extra = ''): void {
   const recorder = join(work, 'recorder.sh');
-  writeFileSync(recorder, `#!/bin/sh\n${extra}printf '%s' "$APP_LAUNCH_DIR" > "${recOut}"\n`);
+  writeFileSync(recorder, `#!/bin/sh\n${extra}printf '%s' "$APP_LAUNCH_DIR" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
   chmodSync(recorder, 0o755);
   shimPath = join(work, 'agent-terminal');
   writeFileSync(shimPath, generateShim({ execPath: recorder, appArgs: [] }));
@@ -37,6 +37,7 @@ async function readWhenReady(file: string, timeoutMs = 5000): Promise<string> {
 
 /** Run the shim from the fixture cwd with the given args and return the recorded launch target. */
 async function runShim(args: string[]): Promise<string> {
+  rmSync(recOut, { force: true });
   execFileSync(shimPath, args, { cwd: fixtureCwd, timeout: 5000 });
   return readWhenReady(recOut);
 }
@@ -64,6 +65,14 @@ describe('shim forwarding (§23.4)', () => {
     recorderShim();
     expect(await runShim(['sub'])).toBe(join(realCwd, 'sub'));
     expect(resolve(await runShim(['./sub']))).toBe(join(realCwd, 'sub'));
+  });
+
+  it('reports each run its own launch target, so a later run never reads an earlier run\'s', async () => {
+    mkdirSync(join(fixtureCwd, 'a'));
+    mkdirSync(join(fixtureCwd, 'b'));
+    recorderShim('sleep 0.2\n');
+    expect(await runShim(['a'])).toBe(join(realCwd, 'a'));
+    expect(await runShim(['b'])).toBe(join(realCwd, 'b'));
   });
 
   it('passes an absolute argument through unchanged', async () => {

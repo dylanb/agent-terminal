@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   loadFlowDefinition,
+  loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
   createFlowMachine,
   type FlowLoad,
@@ -138,6 +139,72 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   it('rejects a loop step that names no loop: LoopDef binding (§24.2.3 T2)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n');
     expect(loadFlowDefinition(dir).ok).toBe(false);
+  });
+
+  // §27.9.1 N9b.1 (#137 AC6)
+  it('loads a loop step\'s gate_authority, `human` and `auto` each as declared', () => {
+    writeFlow(
+      'name: f\nsteps:\n' +
+        '  - id: red\n    kind: loop\n    loop: red-loop\n    gate_authority: auto\n' +
+        '  - id: green\n    kind: loop\n    loop: green-loop\n    gate_authority: human\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.definition.steps.map((s) => s.gateAuthority)).toEqual(['auto', 'human']);
+  });
+
+  // Pinning test: green before S1. That an absent field reads as `human` is pinned by AC7's undeclared-step leg in autoGate.test.ts.
+  it('loads a loop step that declares no gate_authority, never as `auto`', () => {
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: loop\n    loop: red-loop\n');
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.definition.steps[0].gateAuthority).not.toBe('auto');
+  });
+
+  it('fails the load, naming the step and the value, on an unknown gate_authority', () => {
+    writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n    loop: red-loop\n    gate_authority: sometimes\n');
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).toContain('build');
+      expect(load.error).toContain('sometimes');
+    }
+  });
+
+  it('fails the load on a gate_authority declared on a manual step, whose gate is never a loop gate', () => {
+    writeFlow('name: f\nsteps:\n  - id: done\n    kind: manual\n    gate_authority: auto\n');
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).toContain('done');
+      expect(load.error).toContain('gate_authority');
+    }
+  });
+
+  // #137 AC16
+  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-polish and integration-slice, `auto` on every other loop step', () => {
+    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'));
+    expect(load.ok).toBe(true);
+    if (!load.ok) return;
+    expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
+      preparation: null,
+      groom: 'auto',
+      'plan-bundle': 'auto',
+      'plan-polish': 'human',
+      infra: 'auto',
+      red: 'auto',
+      green: 'auto',
+      refactor: 'auto',
+      'integration-slice': 'human',
+      finalize: null,
+    });
+  });
+
+  it('fails the load on a non-string gate_authority', () => {
+    writeFlow('name: f\nsteps:\n  - id: red\n    kind: loop\n    loop: red-loop\n    gate_authority: true\n');
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) expect(load.error).toContain('gate_authority');
   });
 
   // §24.2.3 T3 — a step may declare a `bootstrap: pickup` entry action (§18.3) and typed `inputs`

@@ -23,6 +23,23 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: 'nope' }).startupExitGraceMs).toBe(1000);
   });
 
+  // §27.9.1 N9b.5(e), #137 AC14 — the engine's gate-decision bound.
+  it('defaults the auto-gate decision bound to 300 000 ms and parses an override', () => {
+    expect(resolveRuntimeConfig({}).autoGateDecisionMs).toBe(300_000);
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '1500' }).autoGateDecisionMs).toBe(1500);
+  });
+
+  it.each(['NaN', 'Infinity', '-Infinity', '0', '-5', 'abc', '', '  '])('falls back to the default bound on the non-finite or non-positive value %j', (raw) => {
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: raw }).autoGateDecisionMs).toBe(300_000);
+  });
+
+  it('rounds a fractional bound up and clamps an oversized one to the timer maximum', () => {
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '1.5' }).autoGateDecisionMs).toBe(2);
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '0.1' }).autoGateDecisionMs).toBe(1);
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '1e12' }).autoGateDecisionMs).toBe(2_147_483_647);
+    expect(resolveRuntimeConfig({ APP_AUTO_GATE_DECISION_MS: '2147483648' }).autoGateDecisionMs).toBe(2_147_483_647);
+  });
+
   it('enables shell integration by default and opts out only on exactly "0"', () => {
     expect(resolveRuntimeConfig({}).shellIntegration).toBe(true);
     expect(resolveRuntimeConfig({ APP_SHELL_INTEGRATION: '0' }).shellIntegration).toBe(false);

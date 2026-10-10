@@ -90,10 +90,16 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
       const loop = view.loop;
       if (!loop || loop.humanNeeded !== true) {
         pending.delete(repoKey);
+        // §27.9.1 N9b.5(e) — under per-step gate authority a stop that ends was its own stop, so the next one
+        // notifies again; a run with no `auto` step keeps §24.2.3 T4's `{status, iteration}` dedup.
+        if (loop?.autoGate !== undefined) lastRaised.delete(repoKey);
         if (activeRepoKey === repoKey) clearActive();
         return;
       }
-      pending.set(repoKey, { repoKey, status: loop.status, iteration: loop.iteration });
+      // §27.9.1 N9b.5(e) — under per-step gate authority a stop lasts while the view stays human-needed, so a
+      // status change within it (an error stop the operator Accepted into a halt) is not a second stop.
+      const raised = lastRaised.get(repoKey);
+      pending.set(repoKey, loop.autoGate !== undefined && raised !== undefined ? raised : { repoKey, status: loop.status, iteration: loop.iteration });
       raiseIfDue(repoKey);
     },
   };

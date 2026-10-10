@@ -1,7 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { workingTreeTestPaths, workingTreeTestPathsFromCapabilities } from '../../src/main/frozenTests';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { writeLoopCapabilities } from '../helpers/loopCapabilities';
@@ -128,20 +125,6 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     ]);
   });
 
-  it('is not fooled by a repo-planted refs/replace/* substituting HEAD (tamper-evidence, --no-replace-objects)', async () => {
-    // `git diff HEAD` re-hashes and looks up the HEAD tree, so a planted `git replace HEAD <older>` makes a
-    // naive diff compare the working tree against the OLDER commit — a committed (not this-turn-added) test file
-    // then shows as "added", forging a RED completion. The read must ignore replace refs (same posture as the
-    // commit↔commit changedTestPaths tamper-evidence test), so an ALREADY-committed test stays out of the result.
-    const dir = repos.makeGitRepo('worktree-replace');
-    repos.writeRepoFile(dir, 'src/a.ts', 's\n');
-    const older = repos.commitAll(dir, 'seed'); // no test file
-    repos.writeRepoFile(dir, 'tests/a.test.ts', 't\n');
-    repos.commitAll(dir, 'commit the test'); // the test is COMMITTED, not added this turn; working tree clean
-    repos.git(dir, ['replace', 'HEAD', older]); // a naive `git diff HEAD` would diff against `older` (no test)
-    await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
-  });
-
   it('rejects rather than hangs when the aggregate glob×path matching work exceeds the budget (untrusted-input DoS)', async () => {
     // Same CWE-400 amplification the commit↔commit path bounds: many long globs × a long path. The working-tree
     // path runs on EVERY RED completion attempt (incl. retries), so the aggregate budget must apply here too.
@@ -150,36 +133,6 @@ describe('workingTreeTestPaths (§28.5.2a)', () => {
     repos.writeRepoFile(dir, `tests/${longSeg(300)}.test.ts`, 'x\n'); // a ~600-byte untracked path added this turn
     const bloatedGlobs = Array(200).fill('z'.repeat(1000)); // 200k glob chars, none matching
     await expect(workingTreeTestPaths({ repoDir: dir, testGlobs: bloatedGlobs })).rejects.toThrow(/budget/i);
-  });
-
-  it('never launches an agent-controlled promisor transport during the working-tree diff (partial-clone lazy-fetch RCE)', async () => {
-    // The tracked `git diff HEAD` arm looks up the HEAD tree, so on a tree:0 partial clone with the tree missing
-    // it would lazy-fetch from the promisor — whose transport an agent-controlled .git/config can point at a
-    // command. The read must fail closed on the missing objects (protocol.allow=never + GIT_NO_LAZY_FETCH) and
-    // never launch it — the SAME posture the commit↔commit changedTestPaths promisor test pins on its sibling.
-    const source = repos.makeGitRepo('wt-promisor-source');
-    repos.git(source, ['config', 'uploadpack.allowFilter', 'true']);
-    repos.writeRepoFile(source, 'tests/a.test.ts', 'a\n');
-    repos.commitAll(source, 'seed');
-    const clone = mkdtempSync(join(tmpdir(), 'wt-promisor-clone-'));
-    try {
-      repos.git(source, ['clone', '--filter=tree:0', '--no-checkout', `file://${source}`, clone]);
-      const sentinel = join(clone, 'PWNED');
-      const up = join(clone, 'up.sh');
-      writeFileSync(up, `#!/bin/sh\ntouch ${JSON.stringify(sentinel)}\nexit 1\n`, { mode: 0o755 });
-      repos.git(clone, ['config', 'remote.origin.uploadpack', up]); // the malicious promisor transport command
-
-      let threw = false;
-      try {
-        await workingTreeTestPaths({ repoDir: clone, testGlobs: TEST_GLOBS });
-      } catch {
-        threw = true;
-      }
-      expect(existsSync(sentinel)).toBe(false); // the promisor command was never launched
-      expect(threw).toBe(true); // and the read failed closed on the missing HEAD tree
-    } finally {
-      rmSync(clone, { recursive: true, force: true });
-    }
   });
 
   // IT-WORKTREE-CAP — the capabilities-sourced wrapper

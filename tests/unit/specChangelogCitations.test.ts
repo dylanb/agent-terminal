@@ -128,7 +128,7 @@ function isCommitted(repoRoot: string, token: string): boolean {
 }
 
 function readPreEntrySpecs(repoRoot: string, token: string): SpecTexts {
-  const log = git(repoRoot, ['-c', 'log.showSignature=false', '--no-pager', 'log', '--format=%H', '-S', token, '--', CHANGELOG]);
+  const log = git(repoRoot, ['-c', 'log.showSignature=false', '--no-pager', 'log', '--diff-merges=first-parent', '--format=%H', '-S', token, '--', CHANGELOG]);
   const shas = log.split('\n').filter((l) => /^[0-9a-f]{40}$/.test(l));
   if (shas.length === 0) {
     if (isCommitted(repoRoot, token)) throw new Error(`no commit introduces ${token}; git log said: ${JSON.stringify(log)}`);
@@ -303,7 +303,7 @@ describe('the pre-entry anchor in a git history', () => {
     expect(unresolvedInNewestEntry(repo as string)).toEqual([]);
   });
 
-  it('an entry first committed in a merge resolution, which git log -S cannot find, fails loudly', () => {
+  it('an entry first committed in a merge resolution resolves against the merge\'s first parent', () => {
     seed();
     git(repo as string, ['checkout', '-q', '-b', 'side']);
     write(CHANGELOG, '> **Changelog v9.0:** §99.3 added, side.\n');
@@ -312,9 +312,10 @@ describe('the pre-entry anchor in a git history', () => {
     write(CHANGELOG, '> **Changelog v9.0:** §99.3 added, main.\n');
     commit('main');
     expect(() => git(repo as string, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', 'side'])).toThrow();
-    write(CHANGELOG, '> **Changelog v9.1:** §99.3 kept.\n\n> **Changelog v9.0:** §99.3 added.\n');
+    write(`${SPEC_DIR}/99-fixture.md`, '## 99. Fixture\n');
+    write(CHANGELOG, '> **Changelog v9.1:** §99.3 removed.\n\n> **Changelog v9.0:** §99.3 added.\n');
     commit('merge');
-    expect(() => unresolvedInNewestEntry(repo as string)).toThrow(/no commit introduces/);
+    expect(unresolvedInNewestEntry(repo as string)).toEqual([]);
   });
 
   function seedItems(): void {

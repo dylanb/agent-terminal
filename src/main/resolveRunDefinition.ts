@@ -59,6 +59,10 @@ export interface ResolvedRunDefinition {
   binding?: DispositionRead;
 }
 
+function localFirst(localDir: string, globalDir: string, binding: DispositionRead): ResolvedRunDefinition {
+  return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding };
+}
+
 export type ResolveRunDefinition = (localDir: string, globalDir: string) => ResolvedRunDefinition;
 
 export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): ResolveRunDefinition {
@@ -83,7 +87,7 @@ export function createResolveRunDefinition(deps: ResolveRunDefinitionDeps): Reso
     const pointer = deps.pointer();
     switch (pointer.kind) {
       case 'unset':
-        return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: { source: 'non-catalog' } };
+        return localFirst(localDir, globalDir, { source: 'non-catalog' });
       case 'invalid':
         // §18.7.6 / CWE-116/117 — the reason is display-sanitized at its source (the pointer read strips and
         // bounds the echoed rejected value), so the resolver forwards it as-is.
@@ -141,7 +145,7 @@ export function resolveBoundSource(
       return { load: loadCatalogEntryDefinition(entry.flowDir), binding: disposition };
     }
     case 'non-catalog':
-      return { load: loadFlowDefinitionLocalFirst(localDir, globalDir), binding: disposition };
+      return localFirst(localDir, globalDir, disposition);
     case 'fallback':
       return { load: loadFlowDefinition(globalDir), binding: disposition };
     default:

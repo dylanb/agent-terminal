@@ -9,12 +9,18 @@ import {
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
+  autoHaltAuditCmd,
+  epicPromotionAuditCmd,
   gateDecisionAuditCmd,
+  gateDecisionDecider,
+  gateDecisionKind,
+  parseAutoHaltReasons,
   loopEvents,
   parseAuditStream,
   reconstructTimeline,
   reviewRoundAuditCmd,
   serializeDoc,
+  stepWindowEvents,
   terminateEvents,
   todoEvents,
   type AuditEvent,
@@ -22,6 +28,7 @@ import {
   type TodoLike,
 } from '../../src/shared/audit';
 import { auditFileName, auditFilePath, auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
+import { GATE_DECISION_OPTIONS } from '../../src/shared/ipc';
 
 const D = new Date('2026-06-23T10:00:01.500Z');
 
@@ -29,8 +36,8 @@ describe('audit timestamps (§25.2/§25.3)', () => {
   it('renders an ISO-8601 UTC second-precision ts for events', () => {
     expect(auditTimestamp(D)).toBe('2026-06-23T10:00:01Z');
   });
-  it('renders a filesystem-safe stamp (colons → dashes) for the file name', () => {
-    expect(auditFileStamp(D)).toBe('2026-06-23T10-00-01Z');
+  it('renders a filesystem-safe millisecond stamp (colons → dashes) for the file name', () => {
+    expect(auditFileStamp(D)).toBe('2026-06-23T10-00-01.500Z');
   });
 });
 
@@ -42,7 +49,11 @@ describe('audit path derivation (§25.2)', () => {
     expect(auditRepoDir('/root', '/a/b/agent-terminal')).toBe(path.join('/root', 'agent-terminal'));
   });
   it('names the file <flow>_<stamp>.yaml', () => {
-    expect(auditFileName('feature-dev', D)).toBe('feature-dev_2026-06-23T10-00-01Z.yaml');
+    expect(auditFileName('feature-dev', D)).toBe('feature-dev_2026-06-23T10-00-01.500Z.yaml');
+  });
+  it('gives two Starts of one flow in the same second different files', () => {
+    const later = new Date(D.getTime() + 1);
+    expect(auditFilePath('/root', '/a/b/repo', 'feature-dev', later)).not.toBe(auditFilePath('/root', '/a/b/repo', 'feature-dev', D));
   });
   it('sanitizes an untrusted flow name so it cannot traverse the audit tree (CWE-22)', () => {
     const repoDir = auditRepoDir('/root', '/a/b/repo');
@@ -50,6 +61,11 @@ describe('audit path derivation (§25.2)', () => {
     expect(p.startsWith(repoDir + path.sep)).toBe(true);
     expect(p.includes('..')).toBe(false);
     expect(path.dirname(p)).toBe(repoDir);
+  });
+  it('two Starts in one repo at timestamps in different seconds resolve to two distinct files', () => {
+    const first = auditFilePath('/root', '/a/b/repo', 'feature-dev', new Date('2026-06-23T10:00:01.900Z'));
+    const second = auditFilePath('/root', '/a/b/repo', 'feature-dev', new Date('2026-06-23T10:00:02.100Z'));
+    expect(first).not.toBe(second);
   });
 });
 
@@ -390,50 +406,50 @@ describe('§27 review-round audit vocabulary', () => {
 // round/consolidate ones (CLAUDE.md single-home rule), so the writer and a future viewer read the same phrases.
 describe('§27 gate-decision audit vocabulary', () => {
   it('builds command text carrying the option and the side-effect outcome, distinguishing success from failure', () => {
-    expect(gateDecisionAuditCmd('decision', 'approve')).toContain('approve');
-    const ok = gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready');
+    expect(gateDecisionAuditCmd('decision', 'approve', undefined, 'human')).toContain('approve');
+    const ok = gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready', 'human');
     expect(ok).toContain('approve');
     expect(ok).toContain('mark-ready');
-    const failed = gateDecisionAuditCmd('side-effect-failed', 'approve', 'mark-ready: no PR to mark ready');
+    const failed = gateDecisionAuditCmd('side-effect-failed', 'approve', 'mark-ready: no PR to mark ready', 'human');
     expect(failed).toContain('no PR to mark ready');
     // A recorded failure is distinguishable from a success for the same action (§27.13 / AC3).
-    expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready'));
+    expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready', 'human'));
     // §27.9/AC4 — a request-changes the engine could not start is recorded as a DROP, distinct from the decision
     // that ran, so the audit never claims a round that never happened.
-    const dropped = gateDecisionAuditCmd('decision-dropped', 'request-changes', 'the loop was busy');
+    const dropped = gateDecisionAuditCmd('decision-dropped', 'request-changes', 'the loop was busy', 'human');
     expect(dropped).toContain('request-changes');
     expect(dropped).toContain('the loop was busy');
-    expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes'));
+    expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes', undefined, 'human'));
     // §27.9/AC6 — an approve whose best-effort polish cleanup threw AFTER the accept persisted is recorded as a
     // clear-polish failure, distinct from the decision that succeeded, so the accept is never read as aborted.
-    const clearFailed = gateDecisionAuditCmd('clear-polish-failed', 'approve', 'EISDIR: illegal operation on a directory');
+    const clearFailed = gateDecisionAuditCmd('clear-polish-failed', 'approve', 'EISDIR: illegal operation on a directory', 'human');
     expect(clearFailed).toContain('approve');
     expect(clearFailed).toContain('EISDIR');
-    expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
+    expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve', undefined, 'human'));
   });
 
   // §28.3 / T-taint — an untrusted detail (a def-supplied action / commit phase label) is neutralized
   // before it lands in the append-only §25 stream (CWE-117): control chars stripped, length bounded.
   it('neutralizes control chars and bounds the length of an untrusted detail', () => {
     const evil = 'commit: RED\n\r\x1b[31mfake failed\x07\x00';
-    const out = gateDecisionAuditCmd('side-effect', 'approve', evil);
+    const out = gateDecisionAuditCmd('side-effect', 'approve', evil, 'human');
     const hasControlChar = [...out].some((ch) => {
       const c = ch.charCodeAt(0);
       return c <= 0x1f || c === 0x7f;
     });
     expect(hasControlChar).toBe(false); // no control chars reach the append-only stream
     const long = 'x'.repeat(1000);
-    expect(gateDecisionAuditCmd('side-effect', 'approve', long).length).toBeLessThan(400); // bounded
+    expect(gateDecisionAuditCmd('side-effect', 'approve', long, 'human').length).toBeLessThan(400); // bounded
   });
 
   // §28.3 / T13b — a benign nothing-to-commit is a DISTINCT outcome from a real failure, so a reader (a
   // reconstructed timeline) never mistakes an empty phase for a `git commit` error.
   it('records a benign skipped side-effect distinctly from a success and a failure', () => {
-    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit');
+    const skipped = gateDecisionAuditCmd('side-effect-skipped', 'approve', 'commit: nothing to commit', 'human');
     expect(skipped).toContain('approve');
     expect(skipped).toContain('skipped');
-    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit'));
-    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect-failed', 'approve', 'commit: nothing to commit', 'human'));
+    expect(skipped).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'commit: nothing to commit', 'human'));
   });
 });
 
@@ -545,5 +561,225 @@ describe('§27 round number flows through loopEvents without coalescing to zero 
       serializeDoc({ ts: T, type: 'loop.iteration', n: 1 }) +
       serializeDoc({ ts: T, type: 'loop.status', from: 'working', to: 'error' });
     expect(reconstructTimeline(stream).loop).toEqual({ status: 'error', iteration: 1 });
+  });
+});
+
+describe('stepWindowEvents — the events of a step\'s last (re)entry window', () => {
+  const inProg = (stepName: string) => ({ status: 'in_progress' as const, stepName });
+  const done = (stepName: string) => ({ status: 'done' as const, stepName });
+  const notStarted = { status: 'not_started' as const, stepName: '' };
+  const gate = (cmd: string, ts = 'T'): AuditEvent => ({ ts, type: 'command', source: 'gate', cmd, exit: 0 });
+  const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
+  const read = (events: AuditEvent[]) =>
+    parseAuditStream([header, ...events].map(serializeDoc).join('')).events;
+  const gateCmds = (events: AuditEvent[]) =>
+    events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
+
+  it("finds a single-step run's gate commands by its first step, which Start enters with no step.entered", () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('decision approve'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['decision approve']);
+  });
+
+  it('scopes a two-step run to each step', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('red gate'),
+      ...lifecycleEvents('advance', inProg('red'), inProg('green'), 'T2'),
+      gate('green gate'),
+      ...lifecycleEvents('advance', inProg('green'), done('green'), 'T3'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['red gate']);
+    expect(gateCmds(stepWindowEvents(events, 'green'))).toEqual(['green gate']);
+  });
+
+  it('keeps only the restarted run after a Restart from done', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('first run'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+      ...lifecycleEvents('restart', done('red'), inProg('red'), 'T3'),
+      gate('restarted run'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['restarted run']);
+  });
+
+  it('a Restart from done that re-enters the first step leaves the last step its earlier window', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      ...lifecycleEvents('advance', inProg('red'), inProg('green'), 'T2'),
+      gate('green gate'),
+      ...lifecycleEvents('advance', inProg('green'), done('green'), 'T3'),
+      ...lifecycleEvents('restart', done('green'), inProg('red'), 'T4'),
+      gate('restarted red'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'green'))).toEqual(['green gate']);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['restarted red']);
+  });
+
+  it('an Undo from done re-enters the step it stays on', () => {
+    const events = read([
+      ...lifecycleEvents('start', notStarted, inProg('red'), 'T1'),
+      gate('before undo'),
+      ...lifecycleEvents('advance', inProg('red'), done('red'), 'T2'),
+      ...lifecycleEvents('undo', done('red'), inProg('red'), 'T3'),
+      gate('after undo'),
+    ]);
+    expect(gateCmds(stepWindowEvents(events, 'red'))).toEqual(['after undo']);
+  });
+
+  it('throws naming a step no boundary enters, so an empty read never satisfies a "none" assertion', () => {
+    const events = read([...lifecycleEvents('start', notStarted, inProg('red'), 'T1'), gate('g')]);
+    expect(() => stepWindowEvents(events, 'refactor')).toThrow(/refactor/);
+  });
+});
+
+// §27.9.1 N9b.9 (#137 AC7/AC8) — who decided a gate, and why an `auto` gate halted, read back from §25.
+describe('gate-decision entries carry the deciding party (N9b.9)', () => {
+  // Pinning: the human strings are the §25 entries as written before #137, captured at 8f03f066.
+  const HUMAN_LITERALS: [Parameters<typeof gateDecisionAuditCmd>[0], string | undefined, string][] = [
+    ['decision', undefined, '§27 gate approve'],
+    ['decision-dropped', 'the loop was busy', '§27 gate approve dropped: the loop was busy'],
+    ['side-effect', 'commit: RED', '§27 gate approve side-effect: commit: RED'],
+    ['side-effect-skipped', 'commit: nothing to commit', '§27 gate approve side-effect skipped: commit: nothing to commit'],
+    ['side-effect-failed', 'mark-ready: no PR', '§27 gate approve side-effect failed: mark-ready: no PR'],
+    ['accept-failed', 'EACCES', '§27 gate approve accept failed: EACCES'],
+    ['clear-polish-failed', 'EISDIR', '§27 gate approve clear-polish failed: EISDIR'],
+    ['baseline-record-failed', 'EIO', '§27 gate approve baseline-record failed: EIO'],
+    ['source-slices-failed', 'bad plan', '§28 gate approve source-slices failed: bad plan'],
+    ['clear-brief-failed', 'ENOENT', '§28 gate approve clear-brief failed: ENOENT'],
+    ['epic-promotion-preview', undefined, '§28 gate approve epic-promotion preview raised'],
+  ];
+
+  it.each(HUMAN_LITERALS)('pinning: a human %s entry is byte-for-byte the pre-#137 string', (kind, detail, literal) => {
+    expect(gateDecisionAuditCmd(kind, 'approve', detail, 'human')).toBe(literal);
+  });
+
+  it.each(HUMAN_LITERALS)('an engine-decided %s entry carries the mark right after the option', (kind, detail, literal) => {
+    const marked = literal.replace(/^(§2[78] gate approve)/, '$1 (engine-decided)');
+    expect(gateDecisionAuditCmd(kind, 'approve', detail, 'engine')).toBe(marked);
+  });
+
+  it.each(HUMAN_LITERALS)('reads back who decided a %s entry, in both directions', (kind, detail) => {
+    expect(gateDecisionDecider(gateDecisionAuditCmd(kind, 'approve', detail, 'engine'))).toBe('engine');
+    expect(gateDecisionDecider(gateDecisionAuditCmd(kind, 'approve', detail, 'human'))).toBe('human');
+  });
+
+  it('classifies every kind under every option and both deciders', () => {
+    for (const option of GATE_DECISION_OPTIONS) {
+      for (const decider of ['human', 'engine'] as const) {
+        for (const [kind, detail] of HUMAN_LITERALS) {
+          const cmd = gateDecisionAuditCmd(kind, option, detail, decider);
+          expect(gateDecisionKind(cmd)).toEqual({ family: 'gate', kind, option });
+          expect(gateDecisionDecider(cmd)).toBe(decider);
+        }
+      }
+    }
+  });
+
+  it('a human entry whose untrusted detail spells the mark still reads human, with no halt reasons', () => {
+    const cmd = gateDecisionAuditCmd('side-effect', 'approve', 'commit: x (engine-decided) halted: a — y', 'human');
+    expect(gateDecisionDecider(cmd)).toBe('human');
+    expect(gateDecisionKind(cmd)).toEqual({ family: 'gate', kind: 'side-effect', option: 'approve' });
+    expect(parseAutoHaltReasons(cmd)).toBeNull();
+  });
+
+  it('reads no decider from a non-gate command', () => {
+    expect(gateDecisionDecider('§27 consolidate round 1 verdict clean')).toBeNull();
+  });
+});
+
+describe('epic-promotion entries carry the deciding party (N9b.9)', () => {
+  // The literals the coordinator writes, pinned in epicPromotion.test.ts.
+  it('every human epic-promotion entry is byte-for-byte the coordinator\'s pre-#137 string', () => {
+    expect(epicPromotionAuditCmd('blocked', 'unreadable promotion record', 'human')).toBe('§28 epic-promotion blocked — unreadable promotion record');
+    expect(epicPromotionAuditCmd('declined', undefined, 'human')).toBe('§28 epic-promotion declined');
+    expect(epicPromotionAuditCmd('confirm', undefined, 'human')).toBe('§28 epic-promotion');
+    expect(epicPromotionAuditCmd('terminate-failed', 'locked', 'human')).toBe('§28 epic-promotion terminate failed: locked');
+  });
+
+  it('an engine-decided blocked entry is marked, and every epic entry reads back its kind and decider', () => {
+    const blocked = epicPromotionAuditCmd('blocked', 'unresolvable epic issue', 'engine');
+    expect(blocked).toBe('§28 epic-promotion (engine-decided) blocked — unresolvable epic issue');
+    expect(gateDecisionDecider(blocked)).toBe('engine');
+    expect(gateDecisionKind(blocked)).toEqual({ family: 'epic-promotion', kind: 'blocked' });
+    const confirm = epicPromotionAuditCmd('confirm', undefined, 'human');
+    expect(gateDecisionDecider(confirm)).toBe('human');
+    expect(gateDecisionKind(confirm)).toEqual({ family: 'epic-promotion', kind: 'confirm' });
+    expect(gateDecisionKind(epicPromotionAuditCmd('declined', undefined, 'human'))).toEqual({ family: 'epic-promotion', kind: 'declined' });
+    expect(gateDecisionKind(epicPromotionAuditCmd('terminate-failed', 'x', 'engine'))).toEqual({ family: 'epic-promotion', kind: 'terminate-failed' });
+  });
+});
+
+describe('auto-halt entries name every reason that holds (N9b.9)', () => {
+  const ALL = ['needs-a-human', 'loop-error', 'interrupt-armed', 'frozen-tests-changed', 'frozen-check-unavailable', 'engine-input-missing', 'failed-effect', 'relaunched', 'epic-promotion', 'approve-not-persisted', 'stop-for-a-human'] as const;
+  const header: AuditHeader = { flow: 'f', repo: 'r', repoPath: '/r', started: 'T0' };
+
+  it('round-trips a halt naming all 11 reasons through serialize ↔ parse, as an engine-decided exit-0 gate entry', () => {
+    const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason })));
+    const event: AuditEvent = { ts: 'T1', type: 'command', source: 'gate', cmd, exit: 0 };
+    const [read] = reconstructTimeline([header, event].map(serializeDoc).join('')).commands;
+    expect(read.exit).toBe(0);
+    expect(parseAutoHaltReasons(read.cmd)).toEqual([...ALL]);
+    expect(gateDecisionDecider(read.cmd)).toBe('engine');
+    expect(gateDecisionKind(read.cmd)).toEqual({ family: 'gate', kind: 'auto-halt' });
+  });
+
+  it('writes the N9b.6 letters, in N9b.6 order, into the halt slot', () => {
+    expect(autoHaltAuditCmd(ALL.map((reason) => ({ reason })))).toMatch(
+      /^§27 gate \(engine-decided\) halted: a, b, c, d, e, h, i, j, k, l, stop-for-a-human — needs a human; loop error or accepted failed turn; interrupt armed; /,
+    );
+  });
+
+  it('writes the verdict halt as the one stop-for-a-human token', () => {
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'stop-for-a-human' }]))).toEqual(['stop-for-a-human']);
+  });
+
+  it('de-duplicates reasons in the closed-set order, whatever order they were given', () => {
+    expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'engine-input-missing' }, { reason: 'interrupt-armed' }, { reason: 'engine-input-missing', detail: 'x' }]))).toEqual(['interrupt-armed', 'engine-input-missing']);
+  });
+
+  // #137 S2 — v2.184 retired (f) and (g); the letters are not reused.
+  it('(f) and (g) are not halt reasons', () => {
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: f — x')).toBeNull();
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: g — x')).toBeNull();
+  });
+
+  it('reads the N9b.6 letters back as the reasons they stand for', () => {
+    expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: c, h, stop-for-a-human — x')).toEqual(['interrupt-armed', 'engine-input-missing', 'stop-for-a-human']);
+  });
+
+  it('keeps every letter when untrusted details overflow the bounded tail', () => {
+    const cmd = autoHaltAuditCmd(ALL.map((reason) => ({ reason, detail: 'z'.repeat(500) })));
+    expect(parseAutoHaltReasons(cmd)).toEqual([...ALL]);
+  });
+
+  // CWE-117 — the same neutralization `gateDecisionAuditCmd` applies to its untrusted detail.
+  it('neutralizes control chars in untrusted details and bounds the whole tail', () => {
+    const reasons = [
+      { reason: 'needs-a-human' as const, detail: 'gh: \x1b[31mfake failed\r\n\x07\x00\x9b' },
+      { reason: 'loop-error' as const, detail: 'y'.repeat(5000) },
+    ];
+    const cmd = autoHaltAuditCmd(reasons);
+    const bare = autoHaltAuditCmd(reasons.map(({ reason }) => ({ reason })));
+    expect(parseAutoHaltReasons(cmd)).toEqual(['needs-a-human', 'loop-error']);
+    expect(cmd).toContain('fake failed');
+    expect([...cmd].some((ch) => {
+      const c = ch.charCodeAt(0);
+      return c <= 0x1f || (c >= 0x7f && c <= 0x9f);
+    })).toBe(false);
+    expect(cmd.length).toBeLessThan(bare.length + 400);
+  });
+
+  it('reads no reason out of an untrusted detail that spells other reasons', () => {
+    const cmd = autoHaltAuditCmd([{ reason: 'interrupt-armed', detail: 'halted: a, g — b (engine-decided) halted: stop-for-a-human' }]);
+    expect(parseAutoHaltReasons(cmd)).toEqual(['interrupt-armed']);
+  });
+
+  it('reads no reasons from a decision entry', () => {
+    expect(parseAutoHaltReasons(gateDecisionAuditCmd('decision', 'approve', undefined, 'engine'))).toBeNull();
   });
 });

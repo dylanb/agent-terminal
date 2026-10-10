@@ -9,6 +9,7 @@ import {
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
+  isValidFlowAdvance,
   isValidFlowProvideInput,
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
@@ -140,6 +141,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     arr.sessionId = sid;
     arr.repoKey = '/repo';
     expect(isValidFlowRequest(arr)).toBe(false);
+  });
+
+  it('accepts a flow:advance with or without the step it acts on, rejecting a bad step or an unsafe key (§6, §27.15, N9b.5(e))', () => {
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: undefined })).toBe(true);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: null })).toBe(false);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: 'red' })).toBe(true);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: '' })).toBe(false);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: '/repo', step: 7 })).toBe(false);
+    expect(isValidFlowAdvance({ sessionId: sid, repoKey: 'relative', step: 'red' })).toBe(false);
+    expect(isValidFlowAdvance({ sessionId: 'other', repoKey: '/repo', step: 'red' })).toBe(false);
+    expect(isValidFlowAdvance(null)).toBe(false);
   });
 
   it('accepts a flow:setTitle carrying a string title, rejecting bad shapes (§22.3.1)', () => {

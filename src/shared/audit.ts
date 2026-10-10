@@ -3,7 +3,8 @@
 // tests, and a future viewer so the format and its meaning cannot drift (CLAUDE.md src/shared rule).
 
 import yaml from 'js-yaml';
-import type { FlowStatus, TodoStatus } from './ipc';
+import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
+import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
 
 export interface AuditHeader {
@@ -80,8 +81,9 @@ export function auditTimestamp(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/** §25.2 — the file stamp keeps milliseconds, so two Starts of one flow in the same second get separate files. */
 export function auditFileStamp(date: Date): string {
-  return auditTimestamp(date).replace(/:/g, '-');
+  return date.toISOString().replace(/:/g, '-');
 }
 
 /** One complete YAML document, framed as a `---`-delimited block ready to append (§25.3). */
@@ -140,6 +142,30 @@ export function lifecycleEvents(kind: TransitionKind, before: FlowLike, after: F
     events.push({ ts, type: 'flow.completed', step: after.stepName });
   }
   return events;
+}
+
+/** The step each event (re)enters, per what `lifecycleEvents` writes; `null` for a non-entering event. A
+ *  `flow.status` to `in_progress` directly followed by a `step.entered` is one Restart that enters that
+ *  `step.entered`'s step, not the step the run had stopped on. */
+function enteredSteps(events: AuditEvent[]): (string | null)[] {
+  let current: string | null = null;
+  return events.map((e, i) => {
+    if (e.type === 'flow.started' || e.type === 'step.entered') return (current = e.step);
+    if (e.type === 'flow.status' && e.to === 'in_progress' && events[i + 1]?.type !== 'step.entered') return current;
+    return null;
+  });
+}
+
+/** The events of `step`'s last (re)entry window: after the last event that (re)enters `step`, up to the next
+ *  event that enters another step. Throws when nothing enters `step`, so an empty read is never mistaken for
+ *  "the step ran and recorded none". */
+export function stepWindowEvents(events: AuditEvent[], step: string): AuditEvent[] {
+  const entered = enteredSteps(events);
+  const start = entered.lastIndexOf(step);
+  if (start === -1) throw new Error(`no audit event enters step "${step}"`);
+  const rest = entered.slice(start + 1);
+  const end = rest.findIndex((s) => s !== null && s !== step);
+  return events.slice(start + 1, end === -1 ? undefined : start + 1 + end);
 }
 
 /** The single event a flow Terminate produces (#26 / §25): a timestamped `flow.terminated`, distinct
@@ -362,35 +388,132 @@ export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effe
 
 const GATE_DETAIL_MAX = 200;
 
-export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
+export type GateDecider = 'human' | 'engine';
+
+const ENGINE_MARK = ' (engine-decided)';
+
+const GATE_KIND_SHAPE: Record<GateDecisionAuditKind, { section: '§27' | '§28'; tail: string; detail: boolean }> = {
+  'decision': { section: '§27', tail: '', detail: false },
+  'decision-dropped': { section: '§27', tail: ' dropped: ', detail: true },
+  'side-effect': { section: '§27', tail: ' side-effect: ', detail: true },
+  'side-effect-skipped': { section: '§27', tail: ' side-effect skipped: ', detail: true },
+  'side-effect-failed': { section: '§27', tail: ' side-effect failed: ', detail: true },
+  'accept-failed': { section: '§27', tail: ' accept failed: ', detail: true },
+  'clear-polish-failed': { section: '§27', tail: ' clear-polish failed: ', detail: true },
+  'baseline-record-failed': { section: '§27', tail: ' baseline-record failed: ', detail: true },
+  'source-slices-failed': { section: '§28', tail: ' source-slices failed: ', detail: true },
+  'clear-brief-failed': { section: '§28', tail: ' clear-brief failed: ', detail: true },
+  'epic-promotion-preview': { section: '§28', tail: ' epic-promotion preview raised', detail: false },
+};
+
+export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: GateDecisionOption, detail: string | undefined, decider: GateDecider): string {
   // The detail can carry untrusted content (a def-supplied side-effect action / commit phase label), so it
   // is neutralized before it lands in the append-only §25 stream — the same CWE-117 treatment loopStatus
   // mandates for every human-facing sink and notifyFailedEvent already applies.
   const d = detail === undefined ? '' : stripStatusControlChars(detail).slice(0, GATE_DETAIL_MAX);
+  const head = (section: '§27' | '§28'): string => `${section} gate ${option}${decider === 'engine' ? ENGINE_MARK : ''}`;
+  const shape = GATE_KIND_SHAPE[kind];
+  return `${head(shape.section)}${shape.tail}${shape.detail ? d : ''}`;
+}
+
+/** §28.7 — the epic coordinator's own gate entries. Only a human click writes a confirm or a decline. */
+export type EpicPromotionAuditKind = 'blocked' | 'declined' | 'confirm' | 'terminate-failed';
+
+export type GateDecisionClass =
+  | { family: 'gate'; kind: GateDecisionAuditKind | 'auto-halt'; option?: GateDecisionOption }
+  | { family: 'epic-promotion'; kind: EpicPromotionAuditKind };
+
+const EPIC_PREFIX = '§28 epic-promotion';
+
+export function epicPromotionAuditCmd(kind: 'confirm' | 'declined', detail: undefined, decider: 'human'): string;
+export function epicPromotionAuditCmd(kind: 'blocked' | 'terminate-failed', detail: string, decider: GateDecider): string;
+export function epicPromotionAuditCmd(kind: EpicPromotionAuditKind, detail: string | undefined, decider: GateDecider): string {
+  const head = `${EPIC_PREFIX}${decider === 'engine' ? ENGINE_MARK : ''}`;
   switch (kind) {
-    case 'decision':
-      return `§27 gate ${option}`;
-    case 'decision-dropped':
-      return `§27 gate ${option} dropped: ${d}`;
-    case 'side-effect':
-      return `§27 gate ${option} side-effect: ${d}`;
-    case 'side-effect-skipped':
-      return `§27 gate ${option} side-effect skipped: ${d}`;
-    case 'side-effect-failed':
-      return `§27 gate ${option} side-effect failed: ${d}`;
-    case 'accept-failed':
-      return `§27 gate ${option} accept failed: ${d}`;
-    case 'clear-polish-failed':
-      return `§27 gate ${option} clear-polish failed: ${d}`;
-    case 'baseline-record-failed':
-      return `§27 gate ${option} baseline-record failed: ${d}`;
-    case 'source-slices-failed':
-      return `§28 gate ${option} source-slices failed: ${d}`;
-    case 'clear-brief-failed':
-      return `§28 gate ${option} clear-brief failed: ${d}`;
-    case 'epic-promotion-preview':
-      return `§28 gate ${option} epic-promotion preview raised`;
+    case 'blocked':
+      return `${head} blocked — ${detail ?? ''}`;
+    case 'declined':
+      return `${head} declined`;
+    case 'confirm':
+      return head;
+    case 'terminate-failed':
+      return `${head} terminate failed: ${detail ?? ''}`;
   }
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const OPTION_ALT = GATE_DECISION_OPTIONS.map(escapeRe).join('|');
+// §25.5 — anchored by position: the option (or none, for a halt) then the optional mark, never a substring search.
+const OPTION_RE = new RegExp(`^(?:${OPTION_ALT})(?= |$)`);
+const GATE_PREFIX_RE = /^(§2[78]) gate /;
+const EPIC_HEAD_RE = /^§28 epic-promotion( \(engine-decided\))?(?= |$)/;
+
+const HALT_SLOT = ' halted: ';
+
+function gateHead(cmd: string): { section: string; option?: GateDecisionOption; engine: boolean; rest: string } | null {
+  const m = GATE_PREFIX_RE.exec(cmd);
+  if (m === null) return null;
+  let rest = cmd.slice(m[0].length);
+  const om = OPTION_RE.exec(rest);
+  const option = om === null ? undefined : (om[0] as GateDecisionOption);
+  if (om !== null) rest = rest.slice(om[0].length);
+  const mark = option === undefined ? ENGINE_MARK.trimStart() : ENGINE_MARK;
+  const engine = rest.startsWith(mark);
+  if (engine) rest = rest.slice(mark.length);
+  return { section: m[1], option, engine, rest };
+}
+
+/** Who decided a §25 gate entry (§27.9.1 N9b.9): `null` for a command that is not a gate entry. */
+export function gateDecisionDecider(cmd: string): GateDecider | null {
+  const epic = EPIC_HEAD_RE.exec(cmd);
+  if (epic !== null) return epic[1] !== undefined ? 'engine' : 'human';
+  const head = gateHead(cmd);
+  if (head === null) return null;
+  return head.engine && (head.rest === '' || head.rest.startsWith(' ')) ? 'engine' : 'human';
+}
+
+export function gateDecisionKind(cmd: string): GateDecisionClass | null {
+  const epic = EPIC_HEAD_RE.exec(cmd);
+  if (epic !== null) {
+    const rest = cmd.slice(epic[0].length);
+    if (rest === '') return { family: 'epic-promotion', kind: 'confirm' };
+    if (rest.startsWith(' blocked — ')) return { family: 'epic-promotion', kind: 'blocked' };
+    if (rest === ' declined') return { family: 'epic-promotion', kind: 'declined' };
+    if (rest.startsWith(' terminate failed: ')) return { family: 'epic-promotion', kind: 'terminate-failed' };
+    return null;
+  }
+  const head = gateHead(cmd);
+  if (head === null) return null;
+  if (head.option === undefined) return head.engine && head.section === '§27' && head.rest.startsWith(HALT_SLOT) ? { family: 'gate', kind: 'auto-halt' } : null;
+  const kind = (Object.keys(GATE_KIND_SHAPE) as GateDecisionAuditKind[]).find((k) => {
+    const shape = GATE_KIND_SHAPE[k];
+    return shape.section === head.section && (shape.detail ? head.rest.startsWith(shape.tail) : head.rest === shape.tail);
+  });
+  return kind === undefined ? null : { family: 'gate', kind, option: head.option };
+}
+
+const haltToken = (r: AutoHaltReason): string => autoHaltLetter(r) ?? r;
+
+/** §27.9.1 N9b.9 — one engine-decided entry naming every halt reason that holds. The letters are a closed set
+ *  and come first, never truncated; the untrusted details follow, neutralized and bounded (CWE-117). */
+export function autoHaltAuditCmd(reasons: { reason: AutoHaltReason; detail?: string }[]): string {
+  const held = AUTO_HALT_REASONS.filter((r) => reasons.some((x) => x.reason === r));
+  const tail = held
+    .map((r) => {
+      const detail = reasons.find((x) => x.reason === r && x.detail !== undefined)?.detail;
+      return detail === undefined ? autoHaltReasonLabel(r) : `${autoHaltReasonLabel(r)}: ${detail}`;
+    })
+    .join('; ');
+  return `§27 gate${ENGINE_MARK}${HALT_SLOT}${held.map(haltToken).join(', ')} — ${stripStatusControlChars(tail).slice(0, GATE_DETAIL_MAX)}`;
+}
+
+const HALT_RE = /^§27 gate \(engine-decided\) halted: ([a-z, -]*?) — /;
+
+export function parseAutoHaltReasons(cmd: string): AutoHaltReason[] | null {
+  const m = HALT_RE.exec(cmd);
+  if (m === null) return null;
+  const reasons = m[1].split(', ').map((t) => AUTO_HALT_REASONS.find((r) => haltToken(r) === t));
+  return reasons.every((r): r is AutoHaltReason => r !== undefined) ? reasons : null;
 }
 
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {

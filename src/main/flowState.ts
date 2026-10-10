@@ -19,10 +19,13 @@ export interface PersistedFlowState {
   step: string;
   status: FlowStatus;
   inputs?: Record<string, string>;
-  /** Epoch ms at which this run of the flow began. No producer writes it anymore; retained so
-   *  `decodeStrict` still accepts a document a pre-sweep run stamped, and `writeTitle` does not throw
-   *  on it (§H.2). Absent for a flow that never started, and for one persisted before this field. */
+  /** Epoch ms at which this run of the flow began: Start writes it, Restart and Undo keep it, a reset to
+   *  `not_started` clears it (§27.9.1). It names the run's §25 file with `flow`. Absent for a flow that
+   *  never started, and for one persisted before this field. */
   startedAt?: number;
+  /** The name of the flow this run was started from (§27.9.1), so the run's identity never re-resolves the
+   *  live pointer. Absent for a run persisted before this field. */
+  flow?: string;
   /** The name the user gave this worktree's work (§22.3.1). Absent until they name one. */
   title?: string;
   /** §28.4 loop-back state: per-repeat-step iteration count (how many times each repeat step has been
@@ -49,7 +52,7 @@ const AGENT_DIR = FLOW_HOME_SUBDIR;
 const STATE_LEAF = 'flow-state.yaml';
 const STATE_REL = path.join(AGENT_DIR, STATE_LEAF);
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
-const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title', 'repeat_counts']);
+const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'flow', 'title', 'repeat_counts']);
 
 /** The legality gate for a persisted progression's `status`: the one vocabulary the store's `decode` and the
  *  `worktreeStartedness` safety accessor both classify against, so a status one reader rejects the other cannot
@@ -82,6 +85,10 @@ function readInputs(raw: unknown): Record<string, string> | null {
  *  `writeTitle` throws rather than silently discarding it (§H.2's decode-tolerance boundary). */
 function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function readFlowName(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
 /** True where `v` is a persistable repeat count — a positive integer (§28.4). */
@@ -151,6 +158,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     if (!isPersistableStatus(doc.status)) return null;
     const inputs = readInputs(doc.inputs);
     const startedAt = readStartedAt(doc.started_at);
+    const flow = readFlowName(doc.flow);
     const title = normalizeTitle(doc.title);
     const repeatCounts = readRepeatCounts(doc.repeat_counts);
     return {
@@ -158,6 +166,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       status: doc.status as FlowStatus,
       ...(inputs ? { inputs } : {}),
       ...(startedAt !== null ? { startedAt } : {}),
+      ...(flow !== null ? { flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(repeatCounts ? { repeatCounts } : {}),
     };
@@ -169,6 +178,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     if (Object.keys(doc).some((key) => !PERSISTED_KEYS.has(key))) return null;
     if (doc.inputs !== undefined && !(isRecord(doc.inputs) && Object.values(doc.inputs).every(isStringValue))) return null;
     if (doc.started_at !== undefined && readStartedAt(doc.started_at) === null) return null;
+    if (doc.flow !== undefined && readFlowName(doc.flow) === null) return null;
     if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
     if (doc.repeat_counts !== undefined && !(isRecord(doc.repeat_counts) && Object.values(doc.repeat_counts).every(isRepeatCount))) return null;
     return progression;
@@ -188,6 +198,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       status: state.status,
       ...(hasInputs ? { inputs: state.inputs } : {}),
       ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
+      ...(state.flow !== undefined ? { flow: state.flow } : {}),
       ...(title !== null ? { title } : {}),
       ...(hasRepeatCounts ? { repeat_counts: state.repeatCounts } : {}),
     });

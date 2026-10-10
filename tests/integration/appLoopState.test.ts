@@ -761,6 +761,27 @@ describe('§28.4/§28.5.1 — the baseline-commit store, disjoint from the run-s
     expect(readBaselineCommit(repo)).toBeNull();
   });
 
+  // §27.9.1 N9b.7(c) — #137 S4 "Baseline as persisted": the caller observes whether a baseline now exists.
+  it('UT-STATE-persisted: returns the baseline it persisted, and null when it persisted none', () => {
+    expect(recordBaselineCommit(repo, 'feature-slice1', OID)).toEqual({ branch: 'feature-slice1', sha: OID });
+    expect(recordBaselineCommit(repo, 'HEAD', OID)).toBeNull();
+    expect(recordBaselineCommit(repo, '', OID)).toBeNull();
+    expect(recordBaselineCommit(repo, 'feature-slice1', 'not-a-sha')).toBeNull();
+  });
+
+  it('UT-STATE-persisted (failed write): a write that cannot land persists no baseline, whether it throws or returns null', () => {
+    rmSync(baselineFile(), { force: true });
+    mkdirSync(baselineFile(), { recursive: true });
+    let returned: unknown = 'threw';
+    try {
+      returned = recordBaselineCommit(repo, 'feature-slice1', OID);
+    } catch {
+      // the fail-loud contract is one of the two allowed outcomes
+    }
+    expect([null, 'threw']).toContain(returned);
+    expect(readBaselineCommit(repo)).toBeNull();
+  });
+
   it('UT-STATE-2b (read-side CWE-20): a PLANTED baseline with a bad sha or blank branch reads unset', () => {
     mkdirSync(loopDir(), { recursive: true });
     for (const bad of [
