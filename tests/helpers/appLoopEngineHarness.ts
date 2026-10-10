@@ -234,6 +234,7 @@ export class AppLoopEngineHarness {
         clearBaselineCommit(repoDir);
       },
       currentBranch: () => currentBranchOverride,
+      pickupBranch: () => null,
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
       artifactCheckCommand: (check) =>

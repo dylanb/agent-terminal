@@ -159,6 +159,9 @@ export interface AppLoopEngineDeps {
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
   currentBranch(repoDir: string): string | null;
+  /** §27.10 — the branch this run's pickup created and checked out for the flow's ticket, or null when the run
+   *  has none. */
+  pickupBranch(repoDir: string): string | null;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
@@ -871,6 +874,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return null;
   };
 
+  const offPickupBranch = (repoDir: string): string | null => {
+    const expected = deps.pickupBranch(repoDir);
+    if (expected === null) return null;
+    const current = deps.currentBranch(repoDir);
+    if (current === expected) return null;
+    return `the worktree is on ${current ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
+  };
+
   runner = createTurnRunner({
     compose: (turnKey, retry) => {
       if (!active) return null;
@@ -950,6 +961,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.inject(prompt);
     },
     hostedAgent: () => deps.hostedAgent(),
+    injectionRefusal: () => (active ? offPickupBranch(active.repoDir) : null),
     completionShortfall,
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),

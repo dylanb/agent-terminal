@@ -55,9 +55,11 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
   let writeError: Mock<(reason: string) => void>;
   let onComplete: Mock<(turnKey: string) => void>;
   let noteSettle: Mock<() => void>;
+  let refusal: string | null;
 
   beforeEach(() => {
     hosted = 'idle';
+    refusal = null;
     artifact = true;
     shortfall = 'the turn artifact is missing';
     inject = vi.fn();
@@ -78,6 +80,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
       onComplete,
       noteSettle,
       resumeStalled: vi.fn(),
+      injectionRefusal: () => refusal,
     };
   });
 
@@ -325,6 +328,15 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     r.requestTurn('work-plan');
     expect(inject).not.toHaveBeenCalled();
     expect(writeError).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('error');
+  });
+
+  it('a refused injection sends nothing, not even the boundary, and errors with the refusal as the reason', () => {
+    refusal = 'the worktree is on fix/x, not plan-loop/issue-1';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan', { preamble: '/clear' });
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledWith('the worktree is on fix/x, not plan-loop/issue-1');
     expect(r.state()).toBe('error');
   });
 

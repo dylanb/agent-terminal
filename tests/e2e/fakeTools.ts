@@ -81,6 +81,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // absent, which is what the port distinguishes "no local branch" from "the probe itself failed" by.
     'if [ "$1" = "show-ref" ]; then ref=${!#}; local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ "$local_branch" = "${ref#refs/heads/}" ]; then exit 0; fi; exit 1; fi\n' +
     'if [ "$1" = "symbolic-ref" ]; then cat "$FAKE_GHGIT_LOG.current-branch" 2>/dev/null || echo main; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--abbrev-ref" ] && [ "$3" = "HEAD" ] && [ "$#" -eq 3 ]; then if [ -f "$FAKE_GHGIT_LOG.current-branch" ]; then cat "$FAKE_GHGIT_LOG.current-branch"; else head=$(cat .git/HEAD 2>/dev/null || true); case "$head" in "ref: refs/heads/"*) echo "${head#ref: refs/heads/}";; *) echo main;; esac; fi; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then pwd -P; exit 0; fi\n' +
     // Origin is read from config, never `remote get-url` (which applies url.*.insteadOf). Real git exits 1
     // for an unset key, which is how the port tells "no separate push URL" from a broken config.

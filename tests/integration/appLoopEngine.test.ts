@@ -200,6 +200,60 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
   });
 });
 
+describe('§27.10 — every turn after pickup runs on the branch pickup created', () => {
+  const PICKUP_BRANCH = 'plan-loop/issue-180';
+  const OTHER_BRANCH = 'fix/review-subject-artifact';
+
+  it('a work turn on a different branch than pickup created injects no prompt and summons the human, naming both branches', () => {
+    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => PICKUP_BRANCH });
+    enterAndInjectWork(engine);
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    const live = engine.liveErrorFor(h.repo);
+    expect(live?.kind).toBe('turn-error');
+    expect(live?.reason).toContain(PICKUP_BRANCH);
+    expect(live?.reason).toContain(OTHER_BRANCH);
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
+  });
+
+  it('a detached HEAD is not the pickup branch either', () => {
+    const engine = makeEngine(undefined, undefined, null, { pickupBranch: () => PICKUP_BRANCH });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(PICKUP_BRANCH);
+  });
+
+  it('a branch switched mid-step stops the next turn before it injects', () => {
+    let branch: string | null = PICKUP_BRANCH;
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => PICKUP_BRANCH,
+      currentBranch: () => branch,
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    branch = OTHER_BRANCH;
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes(REVIEW_KEY))).toBe(false);
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(OTHER_BRANCH);
+  });
+
+  it('a turn on the pickup branch injects as usual', () => {
+    const engine = makeEngine(undefined, undefined, PICKUP_BRANCH, { pickupBranch: () => PICKUP_BRANCH });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+  });
+
+  it('a run with no pickup branch is not held to one', () => {
+    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => null });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+  });
+});
+
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();
