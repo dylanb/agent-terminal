@@ -219,6 +219,13 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
     'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
     'only what the loop is not entitled to decide.',
+    '',
+    'Test-support code — a fake, stand-in, or double of a real tool, and the fixtures and helpers around it —',
+    'exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it',
+    'has no test of its own, changes an observable outcome only when a test the ticket needs relies on that',
+    'behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is',
+    '`dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never',
+    'runs out. A test written later that relies on the behaviour is reviewed in its own round.',
   );
   if (req.polish === 'defer') {
     lines.push(
