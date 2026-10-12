@@ -32,12 +32,43 @@ const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
 const ESSENTIAL_MARKER = "the repo's standards make essential to this change";
 const OPERATOR_DECISION = 'Operator decision (';
+const BUNDLE_ALTITUDE_MARKER = "this plan's own tests would catch";
+const OVERREACH_MARKER = 'no acceptance criterion names';
+const UNTESTABLE_MARKER = 'no test environment in the repository exercises';
+const SAME_GUARD_MARKER = 'another hole in the same';
 
 describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   for (const f of charters) {
     it(`${f} carries the materiality floor`, () => expect(read(f)).toContain(MATERIALITY_MARKER));
     it(`${f} treats additions beyond the ticket as a finding`, () => expect(read(f)).toContain(SCOPE_MARKER));
   }
+
+  // §28.8.1 — the bundle review checks the draft is complete and well-sliced; a mechanism bug the plan's own
+  // tests would catch, or an addition no acceptance criterion names, is not work for that review to grow.
+  for (const f of charters.filter((c) => c.startsWith(`${LOOP}/`))) {
+    it(`${f} leaves mechanism defects to the implementation's tests`, () => expect(read(f)).toContain(BUNDLE_ALTITUDE_MARKER));
+    it(`${f} routes an addition no acceptance criterion names to a human`, () => {
+      expect(read(f)).toContain(OVERREACH_MARKER);
+      expect(read(f)).toContain('needs a human decision');
+    });
+  }
+
+  // #180 rounds 16–20: macOS-only and real-agent behaviour no repo test can reach kept review spinning, and each
+  // fix patched one more hole in the same PATH-shim guard without anyone questioning the guard.
+  for (const f of charters.filter((c) => c.startsWith(`${LOOP}/`))) {
+    it(`${f} routes behaviour no test environment can reach to the plan's assumptions, not to elaboration`, () => {
+      expect(read(f)).toContain(UNTESTABLE_MARKER);
+      expect(read(f)).toContain('Assumptions');
+    });
+    it(`${f} treats another hole in the same guard as a sign the mechanism is wrong`, () => expect(read(f)).toContain(SAME_GUARD_MARKER));
+  }
+
+  it('the work recipe asks for an Assumptions list of behaviour no test environment exercises, each with its real-run check', () => {
+    const recipe = read(`${LOOP}/prompts/work.md`);
+    expect(recipe).toContain('Assumptions');
+    expect(recipe).toContain(UNTESTABLE_MARKER);
+    expect(recipe).toContain('real-run check');
+  });
 
   it('the work recipe forbids adding scope beyond the ticket', () =>
     expect(read(`${LOOP}/prompts/work.md`)).toContain(SCOPE_MARKER));

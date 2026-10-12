@@ -14,6 +14,9 @@ export const FIXED_DISPOSITION: Disposition = 'fixed';
 /** The disposition a deferred polish finding takes (§27.8 `polish: defer`). */
 export const OUT_OF_SCOPE_DISPOSITION: Disposition = 'dismissed — out of scope';
 
+/** The disposition a fix the loop is not entitled to make takes (§27.3 document-subject overreach). */
+export const NEEDS_HUMAN_DISPOSITION: Disposition = 'needs a human';
+
 /** The report grammar both sides agree on: heading prefixes, per-issue element labels, and the empty/failed
  *  persona marker. It pins the names/tokens, not a rigid layout — an over-constrained template would diverge
  *  the fake-agent from the real fixer (§27.5 Risks). */

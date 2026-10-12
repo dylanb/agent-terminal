@@ -191,6 +191,46 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   });
 });
 
+// §27.3 — a fixer that corrects a wrong mechanism in a document by specifying it in more detail hands the next
+// round new surface to review: #180's plan-bundle ran ten rounds that way, every fix adding mechanism.
+describe('composeReviewAndFixPrompt — fixing a document subject lifts, never adds (§27.3)', () => {
+  const req = (subjectRel?: string) => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    ...(subjectRel !== undefined ? { subjectRel } : {}),
+  });
+  const liftClause = /replac\w*\s+(that|the)\s+mechanism\s+with\s+the\s+contract\s+it\s+must\s+meet[\s\S]*never\s+by\s+specifying/i;
+  const overreachClause = /no\s+acceptance\s+criterion\s+names[\s\S]*`needs a human`/i;
+
+  it('tells the fixer to replace a wrong mechanism with its contract rather than detail it further', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(liftClause);
+  });
+
+  it('routes a fix that needs a state, outcome, field or defence no acceptance criterion names to a human', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(overreachClause);
+  });
+
+  const assumptionClause = /no\s+test\s+environment\s+in\s+the\s+repository\s+exercises[\s\S]*Assumptions/i;
+  const sameGuardClause = /another\s+hole\s+in\s+the\s+same[\s\S]*`needs a human`/i;
+
+  it('records behaviour no test environment exercises as an assumption rather than elaborating it', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(assumptionClause);
+  });
+
+  it('routes another hole in the same guard to a human as a sign the mechanism is wrong', () => {
+    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(sameGuardClause);
+  });
+
+  it('carries none of these clauses for a loop whose product is commits, where the mechanism is the work', () => {
+    const p = composeReviewAndFixPrompt(req());
+    for (const clause of [liftClause, overreachClause, assumptionClause, sameGuardClause]) expect(p).not.toMatch(clause);
+  });
+});
+
 describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
   const req = (polish?: 'fix' | 'defer') => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
