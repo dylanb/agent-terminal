@@ -79,8 +79,7 @@ export interface ReviewAndFixPromptReq {
   /** §27.4 — the repo-relative work artifact this round reviews; absent for a loop whose product is commits
    *  or a phase-result file (the reviewers then pull the diff themselves). */
   subjectRel?: string;
-  /** §27.10/§27.4 — the inputs the step carried (id + repo-relative path), named so each reviewer grades
-   *  against them rather than searching the repo for a file of the same name. */
+  /** §27.10/§27.4 */
   inputs?: ChainedInput[];
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
   sliceBrief?: SliceBrief;

@@ -234,8 +234,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
 
 });
 
-// §27.4 — the work turn is told where this work's flow documents live, with the code carved out, so a search
-// for "the plan" or "the ticket" never lands on an unrelated file of that name elsewhere in the repo.
+// §27.4
 describe('composeAppWorkPrompt (§27.4 — where the flow documents live)', () => {
   for (const completion of [
     { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') } as const,

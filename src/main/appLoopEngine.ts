@@ -283,7 +283,8 @@ type ActiveAppTurn =
       feedback?: string;
       /** §27.4 — the repo-relative work artifact the reviewers grade; absent when the work product is commits
        *  or a phase-result file. */
-      subjectRel?: string;      /** §27.10/§27.4 — the inputs the step carried, named to the reviewers by path. */
+      subjectRel?: string;
+      /** §27.10/§27.4 */
       inputs?: ChainedInput[];
     }
   | {

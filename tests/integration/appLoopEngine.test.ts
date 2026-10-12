@@ -1125,8 +1125,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(prompt).not.toMatch(/not the issue body/i);
   });
 
-  // §27.4 — a commit loop's reviewers grade against the plan it carries; without the path they search the repo
-  // for a `plan.md` and can land on a stale one (#137's gate-probe review read a leftover root plan.md).
+  // §27.4
   it('a commit-producing loop\'s review prompt names the inputs the step carried, by path', () => {
     const planPath = seedInputArtifact(join(h.repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md'), '# plan\n');
     h.defResult = resolved({ ...commitDef(), inputs: [binding('plan', planPath)] });

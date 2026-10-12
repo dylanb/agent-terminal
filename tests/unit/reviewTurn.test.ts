@@ -165,13 +165,7 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
   });
 });
 
-// §27.6 — the materiality floor that lets the termination rule reach a fixed point on PROSE. §27.6's
-// convergence argument (a memory-less fixer "re-dismisses a settled judgment every round … the loop
-// terminates when a round produces no changes") holds only if an in-scope finding that changes no
-// observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
-// refinement is what manufactures the next round's findings. The composer must state that criterion.
-// §27.4 — reviewers are told where this work's flow documents are, and that the code a loop produces is the
-// working-tree diff, so a search for "the plan" never lands on an unrelated plan.md elsewhere in the repo.
+// §27.4
 describe('composeReviewAndFixPrompt — the flow documents and the carried inputs (§27.4)', () => {
   const req = () => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
@@ -206,6 +200,11 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   });
 });
 
+// §27.6 — the materiality floor that lets the termination rule reach a fixed point on PROSE. §27.6's
+// convergence argument (a memory-less fixer "re-dismisses a settled judgment every round … the loop
+// terminates when a round produces no changes") holds only if an in-scope finding that changes no
+// observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
+// refinement is what manufactures the next round's findings. The composer must state that criterion.
 describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
   const req = () => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
