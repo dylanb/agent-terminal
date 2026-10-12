@@ -27,6 +27,7 @@ import {
   type DismissAllMsg,
   type DismissMsg,
   type FlowRequestMsg,
+  type FlowAdvanceMsg,
   type FlowProvideInputMsg,
   type FlowSetTitleMsg,
   type FlowSetActiveFlowMsg,
@@ -161,6 +162,11 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
  *  same safe-path guard as the todo channels. */
 export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** flow:advance (§6, #137 S2). */
+export function isValidFlowAdvance(m: unknown): m is FlowAdvanceMsg {
+  return isValidFlowRequest(m) && isRecord(m) && (m.step === undefined || (typeof m.step === 'string' && m.step.length > 0));
 }
 
 /** flow:provideInput — the typed input answers persisted to flow-state (§18.4 / §24.2.3 T3). */

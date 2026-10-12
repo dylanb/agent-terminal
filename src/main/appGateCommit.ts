@@ -4,7 +4,6 @@
 // stages ONLY the phase's own paths (the injected phase-start snapshot leaves operator WIP untouched, §28.3).
 
 import { CommandFailure, run } from './appBootstrapCommand';
-import { coreExecHardeningArgs, freshDisabledHooksDir } from './gitHardening';
 import { APP_STATE_DIRS } from './appStateDirs';
 import { isGitObjectId } from '../shared/appBootstrap';
 
@@ -79,19 +78,11 @@ export function createAppGateCommit(
   };
 }
 
-// §28.3 — `git add`/`git commit` are new command forms, so gitHardening's set is re-evaluated: `-c
-// commit.gpgSign=false` neutralizes gpg.program alongside the hooks/fsmonitor set. The `filter.*.clean` lever
-// (a repo `.gitattributes` + config driver run by `git add`) is an accepted residual — the agent already runs
-// the repo's own code in-turn, so `git add` is no new trust boundary (§28.3).
-function commitHardeningArgs(disabledHooks: string): string[] {
-  return [...coreExecHardeningArgs(disabledHooks), '-c', 'commit.gpgSign=false'];
-}
-
 /** Whether the index differs from HEAD. `git diff --cached --quiet` exits 1 when there ARE staged changes and 0
  *  when there are none (git's contract); any other failure rethrows. */
-async function hasStagedChanges(repoDir: string, harden: string[]): Promise<boolean> {
+async function hasStagedChanges(repoDir: string): Promise<boolean> {
   try {
-    await run('git', [...harden, 'diff', '--cached', '--quiet'], repoDir, 'commit side-effect: git diff failed');
+    await run('git', ['diff', '--cached', '--quiet'], repoDir, 'commit side-effect: git diff failed');
     return false;
   } catch (e) {
     if (e instanceof CommandFailure && e.exitCode === 1) return true;
@@ -102,19 +93,14 @@ async function hasStagedChanges(repoDir: string, harden: string[]): Promise<bool
 export function createRealAppGateCommit(
   repoDir: string,
 ): RunAppGateCommitSideEffect {
-  // Reads are hardened with the core set (hooks/fsmonitor); `commit.gpgSign=false` is a commit-only concern.
-  const readRev = async (args: string[], failure: string): Promise<string> => {
-    const harden = coreExecHardeningArgs(freshDisabledHooksDir());
-    return (await run('git', [...harden, ...args], repoDir, failure)).trim();
-  };
+  const readRev = async (args: string[], failure: string): Promise<string> => (await run('git', args, repoDir, failure)).trim();
   const git: AppGateCommitOperations = {
     // Rejects on a rootless repo (no HEAD) — the §28 chain always runs post-pickup, so a missing HEAD is a
     // genuine failure, not a baseline story to invent.
     headCommit: () => readRev(['rev-parse', '--verify', '--end-of-options', 'HEAD'], 'commit side-effect: git rev-parse HEAD failed'),
     commitWorkingTree: async (label, dirtyAtPhaseStart) => {
-      const harden = commitHardeningArgs(freshDisabledHooksDir());
       // `git add -A` only READS `.gitignore` (never writes it — AC2) and silently skips ignored paths.
-      await run('git', [...harden, 'add', '-A'], repoDir, 'commit side-effect: git add failed');
+      await run('git', ['add', '-A'], repoDir, 'commit side-effect: git add failed');
       // Unstage what a phase commit must never sweep (§28.3): operator WIP already dirty at phase start, and
       // the app's OWN state dirs — APP_STATE_DIRS, the SAME set the clean-tree gate uses (never a parallel
       // copy) — so loop/flow state never lands in a phase commit (CWE-200) and never makes nothing-to-commit
@@ -125,12 +111,12 @@ export function createRealAppGateCommit(
       // of a non-staged path is a clean no-op.
       await run(
         'git',
-        [...harden, '--literal-pathspecs', 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
+        ['--literal-pathspecs', 'reset', '-q', '--', ...dirtyAtPhaseStart, ...APP_STATE_DIRS],
         repoDir,
         'commit side-effect: git reset failed',
       );
-      if (!(await hasStagedChanges(repoDir, harden))) return { outcome: 'nothing-to-commit' };
-      await run('git', [...harden, 'commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
+      if (!(await hasStagedChanges(repoDir))) return { outcome: 'nothing-to-commit' };
+      await run('git', ['commit', '-m', label], repoDir, 'commit side-effect: git commit failed');
       // §28.5.1 — read the new commit AND its parent from ONE snapshot (`rev-list --parents -n 1`), chained
       // right after `git commit`: an atomic pair, so the composition's parent-vs-`before` check compares a
       // single HEAD state (a separate `rev-parse HEAD` then `HEAD^` would straddle two snapshots — a raced

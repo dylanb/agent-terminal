@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -116,36 +116,6 @@ describe('createRealAppGateCommit — real git (§28.3/§28.5.1 L1)', () => {
     const result = await createRealAppGateCommit(repo)({ label: 'refactor: noop', dirtyAtPhaseStart: [] });
     expect(result).toEqual({ outcome: 'nothing-to-commit' }); // no `sha` on the no-op arm
     expect(headCount(repo)).toBe(before); // no empty commit
-  });
-
-  it('T6: a planted git hook does not run (hooks/fsmonitor hardening)', async () => {
-    const sentinel = join(repo, 'HOOK_RAN');
-    const hooksDir = join(repo, '.git', 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    for (const hook of ['pre-commit', 'post-commit']) {
-      const p = join(hooksDir, hook);
-      writeFileSync(p, `#!/bin/sh\ntouch ${JSON.stringify(sentinel)}\n`);
-      chmodSync(p, 0o755);
-    }
-    fx.writeRepoFile(repo, 'src/e.ts', 'export const e = 5;\n');
-    const before = headCount(repo);
-    await createRealAppGateCommit(repo)({ label: 'GREEN: hardened', dirtyAtPhaseStart: [] });
-    expect(headCount(repo)).toBe(before + 1);
-    expect(existsSync(sentinel)).toBe(false);
-  });
-
-  it('T6b: gpg signing is neutralized — the commit lands unsigned and gpg.program never runs', async () => {
-    const sentinel = join(repo, 'GPG_RAN');
-    const fakeGpg = join(repo, 'fake-gpg.sh');
-    writeFileSync(fakeGpg, `#!/bin/sh\ntouch ${JSON.stringify(sentinel)}\nexit 1\n`);
-    chmodSync(fakeGpg, 0o755);
-    git(repo, 'config', 'commit.gpgSign', 'true');
-    git(repo, 'config', 'gpg.program', fakeGpg);
-    fx.writeRepoFile(repo, 'src/f.ts', 'export const f = 6;\n');
-    const before = headCount(repo);
-    await createRealAppGateCommit(repo)({ label: 'GREEN: unsigned', dirtyAtPhaseStart: [] });
-    expect(headCount(repo)).toBe(before + 1);
-    expect(existsSync(sentinel)).toBe(false);
   });
 
   it('T1b: a shell-metachar label lands verbatim as the subject and is never shell-interpreted (CWE-78)', async () => {

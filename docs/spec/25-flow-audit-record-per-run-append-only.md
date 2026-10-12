@@ -8,7 +8,7 @@ Each flow run writes a durable, human-auditable record from which a **complete t
 
 ### 25.2 Storage layout (D-audit-2)
 
-Audit root: `~/.agent-terminal/audit/`. One directory per repo, named by the repo **basename only**. One file per `flow:start`, named `<flowName>_<startTimestampZ>.yaml`, where the timestamp is ISO-8601 UTC to the second with `:` replaced by `-` (`2026-06-23T10-00-01Z`).
+Audit root: `~/.agent-terminal/audit/`. One directory per repo, named by the repo **basename only**. One file per `flow:start`, named `<flowName>_<startTimestampZ>.yaml`, where the timestamp is ISO-8601 UTC to the millisecond with `:` replaced by `-` (`2026-06-23T10-00-01.500Z`), so two Starts of one flow in the same second never share a file. Event `ts` values and the header's `started` stay to the second.
 
 The repo basename and the flow name are each reduced to a filesystem-safe segment before they reach the path — characters outside `[A-Za-z0-9._-]` become `-` — so an untrusted `flow.yaml` `name:` (a repo is untrusted input) cannot traverse the audit tree (CWE-22). Basename collision across two same-named repos is an **accepted limitation** (§25.7).
 
@@ -16,8 +16,8 @@ The repo basename and the flow name are each reduced to a filesystem-safe segmen
 ~/.agent-terminal/
   audit/
     agent-terminal/                         # repo basename
-      feature-dev_2026-06-23T10-00-01Z.yaml # one run
-      feature-dev_2026-06-25T14-12-00Z.yaml # a later re-run
+      feature-dev_2026-06-23T10-00-01.500Z.yaml # one run
+      feature-dev_2026-06-25T14-12-00.000Z.yaml # a later re-run
 ```
 
 ### 25.3 File format — YAML multi-document stream (D-audit-3)

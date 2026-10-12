@@ -7,10 +7,10 @@
 //   - a def that failed to resolve / parse / confine → a FAILURE view carrying the reason (AC 6),
 //     human-needed so the cue and OS notifier surface it, with no round.
 
-import type { FlowLoopView } from '../shared/ipc';
+import type { FlowAutoGateView, FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { readEpicSubTicketsAtGate } from './epicPromotion';
-import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2 } from './loopDefV2';
+import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2, type LoopDefV2Result } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState, isPolishActiveForStep, readChangedTests } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
@@ -31,11 +31,11 @@ function epicPreviewAtGate(def: LoopDefV2): FlowLoopView['epic'] {
   return subs ? { subTickets: subs.map((t) => ({ index: t.index, title: t.title })) } : undefined;
 }
 
-export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
+export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null, resolved?: LoopDefV2Result): FlowLoopView {
   // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
   // AND the gate options both come from it, so the terminal consolidator gate (a run-state view) can show the
   // verdict and the def's options together. Both are absent when the def does not resolve.
-  const r = resolveLoopDefV2(name, ctx);
+  const r = resolved ?? resolveLoopDefV2(name, ctx);
   const catalog = r.ok ? catalogPersonas(r.def) : undefined;
   const gateOptions = r.ok ? r.def.gate.map((g) => g.option) : [];
   // §27.12c — when the status:error write could not land (ENOSPC/EPERM/a planted symlink), the persisted
@@ -130,6 +130,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   };
 }
 
+/** §27.9.1 */
+export type AutoGateViewFor = (repoKey: string, step: string, turnKey: string) => FlowAutoGateView | undefined;
+
 /** The flow manager's §27 loop-view provider: reconstruct a relaunch-stranded turn to routable BEFORE the
  *  live error is read, then derive the view from it + the resolved def (§27.12/§27.15). Without this a
  *  persisted `working` turn — definitionally stopped by the relaunch — mirrors to a not-human-needed view
@@ -139,7 +142,30 @@ export function provideAppLoopView(
   engine: Pick<AppLoopEngine, 'activeRepoDir' | 'resume' | 'liveErrorFor'>,
   name: string,
   ctx: LoopDefV2Context,
+  autoGateViewFor?: AutoGateViewFor,
+  resolveDef?: (name: string) => LoopDefV2Result,
 ): FlowLoopView {
   if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
-  return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));
+  const view = deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir), resolveDef?.(name));
+  const autoGate = view.appTurn ? autoGateViewFor?.(ctx.repoDir, view.appTurn.step, view.appTurn.turnKey) : haltAtForeignRunState(ctx.repoDir, autoGateViewFor);
+  if (!autoGate) return view;
+  return { ...view, autoGate, humanNeeded: autoGateHumanNeeded(view, autoGate) };
+}
+
+/** §27.9.1 N9b.6(l) — an engine halt over a run-state naming another loop is still shown at its gate. */
+function haltAtForeignRunState(repoDir: string, autoGateViewFor?: AutoGateViewFor): FlowAutoGateView | undefined {
+  const run = autoGateViewFor && readAppLoopState(repoDir);
+  if (!run) return undefined;
+  const shown = autoGateViewFor(repoDir, run.step, run.turnKey);
+  return shown && shown.haltReasons.length > 0 ? shown : undefined;
+}
+
+/** §27.9.1 N9b.5(e) — the one human-needed derivation for a view carrying `autoGate`. */
+function autoGateHumanNeeded(view: FlowLoopView, autoGate: FlowAutoGateView): boolean {
+  return (
+    (view.actionable && !autoGate.deciding) ||
+    autoGate.hung ||
+    autoGate.haltReasons.length > 0 ||
+    isHumanNeededStatus(view.status)
+  );
 }

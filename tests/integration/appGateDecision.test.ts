@@ -1,13 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   resolveGateSideEffectBodyFile,
+  runAppApprove,
   runAppGateDecision,
+  stepScopedAdvance,
   type AppGateDecisionDeps,
+  type ApproveDecider,
 } from '../../src/main/appGateDecision';
 import { gateDecisionAuditCmd } from '../../src/shared/audit';
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
-import type { GateDecisionOption } from '../../src/shared/ipc';
+import type { FlowStateView, GateDecisionOption } from '../../src/shared/ipc';
+import { createEpicPromotionCoordinator } from '../../src/main/epicPromotion';
+import { createFlowManager } from '../../src/main/flow';
+import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import type { AppGateCommitCtx } from '../../src/main/appGateCommit';
 
 // §27.9/§27.13 / N5 — the §27 human-gate decision executor, driven with FAKES (no PTY). Approve runs the
@@ -118,9 +124,10 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     },
     enterPolish: (repoDir, step) => void rec.polishEnters.push({ repoDir, step }),
     clearPolish: (repoDir) => void rec.polishClears.push(repoDir),
-    reopenSlice: (repoDir) => {
+    reopenSlice: (repoDir, reopened) => {
       rec.reopens.push(repoDir);
       rec.order.push('reopen');
+      reopened();
       return true;
     },
     recordSliceBrief: (repoDir, fromStep, text) => {
@@ -513,6 +520,29 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
     expect(rec.views).toBeGreaterThan(0); // the view refreshes so the operator sees the flow back at RED
   });
 
+  // §25 — the decision belongs to the GREEN gate it was made at, so it precedes the RED re-entry it caused.
+  it('records the back-to-red decision once the slice has reopened and before the RED re-entry is recorded', async () => {
+    const log: string[] = [];
+    const { deps } = mkDeps({
+      run: GREEN_RUN,
+      gate: BACK_TO_RED_GATE,
+      audit: (_r, cmd) => void log.push(cmd),
+      reopenSlice: (_repoDir, reopened) => {
+        reopened();
+        log.push('step.entered red');
+        return true;
+      },
+    });
+    await expect(atGreen(deps)).resolves.toBe(true);
+    expect(log).toEqual([gateDecisionAuditCmd('decision', 'back-to-red', undefined, 'human'), 'step.entered red']);
+  });
+
+  it('records no back-to-red decision when the reopen does not land', async () => {
+    const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: BACK_TO_RED_GATE, reopenSlice: () => false });
+    await expect(atGreen(deps)).resolves.toBe(false);
+    expect(rec.audits.filter((a) => a.cmd.includes('back-to-red'))).toEqual([]);
+  });
+
   it('is inert when the bound def does not declare back-to-red (validated at the operation, AC9)', async () => {
     const { deps, rec } = mkDeps({ run: GREEN_RUN, gate: [{ option: 'approve', sideEffects: [] }] });
     await atGreen(deps);
@@ -652,7 +682,8 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
 
   it('enters the polish stand-down (app-owned state) and neither accepts, runs a side-effect, nor advances', async () => {
     const { deps, rec } = mkDeps({ gate: POLISH_GATE });
-    await decide(deps, 'polish');
+    // N9b.5(d)/(c) — a polish that landed is a human decision at the gate: the runners clear what it showed.
+    await expect(decide(deps, 'polish')).resolves.toBe(true);
     expect(rec.polishEnters).toEqual([{ repoDir: '/repo', step: 'plan' }]); // the stand-down for the named step
     expect(rec.accepts).toEqual([]);
     expect(rec.sideEffects).toEqual([]);
@@ -662,7 +693,7 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
 
   it('is inert when the bound def does not declare polish (validated at the operation, AC9)', async () => {
     const { deps, rec } = mkDeps({}); // approve-only default def
-    await decide(deps, 'polish');
+    await expect(decide(deps, 'polish')).resolves.toBe(false);
     expect(rec.polishEnters).toEqual([]);
   });
 
@@ -723,7 +754,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
         throw new Error('EISDIR: illegal operation on a directory');
       },
     });
-    await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
+    await expect(approve(deps)).resolves.toBe(true); // resolves as landed — the throw is caught, never rejects into the caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
     expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
@@ -752,7 +783,7 @@ describe('runAppGateDecision — inert when the gate cannot be established', () 
 // §28.7 — approving an epic-classified plan is classified into an EpicGateOutcome BEFORE the accept.
 describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
   // The §25 preview event's cmd, derived from its single producer so a rename re-flows here (shared-semantics).
-  const previewAuditCmd = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
+  const previewAuditCmd = gateDecisionAuditCmd('epic-promotion-preview', 'approve', undefined, 'human');
 
   it('preview-raised holds an epic approve before accept: no accept, no advance, no side-effect, preview audited', async () => {
     const { deps, rec } = mkDeps({ maybeBeginEpicPromotion: () => ({ kind: 'preview-raised' }) });
@@ -780,5 +811,162 @@ describe('runAppGateDecision — epic promotion interception (§28.7)', () => {
     await approve(deps);
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toHaveLength(1);
+  });
+});
+
+// #137 AC7/AC8 — who decided, at the approve operation: every entry an approve writes, under each decider.
+describe('runAppApprove — every approve entry carries its decider (§27.9.1 N9b.9, #137 AC7/AC8)', () => {
+  const refactorRun: AppLoopRunState = { loop: 'refactor-loop', step: 'refactor', turnKey: 'consolidate-refactor', status: 'complete', round: 1, verdict: 'clean' };
+  const refactorDef = { ok: true as const, def: { ...defWithGate([{ option: 'approve', sideEffects: [] }]), work: { recipe: '/r', artifact: 'commits', completion: 'refactor' as const } }, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' };
+  const throwing = (message: string) => () => {
+    throw new Error(message);
+  };
+  // Pinning: each scenario's human entries as written at 8f03f066.
+  const SCENARIOS: [string, Parameters<typeof mkDeps>[0], [string, number][]][] = [
+    ['a gh side-effect that runs', {}, [['§27 gate approve side-effect: mark-ready', 0], ['§27 gate approve', 0]]],
+    ['a commit with nothing to commit', { gate: APPROVE_COMMIT('RED'), commitOutcome: 'nothing-to-commit' }, [['§27 gate approve side-effect skipped: commit: nothing to commit', 0], ['§27 gate approve', 0]]],
+    ['a gh side-effect that fails', { sideEffectThrows: 'no PR to mark ready' }, [['§27 gate approve side-effect failed: mark-ready: no PR to mark ready', 1], ['§27 gate approve', 0]]],
+    ['an accept that fails to persist', { persistAccept: throwing('ENOSPC') }, [['§27 gate approve accept failed: ENOSPC', 1]]],
+    ['a polish clear that fails', { clearPolish: throwing('EISDIR') }, [['§27 gate approve clear-polish failed: EISDIR', 1], ['§27 gate approve side-effect: mark-ready', 0], ['§27 gate approve', 0]]],
+    ['a baseline record that fails', { gate: APPROVE_COMMIT('GREEN'), recordBaseline: throwing('EIO') }, [['§27 gate approve side-effect: commit: GREEN', 0], ['§27 gate approve baseline-record failed: EIO', 1], ['§27 gate approve', 0]]],
+    ['a slice-count sourcing that fails', { sourceSliceCount: throwing('EACCES') }, [['§27 gate approve side-effect: mark-ready', 0], ['§28 gate approve source-slices failed: EACCES', 1], ['§27 gate approve', 0]]],
+    ['a slice-brief clear that fails', { run: refactorRun, resolveDef: () => refactorDef, clearSliceBrief: throwing('ENOENT') }, [['§28 gate approve clear-brief failed: ENOENT', 1], ['§27 gate approve', 0]]],
+    ['an epic preview', { maybeBeginEpicPromotion: () => ({ kind: 'preview-raised' }) }, [['§28 gate approve epic-promotion preview raised', 0]]],
+  ];
+  const entries = (rec: Recorder): [string, number | null][] => rec.audits.map((a) => [a.cmd, a.exit]);
+  const engineDecider = (loop: string): ApproveDecider => ({ kind: 'engine', boundLoop: loop, humanAttempted: () => false, claimAccept: () => ({ ok: true }) });
+
+  it.each(SCENARIOS)('pinning: a human approve with %s writes its pre-#137 entries', async (_name, over, literals) => {
+    const { deps, rec } = mkDeps(over);
+    const run = deps.readRunState('/repo')!;
+    await runAppGateDecision('/repo', run.step, run.turnKey, 'approve', deps);
+    expect(entries(rec)).toEqual(literals);
+  });
+
+  it.each(SCENARIOS)('a human-decided runAppApprove with %s writes exactly the human entries', async (_name, over, literals) => {
+    const { deps, rec } = mkDeps(over);
+    const run = deps.readRunState('/repo')!;
+    await runAppApprove('/repo', run.step, run.turnKey, deps, { kind: 'human' });
+    expect(entries(rec)).toEqual(literals);
+  });
+
+  it.each(SCENARIOS)('an engine-decided runAppApprove with %s marks every entry it writes', async (_name, over, literals) => {
+    const { deps, rec } = mkDeps(over);
+    const run = deps.readRunState('/repo')!;
+    await runAppApprove('/repo', run.step, run.turnKey, deps, engineDecider(run.loop));
+    expect(entries(rec)).toEqual(literals.map(([cmd, exit]) => [cmd.replace(/^(§2[78] gate approve)/, '$1 (engine-decided)'), exit]));
+  });
+
+  // Concrete choice 1 — the outcome the engine branches on (N9b.5(c)/(d)).
+  const OUTCOMES: Record<string, unknown> = {
+    'a gh side-effect that runs': { kind: 'advanced', effectFailures: [] },
+    'a commit with nothing to commit': { kind: 'advanced', effectFailures: [] },
+    'a gh side-effect that fails': { kind: 'advanced', effectFailures: [expect.stringContaining('no PR to mark ready')] },
+    'an accept that fails to persist': { kind: 'accept-failed', reason: expect.stringContaining('ENOSPC') },
+    'a polish clear that fails': { kind: 'advanced', effectFailures: [expect.stringContaining('EISDIR')] },
+    'a baseline record that fails': { kind: 'advanced', effectFailures: [expect.stringContaining('EIO')] },
+    'a slice-count sourcing that fails': { kind: 'advanced', effectFailures: [expect.stringContaining('EACCES')] },
+    'a slice-brief clear that fails': { kind: 'advanced', effectFailures: [expect.stringContaining('ENOENT')] },
+    'an epic preview': { kind: 'preview-raised' },
+  };
+
+  it.each(SCENARIOS)('an engine-decided runAppApprove with %s returns the outcome naming what happened', async (name, over) => {
+    const { deps } = mkDeps(over);
+    const run = deps.readRunState('/repo')!;
+    await expect(runAppApprove('/repo', run.step, run.turnKey, deps, engineDecider(run.loop))).resolves.toEqual(OUTCOMES[name]);
+  });
+
+  const noEffect = (rec: Recorder): void => {
+    expect(rec.accepts).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+    expect(rec.commitSideEffects).toEqual([]);
+    expect(rec.advances).toEqual([]);
+    expect(rec.audits).toEqual([]);
+  };
+
+  it('stands down, with no effect and no entry, when a human attempt reached the gate first', async () => {
+    const { deps, rec } = mkDeps({});
+    const decider: ApproveDecider = { ...engineDecider('plan-loop'), humanAttempted: () => true } as ApproveDecider;
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, decider)).resolves.toEqual({ kind: 'stood-down' });
+    noEffect(rec);
+  });
+
+  it('refuses, with no effect, when the run-state names a loop other than the Start-bound one', async () => {
+    const { deps, rec } = mkDeps({});
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, engineDecider('some-other-loop'))).resolves.toEqual({ kind: 'refused', reason: expect.any(String) });
+    noEffect(rec);
+  });
+
+  it.each([
+    ['abandoned', { ok: false, abandoned: true }, { kind: 'abandoned' }],
+    ['run-ended', { ok: false, runEnded: true }, { kind: 'run-ended' }],
+    ['refused-late', { ok: false, reasons: ['c', 'h'] }, { kind: 'refused-late', reasons: ['c', 'h'] }],
+  ] as const)('a refused accept claim returns %s and persists nothing', async (_name, claim, outcome) => {
+    const { deps, rec } = mkDeps({});
+    const decider: ApproveDecider = { ...engineDecider('plan-loop'), claimAccept: () => claim } as ApproveDecider;
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, decider)).resolves.toEqual(outcome);
+    noEffect(rec);
+  });
+
+  it.each([
+    ['pinning: a human', '', (): ApproveDecider => ({ kind: 'human' })],
+    ['an engine', '(engine-decided) ', (): ApproveDecider => engineDecider('plan-bundle-loop')],
+  ] as const)('%s approve reaching a blocked epic promotion through the real coordinator writes the blocked entry with its decider', async (_n, mark, decider) => {
+    const coordAudits: Array<{ cmd: string; exit: number | null }> = [];
+    const coord = createEpicPromotionCoordinator({
+      readSubTickets: () => [{ index: 1, title: 'Slice one', body: 'Acceptance criteria: a\n\nplan one' }],
+      promotionRecordBlock: () => null,
+      emitPreview: () => undefined,
+      runPromotion: () => Promise.resolve(),
+      persistAccept: () => undefined,
+      terminateFlow: () => ({ outcome: 'reset', view: {} as FlowStateView }),
+      audit: (_r, cmd, exit) => void coordAudits.push({ cmd, exit }),
+      emitError: () => undefined,
+      onViewChanged: () => undefined,
+    });
+    const bundleRun: AppLoopRunState = { loop: 'plan-bundle-loop', step: 'plan-bundle', turnKey: 'consolidate-plan-bundle', status: 'complete', round: 1, verdict: 'clean' };
+    const { deps, rec } = mkDeps({
+      run: bundleRun,
+      maybeBeginEpicPromotion: (repoDir, def, step, turnKey, d) => coord.maybeBegin(repoDir, def, 'plan-bundle-loop', step, turnKey, { epic: null, pr: 77 }, d),
+    });
+    await runAppApprove('/repo', 'plan-bundle', 'consolidate-plan-bundle', deps, decider());
+    expect(coordAudits).toEqual([{ cmd: `§28 epic-promotion ${mark}blocked — unresolvable epic issue`, exit: 1 }]);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('an engine-decided runAppApprove held by a blocked epic promotion returns blocked', async () => {
+    const { deps } = mkDeps({ maybeBeginEpicPromotion: () => ({ kind: 'blocked' }) });
+    await expect(runAppApprove('/repo', 'plan', 'consolidate-plan', deps, engineDecider('plan-loop'))).resolves.toEqual({ kind: 'blocked' });
+  });
+});
+
+// §27.9.1 N9b.5(e) — the approve's advance is scoped to the step it decided: a manual Advance that lands while its
+// effects run has already moved the flow on, and the approve must not advance it a second time.
+describe('runAppApprove — the advance is step-scoped (#137 S1)', () => {
+  const fx = createWorktreeFixture();
+  afterEach(() => fx.cleanup());
+
+  it.each([
+    ['human', (): ApproveDecider => ({ kind: 'human' })],
+    ['engine', (): ApproveDecider => ({ kind: 'engine', boundLoop: 'plan-loop', humanAttempted: () => false, claimAccept: () => ({ ok: true }) })],
+  ] as const)('the %s approve of step N whose flow a manual Advance moved to N+1 mid-effects ends at N+1, entered once', async (_name, decider) => {
+    const wt = fx.makeWorktree('step-scoped-advance');
+    fx.writeFlowHome(wt, { name: 'scoped', stepIds: ['plan', 'next', 'after'] });
+    const entered: string[] = [];
+    const flow = createFlowManager({ globalDir: fx.outsideDir('step-scoped-global'), onEnterStep: (step) => void entered.push(step.id) });
+    expect(flow.start(wt).stepName).toBe('plan');
+    entered.length = 0;
+    const { deps } = mkDeps({
+      gate: APPROVE_COMMIT('RED'),
+      runCommitSideEffect: async () => {
+        flow.advance(wt);
+        return { outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' };
+      },
+      advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => void flow.advance(repoDir)),
+    });
+    await runAppApprove(wt, 'plan', 'consolidate-plan', deps, decider());
+    expect(flow.state(wt).stepName).toBe('next');
+    expect(entered).toEqual(['next']);
   });
 });

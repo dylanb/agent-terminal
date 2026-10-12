@@ -7,6 +7,7 @@ import type { ConsolidatorVerdict } from './consolidatorOutput';
 import type { AppBootstrapConflictTarget } from './appBootstrap';
 import type { StartednessSignal } from './flowStarted';
 import type { HeldRunView } from './runHold';
+import type { AutoHaltReason, FailedEffectState } from './gateAuthority';
 
 export type SessionId = string;
 
@@ -450,6 +451,14 @@ export interface FlowDerived {
   ready: boolean;
 }
 
+/** §27.9.1 */
+export interface FlowAutoGateView {
+  deciding: boolean;
+  hung: boolean;
+  haltReasons: { reason: AutoHaltReason; detail?: string }[];
+  failedEffect?: { state: FailedEffectState; detail: string };
+}
+
 /** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip
  *  render, produced by the bound engine — not a mirror of any file the app reads.
  *  `status` is the per-LoopDef state-machine string (unbounded — the
@@ -482,6 +491,7 @@ export interface FlowLoopView {
    *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
    *  a derived loop view — the `?` is for hand-constructed views only. */
   humanNeeded?: boolean;
+  autoGate?: FlowAutoGateView;
   /** §27.12 — the reason the current turn failed (or, on a marked binding, why the step names no surviving
    *  engine), present only at `status: 'error'`. Lets the loop panel show WHY the loop stopped (e.g. "no
    *  Claude at the prompt") rather than a bare "error", and is cleared the moment the status recovers.
@@ -707,6 +717,11 @@ export interface FlowResolveEpicPromotionMsg {
 export interface FlowRequestMsg {
   sessionId: SessionId;
   repoKey: string;
+}
+
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.185. */
+export interface FlowAdvanceMsg extends FlowRequestMsg {
+  step?: string;
 }
 
 /** flow:provideInput request (§18.4 / §24.2.3 T3 / §27.10): the renderer's answer to a step-entry
@@ -1127,8 +1142,9 @@ export interface FlowApi {
   state(repoKey: string): Promise<FlowStateView>;
   /** not_started → in_progress; rejects if not currently not_started. */
   start(repoKey: string): Promise<FlowStateView>;
-  /** in_progress → done; rejects if not currently in_progress. */
-  advance(repoKey: string): Promise<FlowStateView>;
+  /** in_progress → done; rejects if not currently in_progress. `step`, when given, names the step the caller
+   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6 v2.185). */
+  advance(repoKey: string, step?: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions

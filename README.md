@@ -47,3 +47,4 @@ pnpm run package    # electron-builder: dmg/zip (macOS), AppImage/deb (Linux)
 |---|---|---|
 | `APP_SHELL` | `$SHELL`, else `bash` | Shell binary for the hosted session. Defaults to the user's login shell; set this to override (e.g. Homebrew bash on macOS). |
 | `APP_SUBMIT_DELAY_MS` | `50` | Settle delay between an injected paste and the submitting `\r` (§9.3). Raise on loaded machines/CI if "Insert & submit" submissions are swallowed. |
+| `APP_AUTO_GATE_DECISION_MS` | `300000` | How long the engine may take to decide an `auto` gate before it hands the gate to a human (§27.9.1 N9b.5(e)). A non-finite or non-positive value falls back to the default; fractions round up; values above 2147483647 are clamped to it. |

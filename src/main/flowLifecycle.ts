@@ -21,6 +21,8 @@ export interface FlowLifecycleDeps {
   loopTurnActive(repoKey: string): boolean;
   /** Drop the runtime state issued under the run's current binding. */
   forgetRunEntry(repoKey: string): void;
+  /** §27.9.1 — end the engine-held run: called on every reset of the run to not_started. */
+  endRun(repoKey: string): void;
   recordTerminate(repoKey: string): void;
   clearTodos(repoKey: string): void;
   clearSliceBrief(repoKey: string): void;
@@ -57,6 +59,7 @@ function bestEffort(effect: () => void): void {
 export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
   const afterTerminateReset = (repoKey: string): void => {
     bestEffort(() => deps.forgetRunEntry(repoKey));
+    bestEffort(() => deps.endRun(repoKey));
     bestEffort(() => deps.releaseLoopTurn(repoKey));
     bestEffort(() => deps.recordTerminate(repoKey));
     bestEffort(() => deps.clearTodos(repoKey));
@@ -101,6 +104,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
         throw new Error(`${errMsg(e)} ${ROLLBACK_FAILED_REMEDY}`);
       }
       if (!locked.ok) throw new Error(`${locked.reason} ${ROLLBACK_FAILED_REMEDY}`);
+      if (locked.value.status === 'not_started') bestEffort(() => deps.endRun(repoKey));
       return locked.value;
     },
     rebind(repoKey, choice, ifStepMissing) {

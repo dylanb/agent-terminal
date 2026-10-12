@@ -36,6 +36,15 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', startedAt: 1_752_062_400_000 });
   });
 
+  // #137 — the run's identity (its flow name and Start instant) locates its §25 file; a §22.3.1 rename keeps it.
+  it('round-trips the run\'s flow name beside its start instant, and a rename keeps both', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'plan', status: 'in_progress', flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999 });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999 });
+    store.writeTitle('x');
+    expect(createFlowStateStore(dir).read()).toMatchObject({ flow: 'Auto Gate Flow', startedAt: 1_752_062_400_999, title: 'x' });
+  });
+
   it('omits the start instant for a flow that never recorded one', () => {
     createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
     expect(createFlowStateStore(dir).read()).not.toHaveProperty('startedAt');
@@ -180,6 +189,17 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
       expect(store.read()).not.toHaveProperty('repeatCounts'); // lenient read drops the non-positive count
       expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
       expect(readFileSync(file, 'utf8')).toContain('refactor: 0'); // strict write left the un-round-trippable doc intact
+    });
+
+    it('write-side strict validation rejects an ill-typed flow name that the lenient read drops', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\nflow: 5\n';
+      writeFileSync(file, before);
+      const store = createFlowStateStore(dir);
+      expect(store.read()).not.toHaveProperty('flow');
+      expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
     });
 
     it('clears the name without disturbing the progression', () => {

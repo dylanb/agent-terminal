@@ -7,6 +7,11 @@ export class CommandFailure extends Error {
   }
 }
 
+export interface RunOptions {
+  env?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
 function commandFailureFrom(failure: string, err: { code?: string | number | null }): CommandFailure {
   const code = typeof err.code === 'number' ? ` (exit ${err.code})` : '';
   return new CommandFailure(`${failure}${code}`, err.code ?? undefined);
@@ -18,11 +23,11 @@ export function run(
   args: string[],
   cwd: string,
   failure: string,
-  env?: Record<string, string>,
+  { env, signal }: RunOptions = {},
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const environment = env ? { ...commandEnvironment(), ...env } : commandEnvironment();
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: environment }, (err, stdout) => {
+    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: environment, signal }, (err, stdout) => {
       if (err) reject(commandFailureFrom(failure, err));
       else resolve(stdout);
     });
@@ -36,11 +41,11 @@ export function runBuffer(
   args: string[],
   cwd: string,
   failure: string,
-  env?: Record<string, string>,
+  { env, signal }: RunOptions = {},
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const environment = env ? { ...commandEnvironment(), ...env } : commandEnvironment();
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: environment, encoding: 'buffer' }, (err, stdout) => {
+    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: environment, encoding: 'buffer', signal }, (err, stdout) => {
       if (err) reject(commandFailureFrom(failure, err));
       else resolve(stdout as Buffer);
     });

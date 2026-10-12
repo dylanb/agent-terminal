@@ -1,9 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { currentGitBranch } from '../../src/main/gitBranch';
+import { installPathGitStub } from '../helpers/pathGitStub';
+import { shellQuote } from '../../src/shared/shellQuote';
 
 // §28.5.1 — currentGitBranch is the frozen baseline's slice key. A named branch → its name; a detached HEAD or
 // a non-repo → null (a state that cannot prove "same slice", so the frozen check blocks — fail toward firing).
@@ -19,6 +21,24 @@ describe('currentGitBranch (§28.5.1)', () => {
     fx.writeRepoFile(repo, 'seed.txt', 'x\n');
     fx.commitAll(repo, 'baseline');
     expect(currentGitBranch(repo)).toBe(fx.git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']));
+  });
+
+  it('reads the branch under the repo\'s own git config: no hooks-path or fsmonitor override (v2.184 (10))', () => {
+    const repo = fx.makeGitRepo('gitbranch-config');
+    fx.writeRepoFile(repo, 'seed.txt', 'x\n');
+    fx.commitAll(repo, 'baseline');
+    const expected = fx.git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const log = join(mkdtempSync(join(tmpdir(), 'gitbranch-config-log-')), 'git.log');
+    const stub = installPathGitStub([{ argvPrefix: [], script: `printf '%s\\n' "$*" >> ${shellQuote(log)}` }]);
+    try {
+      expect(currentGitBranch(repo)).toBe(expected);
+      const lines = readFileSync(log, 'utf8').split('\n').filter((l) => l.includes('rev-parse --abbrev-ref HEAD'));
+      expect(lines).toHaveLength(1);
+      expect(lines.filter((l) => /core\.(hooksPath|fsmonitor)=/.test(l))).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      stub.dispose();
+    }
   });
 
   it('returns null on a detached HEAD (the literal HEAD cannot key a slice)', () => {

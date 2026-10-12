@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
+import { auditTimestamp, parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
 const D = new Date('2026-06-23T10:00:01.000Z');
@@ -411,4 +411,30 @@ describe('audit writer — the retired cost/ci kinds stay closed to new writers 
       expect(token.test(writerSrc), `src/main/auditRecorder.ts must not name a ${kind} event (§H.1: closed to new writers)`).toBe(false);
     });
   }
+});
+
+// #137 — the Start reads the clock once: the run's §25 file and header take the Start's instant and flow name,
+// never the recorder's own clock or a live flow-name read.
+describe('audit recorder — the start leg takes the run\'s Start identity (#137)', () => {
+  let root: string;
+  let repo: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'audit-root-'));
+    repo = mkdtempSync(join(tmpdir(), 'audit-repo-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('names the file and stamps the header from the Start instant and flow, a second before the recorder\'s clock', () => {
+    const startedAt = Date.parse('2026-06-23T10:00:01.999Z');
+    const later = new Date(startedAt + 1_000);
+    createAuditRecorder({ root, now: () => later, flowName: () => 'another-flow' }).recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS, { startedAt, flow: 'Auto Gate Flow' });
+
+    const file = auditFilePath(root, repo, 'Auto Gate Flow', new Date(startedAt));
+    expect(readdirSync(auditRepoDir(root, repo))).toEqual([basename(file)]);
+    expect(parseAuditStream(readFileSync(file, 'utf8')).header).toMatchObject({ flow: 'Auto Gate Flow', started: auditTimestamp(new Date(startedAt)) });
+  });
 });

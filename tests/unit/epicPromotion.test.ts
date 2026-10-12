@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createEpicPromotionCoordinator, promotionRecordStale, type EpicGateOutcome, type EpicPromotionCoordinatorDeps, type EpicPromotionRefs } from '../../src/main/epicPromotion';
-import { gateDecisionAuditCmd } from '../../src/shared/audit';
+import { gateDecisionAuditCmd, type GateDecider } from '../../src/shared/audit';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { EpicSubTicket } from '../../src/shared/epicPlan';
 import type { FlowStateView } from '../../src/shared/ipc';
@@ -11,7 +11,7 @@ import type { FlowStateView } from '../../src/shared/ipc';
 // §25 — the caller fires the preview audit iff maybeBegin returned preview-raised; the detection needle both the
 // block-string guard and these tests key on is derived from its single producer, never hardcoded (shared-semantics),
 // so a rename of the preview cmd re-flows here rather than leaving a stale literal that matches vacuously.
-const PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve');
+const PREVIEW_AUDIT_CMD = gateDecisionAuditCmd('epic-promotion-preview', 'approve', undefined, 'human');
 
 const DEF = {} as LoopDefV2;
 const SUBS: EpicSubTicket[] = [
@@ -134,6 +134,99 @@ describe('maybeBegin — block a precondition failure before the preview (§28.7
     expect(approveEpic(coord)).toEqual({ kind: 'preview-raised' });
     expect(deps.emitPreview).toHaveBeenCalledTimes(1);
   });
+});
+
+// #137 AC7 — pinning: every `§28 epic-promotion` entry the coordinator writes, byte-for-byte as at 8f03f066.
+describe('pinning: the coordinator\'s epic-promotion audit entries (#137 AC7)', () => {
+  const approveEpic = (coord: ReturnType<typeof harness>['coord'], refs: EpicPromotionRefs = { epic: 176, pr: 77 }): EpicGateOutcome =>
+    coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', refs);
+  const entries = (deps: EpicPromotionCoordinatorDeps): [string, number | null][] => vi.mocked(deps.audit).mock.calls.map(([, cmd, exit]) => [cmd, exit]);
+
+  it.each([
+    ['corrupt' as const, '§28 epic-promotion blocked — unreadable promotion record'],
+    ['stale-split' as const, '§28 epic-promotion blocked — plan diverged from partial-promotion record'],
+  ])('a %s promotion record writes the blocked entry', (block, literal) => {
+    const { deps, coord } = harness({ promotionRecordBlock: vi.fn(() => block) });
+    approveEpic(coord);
+    expect(entries(deps)).toEqual([[literal, 1]]);
+  });
+
+  it('an unresolvable epic issue writes the blocked entry', () => {
+    const { deps, coord } = harness();
+    approveEpic(coord, { epic: null, pr: 77 });
+    expect(entries(deps)).toEqual([['§28 epic-promotion blocked — unresolvable epic issue', 1]]);
+  });
+
+  it('a declined promotion writes the declined entry', async () => {
+    const { deps, coord } = harness();
+    approveEpic(coord);
+    await coord.resolve('/repo', 'plan-bundle', false);
+    expect(entries(deps)).toEqual([['§28 epic-promotion declined', 0]]);
+  });
+
+  it('a confirmed promotion writes the confirm entry', async () => {
+    const { deps, coord } = harness();
+    approveEpic(coord);
+    await coord.resolve('/repo', 'plan-bundle', true);
+    expect(entries(deps)).toEqual([['§28 epic-promotion', 0]]);
+  });
+
+  it('a refused Terminate after the confirm writes the terminate-failed entry with its reason', async () => {
+    const { deps, coord } = harness({
+      terminateFlow: vi.fn(() => ({ outcome: 'refused' as const, cause: 'locked' as const, reason: 'a peer holds the worktree lock', view: {} as FlowStateView })),
+    });
+    approveEpic(coord);
+    await coord.resolve('/repo', 'plan-bundle', true);
+    expect(entries(deps)).toEqual([['§28 epic-promotion', 0], ['§28 epic-promotion terminate failed: a peer holds the worktree lock', 1]]);
+  });
+
+  it('a throwing Terminate after the confirm writes the terminate-failed entry with the error', async () => {
+    const { deps, coord } = harness({
+      terminateFlow: vi.fn(() => {
+        throw new Error('illegal flow transition');
+      }),
+    });
+    approveEpic(coord);
+    await coord.resolve('/repo', 'plan-bundle', true);
+    expect(entries(deps)).toEqual([['§28 epic-promotion', 0], ['§28 epic-promotion terminate failed: illegal flow transition', 1]]);
+  });
+});
+
+// #137 AC8 — an engine-decided approve's blocked entry is marked; a human one is the pinned literal.
+describe('the coordinator\'s blocked entries carry the decider (§27.9.1 N9b.9, #137 AC8)', () => {
+  const blockedBy = (decider: GateDecider, over: Partial<EpicPromotionCoordinatorDeps>, refs: EpicPromotionRefs = { epic: 176, pr: 77 }): [string, number | null][] => {
+    const { deps, coord } = harness(over);
+    coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', refs, decider);
+    return vi.mocked(deps.audit).mock.calls.map(([, cmd, exit]) => [cmd, exit]);
+  };
+
+  it.each([
+    ['a corrupt record', { promotionRecordBlock: vi.fn(() => 'corrupt' as const) }, undefined, 'blocked — unreadable promotion record'],
+    ['a stale record', { promotionRecordBlock: vi.fn(() => 'stale-split' as const) }, undefined, 'blocked — plan diverged from partial-promotion record'],
+    ['an unresolvable epic issue', {}, { epic: null, pr: 77 }, 'blocked — unresolvable epic issue'],
+  ] as [string, Partial<EpicPromotionCoordinatorDeps>, EpicPromotionRefs | undefined, string][])('%s: engine-decided is marked, human is unmarked', (_name, over, refs, tail) => {
+    expect(blockedBy('engine', over, refs)).toEqual([[`§28 epic-promotion (engine-decided) ${tail}`, 1]]);
+    expect(blockedBy('human', over, refs)).toEqual([[`§28 epic-promotion ${tail}`, 1]]);
+  });
+
+  it.each([
+    ['a confirm', {}, true, [['§28 epic-promotion', 0]]],
+    ['a decline', {}, false, [['§28 epic-promotion declined', 0]]],
+    [
+      'a confirm whose Terminate is refused',
+      { terminateFlow: vi.fn(() => ({ outcome: 'refused' as const, cause: 'locked' as const, reason: 'a peer holds the worktree lock', view: {} as FlowStateView })) },
+      true,
+      [['§28 epic-promotion', 0], ['§28 epic-promotion terminate failed: a peer holds the worktree lock', 1]],
+    ],
+  ] as [string, Partial<EpicPromotionCoordinatorDeps>, boolean, [string, number][]][])(
+    'an engine-begun preview resolved by %s from the operator writes unmarked entries (N9b.9)',
+    async (_name, over, confirm, expected) => {
+      const { deps, coord } = harness(over);
+      coord.maybeBegin('/repo', DEF, 'plan-bundle-loop', 'plan-bundle', 'consolidate-plan-bundle', { epic: 176, pr: 77 }, 'engine');
+      await coord.resolve('/repo', 'plan-bundle', confirm);
+      expect(vi.mocked(deps.audit).mock.calls.map(([, cmd, exit]) => [cmd, exit])).toEqual(expected);
+    },
+  );
 });
 
 describe('promotionRecordStale — a resumed record reconciled against the current plan (§28.7)', () => {

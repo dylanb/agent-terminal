@@ -23,6 +23,7 @@ import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
+import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -57,6 +58,7 @@ export interface FlowStepDef {
    *  surviving engine when the flow file names none (AC 4) — so engine choice is a property of the reviewed
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
+  gateAuthority?: GateAuthority;
   /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: 'pickup';
@@ -205,8 +207,17 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
     if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
       return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
+    // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
+    if (raw.kind !== 'loop' && raw.gate_authority !== undefined)
+      return { ok: false, error: `flow.yaml step "${raw.id}" declares gate_authority, which only a loop step may carry` };
+    let gateAuthority: GateAuthority | undefined;
     let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
     if (raw.kind === 'loop') {
+      if (raw.gate_authority !== undefined) {
+        if (!isGateAuthority(raw.gate_authority))
+          return { ok: false, error: `flow.yaml loop step "${raw.id}" has unsupported gate_authority "${String(raw.gate_authority)}" (supports: ${GATE_AUTHORITIES.join(', ')})` };
+        gateAuthority = raw.gate_authority;
+      }
       if (raw.loop_namespace !== undefined) {
         if (!isRecognizedLoopBinding(raw.loop_namespace))
           return { ok: false, error: `flow.yaml loop step "${raw.id}" names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
@@ -250,6 +261,7 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
       ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
+      ...(gateAuthority !== undefined ? { gateAuthority } : {}),
       ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
       ...(repeat ? { repeat } : {}),
@@ -272,6 +284,12 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
+/** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
+export interface RunIdentity {
+  startedAt: number;
+  flow: string;
+}
+
 /** A view as the state machine produces it — before the manager splices on the per-call run started-ness. */
 export type MachineView = Omit<FlowStateView, 'runStarted' | 'runHold'>;
 
@@ -283,8 +301,9 @@ export interface FlowMachine {
   currentSlice(): number;
   /** §28.4.2 — the step a slice restarts at (the repeat step's `back_to`), or null when the flow declares none. */
   sliceStartStep(): string | null;
-  /** not_started → in_progress; throws on any other current status (inert in the error state). */
-  start(): MachineView;
+  /** not_started → in_progress; throws on any other current status (inert in the error state). The run's
+   *  identity (§27.9.1) takes `startedAt` (default: now) and this definition's name, kept until a reset. */
+  start(at?: { startedAt: number }): MachineView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
   advance(): MachineView;
   /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
@@ -404,6 +423,7 @@ export function createFlowMachine(
   let repeatCounts: Record<string, number> = Object.create(null);
   // §22.3.1.
   let userTitle: string | null = null;
+  let identity: RunIdentity | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -415,12 +435,14 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     repeatCounts = Object.create(null);
+    identity = null;
     const persisted = store.read();
     if (persisted) {
       if (resumesAt(def, persisted.step)) {
         index = names.indexOf(persisted.step);
         status = persisted.status;
       }
+      if (persisted.startedAt !== undefined && persisted.flow !== undefined) identity = { startedAt: persisted.startedAt, flow: persisted.flow };
       if (persisted.inputs) inputs = { ...persisted.inputs };
       if (persisted.repeatCounts) for (const [k, v] of Object.entries(persisted.repeatCounts)) repeatCounts[k] = v;
       userTitle = persisted.title ?? null;
@@ -506,14 +528,18 @@ export function createFlowMachine(
     return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
   };
 
-  const persist = (): void =>
+  const persist = (): void => {
+    // §27.9.1 — a run reset to not_started carries no run identity.
+    if (status === 'not_started') identity = null;
     store?.write({
       step: current().id,
       status,
+      ...(identity !== null ? { startedAt: identity.startedAt, flow: identity.flow } : {}),
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(Object.keys(repeatCounts).length > 0 ? { repeatCounts: { ...repeatCounts } } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
+  };
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
@@ -544,9 +570,10 @@ export function createFlowMachine(
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
     sliceStartStep: () => steps.find((s) => s.repeat)?.repeat?.backTo ?? null,
-    start: () => {
+    start: (at) => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
+      identity = { startedAt: at?.startedAt ?? Date.now(), flow: def.name };
       persist();
       return enter(view());
     },
@@ -660,7 +687,7 @@ export function createFlowMachine(
  */
 export interface FlowManager {
   state(repoKey: string): FlowStateView;
-  start(repoKey: string): FlowStateView;
+  start(repoKey: string, opts?: { startedAt: number; run?: StartRunDefinition }): FlowStateView;
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
@@ -682,6 +709,12 @@ export interface FlowManager {
   resolveInputs(repoKey: string, values: Record<string, string>): FlowStateView;
   /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
+}
+
+/** The one resolution a Start acts on (§27.9.1): the definition and the binding it recorded. */
+export interface StartRunDefinition {
+  definition: FlowDefinition;
+  binding?: DispositionRead;
 }
 
 /** Whether a Terminate reset the run's progression, so the caller's abandon side effects run only when it did. */
@@ -723,8 +756,12 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  const machineFor = (repoKey: string): { machine: FlowMachine; binding?: DispositionRead } => {
-    const resolved = loadDef(repoKey, deps.globalDir);
+  const machineFor = (repoKey: string, run?: StartRunDefinition): { machine: FlowMachine; binding?: DispositionRead } => {
+    const live = loadDef(repoKey, deps.globalDir);
+    // §27.9.1 — a Start acts on the one resolution it was handed, never a second live read.
+    const resolved: ResolvedDefinition = run
+      ? { load: { ok: true, definition: run.definition, flowDir: live.load.ok ? live.load.flowDir : '' }, binding: run.binding ?? live.binding }
+      : live;
     const sig = JSON.stringify(resolved.load);
     const cached = cache.get(repoKey);
     if (cached && cached.sig === sig) {
@@ -753,11 +790,11 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     withRunStarted(k, { ...machineView(k, (m) => m.state()), notice });
   return {
     state: (k) => viewOf(k, (m) => m.state()),
-    start: (k) => {
+    start: (k, opts) => {
       // §18.7.3 AC9 / §18.7.4 AC7 — the begun marker and its source binding are committed BEFORE the transition to
       // in_progress, so no begun run can exist without a recorded source; a marker that cannot be written refuses
       // the start with a visible reason, leaving the run not_started.
-      const { machine, binding } = machineFor(k);
+      const { machine, binding } = machineFor(k, opts?.run);
       const begins = binding !== undefined && machine.state().status === 'not_started';
       // §18.7.2 — a record a reset could not remove would block the record write below, so it is retried here.
       if (begins && runRecordRead(k) === 'unreadable') {
@@ -775,7 +812,8 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
           return stateWithNotice(k, `The run could not be started: ${errMsg(e)}`);
         }
       }
-      const view = machineView(k, (m) => m.start());
+      const at = opts ? { startedAt: opts.startedAt } : undefined;
+      const view = opts?.run ? machine.start(at) : machineView(k, (m) => m.start(at));
       if (begins && !hadMarker && view.status !== 'in_progress') {
         try {
           clearDisposition(k);

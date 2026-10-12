@@ -86,23 +86,34 @@ function issueProblems(block: IssueBlock, line: number): string[] {
  *  a required element or carrying a disposition outside the closed set (exact match, trimmed — never
  *  normalized). Empty ⟺ well-formed. Disposition CORRECTNESS is out of scope. */
 export function roundReportProblems(report: string, spec: RoundReportSpec): string[] {
-  const lines = report.split('\n');
-  const sectionsPresent = new Set<string>();
-  const personasPresent = new Set<string>();
   const g = REPORT_GRAMMAR;
-  const problems: string[] = [];
+  const parsed = parseReport(report);
+  const problems: string[] = parsed.issues.flatMap(({ block, line }) => issueProblems(block, line));
+  for (const s of spec.sections) if (!parsed.sections.has(s)) problems.push(`missing the \`${g.sectionPrefix}${s}\` section heading`);
+  for (const p of spec.roster) {
+    if (!parsed.personas.has(p)) problems.push(`missing the \`${g.personaPrefix}${p}\` reviewer record (write \`${g.emptyMarker}\` or \`${g.failedMarker}\` if it raised nothing)`);
+  }
+  return problems;
+}
+
+function parseReport(report: string): { sections: Set<string>; personas: Set<string>; issues: { block: IssueBlock; line: number }[] } {
+  const lines = report.split('\n');
+  const sections = new Set<string>();
+  const personas = new Set<string>();
+  const issues: { block: IssueBlock; line: number }[] = [];
+  const g = REPORT_GRAMMAR;
 
   let currentPersona: string | null = null;
   for (let i = 0; i < lines.length; i++) {
     const persona = isHeading(lines[i], g.personaPrefix);
     if (persona !== null) {
-      personasPresent.add(persona);
+      personas.add(persona);
       currentPersona = persona;
       continue;
     }
     const section = isHeading(lines[i], g.sectionPrefix);
     if (section !== null) {
-      sectionsPresent.add(section);
+      sections.add(section);
       currentPersona = null;
       continue;
     }
@@ -121,17 +132,22 @@ export function roundReportProblems(report: string, spec: RoundReportSpec): stri
         if (w !== null) block.whatChanged = w.value;
         j = (d ?? r ?? w)?.end ?? j + 1;
       }
-      problems.push(...issueProblems(block, i + 1));
+      issues.push({ block, line: i + 1 });
       i = j - 1;
     }
   }
-
-  for (const s of spec.sections) if (!sectionsPresent.has(s)) problems.push(`missing the \`${g.sectionPrefix}${s}\` section heading`);
-  for (const p of spec.roster) {
-    if (!personasPresent.has(p)) problems.push(`missing the \`${g.personaPrefix}${p}\` reviewer record (write \`${g.emptyMarker}\` or \`${g.failedMarker}\` if it raised nothing)`);
-  }
-  return problems;
+  return { sections, personas, issues };
 }
+
+/** §27.9.1 N9b.6(a) — whether the report records any issue with the `needs a human` disposition; `null` when an
+ *  issue's disposition cannot be read as one of the closed set. */
+export function reportNeedsAHuman(report: string): boolean | null {
+  const dispositions = parseReport(report).issues.map(({ block }) => block.disposition);
+  if (dispositions.some((d) => d === null || !DISPOSITION_SET.has(d))) return null;
+  return dispositions.includes(NEEDS_A_HUMAN);
+}
+
+const NEEDS_A_HUMAN: Disposition = 'needs a human';
 
 /** Whether the report is well-formed (§27.5/§27.12) — exactly when `roundReportProblems` finds nothing. */
 export function roundReportWellFormed(report: string, spec: RoundReportSpec): boolean {
