@@ -15,3 +15,5 @@ plan.md
 .agent-terminal/flow-state.yaml
 .pnpm-store/
 __screenshots__/
+!bench/fixtures/**
+!tests/fixtures/bench/**

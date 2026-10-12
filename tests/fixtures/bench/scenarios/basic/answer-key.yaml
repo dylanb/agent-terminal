@@ -1,0 +1,12 @@
+flow: bench-minimal
+steps:
+  b:
+    loop: bench-b
+    expect:
+      well_formed: true
+      verdict: clean
+  c:
+    loop: bench-c
+    expect:
+      well_formed: true
+      verdict: clean

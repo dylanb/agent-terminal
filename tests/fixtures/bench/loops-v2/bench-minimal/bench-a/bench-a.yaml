@@ -1,0 +1,36 @@
+version: v2
+name: bench-a
+work:
+  recipe: prompts/work.md
+  artifact: bench-a-out
+reviewers:
+  - persona: bench-a-reviewer
+    charter: charter/reviewer.md
+    tools: [Read, Grep, Glob]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: update-issue-body
+        artifact: bench-a-out
+  - option: request-changes
+  - option: redo
+  - option: polish
+pickup:
+  initial_status: planning
+  branch_template: bench-a/issue-{issue}
+  initial_labels:
+    - action: add
+      target: issue
+      label: bench/in-progress
+  on_conflict: wipe-and-retry
+outputs:
+  - id: bench-a-out
+    path: bench-a.md

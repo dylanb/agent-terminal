@@ -1,0 +1,27 @@
+version: v2
+name: bench-c
+work:
+  recipe: prompts/work.md
+  artifact: bench-c-out
+reviewers:
+  - persona: bench-c-reviewer
+    charter: charter/reviewer.md
+    tools: [Read, Grep, Glob]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+  - option: request-changes
+  - option: redo
+  - option: polish
+inputs:
+  - id: bench-b-out
+    path: bench-b.md
+outputs:
+  - id: bench-c-out
+    path: bench-c.md

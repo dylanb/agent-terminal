@@ -1,0 +1,35 @@
+# The minimal flow the benchmark's whole-run tests drive (#180): one manual step, four loop steps, and a
+# final manual step. `c` loops back to `b` (§28.4) `n` times; `m` and `a` name a skill print mode drops.
+name: bench-minimal
+steps:
+  - id: m
+    kind: manual
+    skill: bench-manual-skill
+    todo_template: manual
+  - id: a
+    kind: loop
+    loop: bench-a
+    loop_namespace: app
+    skill: bench-pickup-skill
+    inputs:
+      - name: ticket
+        type: github-ticket
+        required: true
+  - id: b
+    kind: loop
+    loop: bench-b
+    loop_namespace: app
+  - id: c
+    kind: loop
+    loop: bench-c
+    loop_namespace: app
+    repeat:
+      back_to: b
+      count_input: n
+  - id: d
+    kind: loop
+    loop: bench-d
+    loop_namespace: app
+  - id: z
+    kind: manual
+    todo_template: manual

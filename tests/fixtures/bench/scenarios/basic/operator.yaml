@@ -1,0 +1,5 @@
+steps:
+  b:
+    - approve
+  c:
+    - approve
