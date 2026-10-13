@@ -19,6 +19,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   'test_command',
   'build_command',
   'select_template',
+  'red_check_command',
 ]);
 
 export interface LoopCapabilities {
@@ -26,6 +27,8 @@ export interface LoopCapabilities {
   testCommand: string;
   buildCommand: string;
   selectTemplate?: string;
+  /** §28.5.2 */
+  redCheckCommand?: string;
 }
 
 export type LoopCapabilitiesParse =
@@ -89,6 +92,12 @@ function parse(text: string): LoopCapabilities {
   };
   if (doc.select_template !== undefined) {
     result.selectTemplate = requireNonBlankString(doc.select_template, 'select_template');
+  }
+  if (doc.red_check_command !== undefined) {
+    const command = requireNonBlankString(doc.red_check_command, 'red_check_command');
+    // CWE-74
+    if (/[\u0000-\u001f\u007f]/.test(command)) fail('red_check_command must be a single line');
+    result.redCheckCommand = command;
   }
   return result;
 }

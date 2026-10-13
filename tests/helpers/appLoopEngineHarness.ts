@@ -49,6 +49,8 @@ const completionPredicatesSentinel: LoopCompletionPredicates = {
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   recoverExitCode: async () => null,
+  redCheckCommand: () => null,
+  redCheck: async () => ({ kind: 'refused', reason: 'sentinel' }),
 };
 
 /** Flush the engine's async RED gate (redAsyncGate resolves on the fake predicate promises, then re-enters the
@@ -92,6 +94,8 @@ export class AppLoopEngineHarness {
   workRefsResult!: { ticket: number | null; pr: number | null };
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
+  /** §28.4 D1 */
+  currentSliceResult!: number;
   defResult!: LoopDefV2Result;
 
   setUp = (): void => {
@@ -180,6 +184,7 @@ export class AppLoopEngineHarness {
     this.injected = [];
     this.workRefsResult = { ticket: null, pr: null };
     this.sliceBriefResult = null;
+    this.currentSliceResult = 1;
     this.polishStep = null;
     this.clearPolishError = null;
     this.clearBaselineError = null;
@@ -237,6 +242,7 @@ export class AppLoopEngineHarness {
       pickupBranch: () => ({ kind: 'none' }),
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
+      currentSlice: () => this.currentSliceResult,
       artifactCheckCommand: (check) =>
         check.kind === 'report'
           ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`

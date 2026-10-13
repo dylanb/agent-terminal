@@ -1,6 +1,7 @@
 # §28.5.4 — framework-neutral per-repo loop descriptor consumed by the in-terminal loop engine's
 # RED/GREEN completion gates. test_globs identifies which files count as tests (the RED gate checks a
 # turn added lines to one); test_command/build_command are inert guidance strings (never executed).
+# §28.5.2
 test_globs:
   - tests/unit/**/*.test.ts
   - tests/integration/**/*.test.ts
@@ -8,3 +9,4 @@ test_globs:
   - tests/e2e/**/*.spec.ts
 test_command: pnpm test
 build_command: pnpm run build
+red_check_command: node scripts/red-check.mjs

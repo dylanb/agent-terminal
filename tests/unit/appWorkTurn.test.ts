@@ -358,7 +358,7 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
       recipeBody: '# work turn\nAuthor a failing test for the adder.',
       turnKey: 'work-red-slice1',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { kind: 'red', resultRel: RESULT_REL },
+      completion: { kind: 'red', resultRel: RESULT_REL, redCheckCommand: null },
       ...over,
     });
 

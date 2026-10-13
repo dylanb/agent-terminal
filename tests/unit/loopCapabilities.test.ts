@@ -106,6 +106,22 @@ describe('parseLoopCapabilities (§28.5.4)', () => {
     ).toContain('select_template');
   });
 
+  it('reads an optional red_check_command (§28.5.2)', () => {
+    const r = parseLoopCapabilities('test_globs: [tests/**]\ntest_command: t\nbuild_command: b\nred_check_command: node scripts/red-check.mjs\n');
+    expect(r).toEqual({
+      ok: true,
+      value: { testGlobs: ['tests/**'], testCommand: 't', buildCommand: 'b', redCheckCommand: 'node scripts/red-check.mjs' },
+    });
+  });
+
+  it('rejects a blank red_check_command, or one carrying a line break that would split the prompt it is named in', () => {
+    for (const value of ['"  "', '"a\\nb"']) {
+      const reason = rejectReason(`test_globs: [tests/**]\ntest_command: t\nbuild_command: b\nred_check_command: ${value}\n`);
+      expect(reason).toContain('red_check_command');
+      expect(reason).not.toContain('unknown key');
+    }
+  });
+
   it('accepts a file of exactly 512 KiB and rejects one byte over (inclusive size boundary at the parse layer)', () => {
     const CAP = 512 * 1024;
     const base = 'test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n';

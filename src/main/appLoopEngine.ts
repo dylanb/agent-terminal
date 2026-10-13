@@ -172,6 +172,8 @@ export interface AppLoopEngineDeps {
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
   /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
   sliceBrief(repoDir: string): SliceBrief | null;
+  /** §28.4 D1 */
+  currentSlice(repoDir: string): number;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
   gateReaching?: AutoGate['gateReaching'];
@@ -281,6 +283,7 @@ type ActiveAppTurn =
         | { kind: 'report' }
         | { kind: 'green-report' }
         | { kind: 'refactor-report'; resultPath: string; resultRel: string }
+        | { kind: 'red-report'; resultPath: string; resultRel: string }
         | { kind: 'unresolved' };
       /** The roster the consolidator chose for this round (§27.6/AC8); absent on round 1 (the full catalog). */
       chosenRoster?: string[];
@@ -703,7 +706,32 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (exit !== null && exit === 0) {
         return { ok: false, reason: 'the test command exited 0 — that is not a RED failure' };
       }
-      return { ok: true };
+      if (a.completion.kind !== 'red') return { ok: true };
+      return await redCheckClause(a, a.completion.resultPath, added.paths);
+    } catch (e) {
+      return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  };
+
+  /** §28.5.3 */
+  const redCheckClause = async (a: ActiveAppTurn, resultPath: string, addedTestPaths: string[]): Promise<PrecomputedGate> => {
+    const check = await deps.completionPredicates.redCheck({ repoDir: a.repoDir, resultPath, addedTestPaths });
+    if (check.kind === 'refused') return { ok: false, reason: check.reason };
+    if (check.kind === 'unconfigured') {
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check not configured — this RED was not independently checked`, null);
+    } else if (check.unchecked.length > 0) {
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — those declared failures were not independently checked`, null);
+    }
+    return { ok: true };
+  };
+
+  /** §28.5.3 */
+  const redReviewGate = async (a: ActiveAppTurn & { phase: 'review' }): Promise<PrecomputedGate> => {
+    try {
+      if (a.completion.kind !== 'red-report') return { ok: true };
+      const added = await deps.completionPredicates.workingTreeTestPaths({ repoDir: a.repoDir });
+      if (!added.ok) return { ok: false, reason: `RED cannot verify the round's tests — ${capabilitiesCauseReason(added.cause)}` };
+      return await redCheckClause(a, a.completion.resultPath, added.paths);
     } catch (e) {
       return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -946,6 +974,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
           ...(active.completion.kind === 'refactor-report' ? { resultRel: active.completion.resultRel } : {}),
+          ...(active.completion.kind === 'red-report'
+            ? { redCheck: { command: deps.completionPredicates.redCheckCommand(active.repoDir), resultRel: active.completion.resultRel } }
+            : {}),
         });
       }
       const body = deps.readRecipe(active.recipePath);
@@ -963,7 +994,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           active.completion.kind === 'file'
             ? { kind: 'file', artifactRel: active.completion.artifactRel, marker: active.completion.marker }
             : active.completion.kind === 'red'
-              ? { kind: 'red', resultRel: active.completion.resultRel }
+              ? { kind: 'red', resultRel: active.completion.resultRel, redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir) }
               : active.completion.kind === 'green'
                 ? { kind: 'green', resultRel: active.completion.resultRel }
                 : null,
@@ -1064,6 +1095,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const res = deps.resolveRefactorResultLocation(ctx.repoDir, round);
       if (!res) return null;
       completion = { kind: 'refactor-report', resultPath: res.abs, resultRel: res.rel };
+    } else if (r.def.work.completion === 'red') {
+      const base = completionArtifact(r.def);
+      if (!base) return null;
+      const res = sliceArtifact(base, deps.currentSlice(ctx.repoDir));
+      completion = { kind: 'red-report', resultPath: res.path, resultRel: res.rel };
     } else if (r.def.work.completion === 'green') {
       completion = { kind: 'green-report' };
     } else {
@@ -1354,6 +1390,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             runner.onDoneSignal(gate);
           }
         });
+      } else if (a?.phase === 'review' && a.completion.kind === 'red-report') {
+        // §28.5.3
+        if (asyncGatePendingFor === a) return;
+        asyncGatePendingFor = a;
+        void redReviewGate(a).then((gate) => {
+          asyncGatePendingFor = null;
+          if (active === a) runner.onDoneSignal(gate);
+        });
       } else if (a?.phase === 'review' && a.completion.kind === 'green-report') {
         // §28.5.3
         if (asyncGatePendingFor === a) return;
@@ -1438,6 +1482,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               }
               if (changedTests !== null) recordChangedTestsFlag(a, changedTests);
               acceptFinalize('the refactor round was accepted but could not be saved — retry or terminate', reviewRoundAuditCmd('accept', a.round), a.round);
+            });
+            return;
+          }
+          if (active.completion.kind === 'red-report') {
+            // §28.5.3/§28.5.6
+            const a = active;
+            void redReviewGate(a).then((gate) => {
+              if (active !== a) return;
+              if (!gate.ok) {
+                refuseRouteOut('turn-error', gate.reason, a.round);
+                return;
+              }
+              acceptFinalize('the review round was accepted but could not be saved — retry or terminate', reviewRoundAuditCmd('accept', a.round), a.round);
             });
             return;
           }
