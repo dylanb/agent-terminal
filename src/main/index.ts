@@ -152,6 +152,7 @@ import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
   resolveAppGateRefs,
+  resolvePickupBranch,
   type AppLoopBootstrapCoordinator,
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
@@ -401,13 +402,8 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    pickupBranch: (repoDir) => {
-      const record = readPickupRecord(repoDir);
-      if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
-      return record.kind === 'complete' && record.bootstrap.issue === (flow.state(repoDir).refs?.ticket ?? null)
-        ? { kind: 'branch', branch: record.bootstrap.branch }
-        : { kind: 'none' };
-    },
+    pickupBranch: (repoDir) =>
+      resolvePickupBranch(readPickupRecord(repoDir), trustedAppBootstraps.get(repoDir) ?? null, flow.state(repoDir).refs?.ticket ?? null),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
     // cannot diverge from the ticket update-issue-body writes to (CLAUDE.md: never re-derive from ambient state).

@@ -336,7 +336,7 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
 
   it('reports a malformed, field-invalid, or non-file pickup record as invalid, naming the file', () => {
     mkdirSync(loopDir(), { recursive: true });
-    for (const text of ['pr: [unclosed', '- just a list', 'schema_version: 99\nstatus: complete\npr: 1\nbranch: b\nissue: 1\n', 'schema_version: 1\nstatus: complete\npr: -1\nbranch: b\nissue: 1\n']) {
+    for (const text of ['pr: [unclosed', '- just a list', 'schema_version: 99\nstatus: complete\npr: 1\nbranch: b\nissue: 1\n', 'schema_version: 1\nstatus: complete\npr: -1\nbranch: b\nissue: 1\n', 'schema_version: 1\nstatus: pending\nbranch: b\ninitial_status: planning\n', 'schema_version: 1\nstatus: pending\nbranch: ""\nissue: 1\ninitial_status: planning\n']) {
       writeFileSync(bootstrapFile(), text);
       const record = readPickupRecord(repo);
       expect(record.kind, text).toBe('invalid');

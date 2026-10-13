@@ -372,7 +372,11 @@ export function readPickupRecord(repoDir: string): PickupRecord {
   }
   if (!isRecord(doc)) return invalid('is not a YAML mapping');
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return invalid(`has unsupported schema_version ${String(doc.schema_version)}`);
-  if (doc.status === 'pending') return { kind: 'pending' };
+  if (doc.status === 'pending') {
+    return isPositiveInt(doc.issue) && isNonBlank(doc.branch) && isNonBlank(doc.initial_status)
+      ? { kind: 'pending' }
+      : invalid('is a pending pickup without a positive integer issue, a non-blank branch and initial_status');
+  }
   if (doc.status !== undefined && doc.status !== 'complete') return invalid(`has unknown status ${String(doc.status)}`);
   if (!isPositiveInt(doc.pr) || !isPositiveInt(doc.issue)) return invalid('needs positive integer pr and issue');
   if (!isNonBlank(doc.branch)) return invalid('needs a non-blank branch');

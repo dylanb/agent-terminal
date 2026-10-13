@@ -7,9 +7,7 @@ import { currentGitBranch } from '../../src/main/gitBranch';
 import { installPathGitStub } from '../helpers/pathGitStub';
 import { shellQuote } from '../../src/shared/shellQuote';
 
-// §28.5.1 — currentGitBranch is the frozen baseline's slice key. A named branch → its name; a detached HEAD → a
-// null branch (a state that cannot prove "same slice", so the frozen check blocks — fail toward firing); a
-// failed read → git's own reason (§27.10 reports it rather than calling it detached).
+// §28.5.1, §27.10
 describe('currentGitBranch (§28.5.1)', () => {
   let fx: GitRepoFixture;
   beforeEach(() => {
