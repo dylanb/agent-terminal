@@ -35,7 +35,7 @@ export interface IntendedFailure {
 
 export type RedCheckVerdict = { ok: true; unchecked: string[] } | { ok: false; reason: string };
 
-/** §28.5.2 — the round report carries this verbatim when the repo declares no `red_check_command`. */
+/** §28.5.2 */
 export const RED_CHECK_MISSING_WARNING =
   'Warning: this RED was not independently checked — loop-capabilities.yaml declares no `red_check_command`, so whether each test fails at its own check rests on the agent\'s classification alone.';
 
