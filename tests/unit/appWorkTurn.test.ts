@@ -243,7 +243,9 @@ describe('composeAppWorkPrompt (§27.4 — where the flow documents live)', () =
     it(`says flow documents live only under the loop artifacts directory and carves out the code (${completion ? 'file' : 'commits'} turn)`, () => {
       const prompt = composeAppWorkPrompt({ recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion });
       expect(prompt).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
-      expect(prompt).toMatch(/elsewhere in the repository is not this work's/i);
+      expect(prompt).toMatch(/elsewhere in the repository is not one of this work's flow documents/i);
+      expect(prompt).toMatch(/still work when the ticket names it/i);
+      expect(prompt).not.toMatch(/ignore it/i);
       expect(prompt).toMatch(/working-tree diff/i);
     });
   }

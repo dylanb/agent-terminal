@@ -194,7 +194,9 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   it('says flow documents live only under the loop artifacts directory, and carves out the code and repo standards', () => {
     for (const p of [composeReviewAndFixPrompt(req()), composeReviewAndFixPrompt({ ...req(), subjectRel: PLAN.rel })]) {
       expect(p).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
-      expect(p).toMatch(/elsewhere in the repository is not this work's/i);
+      expect(p).toMatch(/elsewhere in the repository is not one of this work's flow documents/i);
+      expect(p).toMatch(/still work when the ticket names it/i);
+      expect(p).not.toMatch(/ignore it/i);
       expect(p).toMatch(/working-tree diff/i);
       expect(p).toMatch(/standards and\s+configuration are read where they live/i);
     }

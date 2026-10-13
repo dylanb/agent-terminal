@@ -122,7 +122,9 @@ export function flowDocumentLines(): string[] {
   return [
     '',
     'FLOW DOCUMENTS — this work\'s flow documents (the groomed ticket, the plan, the RED/GREEN phase results) live',
-    `only under \`${dir}/\`. A file of that kind found elsewhere in the repository is not this work's: ignore it.`,
+    `only under \`${dir}/\`.`,
+    "A file of that kind found elsewhere in the repository is not one of this work's flow documents, so never read",
+    'it as one; it is still work when the ticket names it as something to change.',
     "The code and tests a loop produces are the working-tree diff, and the repository's standards and",
     'configuration are read where they live.',
   ];
