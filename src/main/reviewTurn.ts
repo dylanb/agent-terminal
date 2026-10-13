@@ -13,6 +13,7 @@ import { DISPOSITIONS, FIXED_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
@@ -71,6 +72,8 @@ export interface ReviewAndFixPromptReq {
    *  additionally runs the targeted tests and writes the result the round gate reads (softer than GREEN —
    *  {passed}, no build). Absent for RED/GREEN loops' review rounds (no phase-result block emitted). */
   resultRel?: string;
+  /** §28.5.3 */
+  redCheck?: { command: string | null; resultRel: string };
   /** §19.1 — the GitHub issue the flow resolved (the SAME identity the gate side-effects act on), named so the
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow
    *  resolved no ticket. */
@@ -266,6 +269,15 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
           '(A legitimate fixture change is recorded and flagged for regression-guard and the human, not blocked.)',
         ],
       }),
+    );
+  }
+  if (req.redCheck !== undefined) {
+    const { command, resultRel } = req.redCheck;
+    lines.push(
+      '',
+      ...(command !== null
+        ? composeRedCheckInstruction({ command, reportRel: redCheckReportRel(resultRel), resultRel })
+        : ['Put this warning line, verbatim, in the round report\'s summary:', '', RED_CHECK_MISSING_WARNING]),
     );
   }
   if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'report'));

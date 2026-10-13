@@ -409,6 +409,7 @@ async function createWindow(): Promise<void> {
       const brief = readSliceBrief(repoDir);
       return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
     },
+    currentSlice: (repoDir) => flow.currentSlice(repoDir),
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };

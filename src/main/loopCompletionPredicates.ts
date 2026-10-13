@@ -10,6 +10,7 @@ import {
   type ChangedTestPathsResult,
   type WorkingTreeTestPathsResult,
 } from './frozenTests';
+import { checkRed, redCheckCommand, type RedCheckOutcome } from './redCheckGate';
 
 export interface LoopCompletionPredicates {
   /** Recognize the framework-neutral outcome the agent claimed (§28.5.2); null if it is not a known category. */
@@ -38,6 +39,10 @@ export interface LoopCompletionPredicates {
    *  a RED failure). No live source ships today (N7/#92) — the default returns null, so the clause is dormant
    *  but real (the direction logic is exercised under an injected fake). */
   recoverExitCode(query: { repoDir: string; turnKey: string }): Promise<number | null>;
+  /** §28.5.2 */
+  redCheckCommand(repoDir: string): string | null;
+  /** §28.5.3 */
+  redCheck(query: { repoDir: string; resultPath: string; addedTestPaths: string[] }): Promise<RedCheckOutcome>;
 }
 
 export function createLoopCompletionPredicates(): LoopCompletionPredicates {
@@ -48,5 +53,7 @@ export function createLoopCompletionPredicates(): LoopCompletionPredicates {
     changedTestPaths: (query) => changedTestPathsFromCapabilities(query),
     workingTreeTestPaths: (query) => workingTreeTestPathsFromCapabilities(query),
     recoverExitCode: () => Promise.resolve(null),
+    redCheckCommand: (repoDir) => redCheckCommand(repoDir),
+    redCheck: (query) => Promise.resolve(checkRed(query)),
   };
 }
