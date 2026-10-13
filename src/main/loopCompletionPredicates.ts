@@ -39,10 +39,9 @@ export interface LoopCompletionPredicates {
    *  a RED failure). No live source ships today (N7/#92) — the default returns null, so the clause is dormant
    *  but real (the direction logic is exercised under an injected fake). */
   recoverExitCode(query: { repoDir: string; turnKey: string }): Promise<number | null>;
-  /** §28.5.2 — the repo's declared RED check command, or null when it declares none. */
+  /** §28.5.2 */
   redCheckCommand(repoDir: string): string | null;
-  /** §28.5.3 — whether the repo's own red-check report confirms the RED result at `resultPath` fails exactly at
-   *  its declared checks, across the test files this turn added to. `unconfigured` when the repo declares no check. */
+  /** §28.5.3 */
   redCheck(query: { repoDir: string; resultPath: string; addedTestPaths: string[] }): Promise<RedCheckOutcome>;
 }
 

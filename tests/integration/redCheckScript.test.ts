@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseRedCheckReport, type RedCheckReport } from '../../src/shared/redCheck';
 import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
@@ -52,4 +53,21 @@ describe('scripts/red-check.mjs (§28.5.2)', () => {
   it('reports a test file that failed to load as errored', () => {
     expect(report.tests.find((t) => t.file === `${FIXTURES}/broken.case.mjs`)?.outcome).toBe('errored');
   });
+});
+
+describe('scripts/red-check.mjs when vitest writes no report', () => {
+  it('exits non-zero and leaves nothing behind in the temp directory', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'red-check-tmp-'));
+    try {
+      const run = spawnSync(process.execPath, ['scripts/red-check.mjs', '--config', `${FIXTURES}/absent.config.mjs`], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: tmp },
+      });
+      expect(run.status).not.toBe(0);
+      expect(readdirSync(tmp)).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

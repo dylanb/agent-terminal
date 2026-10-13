@@ -27,7 +27,7 @@ export interface LoopCapabilities {
   testCommand: string;
   buildCommand: string;
   selectTemplate?: string;
-  /** §28.5.2 — the repo's RED check: prints a red-check report (src/shared/redCheck.ts) for the test files it is given. */
+  /** §28.5.2 */
   redCheckCommand?: string;
 }
 
