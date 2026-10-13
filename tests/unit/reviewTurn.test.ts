@@ -189,6 +189,21 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
     // it names the dismissal disposition for such a refinement — never `fixed`
     expect(p).toContain('dismissed — invalid');
   });
+
+  // #180's infra-loop ran 16 rounds: each fixed one more place a stand-in `gh` or agent differed from the real
+  // tool, or one more branch of it with no test of its own. Nothing the ticket's tests relied on changed.
+  const doubleFidelityClause =
+    /(fake|stand-in|double)[\s\S]*only\s+when\s+a\s+test\s+the\s+ticket\s+needs\s+relies\s+on[\s\S]*`dismissed — invalid`/i;
+
+  it('dismisses a test double gap that no test the ticket needs relies on, for a commit loop', () => {
+    expect(composeReviewAndFixPrompt(req())).toMatch(doubleFidelityClause);
+  });
+
+  it('dismisses a test double gap that no test the ticket needs relies on, for a document loop', () => {
+    expect(composeReviewAndFixPrompt({ ...req(), subjectRel: '.agent-terminal/loop/artifacts/plan.md' })).toMatch(
+      doubleFidelityClause,
+    );
+  });
 });
 
 // §27.3 — a fixer that corrects a wrong mechanism in a document by specifying it in more detail hands the next
