@@ -3,6 +3,7 @@ import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
   resolveAppGateRefs,
+  resolvePickupBranch,
   runAppLoopBootstrap,
   type AppLoopBootstrapJob,
   type AppLoopBootstrapRequest,
@@ -980,6 +981,32 @@ describe('resolveAppGateRefs — live bootstrap identity routing', () => {
 
   it('reports no identity to the gate when nothing was accepted', () => {
     expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, bootstrap: null });
+  });
+});
+
+describe('resolvePickupBranch — the §27.10 branch guard follows the gate\'s identity', () => {
+  const accepted: AppLoopBootstrap = { pr: 42, branch: 'plan-loop/issue-78', issue: 78, initialStatus: 'planning' };
+  const persisted = { kind: 'complete', bootstrap: { pr: 42, branch: 'plan-loop/issue-77', issue: 77 } } as const;
+
+  it('holds the run to the accepted pickup branch even when the flow\'s ticket ref has changed or gone', () => {
+    expect(resolvePickupBranch({ kind: 'none' }, accepted, 79)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
+    expect(resolvePickupBranch(persisted, accepted, null)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-78' });
+  });
+
+  it('after a relaunch, holds the run to the persisted pickup branch when it is for the flow\'s ticket', () => {
+    expect(resolvePickupBranch(persisted, null, 77)).toEqual({ kind: 'branch', branch: 'plan-loop/issue-77' });
+  });
+
+  it('does not hold a run whose ticket has no completed pickup', () => {
+    expect(resolvePickupBranch(persisted, null, 80)).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch({ kind: 'pending' }, null, 77)).toEqual({ kind: 'none' });
+    expect(resolvePickupBranch({ kind: 'none' }, null, 77)).toEqual({ kind: 'none' });
+  });
+
+  it('fails closed on an invalid record, with or without an accepted pickup', () => {
+    const invalid = { kind: 'invalid', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' } as const;
+    expect(resolvePickupBranch(invalid, null, 77)).toEqual({ kind: 'unreadable', detail: invalid.detail });
+    expect(resolvePickupBranch(invalid, accepted, 78)).toEqual({ kind: 'unreadable', detail: invalid.detail });
   });
 });
 

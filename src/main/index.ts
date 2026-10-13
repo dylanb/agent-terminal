@@ -123,7 +123,7 @@ import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -152,6 +152,7 @@ import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
   resolveAppGateRefs,
+  resolvePickupBranch,
   type AppLoopBootstrapCoordinator,
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
@@ -401,6 +402,12 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
+    pickupBranch: (repoDir) =>
+      resolvePickupBranch(
+        pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),
+        trustedAppBootstraps.get(repoDir) ?? null,
+        flow.state(repoDir).refs?.ticket ?? null,
+      ),
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and
     // cannot diverge from the ticket update-issue-body writes to (CLAUDE.md: never re-derive from ambient state).
@@ -642,6 +649,9 @@ async function createWindow(): Promise<void> {
   // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
   // naive re-seed from the repo-scoped persisted bootstrap could retarget a destructive `gh pr ready`.
   const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
+  // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
+  // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
+  const pickupRecordPredatesRun = new Set<string>();
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
     const existing = appBootstrapSessions.get(repoDir);
@@ -693,8 +703,10 @@ async function createWindow(): Promise<void> {
       );
     },
     canEnterWork: () => appEngine.canEnter(),
-    acceptBootstrap: (job, identity) =>
-      trustedAppBootstraps.set(job.repoDir, identity),
+    acceptBootstrap: (job, identity) => {
+      trustedAppBootstraps.set(job.repoDir, identity);
+      pickupRecordPredatesRun.delete(job.repoDir);
+    },
     rollbackStep: (job) => {
       const current = flow.state(job.repoDir);
       if (
@@ -843,6 +855,7 @@ async function createWindow(): Promise<void> {
     forgetRunEntry: (repoKey) => {
       currentFlowEntryTokens.delete(repoKey);
       trustedAppBootstraps.delete(repoKey);
+      pickupRecordPredatesRun.add(repoKey);
     },
     endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
@@ -859,11 +872,14 @@ async function createWindow(): Promise<void> {
 
   const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
     const previous = trustedAppBootstraps.get(repoKey);
+    const predated = pickupRecordPredatesRun.has(repoKey);
     trustedAppBootstraps.delete(repoKey);
+    pickupRecordPredatesRun.add(repoKey);
     try {
       return transition();
     } catch (e) {
       if (previous !== undefined) trustedAppBootstraps.set(repoKey, previous);
+      if (!predated) pickupRecordPredatesRun.delete(repoKey);
       throw e;
     }
   };

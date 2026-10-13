@@ -15,18 +15,20 @@ const branchOrNull = (abbrevRef: string): string | null => {
   return branch.length === 0 || branch === 'HEAD' ? null : branch;
 };
 
-export function currentGitBranch(repoDir: string): string | null {
+export type GitBranchRead = { ok: true; branch: string | null } | { ok: false; detail: string };
+
+export function currentGitBranch(repoDir: string): GitBranchRead {
   try {
     // §28.5.1 — scrub the git env (GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_*) exactly as the write-side branch capture
     // does through `run` → commandEnvironment(), so this read and that write resolve the SAME repo's HEAD.
-    return branchOrNull(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoDir, encoding: 'utf8', env: commandEnvironment() }));
-  } catch {
-    return null;
+    return { ok: true, branch: branchOrNull(execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoDir, encoding: 'utf8', env: commandEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] })) };
+  } catch (e) {
+    return { ok: false, detail: errMsg(e) };
   }
 }
 
 /** §27.9.1 N9b.5(e), N9b.7(c) — the approve-time frozen check's branch read: abortable, and bounded by the decision. */
-export async function readGitBranch(repoDir: string, signal: AbortSignal): Promise<{ ok: true; branch: string | null } | { ok: false; detail: string }> {
+export async function readGitBranch(repoDir: string, signal: AbortSignal): Promise<GitBranchRead> {
   try {
     const out = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], repoDir, 'git rev-parse --abbrev-ref HEAD failed', { env: LOCK_FREE_GIT_READ_ENV, signal });
     return { ok: true, branch: branchOrNull(out) };

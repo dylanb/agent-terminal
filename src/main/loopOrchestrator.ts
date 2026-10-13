@@ -60,6 +60,8 @@ export interface TurnRunnerDeps {
   cancelTimer(): void;
   /** Persist `status: error` with the reason (§27.12). */
   writeError(reason: string): void;
+  /** §27.10 */
+  injectionRefusal(): string | null;
   /** §27.12 — a stalled turn's done-signal arrived: the turn is back in flight, so the stall error no longer
    *  holds. Called before the completion check, which then completes, retries, or errors the turn as usual. */
   resumeStalled(): void;
@@ -121,6 +123,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
 
   const tryInject = (): void => {
     if (state !== 'in-flight' || turnKey === null) return;
+    const refusal = deps.injectionRefusal();
+    if (refusal !== null) {
+      awaitingInjectable = false;
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError(refusal);
+      return;
+    }
     const agent = deps.hostedAgent();
     if (agent === 'absent') {
       // §27.2 — no hosted agent at the prompt (a bare shell). Injecting now would type the whole prompt

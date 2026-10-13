@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
@@ -37,6 +37,18 @@ describe('fake gh/git shims', () => {
     const exited = new Promise<number | null>((r) => p.on('exit', (code) => r(code)));
     return { p, exited };
   };
+
+  it('git rev-parse --abbrev-ref HEAD answers like real git: the ref\'s branch, HEAD when detached, main when HEAD is absent', () => {
+    const { binDir, env } = shims();
+    const repo = tmp('fake-tools-head-');
+    const branch = () => spawnSync(join(binDir, 'git'), ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repo, env, encoding: 'utf8' }).stdout.trim();
+    expect(branch()).toBe('main');
+    mkdirSync(join(repo, '.git'));
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/plan-loop/issue-7\n');
+    expect(branch()).toBe('plan-loop/issue-7');
+    writeFileSync(join(repo, '.git', 'HEAD'), '0123456789abcdef0123456789abcdef01234567\n');
+    expect(branch()).toBe('HEAD');
+  });
 
   it('FAKE_GH_FAIL_ACTION fails only the named side-effect action', () => {
     const { binDir, env } = shims();

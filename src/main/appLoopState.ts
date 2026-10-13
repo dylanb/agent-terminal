@@ -5,7 +5,7 @@ import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
@@ -344,33 +344,57 @@ export function writeAppLoopBootstrapIntent(
   }
 }
 
-export function readAppLoopBootstrap(repoDir: string): ReadAppLoopBootstrap | null {
+/** §27.10 */
+export type PickupRecord =
+  | { kind: 'none' }
+  | { kind: 'pending' }
+  | { kind: 'complete'; bootstrap: ReadAppLoopBootstrap }
+  | { kind: 'invalid'; detail: string };
+
+const BOOTSTRAP_REL = [...APP_LOOP_DIR_SEGMENTS, BOOTSTRAP_FILE].join('/');
+
+export function readPickupRecord(repoDir: string): PickupRecord {
+  const invalid = (why: string): PickupRecord => ({ kind: 'invalid', detail: `${BOOTSTRAP_REL} ${why}` });
   const file = bootstrapFileOf(repoDir);
-  if (file === null) return null;
+  if (file === null) return invalid('is not a regular file inside a real loop directory');
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
-  } catch {
-    return null;
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return { kind: 'none' };
+    return invalid(`cannot be read: ${errMsg(e)}`);
   }
   let doc: unknown;
   try {
     doc = yaml.load(text);
-  } catch {
-    return null;
+  } catch (e) {
+    return invalid(`is not valid YAML: ${errMsg(e)}`);
   }
-  if (!isRecord(doc)) return null;
-  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
-  if (doc.status !== undefined && doc.status !== 'complete') return null;
-  if (!isPositiveInt(doc.pr) || !isPositiveInt(doc.issue)) return null;
-  if (!isNonBlank(doc.branch)) return null;
-  if (doc.initial_status !== undefined && !isNonBlank(doc.initial_status)) return null;
+  if (!isRecord(doc)) return invalid('is not a YAML mapping');
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return invalid(`has unsupported schema_version ${String(doc.schema_version)}`);
+  if (doc.status === 'pending') {
+    return isPositiveInt(doc.issue) && isNonBlank(doc.branch) && isNonBlank(doc.initial_status)
+      ? { kind: 'pending' }
+      : invalid('is a pending pickup without a positive integer issue, a non-blank branch and initial_status');
+  }
+  if (doc.status !== undefined && doc.status !== 'complete') return invalid(`has unknown status ${String(doc.status)}`);
+  if (!isPositiveInt(doc.pr) || !isPositiveInt(doc.issue)) return invalid('needs positive integer pr and issue');
+  if (!isNonBlank(doc.branch)) return invalid('needs a non-blank branch');
+  if (doc.initial_status !== undefined && !isNonBlank(doc.initial_status)) return invalid('has a blank initial_status');
   return {
-    pr: doc.pr,
-    branch: doc.branch,
-    issue: doc.issue,
-    ...(isNonBlank(doc.initial_status) ? { initialStatus: doc.initial_status } : {}),
+    kind: 'complete',
+    bootstrap: {
+      pr: doc.pr,
+      branch: doc.branch,
+      issue: doc.issue,
+      ...(isNonBlank(doc.initial_status) ? { initialStatus: doc.initial_status } : {}),
+    },
   };
+}
+
+export function readAppLoopBootstrap(repoDir: string): ReadAppLoopBootstrap | null {
+  const record = readPickupRecord(repoDir);
+  return record.kind === 'complete' ? record.bootstrap : null;
 }
 
 export function clearAppLoopBootstrap(repoDir: string): void {

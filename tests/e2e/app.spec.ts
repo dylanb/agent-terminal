@@ -2920,6 +2920,7 @@ function seedCompletedAppBootstrap(dir: string, issue = 176): void {
     join(dir, '.agent-terminal', 'loop', 'bootstrap.yaml'),
     `schema_version: 1\nstatus: complete\npr: 4242\nbranch: plan-loop/issue-${issue}\nissue: ${issue}\ninitial_status: planning\nupdated_at: 2026-07-23T00:00:00.000Z\n`,
   );
+  writeFileSync(join(dir, '.git', 'HEAD'), `ref: refs/heads/plan-loop/issue-${issue}\n`);
 }
 
 function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
@@ -4546,6 +4547,104 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a branch switched away from the pickup branch stops the next step\'s work turn before it injects, naming both branches (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainFlowRepo('agent-term-e2e-v2-branch-guard-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-branch-guard-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-branch-guard-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  writeFileSync(`${logFile}.current-branch`, 'fix/elsewhere\n');
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 20_000 }).toContain('status: error');
+  const runState = readIf(appRunState(repo)).replace(/\s+/g, ' ');
+  expect(runState).toContain('plan-loop/issue-176');
+  expect(runState).toContain('fix/elsewhere');
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain(`- plan: ${APP_ARTIFACT_REL}`);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('an unreadable pickup record stops the next step\'s work turn before it injects, naming the file, instead of lifting the branch guard (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainFlowRepo('agent-term-e2e-v2-bad-pickup-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bad-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bad-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  writeFileSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'), 'pr: [unclosed\n');
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 20_000 }).toContain('status: error');
+  expect(readIf(appRunState(repo)).replace(/\s+/g, ' ')).toContain('.agent-terminal/loop/bootstrap.yaml is not valid YAML');
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain(`- plan: ${APP_ARTIFACT_REL}`);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a pickup recorded by an earlier run does not hold a newly started run to that run\'s branch (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: v2-stale-pickup\nsteps:\n' +
+      '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\ninputs:\n  ticket: "176"\n');
+  seedCompletedAppBootstrap(repo);
+  writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-stale-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'implement', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('turn_key: review-implement');
+  expect(readIf(appRunState(repo)).replace(/\s+/g, ' ')).not.toContain('plan-loop/issue-176');
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
 // §27.10 — STARTING a run at a step is not a chain advance: no upstream loop has run, so an artifact already

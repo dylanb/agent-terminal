@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { AppLoopEnterResult, AppLoopEntry } from './appLoopEngine';
-import type { AppLoopBootstrap } from './appLoopState';
+import type { AppLoopEnterResult, AppLoopEntry, PickupBranch } from './appLoopEngine';
+import type { AppLoopBootstrap, PickupRecord } from './appLoopState';
 import type { AppGateRefs } from './appGateDecision';
 import {
   AmbiguousBootstrapOperationError,
@@ -75,6 +75,13 @@ export function resolveAppGateRefs(
     ticket: flowRefs?.ticket ?? null,
     bootstrap: null,
   };
+}
+
+/** §27.10 */
+export function resolvePickupBranch(record: PickupRecord, trustedBootstrap: AppLoopBootstrap | null, flowTicket: number | null): PickupBranch {
+  if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
+  if (trustedBootstrap !== null) return { kind: 'branch', branch: trustedBootstrap.branch };
+  return record.kind === 'complete' && record.bootstrap.issue === flowTicket ? { kind: 'branch', branch: record.bootstrap.branch } : { kind: 'none' };
 }
 
 const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
