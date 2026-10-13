@@ -7,6 +7,12 @@ when a test you added reports `failed-assertion`. A compile or import error, a p
 selected does not complete it. The orchestrator appends the result-file instruction; classify the run and
 write the result it asks for.
 
+Each test must fail at the check it exists for. A test that fails before it reaches that check — a shared wait
+that times out, an earlier assertion, setup that never starts the thing under test — proves nothing about it:
+restructure the test so its own check is the one that fails, by splitting it, by using soft assertions so every
+check reports, or by making the stub do enough to get there. Never leave GREEN an instruction to see that check
+fail later; the RED is not done until it has been seen failing here.
+
 No acceptance criterion may be deferred or left without an authored failing test. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the
 ticket or plan, or a split into an already-filed sub-ticket of the same epic. There is no excuse for

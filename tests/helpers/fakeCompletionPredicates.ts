@@ -17,6 +17,8 @@ export function makeFakeCompletionPredicates(
     changedTestPaths: async () => ({ ok: true, paths: [] }),
     workingTreeTestPaths: async () => ({ ok: true, paths: [] }),
     recoverExitCode: async () => null,
+    redCheckCommand: () => null,
+    redCheck: async () => ({ kind: 'unconfigured' }),
     ...overrides,
   };
 }

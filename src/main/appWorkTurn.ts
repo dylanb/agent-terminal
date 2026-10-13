@@ -9,6 +9,7 @@ import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
@@ -81,7 +82,7 @@ export interface AppWorkPromptReq {
    *  (done-signal alone). `red` and `green` share the result-file shape, differing only in the bar the prose sets. */
   completion:
     | { kind: 'file'; artifactRel: string; marker: string }
-    | { kind: 'red'; resultRel: string }
+    | { kind: 'red'; resultRel: string; redCheckCommand: string | null }
     | { kind: 'green'; resultRel: string }
     | null;
   /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
@@ -173,6 +174,11 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
         ],
       }),
     );
+    const command = req.completion.redCheckCommand;
+    if (command !== null) {
+      const resultRel = req.completion.resultRel;
+      parts.push('', ...composeRedCheckInstruction({ command, reportRel: redCheckReportRel(resultRel), resultRel }));
+    }
   } else if (req.completion?.kind === 'green') {
     // §28.5.3 §7d — the GREEN phase-result instruction: the same shared writer, additionally classifying the
     // build (`build:`) via `build`. The phase-specific bar prose is threaded as `closing`.
