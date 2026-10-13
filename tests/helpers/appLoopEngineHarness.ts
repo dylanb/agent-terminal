@@ -94,7 +94,7 @@ export class AppLoopEngineHarness {
   workRefsResult!: { ticket: number | null; pr: number | null };
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
-  /** §28.4 D1 — the impl-slice the engine's `currentSlice` dep reports. */
+  /** §28.4 D1 */
   currentSliceResult!: number;
   defResult!: LoopDefV2Result;
 

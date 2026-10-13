@@ -6,8 +6,7 @@ import { INTENDED_FAILURES_HEADING, RED_CHECK_MISSING_WARNING } from '../../src/
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 import { CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, createAppLoopEngineHarness, flushRedGate } from '../helpers/appLoopEngineHarness';
 
-// §28.5.3 — the RED gate holds the work turn AND every RED review round to the repo's own red-check report,
-// and a repo that declares no red check runs unblocked with a warning in each round report.
+// §28.5.3
 
 const h = createAppLoopEngineHarness();
 beforeEach(h.setUp);

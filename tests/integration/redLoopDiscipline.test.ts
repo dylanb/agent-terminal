@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { bundledPath } from '../helpers/bundledLoops';
 
-// §28.5.3 — on #180's red-loop, rounds 3–5 changed no test: each wrote more "GREEN must first see this check fail"
-// entries into red-result.md for tests that failed before reaching their own check, and each entry was new
-// surface for the next round. A RED test whose own check is hidden behind an earlier failure is restructured.
+// §28.5.3
 
 const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8');
 const RESTRUCTURE = /fails before it reaches[\s\S]*restructur/i;

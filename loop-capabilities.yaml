@@ -1,7 +1,7 @@
 # §28.5.4 — framework-neutral per-repo loop descriptor consumed by the in-terminal loop engine's
 # RED/GREEN completion gates. test_globs identifies which files count as tests (the RED gate checks a
 # turn added lines to one); test_command/build_command are inert guidance strings (never executed).
-# red_check_command is run by the agent, never the engine; the RED gate reads the report it prints (§28.5.2).
+# §28.5.2
 test_globs:
   - tests/unit/**/*.test.ts
   - tests/integration/**/*.test.ts
