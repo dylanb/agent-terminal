@@ -95,7 +95,7 @@ function parse(text: string): LoopCapabilities {
   }
   if (doc.red_check_command !== undefined) {
     const command = requireNonBlankString(doc.red_check_command, 'red_check_command');
-    // The command is named inside an agent-facing prompt line (CWE-74).
+    // CWE-74
     if (/[\u0000-\u001f\u007f]/.test(command)) fail('red_check_command must be a single line');
     result.redCheckCommand = command;
   }

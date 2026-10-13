@@ -6,8 +6,7 @@ import { join } from 'node:path';
 import { parseRedCheckReport, type RedCheckReport } from '../../src/shared/redCheck';
 import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
 
-// §28.5.2 — this repo's red_check_command, run for real against fixture tests, must print a report the RED gate's
-// own parser accepts, classifying each test the way vitest ran it.
+// §28.5.2
 
 const ROOT = join(__dirname, '..', '..');
 const FIXTURES = 'tests/fixtures/red-check';

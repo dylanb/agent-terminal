@@ -229,8 +229,6 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
     expect(p).toContain('dismissed — invalid');
   });
 
-  // #180's infra-loop ran 16 rounds: each fixed one more place a stand-in `gh` or agent differed from the real
-  // tool, or one more branch of it with no test of its own. Nothing the ticket's tests relied on changed.
   const doubleFidelityClause =
     /(fake|stand-in|double)[\s\S]*only\s+when\s+a\s+test\s+the\s+ticket\s+needs\s+relies\s+on[\s\S]*`dismissed — invalid`/i;
 

@@ -1,5 +1,4 @@
-// §28.5.2 — this repo's red_check_command (loop-capabilities.yaml); its stdout must parse as the report in
-// src/shared/redCheck.ts.
+// §28.5.2
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
