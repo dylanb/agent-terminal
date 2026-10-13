@@ -1521,7 +1521,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           inputs,
         });
       } else if (active.phase === 'review') {
-        active = reviewTurnFor({ repoDir, loopName: active.loopName, stepId }, active.round, 're-enter', active.chosenRoster, active.feedback) ?? active;
+        const { loopName, round, chosenRoster, feedback } = active;
+        const rebuilt = reviewTurnFor({ repoDir, loopName, stepId }, round, 're-enter', chosenRoster, feedback);
+        if (!rebuilt) {
+          active = {
+            ...unresolvedReviewTurn({ repoDir, loopName, stepId, turnKey, round }),
+            ...(chosenRoster ? { chosenRoster } : {}),
+            ...(feedback !== undefined ? { feedback } : {}),
+          };
+          refuseRouteOut('def-unresolvable', 'the review round no longer resolves (def or report location) — retry or terminate', round);
+          return;
+        }
+        active = rebuilt;
       }
       persist('working');
       const retryAudit =

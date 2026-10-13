@@ -1061,6 +1061,27 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable'); // and the operator keeps a route out
   });
 
+  it('refuses a REVIEW retry whose def no longer resolves, and a later retry still carries the operator feedback', () => {
+    const FEEDBACK = 'Tighten the error-path coverage.';
+    writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'malformed', round: 2, feedback: FEEDBACK }, FIXED);
+    const engine = makeEngine();
+    engine.resume(h.repo);
+    const good = h.defResult;
+    h.defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const before = h.injected.length;
+    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.length).toBe(before);
+    expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable');
+    h.defResult = good;
+    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected[h.injected.length - 1]).toContain('review-and-fix');
+    expect(h.injected[h.injected.length - 1]).toContain(FEEDBACK);
+  });
+
   it('refuses Accept after a retry-refuse leaves a commits turn on an unresolvable def (CWE-754)', () => {
     // Retry's def-unresolvable refuse returned without touching `active`, so a commits turn kept
     // `completion: { kind: 'commits' }` — whose completionSatisfied() is unconditionally true. The very next
