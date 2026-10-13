@@ -234,6 +234,23 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
 
 });
 
+// §27.4
+describe('composeAppWorkPrompt (§27.4 — where the flow documents live)', () => {
+  for (const completion of [
+    { kind: 'file', artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') } as const,
+    null,
+  ]) {
+    it(`says flow documents live only under the loop artifacts directory and carves out the code (${completion ? 'file' : 'commits'} turn)`, () => {
+      const prompt = composeAppWorkPrompt({ recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion });
+      expect(prompt).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
+      expect(prompt).toMatch(/elsewhere in the repository is not one of this work's flow documents/i);
+      expect(prompt).toMatch(/still work when the ticket names it/i);
+      expect(prompt).not.toMatch(/ignore it/i);
+      expect(prompt).toMatch(/working-tree diff/i);
+    });
+  }
+});
+
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({
