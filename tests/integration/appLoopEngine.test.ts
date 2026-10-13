@@ -215,6 +215,7 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(live?.reason).toContain(PICKUP_BRANCH);
     expect(live?.reason).toContain(OTHER_BRANCH);
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
+    expect(h.audit.mock.calls.filter(([, cmd]) => String(cmd).includes('boundary'))).toEqual([]);
   });
 
   it('a detached HEAD is not the pickup branch either', () => {
@@ -239,6 +240,7 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     engine.onInjectable();
     expect(h.injected.some((p) => p.includes(REVIEW_KEY))).toBe(false);
     expect(engine.liveErrorFor(h.repo)?.reason).toContain(OTHER_BRANCH);
+    expect(h.audit.mock.calls.filter(([, cmd]) => String(cmd).includes('review round 1 boundary'))).toEqual([]);
   });
 
   it('a branch probe that fails is reported with its own reason, not as a detached HEAD', () => {
@@ -260,7 +262,10 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
-    expect(engine.liveErrorFor(h.repo)?.reason).toContain('.agent-terminal/loop/bootstrap.yaml is not valid YAML');
+    const reason = engine.liveErrorFor(h.repo)?.reason ?? '';
+    expect(reason).toContain('.agent-terminal/loop/bootstrap.yaml is not valid YAML');
+    expect(reason).toContain('terminate the run');
+    expect(reason).not.toMatch(/remove/i);
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
   });
 

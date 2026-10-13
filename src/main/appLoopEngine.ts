@@ -878,11 +878,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return null;
   };
 
+  const boundaryAuditCmd = (a: ActiveAppTurn): string =>
+    a.phase === 'review'
+      ? reviewRoundAuditCmd('boundary', a.round, a.boundaryCmd)
+      : a.phase === 'consolidate'
+        ? consolidateAuditCmd('boundary', a.round, a.boundaryCmd)
+        : `§27 work turn ${a.turnKey} boundary: ${a.boundaryCmd}`;
+
   const offPickupBranch = (repoDir: string): string | null => {
     const pickup = deps.pickupBranch(repoDir);
     if (pickup.kind === 'none') return null;
     if (pickup.kind === 'unreadable') {
-      return `cannot check this turn's branch against the one pickup created: ${pickup.detail}; repair or remove the pickup record and retry`;
+      return `cannot check this turn's branch against the one pickup created: ${pickup.detail}; repair the pickup record and retry, or terminate the run`;
     }
     const expected = pickup.branch;
     const current = deps.currentBranch(repoDir);
@@ -970,6 +977,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // completion arriving during the boundary drain would be dropped (§27.12/D46 parallel).
       if (!opts?.preamble && active) clearTurnDone(active.repoDir, APP_TURN_DONE_SUBDIR);
       deps.inject(prompt);
+      if (opts?.preamble && active) deps.audit(active.repoDir, boundaryAuditCmd(active), null);
     },
     hostedAgent: () => deps.hostedAgent(),
     injectionRefusal: () => (active ? offPickupBranch(active.repoDir) : null),
@@ -1028,7 +1036,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const start = (turn: ActiveAppTurn, defer = false): void => {
     active = turn;
     persist('working');
-    deps.audit(turn.repoDir, `§27 work turn ${turn.turnKey} boundary: ${turn.boundaryCmd}`, null);
     // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
     // it from the skill injection's completion so the two never share the input line (AC10/CWE-74). The
     // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap (§B.5 item 6(b)).
@@ -1096,7 +1103,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (turn) {
       active = turn;
       persist('working');
-      deps.audit(ctx.repoDir, reviewRoundAuditCmd('boundary', round, turn.boundaryCmd), null);
       runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
       return;
     }
@@ -1144,7 +1150,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (turn) {
       active = turn;
       persist('working');
-      deps.audit(ctx.repoDir, consolidateAuditCmd('boundary', review.round, turn.boundaryCmd), null);
       runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
       return;
     }
