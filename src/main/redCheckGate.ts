@@ -1,5 +1,4 @@
-// §28.5.3 — the RED gate's independent check: the report the repo's own `red_check_command` wrote, read from
-// beside the RED result, held against the failures that result declares (src/shared/redCheck.ts).
+// §28.5.3
 
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -9,11 +8,10 @@ import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { errMsg } from './errno';
 import { MAX_RED_CHECK_REPORT_BYTES, parseIntendedFailures, parseRedCheckReport, redCheckReportRel, redCheckVerdict } from '../shared/redCheck';
 
-export type RedCheckOutcome = { kind: 'unconfigured' } | { kind: 'verified' } | { kind: 'refused'; reason: string };
+export type RedCheckOutcome = { kind: 'unconfigured' } | { kind: 'verified'; unchecked: string[] } | { kind: 'refused'; reason: string };
 
 const refused = (reason: string): RedCheckOutcome => ({ kind: 'refused', reason });
 
-/** The repo's declared RED check command, or null when it declares none (or its capabilities do not load). */
 export function redCheckCommand(repoDir: string): string | null {
   const caps = loadLoopCapabilities(repoDir);
   return caps.ok ? (caps.value.redCheckCommand ?? null) : null;
@@ -51,7 +49,7 @@ export function checkRed(q: { repoDir: string; resultPath: string; addedTestPath
     const intended = parseIntendedFailures(readFileSync(q.resultPath, 'utf8'));
     if (!intended.ok) return refused(intended.reason);
     const verdict = redCheckVerdict({ report: parsed.report, intended: intended.intended, addedTestPaths: q.addedTestPaths });
-    return verdict.ok ? { kind: 'verified' } : refused(verdict.reason);
+    return verdict.ok ? { kind: 'verified', unchecked: verdict.unchecked } : refused(verdict.reason);
   } catch (e) {
     return refused(`the RED check could not read its inputs: ${errMsg(e)}`);
   }

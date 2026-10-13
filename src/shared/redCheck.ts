@@ -1,7 +1,5 @@
-// §28.5.2/§28.5.3 — the RED check: a framework-neutral per-test report the repo's own `red_check_command`
-// writes, the intended failures the RED result declares, and the verdict that holds one against the other.
-// One module for the writer (the RED prompts) and the reader (the RED gate), so the two cannot drift. Parsing is
-// linear string scanning, never a backtracking RegExp, on agent-produced input (CWE-1333/400).
+// §28.5.2/§28.5.3 — the writer (the RED prompts) and the reader (the RED gate) of the red-check report share this
+// module; a second copy of either would let the prompt and the gate disagree (CLAUDE.md shared semantics).
 
 import { PHASE_RESULT_GRAMMAR } from './phaseResult';
 
@@ -23,7 +21,6 @@ export interface RedCheckTest {
   file: string;
   name: string;
   outcome: RedCheckTestOutcome;
-  /** Every failed check, in the test file, in the order the runner reported them. */
   failures: RedCheckFailure[];
 }
 
@@ -36,7 +33,7 @@ export interface IntendedFailure {
   line: number;
 }
 
-export type RedCheckVerdict = { ok: true } | { ok: false; reason: string };
+export type RedCheckVerdict = { ok: true; unchecked: string[] } | { ok: false; reason: string };
 
 /** §28.5.2 — the round report carries this verbatim when the repo declares no `red_check_command`. */
 export const RED_CHECK_MISSING_WARNING =
@@ -102,8 +99,6 @@ export function parseRedCheckReport(text: string): { ok: true; report: RedCheckR
   }
 }
 
-/** The intended failures are read only from BEFORE the captured-output heading, so a look-alike section inside
- *  the raw run is never mistaken for the declaration. The section runs to the next `#` heading. */
 export function parseIntendedFailures(text: string): { ok: true; intended: IntendedFailure[] } | { ok: false; reason: string } {
   const lines = text.split('\n');
   const intended: IntendedFailure[] = [];
@@ -132,9 +127,7 @@ export function parseIntendedFailures(text: string): { ok: true; intended: Inten
 
 const loc = (file: string, line: number): string => `${file}:${line}`;
 
-/** §28.5.3 — a RED is verified when, across the files this turn added tests to, nothing errored and the set of
- *  places a check failed by assertion is EXACTLY the set the result declares. An undeclared failure location is
- *  a test failing before its own check; a declared one that did not fail is a check never seen failing. */
+/** §28.5.3 */
 export function redCheckVerdict(q: { report: RedCheckReport; intended: IntendedFailure[]; addedTestPaths: string[] }): RedCheckVerdict {
   if (q.intended.length === 0) {
     return { ok: false, reason: `the RED result declares no intended failures under \`${INTENDED_FAILURES_HEADING}\`` };
@@ -147,13 +140,14 @@ export function redCheckVerdict(q: { report: RedCheckReport; intended: IntendedF
     if (t.outcome === 'errored') problems.push(`${t.file} › ${t.name} errored instead of failing by assertion`);
     if (t.outcome === 'failed-assertion') for (const f of t.failures) observed.add(loc(t.file, f.line));
   }
-  const declared = new Set(q.intended.map((i) => loc(i.file, i.line)));
+  const covered = new Set(q.report.tests.map((t) => t.file));
+  const unchecked = [...new Set(q.intended.filter((i) => !covered.has(i.file)).map((i) => i.file))].sort();
+  const declared = new Set(q.intended.filter((i) => covered.has(i.file)).map((i) => loc(i.file, i.line)));
   for (const d of declared) if (!observed.has(d)) problems.push(`${d} is declared but did not fail by assertion`);
   for (const o of observed) if (!declared.has(o)) problems.push(`${o} failed but is not a declared intended failure`);
-  return problems.length === 0 ? { ok: true } : { ok: false, reason: `the RED check refused: ${problems.join('; ')}` };
+  return problems.length === 0 ? { ok: true, unchecked } : { ok: false, reason: `the RED check refused: ${problems.join('; ')}` };
 }
 
-/** The report sits beside the RED result it verifies: `red-result.slice-2.md` → `red-result.slice-2.check.json`. */
 export function redCheckReportRel(resultRel: string): string {
   const cut = resultRel.lastIndexOf('/');
   const dot = resultRel.lastIndexOf('.');
@@ -178,7 +172,7 @@ export function exampleIntendedFailures(): string[] {
   return ['- tests/adder.test.ts:5'];
 }
 
-/** §28.5.3 — the writer instruction for the RED work turn and each RED review round. */
+/** §28.5.3 */
 export function composeRedCheckInstruction(opts: { command: string; reportRel: string; resultRel: string }): string[] {
   return [
     `After the test run, run the repository's RED check, \`${opts.command}\`, with the test files you added or`,
@@ -187,6 +181,8 @@ export function composeRedCheckInstruction(opts: { command: string; reportRel: s
     `as \`- file:line\` (repo-relative), under a \`${INTENDED_FAILURES_HEADING}\` heading in ${opts.resultRel},`,
     `placed before the \`${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\` heading. The engine passes this RED only when,`,
     'in the files you added tests to, nothing errored and the checks that failed are exactly the ones listed.',
+    'A test file the check does not run never appears in its report: still declare its intended failures, and the',
+    'run log records them as not independently checked.',
     'A test that fails before it reaches the check it exists for is not fixed by listing that earlier line: restructure',
     'it so its own check is the one that fails — split it, or use soft assertions so every check reports.',
     'An example report and the matching declaration:',

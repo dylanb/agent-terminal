@@ -1,7 +1,5 @@
-// §28.5.2 — this repo's red_check_command (loop-capabilities.yaml): runs vitest over the given arguments and
-// prints the framework-neutral red-check report (src/shared/redCheck.ts) on stdout. Covers vitest test files
-// only; a Playwright spec's RED rests on the agent's classification.
-//   node scripts/red-check.mjs [vitest args, e.g. test files]
+// §28.5.2 — this repo's red_check_command (loop-capabilities.yaml); its stdout must parse as the report in
+// src/shared/redCheck.ts.
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -23,9 +21,14 @@ try {
     run = JSON.parse(readFileSync(out, 'utf8'));
   } catch {
     process.stderr.write('red-check: vitest produced no JSON report\n');
-    process.exit(1);
+    process.exitCode = 1;
   }
+  if (run !== undefined) report(run);
+} finally {
+  rmSync(dir, { recursive: true, force: true });
+}
 
+function report(run) {
   const rel = (abs) => path.relative(process.cwd(), abs).split(path.sep).join('/');
   const lineIn = (message, abs) => {
     const at = message.indexOf(`${abs}:`);
@@ -63,6 +66,4 @@ try {
     }
   }
   process.stdout.write(`${JSON.stringify({ version: 1, tests }, null, 2)}\n`);
-} finally {
-  rmSync(dir, { recursive: true, force: true });
 }

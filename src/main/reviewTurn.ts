@@ -73,8 +73,7 @@ export interface ReviewAndFixPromptReq {
    *  additionally runs the targeted tests and writes the result the round gate reads (softer than GREEN —
    *  {passed}, no build). Absent for RED/GREEN loops' review rounds (no phase-result block emitted). */
   resultRel?: string;
-  /** §28.5.3 — present ⟺ this is a RED loop's round: the repo's red-check command (null when it declares none)
-   *  and the RED result whose intended failures the round keeps current. */
+  /** §28.5.3 — present ⟺ this is a RED loop's round. */
   redCheck?: { command: string | null; resultRel: string };
   /** §19.1 — the GitHub issue the flow resolved (the SAME identity the gate side-effects act on), named so the
    *  turn hands each reviewer THIS ticket, never one re-derived from the branch/PR/cwd. Absent when the flow

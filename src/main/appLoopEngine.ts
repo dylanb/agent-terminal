@@ -172,8 +172,7 @@ export interface AppLoopEngineDeps {
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
   /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
   sliceBrief(repoDir: string): SliceBrief | null;
-  /** §28.4 D1 — the impl-slice the repo's flow is on (1 when unsliced), so a RED review round checks that slice's
-   *  RED result — the one the work turn wrote. */
+  /** §28.4 D1 */
   currentSlice(repoDir: string): number;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
   artifactCheckCommand(check: ArtifactCheck): string;
@@ -714,19 +713,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
   };
 
-  /** §28.5.3 — the red-check clause the RED work turn and every RED review round share: the repo's own report
-   *  must confirm the RED fails exactly at its declared checks. A repo that declares no check is not blocked;
-   *  the run log records that this RED was not independently checked. */
+  /** §28.5.3 */
   const redCheckClause = async (a: ActiveAppTurn, resultPath: string, addedTestPaths: string[]): Promise<PrecomputedGate> => {
     const check = await deps.completionPredicates.redCheck({ repoDir: a.repoDir, resultPath, addedTestPaths });
     if (check.kind === 'refused') return { ok: false, reason: check.reason };
     if (check.kind === 'unconfigured') {
       deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check not configured — this RED was not independently checked`, null);
+    } else if (check.unchecked.length > 0) {
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — those declared failures were not independently checked`, null);
     }
     return { ok: true };
   };
 
-  /** §28.5.3 — a RED review round's machine gate: the round's edits must leave the red check still passing. */
+  /** §28.5.3 */
   const redReviewGate = async (a: ActiveAppTurn & { phase: 'review' }): Promise<PrecomputedGate> => {
     try {
       if (a.completion.kind !== 'red-report') return { ok: true };
@@ -1392,7 +1391,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
         });
       } else if (a?.phase === 'review' && a.completion.kind === 'red-report') {
-        // §28.5.3 — the same async machinery (dedup + identity + runner-state guards) as the RED work turn.
+        // §28.5.3
         if (asyncGatePendingFor === a) return;
         asyncGatePendingFor = a;
         void redReviewGate(a).then((gate) => {
@@ -1487,7 +1486,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             return;
           }
           if (active.completion.kind === 'red-report') {
-            // §28.5.3/§28.5.6 — the accept overrides report well-formedness only, never the red check.
+            // §28.5.3/§28.5.6
             const a = active;
             void redReviewGate(a).then((gate) => {
               if (active !== a) return;

@@ -52,7 +52,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
     result(['- tests/a.test.ts:12']);
     report(12);
     at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
-    expect(check()).toEqual({ kind: 'verified' });
+    expect(check()).toEqual({ kind: 'verified', unchecked: [] });
   });
 
   it('refuses a test that failed somewhere other than its declared check', () => {

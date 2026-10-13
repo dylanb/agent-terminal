@@ -77,7 +77,7 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
 
   it('passes when every declared check failed by assertion and nothing else failed', () => {
     const v = redCheckVerdict({ report: parsed(report([failing(12)])), intended: [{ file: 'tests/a.test.ts', line: 12 }], addedTestPaths: added });
-    expect(v).toEqual({ ok: true });
+    expect(v).toEqual({ ok: true, unchecked: [] });
   });
 
   it('refuses a test that failed before reaching its own check (an undeclared failure location)', () => {
@@ -110,7 +110,7 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
       intended: [{ file: 'tests/a.test.ts', line: 12 }],
       addedTestPaths: added,
     });
-    expect(v).toEqual({ ok: true });
+    expect(v).toEqual({ ok: true, unchecked: [] });
   });
 
   it('accepts several failing checks in one test, each declared (expect.soft)', () => {
@@ -120,7 +120,35 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
       intended: [{ file: 'tests/a.test.ts', line: 12 }, { file: 'tests/a.test.ts', line: 14 }],
       addedTestPaths: added,
     });
-    expect(v).toEqual({ ok: true });
+    expect(v).toEqual({ ok: true, unchecked: [] });
+  });
+});
+
+describe('redCheckVerdict — a declared failure the repo check does not cover (§28.5.3)', () => {
+  const spec = 'tests/e2e/a.spec.ts';
+  const vitestFailure = { file: 'tests/a.test.ts', name: 't', outcome: 'failed-assertion' as const, failures: [{ line: 12, message: 'AssertionError' }] };
+
+  it('passes a RED whose only declared failures are in a file the report never mentions, naming that file unchecked', () => {
+    const v = redCheckVerdict({ report: parsed(report([])), intended: [{ file: spec, line: 7 }], addedTestPaths: [spec] });
+    expect(v).toEqual({ ok: true, unchecked: [spec] });
+  });
+
+  it('still holds the covered files to their declared checks', () => {
+    const v = redCheckVerdict({
+      report: parsed(report([{ ...vitestFailure, failures: [{ line: 9, message: 'AssertionError' }] }])),
+      intended: [{ file: 'tests/a.test.ts', line: 12 }, { file: spec, line: 7 }],
+      addedTestPaths: ['tests/a.test.ts', spec],
+    });
+    expect(v.ok).toBe(false);
+  });
+
+  it('passes a mixed RED, naming only the uncovered file unchecked', () => {
+    const v = redCheckVerdict({
+      report: parsed(report([vitestFailure])),
+      intended: [{ file: 'tests/a.test.ts', line: 12 }, { file: spec, line: 7 }],
+      addedTestPaths: ['tests/a.test.ts', spec],
+    });
+    expect(v).toEqual({ ok: true, unchecked: [spec] });
   });
 });
 
@@ -137,7 +165,7 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
       intended: intendedOf(resultWith(exampleIntendedFailures())),
       addedTestPaths: ['tests/adder.test.ts'],
     });
-    expect(v).toEqual({ ok: true });
+    expect(v).toEqual({ ok: true, unchecked: [] });
   });
 
   it('the instruction names the command, the report path, and the intended-failures heading', () => {
@@ -145,5 +173,10 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
     expect(text).toContain('node scripts/red-check.mjs');
     expect(text).toContain('r.check.json');
     expect(text).toContain(INTENDED_FAILURES_HEADING);
+  });
+
+  it('the instruction says a declared failure in a file the check does not run is still declared, and recorded as unchecked', () => {
+    const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.md' }).join(' ');
+    expect(text).toMatch(/does not run[\s\S]*still declare[\s\S]*not independently checked/i);
   });
 });
