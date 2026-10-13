@@ -1021,7 +1021,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  runs — a persona the catalog does not declare can never be invoked (§27.4), so an unknown one is simply
    *  filtered out. Round 1 (no `chosenRoster`) runs the full catalog. Returns null when the def no longer
    *  resolves or the report location is unresolvable (a routable error). */
-  const reviewTurnFor = (ctx: TurnCtx, round: number, chosenRoster?: string[], feedback?: string): Extract<ActiveAppTurn, { phase: 'review' }> | null => {
+  const reviewTurnFor = (ctx: TurnCtx, round: number, carry: Exclude<CarryOccasion['kind'], 'advance'>, chosenRoster?: string[], feedback?: string): Extract<ActiveAppTurn, { phase: 'review' }> | null => {
     const r = deps.resolveDef(ctx.repoDir, ctx.loopName);
     if (!r.ok) return null;
     const loc = deps.resolveReportLocation(ctx.repoDir, round);
@@ -1042,7 +1042,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const full = reviewRoster(r.def);
     const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
     const subject = r.def.work.completion === undefined ? completionArtifact(r.def) : null;
-    const inputs = chainFor(ctx.repoDir, ctx.stepId, r.def, { kind: 'reconstruct', ids: recordedCarry(ctx.repoDir, ctx.stepId, readAppLoopState(ctx.repoDir)) });
+    const inputs = chainFor(ctx.repoDir, ctx.stepId, r.def, { kind: carry, ids: recordedCarry(ctx.repoDir, ctx.stepId, readAppLoopState(ctx.repoDir)) });
     return {
       phase: 'review',
       repoDir: ctx.repoDir,
@@ -1069,7 +1069,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  round` (round ≥ 2, over the chosen roster). A def or report-location that no longer resolves stops in a
    *  routable review `error` rather than silently dropping the round. */
   const enterReview = (ctx: TurnCtx, round: number, chosenRoster?: string[], feedback?: string): void => {
-    const turn = reviewTurnFor(ctx, round, chosenRoster, feedback);
+    const turn = reviewTurnFor(ctx, round, 're-enter', chosenRoster, feedback);
     if (turn) {
       active = turn;
       persist('working');
@@ -1520,6 +1520,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
           inputs,
         });
+      } else if (active.phase === 'review') {
+        active = reviewTurnFor({ repoDir, loopName: active.loopName, stepId }, active.round, 're-enter', active.chosenRoster, active.feedback) ?? active;
       }
       persist('working');
       const retryAudit =
@@ -1595,7 +1597,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
         const round = state.round ?? FIRST_ROUND;
         active =
-          reviewTurnFor(ctx, round, state.chosenRoster, state.feedback) ??
+          reviewTurnFor(ctx, round, 'reconstruct', state.chosenRoster, state.feedback) ??
           {
             ...unresolvedReviewTurn({ ...ctx, turnKey: state.turnKey, round }),
             ...(state.chosenRoster ? { chosenRoster: state.chosenRoster } : {}),

@@ -947,6 +947,46 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(h.emitError.mock.calls[0][0]).toContain('design-notes');
   });
 
+  it('says so when a recorded input vanished before the review round is injected', () => {
+    const p = bindSeededInput(h.repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    writeArtifact(true);
+    rmSync(p, { force: true });
+    h.emitError.mockClear();
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected[h.injected.length - 1]).toContain('review-and-fix');
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
+  it('says so when a recorded input is unreadable when the review round is injected', () => {
+    const p = bindSeededInput(h.repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    writeArtifact(true);
+    rmSync(p, { force: true });
+    mkdirSync(p, { recursive: true });
+    h.emitError.mockClear();
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringMatching(/unreadable.*groomed-ticket/));
+  });
+
+  it('says so when a RETRIED review turn can no longer get the input its entry recorded, but not on the resume itself', () => {
+    const p = bindSeededInput(h.repo);
+    writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'malformed', round: 1, chainedInputs: ['groomed-ticket'] }, FIXED);
+    rmSync(p, { force: true });
+    const engine = makeEngine();
+    h.emitError.mockClear();
+    engine.resume(h.repo);
+    expect(h.emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
   it('announces nothing when a reconstruction finds a recorded input has vanished', () => {
     // The reconstruct scope must stay silent for BOTH unresolved states, not just the unreadable one:
     // resume runs on every route-out, including the Terminate that abandons the flow.
@@ -1052,17 +1092,6 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept'); // must NOT finalize on the present artifact
     expect(readAppLoopState(h.repo)?.status).toBe('error'); // not fabricated complete
     expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable');
-  });
-
-  it('resolves no chained input when a REVIEW round is retried — only a work turn carries one', () => {
-    const p = bindSeededInput(h.repo);
-    const engine = makeEngine();
-    enterAndInjectWork(engine, 'chain-advance');
-    driveToReviewInjected(engine);
-    rmSync(p, { force: true });
-    h.emitError.mockClear();
-    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
-    expect(h.emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
   });
 
   it('says so when a recorded carry id no longer matches any binding the def declares', () => {
