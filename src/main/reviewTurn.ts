@@ -154,12 +154,7 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-/** Compose the §27 review-and-fix prompt (§27.3/§27.4/§27.5): spawn the roster as parallel subagents each
- *  handed only the ticket and its charter, fix valid in-scope issues and dismiss the rest, and write the
- *  round report in the prescribed structure — the disposition set, the per-issue element labels, and the
- *  empty marker all taken from the ONE shared descriptor the completion predicate reads, so the prompt and
- *  the predicate cannot diverge. A single canonical example anchors the shape. Ends with the shared
- *  done-signal instruction, verifying the report on disk before the done-file (§27.12a). */
+/** §27.3/§27.4/§27.5/§27.12a */
 export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   const lines: string[] = [];
   const carried = (req.inputs ?? []).filter((i) => i.rel !== req.subjectRel);

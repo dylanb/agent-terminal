@@ -196,6 +196,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
       expect(p).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
       expect(p).toMatch(/elsewhere in the repository is not this work's/i);
       expect(p).toMatch(/working-tree diff/i);
+      expect(p).toMatch(/standards and\s+configuration are read where they live/i);
     }
   });
 });

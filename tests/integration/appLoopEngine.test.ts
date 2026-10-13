@@ -806,6 +806,20 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(prompt).toContain(`- groomed-ticket: ${INPUT_REL}`);
   });
 
+  it('names the recorded carry in a review turn retried after a relaunch (a NEW engine, carry only on disk)', () => {
+    bindSeededInput(h.repo);
+    writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'malformed', round: 1, chainedInputs: ['groomed-ticket'] }, FIXED);
+    const relaunched = makeEngine();
+    relaunched.resume(h.repo);
+    relaunched.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    relaunched.onInjectable();
+    relaunched.onInjectable();
+    const prompt = h.injected[h.injected.length - 1];
+    expect(prompt).toContain('review-and-fix');
+    expect(prompt).toContain(`- groomed-ticket: ${INPUT_REL}`);
+    expect(readAppLoopState(h.repo)?.chainedInputs).toEqual(['groomed-ticket']);
+  });
+
   it('keeps the recorded carry in the run state when a resumed turn is retried (a relaunch must not erase it)', () => {
     bindSeededInput(h.repo);
     writeAppLoopState(h.repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
