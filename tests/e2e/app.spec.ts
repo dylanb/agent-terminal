@@ -4613,6 +4613,40 @@ test('an unreadable pickup record stops the next step\'s work turn before it inj
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+test('a pickup recorded by an earlier run does not hold a newly started run to that run\'s branch (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: v2-stale-pickup\nsteps:\n' +
+      '  - id: implement\n    kind: loop\n    loop: infra-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\ninputs:\n  ticket: "176"\n');
+  seedCompletedAppBootstrap(repo);
+  writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-stale-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'implement', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('turn_key: review-implement');
+  expect(readIf(appRunState(repo)).replace(/\s+/g, ' ')).not.toContain('plan-loop/issue-176');
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 — STARTING a run at a step is not a chain advance: no upstream loop has run, so an artifact already
 // sitting at a declared input path is left over from an earlier run (nothing clears the artifacts subtree) or
 // committed by the repo. Carrying it would have the app vouch to the agent that "the previous loop produced

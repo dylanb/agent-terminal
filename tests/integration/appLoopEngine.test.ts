@@ -269,6 +269,31 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
   });
 
+  it('Retry stays refused while the branch is still wrong, and injects once the pickup branch is checked out', () => {
+    let branch: string | null = OTHER_BRANCH;
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => ON_PICKUP,
+      currentBranch: () => ({ ok: true, branch }),
+    });
+    enterAndInjectWork(engine);
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(OTHER_BRANCH);
+
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected).toEqual([]);
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(OTHER_BRANCH);
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
+
+    branch = PICKUP_BRANCH;
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
+  });
+
   it('a turn on the pickup branch injects as usual', () => {
     const engine = makeEngine(undefined, undefined, PICKUP_BRANCH, { pickupBranch: () => ON_PICKUP });
     enterAndInjectWork(engine);
