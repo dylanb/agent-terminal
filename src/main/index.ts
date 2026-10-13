@@ -123,7 +123,7 @@ import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopBootstrap, readAppLoopState, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -402,8 +402,11 @@ async function createWindow(): Promise<void> {
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
     pickupBranch: (repoDir) => {
-      const bootstrap = readAppLoopBootstrap(repoDir);
-      return bootstrap !== null && bootstrap.issue === (flow.state(repoDir).refs?.ticket ?? null) ? bootstrap.branch : null;
+      const record = readPickupRecord(repoDir);
+      if (record.kind === 'invalid') return { kind: 'unreadable', detail: record.detail };
+      return record.kind === 'complete' && record.bootstrap.issue === (flow.state(repoDir).refs?.ticket ?? null)
+        ? { kind: 'branch', branch: record.bootstrap.branch }
+        : { kind: 'none' };
     },
     // The ticket/PR this repo's work turn is operating on — the SAME identity the gate side-effects act on
     // (resolveAppGateRefs, below), so the composed work prompt binds the agent to the engine-resolved issue and

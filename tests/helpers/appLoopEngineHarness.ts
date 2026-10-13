@@ -233,8 +233,8 @@ export class AppLoopEngineHarness {
         if (this.clearBaselineError) throw new Error(this.clearBaselineError);
         clearBaselineCommit(repoDir);
       },
-      currentBranch: () => currentBranchOverride,
-      pickupBranch: () => null,
+      currentBranch: () => ({ ok: true, branch: currentBranchOverride }),
+      pickupBranch: () => ({ kind: 'none' }),
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
       artifactCheckCommand: (check) =>

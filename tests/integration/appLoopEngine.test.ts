@@ -203,9 +203,10 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
 describe('§27.10 — every turn after pickup runs on the branch pickup created', () => {
   const PICKUP_BRANCH = 'plan-loop/issue-180';
   const OTHER_BRANCH = 'fix/review-subject-artifact';
+  const ON_PICKUP = { kind: 'branch', branch: PICKUP_BRANCH } as const;
 
   it('a work turn on a different branch than pickup created injects no prompt and summons the human, naming both branches', () => {
-    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => PICKUP_BRANCH });
+    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => ON_PICKUP });
     enterAndInjectWork(engine);
     engine.onInjectable();
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
@@ -217,7 +218,7 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
   });
 
   it('a detached HEAD is not the pickup branch either', () => {
-    const engine = makeEngine(undefined, undefined, null, { pickupBranch: () => PICKUP_BRANCH });
+    const engine = makeEngine(undefined, undefined, null, { pickupBranch: () => ON_PICKUP });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
     expect(engine.liveErrorFor(h.repo)?.reason).toContain(PICKUP_BRANCH);
@@ -226,8 +227,8 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
   it('a branch switched mid-step stops the next turn before it injects', () => {
     let branch: string | null = PICKUP_BRANCH;
     const engine = makeEngine(undefined, undefined, null, {
-      pickupBranch: () => PICKUP_BRANCH,
-      currentBranch: () => branch,
+      pickupBranch: () => ON_PICKUP,
+      currentBranch: () => ({ ok: true, branch }),
     });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
@@ -240,15 +241,38 @@ describe('§27.10 — every turn after pickup runs on the branch pickup created'
     expect(engine.liveErrorFor(h.repo)?.reason).toContain(OTHER_BRANCH);
   });
 
+  it('a branch probe that fails is reported with its own reason, not as a detached HEAD', () => {
+    const engine = makeEngine(undefined, undefined, null, {
+      pickupBranch: () => ON_PICKUP,
+      currentBranch: () => ({ ok: false, detail: 'fatal: not a git repository' }),
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    const reason = engine.liveErrorFor(h.repo)?.reason ?? '';
+    expect(reason).toContain('fatal: not a git repository');
+    expect(reason).toContain(PICKUP_BRANCH);
+    expect(reason).not.toContain('detached');
+  });
+
+  it('an unreadable pickup record refuses the turn with its read error instead of lifting the guard', () => {
+    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, {
+      pickupBranch: () => ({ kind: 'unreadable', detail: '.agent-terminal/loop/bootstrap.yaml is not valid YAML' }),
+    });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(false);
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain('.agent-terminal/loop/bootstrap.yaml is not valid YAML');
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
+  });
+
   it('a turn on the pickup branch injects as usual', () => {
-    const engine = makeEngine(undefined, undefined, PICKUP_BRANCH, { pickupBranch: () => PICKUP_BRANCH });
+    const engine = makeEngine(undefined, undefined, PICKUP_BRANCH, { pickupBranch: () => ON_PICKUP });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
     expect(engine.liveErrorFor(h.repo)).toBeNull();
   });
 
   it('a run with no pickup branch is not held to one', () => {
-    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => null });
+    const engine = makeEngine(undefined, undefined, OTHER_BRANCH, { pickupBranch: () => ({ kind: 'none' }) });
     enterAndInjectWork(engine);
     expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
   });

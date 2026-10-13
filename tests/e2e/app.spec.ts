@@ -4582,6 +4582,37 @@ test('a branch switched away from the pickup branch stops the next step\'s work 
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+test('an unreadable pickup record stops the next step\'s work turn before it injects, naming the file, instead of lifting the branch guard (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainFlowRepo('agent-term-e2e-v2-bad-pickup-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bad-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bad-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  writeFileSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'), 'pr: [unclosed\n');
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 20_000 }).toContain('status: error');
+  expect(readIf(appRunState(repo)).replace(/\s+/g, ' ')).toContain('.agent-terminal/loop/bootstrap.yaml is not valid YAML');
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain(`- plan: ${APP_ARTIFACT_REL}`);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 — STARTING a run at a step is not a chain advance: no upstream loop has run, so an artifact already
 // sitting at a declared input path is left over from an earlier run (nothing clears the artifacts subtree) or
 // committed by the repo. Carrying it would have the app vouch to the agent that "the previous loop produced

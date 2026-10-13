@@ -35,6 +35,7 @@ import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolid
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
@@ -61,6 +62,9 @@ export type AppLoopEnterResult = 'entered' | 'busy' | 'unresolved';
  *  turn itself; `def-unresolvable` is an Accept refused because the resumed turn's def no longer resolves
  *  (§27.12c/CWE-755). The `reason` wording is free to change without moving any consumer. */
 export type AppLoopErrorKind = 'turn-error' | 'def-unresolvable';
+
+/** §27.10 */
+export type PickupBranch = { kind: 'none' } | { kind: 'branch'; branch: string } | { kind: 'unreadable'; detail: string };
 
 /** The live in-memory error of the §27 work turn, surfaced to the view when the persisted error write
  *  failed (ENOSPC/EPERM/a planted symlink) so the route-out is never a dead-end (§27.12c). */
@@ -155,13 +159,12 @@ export interface AppLoopEngineDeps {
    *  same-branch baseline from a prior phase/slice is not stale-matched by the next GREEN/refactor frozen
    *  check. A domain seam (composition root wires `clearBaselineCommit`); the caller wraps it best-effort. */
   clearBaseline(repoDir: string): void;
-  /** §28.5.1 — the repo's current branch (the baseline's slice key), or null when detached/unresolvable. The
+  /** §28.5.1 — the repo's current branch (the baseline's slice key; null branch when detached). The
    *  frozen check matches it against the recorded baseline branch so the RED step's baseline is found by the
    *  GREEN step (they share the branch). A domain seam (composition root wires `currentGitBranch`). */
-  currentBranch(repoDir: string): string | null;
-  /** §27.10 — the branch this run's pickup created and checked out for the flow's ticket, or null when the run
-   *  has none. */
-  pickupBranch(repoDir: string): string | null;
+  currentBranch(repoDir: string): GitBranchRead;
+  /** §27.10 */
+  pickupBranch(repoDir: string): PickupBranch;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
@@ -710,7 +713,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const changedTestPathsSinceBaseline = async (
     a: ActiveAppTurn,
   ): Promise<{ kind: 'ok'; paths: string[] } | { kind: 'no-baseline' } | { kind: 'capfail'; cause: 'absent' | 'malformed' }> => {
-    const baseline = baselineForBranch(deps.readBaseline(a.repoDir), deps.currentBranch(a.repoDir));
+    const branch = deps.currentBranch(a.repoDir);
+    const baseline = baselineForBranch(deps.readBaseline(a.repoDir), branch.ok ? branch.branch : null);
     if (baseline === null) return { kind: 'no-baseline' };
     const changed = await deps.completionPredicates.changedTestPaths({ repoDir: a.repoDir, baseline: baseline.sha });
     if (!changed.ok) return { kind: 'capfail', cause: changed.cause };
@@ -875,11 +879,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   const offPickupBranch = (repoDir: string): string | null => {
-    const expected = deps.pickupBranch(repoDir);
-    if (expected === null) return null;
+    const pickup = deps.pickupBranch(repoDir);
+    if (pickup.kind === 'none') return null;
+    if (pickup.kind === 'unreadable') {
+      return `cannot check this turn's branch against the one pickup created: ${pickup.detail}; repair or remove the pickup record and retry`;
+    }
+    const expected = pickup.branch;
     const current = deps.currentBranch(repoDir);
-    if (current === expected) return null;
-    return `the worktree is on ${current ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
+    if (!current.ok) {
+      return `cannot read the worktree's branch to check it against ${expected}, the branch pickup created for this run: ${current.detail}; fix the worktree and retry`;
+    }
+    if (current.branch === expected) return null;
+    return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
   };
 
   runner = createTurnRunner({

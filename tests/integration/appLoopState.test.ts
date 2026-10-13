@@ -27,6 +27,7 @@ import {
   writeAppLoopBootstrap,
   writeAppLoopBootstrapIntent,
   readAppLoopBootstrap,
+  readPickupRecord,
   recordBaselineCommit,
   readBaselineCommit,
   clearBaselineCommit,
@@ -323,6 +324,27 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
+  });
+
+  it('tells an absent or pending pickup record apart from a completed one', () => {
+    expect(readPickupRecord(repo)).toEqual({ kind: 'none' });
+    writeAppLoopBootstrapIntent(repo, { branch: IDENTITY.branch, issue: IDENTITY.issue, initialStatus: IDENTITY.initialStatus }, FIXED);
+    expect(readPickupRecord(repo)).toEqual({ kind: 'pending' });
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(readPickupRecord(repo)).toEqual({ kind: 'complete', bootstrap: IDENTITY });
+  });
+
+  it('reports a malformed, field-invalid, or non-file pickup record as invalid, naming the file', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    for (const text of ['pr: [unclosed', '- just a list', 'schema_version: 99\nstatus: complete\npr: 1\nbranch: b\nissue: 1\n', 'schema_version: 1\nstatus: complete\npr: -1\nbranch: b\nissue: 1\n']) {
+      writeFileSync(bootstrapFile(), text);
+      const record = readPickupRecord(repo);
+      expect(record.kind, text).toBe('invalid');
+      expect(record.kind === 'invalid' && record.detail, text).toContain('bootstrap.yaml');
+    }
+    rmSync(bootstrapFile());
+    mkdirSync(bootstrapFile());
+    expect(readPickupRecord(repo).kind).toBe('invalid');
   });
 });
 
