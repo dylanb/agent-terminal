@@ -1031,6 +1031,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!active) return;
       persist('working');
       deps.audit(active.repoDir, `§27 turn ${active.turnKey} resumed after a stall (done-signal)`, 0);
+      const resumed = active;
+      hook(() => deps.loopRunEvent?.(resumed.repoDir, resumed.stepId, resumed.turnKey, 'retried'));
     },
     onComplete: (turnKey) => {
       if (!active) return;

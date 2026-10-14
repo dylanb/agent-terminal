@@ -413,6 +413,18 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     expect(parseAutoHaltReasons(autoHalts(rig)[0])).toContain('loop-error');
   });
 
+  it('a turn resumed by its done file after a stall at an `auto` step no longer holds (b): the clean gate that follows is approved by the engine', async () => {
+    const { rig, engine } = wired();
+    h.enterAndInjectWork(engine);
+    engine.onStall();
+    await flush();
+    expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, turnKey: TURN_KEY, status: 'error' });
+    h.driveFromWorkToGate(engine);
+    await flush();
+    expect(rig.view(h.repo).autoGate?.haltReasons ?? []).toEqual([]);
+    expect(rig.approvals.map((a) => [a.repoDir, a.step, a.decider])).toEqual([[h.repo, STEP, 'engine']]);
+  });
+
   // AC4 (#137 S2): the error stop itself shows and records (b), and the Accept out of it adds no second entry.
   function expectOneBStop(rig: Rig): void {
     const v = rig.view(h.repo);
