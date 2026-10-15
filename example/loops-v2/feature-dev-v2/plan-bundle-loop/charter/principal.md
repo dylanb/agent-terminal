@@ -38,3 +38,8 @@ When the plan already lists several countermeasures for one guard and a finding 
 guard — one more way around the same isolation, one more case the same workaround misses — the finding is
 that the mechanism cannot deliver its acceptance criterion. Say it needs a human decision on the approach (a
 different mechanism, or a narrower criterion), not another patch.
+
+A criterion that takes a disproportionate share of the plan — of its design, tests or slices — or brings in
+a new external system, component or state, and is not named under `## Complexity drivers` with simpler
+alternatives and a recommendation, is a finding: ask for the entry. The choice among the alternatives needs a
+human, so never ask for one to be applied.

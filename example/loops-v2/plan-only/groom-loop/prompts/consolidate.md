@@ -14,5 +14,10 @@ judge the round against the ticket. Emit a verdict and, for `another round`, the
 - `stop for a human` — a reviewer raised an issue only a human can resolve, or a reviewer failed to run
   again after a re-review. Give the reason.
 
+Then read the groomed ticket's `## Questioned acceptance criteria`. Its items belong to the operator, so
+this rule takes precedence over `clean` and `another round`: the verdict is `stop for a human` when any item
+there is not recorded as `Operator decision (<date>): …`. Name each undecided criterion in the reason, with
+the recommendation the list gives it.
+
 Write your verdict in the exact labelled-line format the turn instruction specifies. Do not merge or
 re-rank findings — that was the round's job; yours is to judge the round and choose what runs next.
