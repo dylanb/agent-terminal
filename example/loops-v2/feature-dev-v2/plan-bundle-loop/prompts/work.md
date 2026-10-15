@@ -68,6 +68,19 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
 
 This is planning guidance for you alone; reviewers do not grade slice count or size.
 
+## Complexity drivers
+
+Once the plan is drafted, find the acceptance criteria that drive most of its cost: a criterion that takes a
+disproportionate share of the design, the tests or the slices; that brings in a new external system,
+component or state; or whose failure paths need decisions the ticket does not settle. Under a
+`## Complexity drivers` heading, name each such criterion, what it costs the plan, and one or more simpler
+alternatives — a narrower criterion, a different mechanism, or a split into a follow-up ticket — with what
+each alternative saves and loses, and your recommendation. Keep the list short and lead with the biggest
+saving. Propose only: never apply an alternative yourself, so the plan still meets every criterion as the
+ticket states it until the operator decides. When the operator decides, record it under the item as
+`Operator decision (<date>): …` and revise the plan to match. When no criterion stands out, write `None.`
+under the heading.
+
 ## Epic classification (§28.7)
 
 Judge whether the ticket is an **epic** — work that decomposes into more than one self-contained,

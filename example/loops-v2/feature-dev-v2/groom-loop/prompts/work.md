@@ -4,3 +4,18 @@ Groom the linked GitHub issue against the ticket standards in `CLAUDE.md` so the
 plan/impl loops waste fewer cycles: sharpen the title to an imperative, state the problem with a
 spec citation, list scope and non-goals, and rewrite the acceptance criteria as measurable
 outcomes. Produce the groomed ticket as the `groomed-ticket` artifact.
+
+## Question criteria the problem does not need
+
+Every acceptance criterion costs planning, tests, review rounds and operator attention, and the cost of a
+ticket grows faster than its criterion count. Test each criterion against the problem the ticket states: is
+it needed to solve that problem? Question one that is not — one that serves a different problem, adds a
+capability no one asked for, hardens against a risk the ticket does not name, or could ship as its own
+follow-up ticket without leaving this one broken.
+
+List each questioned criterion under a `## Questioned acceptance criteria` heading: the criterion, why it
+looks unnecessary, a simpler alternative (drop it, narrow it, or split it into a follow-up ticket), and your
+recommendation. Keep the list short and lead with the criterion whose removal saves the most. Propose only:
+never apply your own suggestion, so every criterion stays in the ticket until the operator decides. When the
+operator decides, record it under the item as `Operator decision (<date>): …` and apply it to the criteria.
+When nothing needs questioning, write `None.` under the heading.
