@@ -423,7 +423,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
   });
 });
 
-describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.4)', () => {
+describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.3)', () => {
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,

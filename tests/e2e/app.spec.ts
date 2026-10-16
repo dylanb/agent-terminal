@@ -3112,7 +3112,6 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   rmSync(cfg, { recursive: true, force: true });
 });
 
-// §27.3 — the review-and-fix turn follows a cleared context, so it carries the loop's brief itself.
 test('§27.3 — the bundled loop brief reaches both the work prompt and the review-and-fix prompt', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-brief-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-brief-home-'));
