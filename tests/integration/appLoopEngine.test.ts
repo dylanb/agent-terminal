@@ -3445,3 +3445,21 @@ describe('§27.3 — the loop brief reaches both the work turn and the review-an
     expect(h.injected.some((t) => t.includes('Produce the plan.'))).toBe(false);
   });
 });
+
+describe('§27.4 — the reviewer hand-off names the impl-slice a phase loop is reviewing', () => {
+  it('a refactor round on slice 3 tells the reviewers it covers impl-slice 3', () => {
+    h.defResult = resolved(refactorDef());
+    const engine = makeEngine();
+    h.currentSliceResult = 3;
+    driveToReviewInjected(engine);
+    expect(h.injected[h.injected.length - 1]).toContain('impl-slice 3 of the plan only');
+  });
+
+  it('a loop that is not a TDD phase names no slice', () => {
+    h.defResult = resolved(fileDef());
+    const engine = makeEngine();
+    h.currentSliceResult = 3;
+    driveToReviewInjected(engine);
+    expect(h.injected[h.injected.length - 1]).not.toContain('impl-slice 3');
+  });
+});

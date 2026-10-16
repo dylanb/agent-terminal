@@ -41,10 +41,13 @@ export interface LoopDefV2Tiers {
 /** One reviewer-catalog entry (§27.4/§27.8): a persona, its charter carried BY REFERENCE (§18.6 — never an
  *  inline body), and the tools it may use. Readable from the parsed def even though nothing consumes it in
  *  this slice. `charter` is the confined absolute path the reference resolved to. */
+/** §27.8 */
+export type ReviewerTools = readonly string[] | 'all';
+
 export interface ReviewerCatalogEntry {
   persona: string;
   charter: string;
-  tools: string[];
+  tools: ReviewerTools;
 }
 
 /** One actor-boundary policy (§27.7): `clear`, or `compact` carrying the message naming what survives it. */
@@ -267,6 +270,7 @@ function toReviewers(raw: unknown, tierRoot: string, defDir: string): ReviewerCa
     const rec = r as Record<string, unknown>;
     const persona = requireSegment(rec.persona, 'reviewer persona');
     const charter = confineDefRelative(tierRoot, defDir, requireString(rec.charter, 'reviewer charter'), 'charter');
+    if (rec.tools === undefined) return { persona, charter, tools: 'all' };
     if (!Array.isArray(rec.tools) || !(rec.tools as unknown[]).every((t) => typeof t === 'string')) {
       fail(`reviewer ${persona} tools must be a list of strings`);
     }

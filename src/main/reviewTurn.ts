@@ -4,7 +4,7 @@
 // is single-sourced from the SHARED report vocabulary (roundReport.ts) so the shape the fixer is told to
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
-import type { LoopDefV2, PolishPolicy } from './loopDefV2';
+import type { LoopDefV2, PolishPolicy, ReviewerTools } from './loopDefV2';
 import { boundaryCommand, flowDocumentLines, sliceBriefLines } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
@@ -34,7 +34,7 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
 export interface RosterEntry {
   persona: string;
   charter: string;
-  tools: string[];
+  tools: ReviewerTools;
   agent: string;
 }
 
@@ -50,6 +50,9 @@ export function reviewRoster(def: LoopDefV2): RosterEntry[] {
 export function catalogPersonas(def: LoopDefV2): string[] {
   return def.reviewers.map((r) => r.persona);
 }
+
+export const REVIEWER_HANDOFF_BEGIN = '----- reviewer hand-off begins -----';
+export const REVIEWER_HANDOFF_END = '----- reviewer hand-off ends -----';
 
 export interface ReviewAndFixPromptReq {
   /** The round's roster — charters handed by reference, not inlined content (§27.4). */
@@ -91,6 +94,8 @@ export interface ReviewAndFixPromptReq {
   sliceBrief?: SliceBrief;
   /** §27.3 */
   loopBrief?: string;
+  /** §28.4 */
+  slice?: number;
 }
 
 /** The round-report format rules (§27.5), from the ONE shared descriptor the completion predicate reads.
@@ -164,25 +169,56 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
+/** §27.4 */
+function reviewerHandoffLines(req: ReviewAndFixPromptReq, carried: ChainedInput[]): string[] {
+  const lines: string[] = [];
+  lines.push(
+    req.ticket !== undefined
+      ? `Review the work for GitHub issue #${req.ticket}. Read the issue and its comments with \`gh issue view ${req.ticket} --comments\`.`
+      : "Review this loop's work.",
+  );
+  if (req.subjectRel !== undefined) {
+    lines.push(
+      `Grade ${req.subjectRel}, the artifact this loop produced, not the issue body on GitHub. The issue is the`,
+      'intent the artifact must honour, and it can still hold text the artifact has since fixed.',
+    );
+  } else {
+    lines.push(
+      "The code and tests under review are this branch's change: its commits since it left the repository's",
+      'default branch, plus any uncommitted changes. See them with git: `git log`, `git status`, and `git diff HEAD`.',
+    );
+  }
+  if (req.slice !== undefined) {
+    lines.push(`This round covers impl-slice ${req.slice} of the plan only; work that belongs to another slice is not under review.`);
+  }
+  if (carried.length > 0) {
+    lines.push('Grade it against these documents, beside the ticket:', ...carried.map((i) => `  - ${i.id}: ${i.rel}`));
+  }
+  lines.push(
+    ...flowDocumentLines('described-elsewhere').slice(1),
+    'Do not change any file: report your findings, and the fixer makes every change.',
+    'Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.',
+    'If you find nothing, return exactly: no findings',
+  );
+  return lines;
+}
+
 /** §27.3/§27.4/§27.5/§27.12a */
 export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   const lines: string[] = [];
   const carried = (req.inputs ?? []).filter((i) => i.rel !== req.subjectRel);
-  const handed = [
-    'the ticket',
-    ...(req.subjectRel !== undefined ? ['the subject below'] : []),
-    ...(carried.length > 0 ? ['the inputs below'] : []),
-  ];
-  const handedText = handed.length <= 2 ? handed.join(' and ') : `${handed.slice(0, -1).join(', ')}, and ${handed[handed.length - 1]}`;
-  const withheld = req.subjectRel === undefined && carried.length === 0 ? 'no diff, no plan, no prior review' : 'no diff, no prior review';
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    `Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, handing each ONLY ${handedText} — ${withheld}.`,
+    'Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, and give each the',
+    'reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
     'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
     'other type for it.',
-    'Each pulls what it needs with tools. Receive their findings into your own context, then fix or dismiss each',
-    'per the criterion below.',
+    'Receive their findings into your own context, then fix or dismiss each per the criterion below.',
+    '',
+    REVIEWER_HANDOFF_BEGIN,
+    ...reviewerHandoffLines(req, carried),
+    REVIEWER_HANDOFF_END,
   );
   if (req.loopBrief !== undefined) {
     lines.push(
@@ -199,10 +235,8 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   if (req.subjectRel !== undefined) {
     lines.push(
       '',
-      `SUBJECT — tell each reviewer to grade ${req.subjectRel}, the artifact this loop's work turn produced and`,
-      'your fixes edit, not the issue body on GitHub. The issue is the intent the artifact must honour, not the',
-      'thing under review: it can still hold text the artifact has since fixed, and grading it re-raises those',
-      'findings. Make every fix in that file.',
+      `SUBJECT — ${req.subjectRel} is the artifact this loop's work turn produced and the reviewers grade. Make every`,
+      'fix in that file, not in the issue body on GitHub.',
       '',
       'When a finding is that a mechanism this document specifies is wrong — an internal helper, how a command\'s',
       'arguments are parsed, a path or platform quirk — fix it by replacing that mechanism with the contract it',
@@ -216,14 +250,6 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       'workaround. When the document already lists several countermeasures for one guard and a finding is another',
       'hole in the same guard, the mechanism cannot deliver its criterion: that is',
       `\`${NEEDS_HUMAN_DISPOSITION}\` (a different mechanism or a narrower criterion), never another patch.`,
-    );
-  }
-  if (carried.length > 0) {
-    lines.push(
-      '',
-      'INPUTS — the documents this step carried. Tell each reviewer to read them as the reference the work is',
-      'graded against, beside the ticket:',
-      ...carried.map((i) => `  - ${i.id}: ${i.rel}`),
     );
   }
   lines.push(...flowDocumentLines());

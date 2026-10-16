@@ -120,7 +120,7 @@ export function sliceBriefLines(brief: SliceBrief, audience: 'work' | 'fixer'): 
 }
 
 /** §27.4 */
-export function flowDocumentLines(): string[] {
+export function flowDocumentLines(code: 'working-tree' | 'described-elsewhere' = 'working-tree'): string[] {
   const dir = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR].join('/');
   return [
     '',
@@ -128,8 +128,9 @@ export function flowDocumentLines(): string[] {
     `only under \`${dir}/\`.`,
     "A file of that kind found elsewhere in the repository is not one of this work's flow documents, so never read",
     'it as one; it is still work when the ticket names it as something to change.',
-    "The code and tests a loop produces are the working-tree diff, and the repository's standards and",
-    'configuration are read where they live.',
+    ...(code === 'working-tree'
+      ? ["The code and tests a loop produces are the working-tree diff, and the repository's standards and", 'configuration are read where they live.']
+      : ["The repository's standards and configuration are read where they live."]),
   ];
 }
 

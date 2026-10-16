@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
+import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
@@ -449,5 +449,68 @@ describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.3)'
   it('carries no brief block when the loop declares none', () => {
     const p = composeReviewAndFixPrompt(req());
     expect(p).not.toMatch(/standing instructions/i);
+  });
+});
+
+describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off (§27.4)', () => {
+  const req = () => ({
+    roster: reviewRoster(def()),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-green',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+  });
+  const handoff = (p: string): string => {
+    const start = p.indexOf(REVIEWER_HANDOFF_BEGIN);
+    const end = p.indexOf(REVIEWER_HANDOFF_END);
+    expect(start, 'no hand-off block').toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    return p.slice(start + REVIEWER_HANDOFF_BEGIN.length, end);
+  };
+
+  it('tells the fixer to pass the hand-off to each reviewer word for word, adding nothing', () => {
+    const p = composeReviewAndFixPrompt(req());
+    handoff(p);
+    expect(p).toMatch(/word for word/i);
+  });
+
+  it('names the ticket and how to read it', () => {
+    expect(handoff(composeReviewAndFixPrompt({ ...req(), ticket: 180 }))).toContain('gh issue view 180 --comments');
+  });
+
+  it('for a commits loop, says how to see the change with git and which slice the round covers', () => {
+    const h = handoff(composeReviewAndFixPrompt({ ...req(), slice: 2 }));
+    expect(h).toContain('git status');
+    expect(h).toContain('git diff HEAD');
+    expect(h).toMatch(/default branch/);
+    expect(h).toContain('impl-slice 2');
+  });
+
+  it('for a file-artifact loop, names the subject to grade instead of the code', () => {
+    const subject = '.agent-terminal/loop/artifacts/plan.md';
+    const h = handoff(composeReviewAndFixPrompt({ ...req(), ticket: 180, subjectRel: subject }));
+    expect(h).toMatch(new RegExp(`Grade ${subject.replace(/\./g, '\\.')}`));
+    expect(h).not.toContain('git diff HEAD');
+  });
+
+  it('lists the carried inputs and where the flow documents live', () => {
+    const h = handoff(composeReviewAndFixPrompt({ ...req(), inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }] }));
+    expect(h).toContain('- plan: .agent-terminal/loop/artifacts/plan.md');
+    expect(h).toMatch(/only under `\.agent-terminal\/loop\/artifacts\/`/);
+  });
+
+  it('describes the change under review one way only', () => {
+    const h = handoff(composeReviewAndFixPrompt(req()));
+    expect(h).not.toMatch(/working-tree diff/);
+    expect(h).toMatch(/standards and\s+configuration are read where they live/);
+  });
+
+  it('asks for each finding as file:line, issue, consequence and fix, with no severity, and no file changes', () => {
+    const h = handoff(composeReviewAndFixPrompt(req()));
+    expect(h).toMatch(/file:line, the issue, its concrete consequence, and the fix/);
+    expect(h).toMatch(/do not rate severity/i);
+    expect(h).toContain('no findings');
+    expect(h).toMatch(/do not change any file/i);
   });
 });

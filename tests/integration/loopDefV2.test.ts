@@ -704,3 +704,13 @@ describe('resolveLoopDefV2 — the loop brief (§27.8)', () => {
     if (!r.ok) expect(r.reason).toMatch(/brief reference escapes/);
   });
 });
+
+describe('resolveLoopDefV2 — a reviewer with no tools list gets every tool (§27.8)', () => {
+  it('parses a reviewer that declares no tools as having all tools', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('    tools: [Read, Grep, Glob]\n', ''));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.def.reviewers[0].tools).toBe('all');
+    expect(r.def.reviewers[1].tools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+  });
+});
