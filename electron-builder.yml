@@ -27,7 +27,7 @@ extraResources:
     to: example/loops-v2
   - from: example/commands
     to: example/commands
-  # The Codex skills (§18.1 v2.198), read back by resolveExampleCodexSkillsDir.
+  # The Codex skills (§18.1 v2.199), read back by resolveExampleCodexSkillsDir.
   - from: example/codex-skills
     to: example/codex-skills
 mac:

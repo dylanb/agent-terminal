@@ -50,7 +50,7 @@ let dirs: InstallDestination[];
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-cfg-'));
-  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, path.join(home, '.codex'));
+  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
@@ -149,6 +149,19 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
 
   it('refuses a reviewer whose explicit tool list grants more than reading, since a Codex agent cannot be narrowed to it', () => {
     expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Edit'], charter: 'c' })).toThrow(/Edit/);
+  });
+
+  it('installs a reviewer limited to reading and running commands', () => {
+    const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Grep', 'Glob', 'Bash'], charter: 'c' })) as Record<string, unknown>;
+    expect(agent.name).toBe('green_loop__impl_review_tests');
+  });
+
+  it.each(['impl_review', 'impl--review', 'a"b'])('refuses a persona %j two reviewers could share a Codex name with, or TOML cannot carry', (persona) => {
+    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona, tools: 'all', charter: 'c' })).toThrow(/cannot name a reviewer sub-agent/);
+  });
+
+  it('refuses a reviewer that declares no tools', () => {
+    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: [], charter: 'c' })).toThrow(/declares no tools/);
   });
 
   it("refuses a charter a TOML literal string cannot carry (one holding ''')", () => {

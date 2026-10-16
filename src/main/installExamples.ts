@@ -183,13 +183,12 @@ export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
   overwrite: { mode: 'confirm-overwrite' } | { mode: 'forbid-overwrite' };
-  /** `null` when this destination has no absolute install location — a relative CLAUDE_CONFIG_DIR (config
-   *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
-   *  refusal the user sees rather than a guessed path. */
+  /** `null` when this destination's root has no absolute location. `resolveAll` turns it into a refusal the
+   *  user sees rather than a guessed path. */
   targetDir: string | null;
   /** What the user must fix when `targetDir` is null: the root THIS destination derives from, and no other.
-   *  The flow home comes from $HOME, the config branches from CLAUDE_CONFIG_DIR — so one refusal text for
-   *  both names a variable that is blameless for whichever destination actually failed. */
+   *  The roots are independent, so a refusal text shared between them would name a variable that is
+   *  blameless for whichever destination actually failed. */
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   /** The home of the tool this destination installs for, when it installs only where that tool is: absent,
@@ -197,16 +196,16 @@ export interface InstallDestination {
   onlyIfPresent?: string;
 }
 
-interface Roots {
+export interface InstallRoots {
   flowGlobalDir: string;
-  configDir: string | undefined;
+  configDir?: string;
   codexHome: string | null;
 }
 
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
-  target: (roots: Roots) => string | null;
-  onlyIfPresent?: (roots: Roots) => string | null;
+  target: (roots: InstallRoots) => string | null;
+  onlyIfPresent?: (roots: InstallRoots) => string | null;
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   overwrite: InstallDestination['overwrite'];
@@ -289,13 +288,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
  *  from the user's surfaces. Order is the contract's, so the report cannot be reordered against it. */
-export function exampleInstallDirs(
-  loc: BundleLocation,
-  flowGlobalDir: string,
-  configDir: string | undefined,
-  codexHome: string | null,
-): InstallDestination[] {
-  const roots: Roots = { flowGlobalDir, configDir, codexHome };
+export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
     const onlyIfPresent = d.onlyIfPresent?.(roots) ?? undefined;
@@ -381,11 +374,8 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
   const notInstalled: InstallDestinationNotInstalled[] = [];
   for (const dest of destinations) {
     if (dest.targetDir === null) {
-      // Every install target must be an absolute directory. A relative one — a relative CLAUDE_CONFIG_DIR
-      // (loops/skills/commands) or a relative launch home from an empty $HOME (flow) — has no single meaning
-      // and would seed into the process cwd, so the whole install refuses rather than guessing (CWE-829).
-      // The remediation is the destination's own: the two roots are independent, and either can be the
-      // sole cause while the other is absolute and blameless.
+      // A relative install target has no single meaning and would seed into the process cwd, so the whole
+      // install refuses rather than guessing (CWE-829), naming the fix for this destination's own root.
       return {
         ok: false,
         error: `Could not install the ${dest.id} examples: its install location is not an absolute path. ${dest.rootFix}`,

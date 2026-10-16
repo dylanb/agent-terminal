@@ -169,8 +169,16 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-/** §27.4 */
-function reviewerHandoffLines(req: ReviewAndFixPromptReq, carried: ChainedInput[]): string[] {
+export interface ReviewerHandoffReq {
+  ticket?: number;
+  subjectRel?: string;
+  slice?: number;
+  carried: ChainedInput[];
+}
+
+/** §27.4. The bundled Codex skill (`example/codex-skills`) carries these lines as its hand-off. */
+export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
+  const carried = req.carried;
   const lines: string[] = [];
   lines.push(
     req.ticket !== undefined
@@ -217,7 +225,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Receive their findings into your own context, then fix or dismiss each per the criterion below.',
     '',
     REVIEWER_HANDOFF_BEGIN,
-    ...reviewerHandoffLines(req, carried),
+    ...reviewerHandoffLines({ ticket: req.ticket, subjectRel: req.subjectRel, slice: req.slice, carried }),
     REVIEWER_HANDOFF_END,
   );
   if (req.loopBrief !== undefined) {

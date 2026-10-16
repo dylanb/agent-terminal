@@ -38,7 +38,7 @@ beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-res-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'install-res-cfg-'));
   repo = mkdtempSync(path.join(tmpdir(), 'install-res-repo-'));
-  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, path.join(home, '.codex'));
+  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
 });
 afterEach(() => {
   for (const d of [home, configRoot, repo]) rmSync(d, { recursive: true, force: true });

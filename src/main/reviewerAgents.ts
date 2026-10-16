@@ -23,6 +23,8 @@ export interface ReviewerAgentSpec {
   charter: string;
 }
 
+/** A sub-agent with no `tools:` line inherits every tool, so an empty list is refused rather than installed
+ *  as every tool. */
 function checkReviewerSpec(spec: ReviewerAgentSpec): void {
   for (const part of [spec.loop, spec.persona]) {
     if (!NAME_SEGMENT.test(part)) throw new Error(`${JSON.stringify(part)} cannot name a reviewer sub-agent: use lowercase letters, digits and single hyphens`);
@@ -37,7 +39,7 @@ export function codexReviewerAgentName(loop: string, persona: string): string {
 
 const CODEX_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'Bash']);
 export const CODEX_REVIEWER_PREAMBLE = 'You are a reviewer. Never create, edit or delete any file: report your findings only.';
-const TOML_LITERAL_CLOSE = "'''";
+const TOML_MULTILINE_LITERAL_QUOTES = "'''";
 
 /** §18.1 v2.199: a Codex subagent runs with its parent's permissions and its file cannot narrow them, so a def
  *  whose explicit list grants more than reading is refused rather than installed as an agent that may write. */
@@ -45,13 +47,13 @@ export function renderCodexReviewerAgent(spec: ReviewerAgentSpec): string {
   checkReviewerSpec(spec);
   const granted = spec.tools === 'all' ? [] : spec.tools.filter((t) => !CODEX_READ_ONLY_TOOLS.has(t));
   if (granted.length > 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares ${granted.join(', ')}, which a read-only Codex reviewer cannot be given`);
-  if (spec.charter.includes(TOML_LITERAL_CLOSE)) throw new Error(`the charter of ${spec.persona} in ${spec.loop} holds ${TOML_LITERAL_CLOSE}, which a TOML literal string cannot carry`);
+  if (spec.charter.includes(TOML_MULTILINE_LITERAL_QUOTES)) throw new Error(`the charter of ${spec.persona} in ${spec.loop} holds ${TOML_MULTILINE_LITERAL_QUOTES}, which a TOML literal string cannot carry`);
   const name = codexReviewerAgentName(spec.loop, spec.persona);
   return [
     `name = "${name}"`,
     `description = "The ${spec.persona} reviewer of the ${spec.loop} loop, installed with the agent-terminal example loops. Its instructions are its charter."`,
-    `developer_instructions = ${TOML_LITERAL_CLOSE}`,
-    `${CODEX_REVIEWER_PREAMBLE}\n\n${spec.charter}${TOML_LITERAL_CLOSE}`,
+    `developer_instructions = ${TOML_MULTILINE_LITERAL_QUOTES}`,
+    `${CODEX_REVIEWER_PREAMBLE}\n\n${spec.charter}${TOML_MULTILINE_LITERAL_QUOTES}`,
     '',
   ].join('\n');
 }
@@ -65,8 +67,6 @@ export interface ReviewerAgentFormat {
 export const CLAUDE_REVIEWER_AGENT: ReviewerAgentFormat = { name: reviewerAgentName, extension: '.md', render: renderReviewerAgent };
 export const CODEX_REVIEWER_AGENT: ReviewerAgentFormat = { name: codexReviewerAgentName, extension: '.toml', render: renderCodexReviewerAgent };
 
-/** A sub-agent with no `tools:` line inherits every tool, so an empty list is refused rather than installed
- *  as every tool. */
 export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
   checkReviewerSpec(spec);
   const name = reviewerAgentName(spec.loop, spec.persona);

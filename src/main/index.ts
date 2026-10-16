@@ -186,7 +186,7 @@ async function createWindow(): Promise<void> {
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   const resolveExampleInstallDestinations = (): InstallDestination[] =>
-    exampleInstallDirs(iconLoc, flowGlobalDir, undefined, codexHome());
+    exampleInstallDirs(iconLoc, { flowGlobalDir, codexHome: codexHome() });
   const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,

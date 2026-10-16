@@ -32,15 +32,61 @@ starts. Do not stand in for a missing piece with something else.
 2. **Work.** If the definition names a `brief`, follow it for the whole loop, including every fix in step 3.
    Then do what `prompts/work.md` asks.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
-   name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the same
-   hand-off and nothing else, so what it receives never depends on how you phrase it:
-   - the issue number, and that it reads the issue with `gh issue view <n> --comments`;
-   - the artifact it grades, if the loop produced a file (the issue is then the intent, not the subject);
-     otherwise that the work is this branch's change, seen with `git log`, `git status` and `git diff HEAD`;
-   - the paths of any inputs the step carried, to grade against beside the issue;
-   - that it must not change any file, because you make every change;
-   - that it returns each finding as its file:line, the issue, its concrete consequence and the fix, with
-     no severity rating, or exactly `no findings`.
+   name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
+   hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives
+   never depends on how you phrase it. Add nothing to it.
+
+   Open with the issue the work is for:
+
+   ```text
+   Review the work for GitHub issue #<n>. Read the issue and its comments with `gh issue view <n> --comments`.
+   ```
+
+   or, when there is no issue:
+
+   ```text
+   Review this loop's work.
+   ```
+
+   Then say what it grades. When the loop changed code:
+
+   ```text
+   The code and tests under review are this branch's change: its commits since it left the repository's
+   default branch, plus any uncommitted changes. See them with git: `git log`, `git status`, and `git diff HEAD`.
+   ```
+
+   or, when the loop produced a file, name that file:
+
+   ```text
+   Grade <artifact>, the artifact this loop produced, not the issue body on GitHub. The issue is the
+   intent the artifact must honour, and it can still hold text the artifact has since fixed.
+   ```
+
+   When you run the loop for one impl-slice of the plan:
+
+   ```text
+   This round covers impl-slice <slice> of the plan only; work that belongs to another slice is not under review.
+   ```
+
+   When the step carried input documents, one line for each:
+
+   ```text
+   Grade it against these documents, beside the ticket:
+     - <input-id>: <input-path>
+   ```
+
+   Always end with:
+
+   ```text
+   FLOW DOCUMENTS — this work's flow documents (the groomed ticket, the plan, the RED/GREEN phase results) live
+   only under `.agent-terminal/loop/artifacts/`.
+   A file of that kind found elsewhere in the repository is not one of this work's flow documents, so never read
+   it as one; it is still work when the ticket names it as something to change.
+   The repository's standards and configuration are read where they live.
+   Do not change any file: report your findings, and the fixer makes every change.
+   Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.
+   If you find nothing, return exactly: no findings
+   ```
 
    Do not hand it a charter, a diff, a prior review, or other reviewers' findings: it pulls what it needs
    with its tools. Take every finding into your own context, then fix it or dismiss it with a reason. A

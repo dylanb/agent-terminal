@@ -28,13 +28,13 @@ describe('exampleInstallDirs — the destination set is the contract, in the con
     // The registry and the contract's id list are not two lists that must be kept in sync by hand: the
     // installer derives its destinations — and their order — from INSTALL_DESTINATION_IDS alone, so the
     // report order (which also iterates that list) cannot drift from preview/apply order.
-    expect(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME).map((d) => d.id)).toEqual([...INSTALL_DESTINATION_IDS]);
+    expect(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }).map((d) => d.id)).toEqual([...INSTALL_DESTINATION_IDS]);
   });
 });
 
 describe('exampleInstallDirs — bundle sources come from the runtime resolvers', () => {
   it('sources each destination from the resolver that reads it back', () => {
-    const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME);
+    const dirs = exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME });
     expect(bundleOf(dirs, 'flow')).toBe(resolveFeatureDevFlowDir(loc));
     expect(bundleOf(dirs, 'flowCatalog')).toBe(resolveExampleFlowsDir(loc));
     expect(bundleOf(dirs, 'commands')).toBe(resolveExampleCommandsDir(loc));
@@ -49,19 +49,19 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
     // Derived from the READER's own resolver, never re-spelled: an assertion that hard-codes
     // '.agent-terminal' stays green when the installer reintroduces the parallel literal flowHomeDir()
     // exists to remove, and the seeded flow silently stops being the flow the app reads back.
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME), 'flow')).toBe(flowHomeDir(FLOW_HOME));
+    expect(targetOf(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }), 'flow')).toBe(flowHomeDir(FLOW_HOME));
   });
 
   it('targets the app-state flow catalog for the flowCatalog destination (§18.7.1)', () => {
     // The one destination this PR adds: derived from the READER's own resolver (flowCatalogDir), never a
     // parallel literal, so the seeded catalog and the location A2 reads back cannot drift.
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME), 'flowCatalog')).toBe(flowCatalogDir(FLOW_HOME));
+    expect(targetOf(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }), 'flowCatalog')).toBe(flowCatalogDir(FLOW_HOME));
   });
 
   it('targets the user-config app loop definitions and commands directories (§24.2.3)', () => {
     // The bundle holds only per-flow folders (§27.8), so seeding its tree here lands each flow's loops in
     // that flow's own folder.
-    const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME);
+    const dirs = exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME });
     expect(targetOf(dirs, 'appLoops')).toBe(userConfigLoopsV2Dir('/cfg'));
     expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));
   });
@@ -69,19 +69,19 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
 
 describe('exampleInstallDirs — the Codex destinations hang off the Codex home (§18.1 v2.199)', () => {
   it('targets the loops-v2 directory under the supplied Codex home', () => {
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME), 'codexLoops')).toBe(codexLoopsV2Dir(CODEX_HOME));
+    expect(targetOf(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }), 'codexLoops')).toBe(codexLoopsV2Dir(CODEX_HOME));
   });
 
   it('targets the agents directory under the supplied Codex home', () => {
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME), 'codexAgents')).toBe(codexAgentsDir(CODEX_HOME));
+    expect(targetOf(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }), 'codexAgents')).toBe(codexAgentsDir(CODEX_HOME));
   });
 
   it('targets the skills directory under the supplied Codex home', () => {
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg', CODEX_HOME), 'codexSkills')).toBe(codexSkillsDir(CODEX_HOME));
+    expect(targetOf(exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: CODEX_HOME }), 'codexSkills')).toBe(codexSkillsDir(CODEX_HOME));
   });
 
   it('has no target when the Codex home was refused (a relative CODEX_HOME)', () => {
-    const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg', null);
+    const dirs = exampleInstallDirs(loc, { flowGlobalDir: FLOW_HOME, configDir: '/cfg', codexHome: null });
     expect(dirs.find((d) => d.id === 'codexLoops')!.targetDir).toBeNull();
   });
 });
