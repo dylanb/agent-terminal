@@ -27,7 +27,7 @@ flowchart TD
   PPOLISH -->|"polished plan"| EPICQ{"classified<br/>an epic?"}
   EPICQ -->|"yes"| PROMO["epic promotion<br/>(reuses §27.10)<br/>fan out to sub-tickets"]
   PROMO -->|"each sub-ticket:<br/>reconstruct groomed ticket +<br/>epic plan (skip groom, §27.10),<br/>then plan its own seams"| PLAN
-  EPICQ -->|"no"| INFRA["infra-loop<br/>(new, impl-shaped)<br/>build the test harness"]
+  EPICQ -->|"no"| INFRA["infra-loop<br/>(new, impl-shaped)<br/>build the test harness<br/>+ deterministic capabilities"]
   INFRA -->|"infra commits"| SLICE1["slice-loop 1"]
   SLICE1 -->|"slice commits"| SLICEN["slice-loop N"]
   SLICEN -->|"slice commits"| INTEG["integration-slice-loop<br/>e2e RED to GREEN to refactor"]

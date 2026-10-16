@@ -471,8 +471,7 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
 // global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
 const CHAIN_LOOP_MS = 15_000;
 export const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
-// Each step's roster is the catalog its shipped loop def declares, read through the engine's own resolver, so a
-// reviewer added to or removed from a loop cannot leave the fake writing a report the engine rejects (§27.5).
+// §27.5
 const CHAIN_STEPS = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'] as const;
 function shippedRoster(step: string): string[] {
   const repoDir = resolve(__dirname, '..', '..');

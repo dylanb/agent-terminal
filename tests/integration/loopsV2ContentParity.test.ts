@@ -283,8 +283,6 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   });
 });
 
-// A work turn is graded against its loop's reviewer charters, so its recipe carries every reviewer's
-// standards verbatim; the charter is the one definition and the recipe must restate it, never paraphrase.
 describe('planning and phase work recipes carry every reviewer standard they are graded against', () => {
   const repoDir = resolve(__dirname, '..', '..');
   const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };

@@ -35,7 +35,7 @@ interface LoopRow {
   consolidateSource: string;
   input: { id: string; path: string };
   output: { id: string; path: string } | null;
-  // Flow documents a loop writes beside its product that no completion gate reads (§27.4).
+  // §27.4
   records?: { id: string; path: string }[];
   personas: PersonaRow[];
   polish: 'fix' | 'defer';
@@ -81,8 +81,6 @@ export const CHAIN: readonly LoopRow[] = [
     consolidateSource: 'infra-loop', input: PLAN_INPUT, output: null,
     records: [{ id: 'infra-capabilities', path: 'infra-capabilities.md' }],
     polish: 'defer',
-    // Authored here, not copied: infra's lenses also grade the deterministic capabilities the ticket could add
-    // to the repository (§28.6), which no other loop's charters do.
     personas: [
       ...['principal', 'tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(authoredImpl),
       authored('review-plan-determinism', 'determinism'),

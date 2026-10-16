@@ -47,8 +47,7 @@ for (const flow of GROOM_FLOWS) {
   });
 }
 
-// §28.8.1 — groom settles the MVP with the operator before writing the ticket. Each list the interview fills is
-// written by the recipe, graded by the reviewer and gated by the consolidator under one heading.
+// §28.8.1
 const MVP_HEADING = '## MVP';
 const GAPS_HEADING = '## Gaps raised';
 const AMBIGUITIES_HEADING = '## Ambiguities and contradictions raised';

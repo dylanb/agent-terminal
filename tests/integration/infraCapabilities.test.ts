@@ -4,10 +4,7 @@ import { resolve } from 'node:path';
 import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 
-// §28.6 — infra looks for deterministic capabilities the ticket's implementation would benefit from, builds the
-// proportionate small ones, and settles every large one and every follow-up with the operator. The record file
-// and its headings are one vocabulary: written by the work recipe, graded by every infra reviewer, and gated by
-// the consolidator, so all three are pinned to the same tokens.
+// §28.6
 const RECORD_FILE = 'infra-capabilities.md';
 const BUILT_HEADING = '## Capabilities built';
 const LARGE_HEADING = '## Large capabilities';
@@ -24,7 +21,6 @@ function infraDef(): LoopDefV2 {
   if (!r.ok) throw new Error(r.reason);
   return r.def;
 }
-// Prose is reflowed freely, so a marker is matched with line wrapping collapsed.
 const flat = (path: string): string => readFileSync(path, 'utf8').replace(/\s+/g, ' ');
 const recipe = (): string => flat(infraDef().work.recipe);
 
