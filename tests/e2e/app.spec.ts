@@ -2507,7 +2507,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'appLoops', 'commands']) {
+  for (const dest of ['flow', 'appLoops', 'commands', 'agents']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
   await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
@@ -2523,6 +2523,10 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop'))).toBe(false);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
+  // §27.4 — each bundled reviewer landed where Claude Code discovers a sub-agent, its charter as its instructions.
+  const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
+  expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
+  expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v2', 'green-loop', 'charter', 'principal.md'), 'utf8'));
 
   // A second click reports every file SKIPPED — not silently re-written — and never asks the user to decide
   // a replacement. The counts are what distinguish the two: a regression that overwrites byte-identical
@@ -3097,6 +3101,9 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
   expect(injectedLog).toContain('This is a REPAIR of the round-1 report');
   expect(injectedLog).toContain(`### ${PLAN_V2_ROSTER[PLAN_V2_ROSTER.length - 1]}`); // the missing record, named
   expect(injectedLog.split('Spawn each reviewer').length - 1).toBe(1); // the reviewers were asked to run once
+  // §27.4 — each reviewer is spawned as the sub-agent installed for it, never told to go and read a charter.
+  for (const persona of PLAN_V2_ROSTER) expect(injectedLog).toContain(`${persona} — subagent_type: plan-loop--${persona}`);
+  expect(injectedLog).not.toMatch(/charter\/[\w-]+\.md/);
 
   // The agent ran the checker the prompt handed it: it passed the repaired report.
   const checkerLog = readIf(join(repo, '.agent-terminal', 'checker-log'));

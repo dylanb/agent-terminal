@@ -16,6 +16,7 @@ import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
+import { reviewerAgentName } from './reviewerAgents';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
  *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
@@ -33,12 +34,14 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
 export interface RosterEntry {
   persona: string;
   charter: string;
+  tools: string[];
+  agent: string;
 }
 
 /** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
  *  subset selection is the consolidator's job (N4). */
 export function reviewRoster(def: LoopDefV2): RosterEntry[] {
-  return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
+  return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter, tools: r.tools, agent: reviewerAgentName(def.name, r.persona) }));
 }
 
 /** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
@@ -165,14 +168,15 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'the ticket',
     ...(req.subjectRel !== undefined ? ['the subject below'] : []),
     ...(carried.length > 0 ? ['the inputs below'] : []),
-    'its charter',
   ];
-  const handedText = handed.length === 2 ? handed.join(' and ') : `${handed.slice(0, -1).join(', ')}, and ${handed[handed.length - 1]}`;
+  const handedText = handed.length <= 2 ? handed.join(' and ') : `${handed.slice(0, -1).join(', ')}, and ${handed[handed.length - 1]}`;
   const withheld = req.subjectRel === undefined && carried.length === 0 ? 'no diff, no plan, no prior review' : 'no diff, no prior review';
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    `Spawn each reviewer below as a PARALLEL Task subagent, handing each ONLY ${handedText} — ${withheld}.`,
+    `Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, handing each ONLY ${handedText} — ${withheld}.`,
+    'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
+    'other type for it.',
     'Each pulls what it needs with tools. Receive their findings into your own context, then fix or dismiss each',
     'per the criterion below.',
   );
@@ -243,9 +247,9 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   }
   lines.push(
     '',
-    'Reviewers (persona — charter):',
+    'Reviewers (persona — subagent_type):',
   );
-  for (const r of req.roster) lines.push(`- ${r.persona} — ${r.charter}`);
+  for (const r of req.roster) lines.push(`- ${r.persona} — subagent_type: ${r.agent}`);
   if (req.sliceBrief !== undefined) lines.push(...sliceBriefLines(req.sliceBrief, 'fixer'));
   // This block is the OUTER framing every request-changes feedback carries ("weigh this / record how you
   // addressed it"). The compose-with-agent mode adds its own inner "Synthesize…" prefix upstream in the

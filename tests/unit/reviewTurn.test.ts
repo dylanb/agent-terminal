@@ -55,10 +55,10 @@ describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () =
     expect(reviewRoster(other).map((r) => r.persona)).toEqual(['impl-review-tests']);
   });
 
-  it('the ONE production source carries each persona and its charter, in order', () => {
+  it('the ONE production source carries each persona, its charter and tools, and the sub-agent installed for it, in order', () => {
     expect(reviewRoster(def())).toEqual([
-      { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md' },
-      { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md' },
+      { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md', tools: ['Read'], agent: 'plan-loop--review-plan-principal' },
+      { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md', tools: ['Read', 'Bash'], agent: 'plan-loop--review-plan-security' },
     ]);
   });
 });
@@ -80,7 +80,7 @@ describe('catalogPersonas — the ONE catalog-persona projection (§27.4)', () =
 
 describe('composeReviewAndFixPrompt — single-sourced from the shared report vocabulary (§27.5)', () => {
   const req = () => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,
@@ -88,12 +88,18 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     doneRelPath: '.agent-terminal/loop/turn-done',
   });
 
-  it('names every roster persona and its charter reference', () => {
+  it('names every roster persona by the sub-agent type that carries its charter, and never hands over a charter path', () => {
     const p = composeReviewAndFixPrompt(req());
-    for (const r of def().reviewers) {
-      expect(p).toContain(r.persona);
-      expect(p).toContain(r.charter);
+    for (const r of reviewRoster(def())) {
+      expect(p).toContain(`${r.persona} — subagent_type: ${r.agent}`);
+      expect(p).not.toContain(r.charter);
     }
+  });
+
+  it('requires that exact sub-agent type, never a substitute, for each reviewer', () => {
+    const p = composeReviewAndFixPrompt(req());
+    expect(p).toMatch(/exactly that subagent_type/i);
+    expect(p).toMatch(/never (substitute|spawn) .*general-purpose/i);
   });
 
   it('§19.1 — binds the turn to the engine-resolved ticket it hands each reviewer', () => {
@@ -168,7 +174,7 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
 // §27.4
 describe('composeReviewAndFixPrompt — the flow documents and the carried inputs (§27.4)', () => {
   const req = () => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,
@@ -210,7 +216,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
 // refinement is what manufactures the next round's findings. The composer must state that criterion.
 describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
   const req = () => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,
@@ -247,7 +253,7 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
 // round new surface to review: #180's plan-bundle ran ten rounds that way, every fix adding mechanism.
 describe('composeReviewAndFixPrompt — fixing a document subject lifts, never adds (§27.3)', () => {
   const req = (subjectRel?: string) => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,
@@ -285,7 +291,7 @@ describe('composeReviewAndFixPrompt — fixing a document subject lifts, never a
 
 describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => {
   const req = (polish?: 'fix' | 'defer') => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,
@@ -314,7 +320,7 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
 // engine threads it from the run-state a request-changes wrote. Absent feedback leaves the round unchanged.
 describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 / AC4)', () => {
   const reqWith = (feedback?: string) => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/2.md',
     round: 2,
@@ -364,7 +370,7 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
 describe('composeReviewAndFixPrompt — the refactor round phase-result instruction (§28.5.3)', () => {
   const RESULT_REL = '.agent-terminal/loop/artifacts/refactor-result-1.md';
   const refactorReq = () => ({
-    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    roster: reviewRoster(def()),
     sections: def().report.sections,
     reportRel: '.agent-terminal/loop/reports/1.md',
     round: 1,

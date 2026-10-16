@@ -55,3 +55,8 @@ export function userConfigLoopsV2Dir(configDir?: string): string | null {
 export function userConfigCommandsDir(configDir?: string): string | null {
   return branch('commands', configDir);
 }
+
+/** Where Claude Code discovers a sub-agent, as `<root>/agents/<name>.md`, when a session starts. */
+export function userConfigAgentsDir(configDir?: string): string | null {
+  return branch('agents', configDir);
+}

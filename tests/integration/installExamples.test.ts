@@ -617,8 +617,8 @@ describe('applyInstallExamples — a container that is not a directory is never 
         ...destOf('appLoops'),
         bundleDir: bundle,
         plan: (b) => [
-          { rel: destRelative('occupier'), src: path.join(b, 'one') },
-          { rel: destRelative(path.join('occupier', 'blocked')), src: path.join(b, 'two') },
+          { rel: destRelative('occupier'), src: path.join(b, 'one'), bytes: () => readFileSync(path.join(b, 'one')) },
+          { rel: destRelative(path.join('occupier', 'blocked')), src: path.join(b, 'two'), bytes: () => readFileSync(path.join(b, 'two')) },
         ],
       };
 

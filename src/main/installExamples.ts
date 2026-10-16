@@ -17,7 +17,8 @@ import {
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
-import { userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
+import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
+import { planReviewerAgents } from './reviewerAgents';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -41,11 +42,15 @@ export function destRelative(rel: string): DestRelativePath {
   return norm as DestRelativePath;
 }
 
-/** A file the action installs: where it lands under its destination, and the bundle file it copies from. */
+/** A file the action installs: where it lands under its destination, the bundle file it comes from, and the
+ *  bytes it installs — a copy of that file, or a file generated from it. */
 export interface PlannedFile {
   rel: DestRelativePath;
   src: string;
+  bytes: () => Buffer;
 }
+
+const copyOf = (rel: DestRelativePath, src: string): PlannedFile => ({ rel, src, bytes: () => readFileSync(src) });
 
 /** `null` when the bundle source is absent — a mispackaged build, not an empty tree (§18.1). */
 type Plan = PlannedFile[] | null;
@@ -82,7 +87,7 @@ function walkFiles(dir: string, base: string = dir): DestRelativePath[] {
 
 function filesUnder(bundleDir: string): Plan {
   if (absent(bundleDir)) return null;
-  return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+  return walkFiles(bundleDir).map((rel) => copyOf(rel, path.join(bundleDir, rel)));
 }
 
 /** A required bundle member must be a REGULAR file, or absent. Absent is still planned, so a mispackaged
@@ -138,7 +143,7 @@ function flowHomeRels(flowHomeBundleDir: string): DestRelativePath[] | null {
 function flowFiles(bundleDir: string): Plan {
   const rels = flowHomeRels(bundleDir);
   if (rels === null) return null;
-  return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+  return rels.map((rel) => copyOf(rel, path.join(bundleDir, rel)));
 }
 
 /** A catalog entry whose directory name is not a safe catalog id (§18.7.6): the name becomes a path segment
@@ -166,7 +171,7 @@ function catalogFiles(catalogBundleDir: string): Plan {
     if (!isSafeCatalogId(entry.name)) throw unsafeCatalogId(abs, entry.name);
     const rels = flowHomeRels(abs);
     if (rels === null) throw bundleAnomaly(abs);
-    for (const rel of rels) out.push({ rel: destRelative(path.join(entry.name, rel)), src: path.join(abs, rel) });
+    for (const rel of rels) out.push(copyOf(destRelative(path.join(entry.name, rel)), path.join(abs, rel)));
   }
   return out;
 }
@@ -192,6 +197,12 @@ interface DestinationSpec {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   overwrite: InstallDestination['overwrite'];
+}
+
+/** §27.4. */
+function reviewerAgentFiles(loopsBundleDir: string): Plan {
+  if (absent(loopsBundleDir)) return null;
+  return planReviewerAgents(loopsBundleDir).map((a) => ({ rel: destRelative(a.rel), src: a.src, bytes: a.bytes }));
 }
 
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
@@ -227,6 +238,13 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
+  agents: {
+    bundle: resolveExampleLoopsV2Dir,
+    target: (_flow, cfg) => userConfigAgentsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: reviewerAgentFiles,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
 };
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
@@ -253,7 +271,7 @@ function allowsOverwrite(
   return overwrite.mode === 'confirm-overwrite';
 }
 
-function classify(bundleFile: string, targetFile: string): Classification {
+function classify(bytes: Buffer, targetFile: string): Classification {
   let target: Buffer;
   try {
     target = readFileSync(targetFile);
@@ -263,7 +281,7 @@ function classify(bundleFile: string, targetFile: string): Classification {
     if (isErrno(e, 'ENOENT')) return 'create';
     throw e;
   }
-  return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
+  return bytes.equals(target) ? 'identical' : 'differ';
 }
 
 /** A destination resolved for work: its plan, and the symlink-free real path each file resolves to inside
@@ -273,6 +291,7 @@ function classify(bundleFile: string, targetFile: string): Classification {
 interface ResolvedFile {
   rel: DestRelativePath;
   src: string;
+  bytes: () => Buffer;
   real: string;
 }
 interface ResolvedDestination {
@@ -317,7 +336,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
     for (const file of files) {
       const real = confinedRealPathResult(jail, path.join(jail, file.rel));
       if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
-      resolved.push({ rel: file.rel, src: file.src, real: real.path });
+      resolved.push({ rel: file.rel, src: file.src, bytes: file.bytes, real: real.path });
     }
     out.push({
       id: dest.id,
@@ -381,7 +400,7 @@ function snapshotFile(
     rel: file.rel,
     src: file.src,
     real: file.real,
-    sourceHash: hash(readFileSync(file.src)),
+    sourceHash: hash(file.bytes()),
     targetHash: targetHash(file.real),
   };
 }
@@ -562,7 +581,7 @@ function applyInstallExamplesWithAuthorization(
     for (const dest of plan) {
       if (
         !allowsOverwrite(dest.overwrite) &&
-        dest.files.some((file) => classify(file.src, file.real) === 'differ')
+        dest.files.some((file) => classify(file.bytes(), file.real) === 'differ')
       ) {
         return {
           ok: false,
@@ -620,7 +639,7 @@ function applyInstallExamplesWithAuthorization(
             );
           }
         }
-        const cls = classify(file.src, file.real);
+        const cls = classify(file.bytes(), file.real);
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
@@ -630,7 +649,7 @@ function applyInstallExamplesWithAuthorization(
         }
         // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
         // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.
-        if (!atomicWriteFileSync(file.real, readFileSync(file.src))) return fail(refusal(file.rel, dest.targetDir, 'escapes'));
+        if (!atomicWriteFileSync(file.real, file.bytes())) return fail(refusal(file.rel, dest.targetDir, 'escapes'));
         record(cls === 'create' ? created : overwritten, dest.id, file.rel);
       } catch (e) {
         return fail(`Could not install ${file.rel}: ${errMsg(e)}`);
