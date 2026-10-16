@@ -41,6 +41,51 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
 
 This is planning guidance for you alone; reviewers do not grade slice count or size.
 
+## Machine-read plan blocks
+
+The plan-bundle gate reads these blocks out of the plan, so every edit keeps each exactly in its shape.
+
+Enumerate the impl-slices in a `## Impl-slices` block so the plan-bundle gate can source their COUNT into the
+`slices` flow input that drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
+`Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs once after the loop and
+is NOT an `### Impl-slice` entry. Emit the block in this shape:
+
+```text
+## Impl-slices
+
+### Impl-slice 1 — Slice 1 of the feature
+Acceptance criteria: acceptance criterion 1 is observably satisfied
+
+Plan for impl-slice 1: the thin RED/GREEN vertical that delivers criterion 1 end to end.
+
+### Impl-slice 2 — Slice 2 of the feature
+Acceptance criteria: acceptance criterion 2 is observably satisfied
+
+Plan for impl-slice 2: the thin RED/GREEN vertical that delivers criterion 2 end to end.
+```
+
+For an epic (§28.7), each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
+the preceding slice it depends on, and the approved plan for that slice **verbatim** (it becomes the created
+sub-ticket's body), in this shape:
+
+```text
+Classification: epic
+
+## Sub-tickets
+
+### Sub-ticket 1 — Slice 1 of the feature
+Acceptance criteria: acceptance criterion 1 is observably satisfied
+Depends on: none
+
+Plan for slice 1: the thin vertical that delivers criterion 1 end to end.
+
+### Sub-ticket 2 — Slice 2 of the feature
+Acceptance criteria: acceptance criterion 2 is observably satisfied
+Depends on: #1
+
+Plan for slice 2: the thin vertical that delivers criterion 2 end to end.
+```
+
 ## Acceptance criteria are non-negotiable
 
 No acceptance criterion may be deferred, narrowed, or dropped from the plan. Every AC must be assigned to a

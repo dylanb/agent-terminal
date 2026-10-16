@@ -236,12 +236,12 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   const repoDir = resolve(__dirname, '..', '..');
   const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
 
-  // The recipe carries more than one fenced ```text example, so each test picks the fence for ITS grammar
+  // The brief carries more than one fenced ```text example, so each test picks the fence for ITS grammar
   // (by a token only that grammar's block contains) rather than "the first fence".
   const fences = (recipe: string): string[] => [...recipe.matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1]);
 
-  it('the work recipe embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
+  it('the brief embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
+    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(EPIC_GRAMMAR.subTicketsHeading));
     expect(example, 'the recipe must embed a fenced epic example').not.toBeUndefined();
     expect(isEpicPlan(example ?? '')).toBe(true);
@@ -251,8 +251,8 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect((example ?? '').trim()).toBe(exampleEpicPlan(2).trim());
   });
 
-  it('§28.4.1 — the work recipe embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
+  it('§28.4.1 — the brief embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
+    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(SLICE_GRAMMAR.implSlicesHeading));
     expect(example, 'the recipe must embed a fenced impl-slices example').not.toBeUndefined();
     expect(slicePlanWellFormed(example ?? '')).toBe(true);

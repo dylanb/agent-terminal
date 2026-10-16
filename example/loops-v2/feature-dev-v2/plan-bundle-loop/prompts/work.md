@@ -26,25 +26,8 @@ scriptable per turn.
 ## Slice plan
 
 Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.
-Size the slices before enumerating them (see **Slice sizing** above). Enumerate the impl-slices in a
-`## Impl-slices` block so the plan-bundle gate can source their COUNT into the `slices` flow input that
-drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
-`Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs once after the loop and
-is NOT an `### Impl-slice` entry. Emit the block in this shape:
-
-```text
-## Impl-slices
-
-### Impl-slice 1 — Slice 1 of the feature
-Acceptance criteria: acceptance criterion 1 is observably satisfied
-
-Plan for impl-slice 1: the thin RED/GREEN vertical that delivers criterion 1 end to end.
-
-### Impl-slice 2 — Slice 2 of the feature
-Acceptance criteria: acceptance criterion 2 is observably satisfied
-
-Plan for impl-slice 2: the thin RED/GREEN vertical that delivers criterion 2 end to end.
-```
+Size the slices before enumerating them (see **Slice sizing** above), then enumerate the impl-slices in the
+`## Impl-slices` block under **Machine-read plan blocks** above.
 
 ## Complexity drivers
 
@@ -64,27 +47,7 @@ under the heading.
 Judge whether the ticket is an **epic** — work that decomposes into more than one self-contained,
 independently-shippable sub-ticket at ticket granularity. When it is, add a `Classification: epic` line and a
 `## Sub-tickets` block that partitions the acceptance criteria across the slices with no gaps or overlap
-(reviewed by `tracer-slicer`). Each `### Sub-ticket N — <title>` block carries its slice's acceptance criteria,
-the preceding slice it depends on, and the approved plan for that slice **verbatim** (it becomes the created
-sub-ticket's body), in this shape:
-
-```text
-Classification: epic
-
-## Sub-tickets
-
-### Sub-ticket 1 — Slice 1 of the feature
-Acceptance criteria: acceptance criterion 1 is observably satisfied
-Depends on: none
-
-Plan for slice 1: the thin vertical that delivers criterion 1 end to end.
-
-### Sub-ticket 2 — Slice 2 of the feature
-Acceptance criteria: acceptance criterion 2 is observably satisfied
-Depends on: #1
-
-Plan for slice 2: the thin vertical that delivers criterion 2 end to end.
-```
+(reviewed by `tracer-slicer`), in the shape under **Machine-read plan blocks** above.
 
 A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first, into the
 stacked sub-ticket chain and turns the epic into a tracking issue (§27.10 / §28.7).
