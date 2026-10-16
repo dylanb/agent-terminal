@@ -711,16 +711,6 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
     }
   });
 
-  it('refuses, writing nothing, a destination whose tool home has no absolute location even when its target does', () => {
-    const res = applyInstallExamples(
-      dirs.map((d) => (d.id === 'codexLoops' ? { ...d, onlyIfPresent: null } : d)),
-      [],
-    );
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toContain('CODEX_HOME');
-    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
-  });
-
   it('names no skipped destination when the install as a whole was refused before writing', () => {
     const broken = withBundle('appLoops', path.join(home, 'no-such-bundle'));
     const res = applyInstallExamples(broken, []);

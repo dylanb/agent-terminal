@@ -192,9 +192,8 @@ export interface InstallDestination {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   /** The home of the tool this destination installs for, when it installs only where that tool is: absent,
-   *  the destination is skipped rather than created (§18.1 v2.199). `null` when that home has no absolute
-   *  location, which refuses as `targetDir: null` does. */
-  onlyIfPresent?: string | null;
+   *  the destination is skipped rather than created (§18.1 v2.199). */
+  toolHome?: string;
 }
 
 export interface InstallRoots {
@@ -206,7 +205,7 @@ export interface InstallRoots {
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
   target: (roots: InstallRoots) => string | null;
-  onlyIfPresent?: (roots: InstallRoots) => string | null;
+  toolHome?: (roots: InstallRoots) => string | null;
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   overwrite: InstallDestination['overwrite'];
@@ -223,6 +222,11 @@ const reviewerAgentFiles =
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 const CODEX_ROOT_FIX = 'Set CODEX_HOME to an absolute path, or unset it to use ~/.codex.';
+
+const inCodexHome = (dir: (home: string) => string): Pick<DestinationSpec, 'target' | 'toolHome'> => ({
+  target: ({ codexHome }) => (codexHome === null ? null : dir(codexHome)),
+  toolHome: ({ codexHome }) => codexHome,
+});
 
 /** §18.1/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
@@ -263,24 +267,21 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   },
   codexLoops: {
     bundle: resolveExampleLoopsV2Dir,
-    target: ({ codexHome }) => (codexHome === null ? null : codexLoopsV2Dir(codexHome)),
-    onlyIfPresent: ({ codexHome }) => codexHome,
+    ...inCodexHome(codexLoopsV2Dir),
     rootFix: CODEX_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
   codexAgents: {
     bundle: resolveExampleLoopsV2Dir,
-    target: ({ codexHome }) => (codexHome === null ? null : codexAgentsDir(codexHome)),
-    onlyIfPresent: ({ codexHome }) => codexHome,
+    ...inCodexHome(codexAgentsDir),
     rootFix: CODEX_ROOT_FIX,
     plan: reviewerAgentFiles(CODEX_REVIEWER_AGENT),
     overwrite: { mode: 'confirm-overwrite' },
   },
   codexSkills: {
     bundle: resolveExampleCodexSkillsDir,
-    target: ({ codexHome }) => (codexHome === null ? null : codexSkillsDir(codexHome)),
-    onlyIfPresent: ({ codexHome }) => codexHome,
+    ...inCodexHome(codexSkillsDir),
     rootFix: CODEX_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
@@ -292,6 +293,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
+    const toolHome = d.toolHome?.(roots);
     return {
       id,
       bundleDir: d.bundle(loc),
@@ -299,7 +301,7 @@ export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): In
       rootFix: d.rootFix,
       plan: d.plan,
       overwrite: d.overwrite,
-      ...(d.onlyIfPresent !== undefined ? { onlyIfPresent: d.onlyIfPresent(roots) } : {}),
+      ...(toolHome != null ? { toolHome } : {}),
     };
   });
 }
@@ -373,7 +375,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
   const notInstalled: InstallDestinationNotInstalled[] = [];
   for (const dest of destinations) {
-    if (dest.targetDir === null || dest.onlyIfPresent === null) {
+    if (dest.targetDir === null) {
       // A relative install target has no single meaning and would seed into the process cwd, so the whole
       // install refuses rather than guessing (CWE-829), naming the fix for this destination's own root.
       return {
@@ -381,8 +383,8 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
         error: `Could not install the ${dest.id} examples: its install location is not an absolute path. ${dest.rootFix}`,
       };
     }
-    if (dest.onlyIfPresent !== undefined && !toolPresent(dest.onlyIfPresent)) {
-      notInstalled.push({ destination: dest.id, root: dest.onlyIfPresent });
+    if (dest.toolHome !== undefined && !toolPresent(dest.toolHome)) {
+      notInstalled.push({ destination: dest.id, root: dest.toolHome });
       continue;
     }
     const files = dest.plan(dest.bundleDir);
