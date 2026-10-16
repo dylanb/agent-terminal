@@ -772,6 +772,18 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
     expect(res.ok).toBe(false);
     expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
   });
+
+  it('refuses an apply when the Codex home disappeared after the preview, recreating nothing', () => {
+    mkdirSync(codexHomeOf());
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const preview = coordinator.preview({ sessionId: SESSION_ID });
+    if (!preview.ok) throw new Error(preview.error);
+    rmSync(codexHomeOf(), { recursive: true });
+    const res = coordinator.apply({ sessionId: SESSION_ID, previewId: preview.previewId, replace: [] });
+    expect(res.ok).toBe(false);
+    expect(existsSync(codexHomeOf())).toBe(false);
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
+  });
 });
 
 describe('applyInstallExamples — a failure once writing has begun names everything already written', () => {

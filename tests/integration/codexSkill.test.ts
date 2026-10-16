@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
-import { codexReviewerAgentName } from '../../src/main/reviewerAgents';
+import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
 
 // §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
@@ -36,16 +36,8 @@ const engineHandoffLines = (): Set<string> =>
 const skillHandoffLines = (): Set<string> =>
   new Set([...skill().matchAll(/^ *```text\n([\s\S]*?)^ *```$/gm)].flatMap((m) => m[1].split('\n')).map((l) => l.replace(/^ {3}/, '')).filter((l) => l.trim() !== ''));
 
-function bundledCodexAgentNames(): Set<string> {
-  const names = new Set<string>();
-  for (const flow of readdirSync(BUNDLE_LOOPS)) {
-    for (const loop of readdirSync(path.join(BUNDLE_LOOPS, flow))) {
-      const def = parseYaml(readFileSync(path.join(BUNDLE_LOOPS, flow, loop, `${loop}.yaml`), 'utf8')) as { reviewers: { persona: string }[] };
-      for (const r of def.reviewers) names.add(codexReviewerAgentName(loop, r.persona));
-    }
-  }
-  return names;
-}
+const bundledCodexAgentNames = (): Set<string> =>
+  new Set(planReviewerAgents(BUNDLE_LOOPS, CODEX_REVIEWER_AGENT).map((a) => path.basename(a.rel, CODEX_REVIEWER_AGENT.extension)));
 
 describe('the bundled Codex skill', () => {
   it('opens with front matter naming it after its directory and describing when to use it', () => {

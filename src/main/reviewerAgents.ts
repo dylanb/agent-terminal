@@ -126,7 +126,7 @@ export interface InstalledReviewer {
  *  resolved, or null when it can. */
 export function installedReviewerProblem(agentsDir: string | null, reviewer: InstalledReviewer): string | null {
   if (agentsDir === null) return `there is no Claude Code agents directory to find ${reviewer.agent} in: set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude`;
-  const file = path.join(agentsDir, `${reviewer.agent}.md`);
+  const file = path.join(agentsDir, `${reviewer.agent}${CLAUDE_REVIEWER_AGENT.extension}`);
   const missing = `no sub-agent ${reviewer.agent} is installed (${file})`;
   const jail = resolveOwnedDirJail(agentsDir);
   if (jail === null) return missing;
