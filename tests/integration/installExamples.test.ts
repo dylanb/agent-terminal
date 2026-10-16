@@ -712,9 +712,12 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
   });
 
   it('names no skipped destination when the install as a whole was refused before writing', () => {
-    const broken = withBundle('appLoops', path.join(home, 'no-such-bundle'));
-    const res = applyInstallExamples(broken, []);
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), 'name: keep-me\n');
+    const forbidden = dirs.map((d) => (d.id === 'flow' ? { ...d, overwrite: { mode: 'forbid-overwrite' as const } } : d));
+    const res = applyInstallExamples(forbidden, []);
     expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/overwrite policy/);
     expect(res.notInstalled).toEqual([]);
   });
 
