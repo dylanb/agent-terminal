@@ -14,6 +14,7 @@ import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
@@ -3135,6 +3136,34 @@ test('§27.3 — the bundled loop brief reaches both the work prompt and the rev
   await expect.poll(() => log().lastIndexOf(rule) > log().indexOf('Spawn each reviewer'), { timeout: 15_000 }).toBe(true);
   const workPart = log().slice(0, log().indexOf('Spawn each reviewer'));
   expect(workPart).toContain(rule);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('§27.4 — the review-and-fix prompt carries the engine-written hand-off each reviewer gets word for word', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-handoff-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-handoff-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-handoff-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  await expect.poll(() => log().includes(REVIEWER_HANDOFF_END), { timeout: 40_000 }).toBe(true);
+  const handoff = log().slice(log().indexOf(REVIEWER_HANDOFF_BEGIN), log().indexOf(REVIEWER_HANDOFF_END));
+  expect(handoff).toContain('gh issue view 176 --comments');
+  expect(handoff).toContain(`Grade ${APP_ARTIFACT_REL}`);
+  expect(handoff).toMatch(/Do not rate severity/);
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });

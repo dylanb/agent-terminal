@@ -7,13 +7,10 @@ work:
 reviewers:
   - persona: review-plan-principal
     charter: charter/principal.md
-    tools: [Read, Grep, Glob]
   - persona: review-plan-intent
     charter: charter/intent.md
-    tools: [Read, Grep, Glob]
   - persona: review-plan-tracer-slicer
     charter: charter/tracer-slicer.md
-    tools: [Read, Grep, Glob]
 consolidator:
   recipe: prompts/consolidate.md
 boundaries:

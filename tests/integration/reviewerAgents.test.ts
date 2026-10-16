@@ -6,7 +6,7 @@ import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
-import { installedReviewerProblem } from '../../src/main/reviewerAgents';
+import { installedReviewerProblem, renderReviewerAgent } from '../../src/main/reviewerAgents';
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
 // are its charter, so a reviewer is never asked to go and read it. Expected values come from the bundle itself.
@@ -15,7 +15,7 @@ const BUNDLE_LOOPS = path.resolve('example', 'loops-v2');
 interface BundledReviewer {
   loop: string;
   persona: string;
-  tools: string[];
+  tools: string[] | undefined;
   charterPath: string;
 }
 
@@ -25,7 +25,7 @@ function bundledReviewers(root: string): BundledReviewer[] {
     for (const loop of readdirSync(path.join(root, flow))) {
       const defPath = path.join(root, flow, loop, `${loop}.yaml`);
       if (!existsSync(defPath)) continue;
-      const def = parseYaml(readFileSync(defPath, 'utf8')) as { reviewers: { persona: string; charter: string; tools: string[] }[] };
+      const def = parseYaml(readFileSync(defPath, 'utf8')) as { reviewers: { persona: string; charter: string; tools?: string[] }[] };
       for (const r of def.reviewers) {
         out.push({ loop, persona: r.persona, tools: r.tools, charterPath: path.join(root, flow, loop, r.charter) });
       }
@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe('installing the examples installs each bundled reviewer as a sub-agent carrying its charter', () => {
-  it('writes <config>/agents/<loop>--<persona>.md for every reviewer, named so, with its tools and its charter as the body', () => {
+  it('writes <config>/agents/<loop>--<persona>.md for every reviewer, named so, with every tool and its charter as the body', () => {
     const res = applyInstallExamples(dirs, []);
     if (!res.ok) throw new Error(res.error);
     const reviewers = bundledReviewers(BUNDLE_LOOPS);
@@ -66,7 +66,8 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
       expect(existsSync(file), file).toBe(true);
       const { front, body } = parseAgent(readFileSync(file, 'utf8'));
       expect(front.name).toBe(name);
-      expect(String(front.tools).split(',').map((t) => t.trim())).toEqual(r.tools);
+      expect(r.tools, `${name} declares a tools list`).toBeUndefined();
+      expect(front.tools, `${name} restricts its tools`).toBeUndefined();
       expect(typeof front.description).toBe('string');
       expect(body).toBe(readFileSync(r.charterPath, 'utf8'));
     }
@@ -129,10 +130,20 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     expect(problem).toContain(edited);
   });
 
-  it('names the tools when the run declares different tools than the sub-agent carries', () => {
+  it('names the tools when the run limits a reviewer the installed sub-agent gives every tool', () => {
     install();
     const [reviewer] = greenRoster();
-    const problem = installedReviewerProblem(agentsDir(), { ...reviewer, tools: [...reviewer.tools, 'Edit'] });
+    const problem = installedReviewerProblem(agentsDir(), { ...reviewer, tools: ['Read'] });
+    expect(problem).toContain(reviewer.agent);
+    expect(problem).toMatch(/tools/i);
+  });
+
+  it('names the tools when the installed sub-agent limits a reviewer the run gives every tool', () => {
+    install();
+    const [reviewer] = greenRoster();
+    const limited = renderReviewerAgent({ loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') });
+    writeFileSync(path.join(agentsDir(), `${reviewer.agent}.md`), limited);
+    const problem = installedReviewerProblem(agentsDir(), reviewer);
     expect(problem).toContain(reviewer.agent);
     expect(problem).toMatch(/tools/i);
   });

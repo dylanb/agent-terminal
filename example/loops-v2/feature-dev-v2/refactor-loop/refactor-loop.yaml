@@ -8,16 +8,12 @@ work:
 reviewers:
   - persona: impl-review-principal
     charter: charter/principal.md
-    tools: [Read, Grep, Glob]
   - persona: impl-review-tests
     charter: charter/tests.md
-    tools: [Read, Grep, Glob, Bash]
   - persona: impl-review-reliability
     charter: charter/reliability.md
-    tools: [Read, Grep, Glob, Bash]
   - persona: impl-review-architecture
     charter: charter/architecture.md
-    tools: [Read, Grep, Glob]
 consolidator:
   recipe: prompts/consolidate.md
 boundaries:

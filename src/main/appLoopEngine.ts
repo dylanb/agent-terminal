@@ -408,6 +408,11 @@ function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   return `§27 work turn ${turn.turnKey} failed: ${reason}`;
 }
 
+/** §28.4 */
+function isPhaseRound(c: Extract<ActiveAppTurn, { phase: 'review' }>['completion']): boolean {
+  return c.kind === 'red-report' || c.kind === 'green-report' || c.kind === 'refactor-report';
+}
+
 function activeTurnFor(
   repoDir: string,
   loopName: string,
@@ -989,6 +994,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
           ...briefFor(active),
           ...(loopBrief !== undefined ? { loopBrief } : {}),
+          ...(isPhaseRound(active.completion) ? { slice: deps.currentSlice(active.repoDir) } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.

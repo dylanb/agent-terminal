@@ -8,13 +8,10 @@ work:
 reviewers:
   - persona: impl-review-tests
     charter: charter/tests.md
-    tools: [Read, Grep, Glob, Bash]
   - persona: impl-review-intent
     charter: charter/intent.md
-    tools: [Read, Grep, Glob]
   - persona: impl-review-red-authenticity
     charter: charter/red-authenticity.md
-    tools: [Read, Grep, Glob, Bash]
 consolidator:
   recipe: prompts/consolidate.md
 boundaries:

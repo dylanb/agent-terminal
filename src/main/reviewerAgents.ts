@@ -6,7 +6,7 @@ import yaml from 'js-yaml';
 import { confinedRealPathResult, resolveOwnedDirJail } from './confinedPath';
 import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
-import { resolveLoopDefV2 } from './loopDefV2';
+import { resolveLoopDefV2, type ReviewerTools } from './loopDefV2';
 
 const NAME_SEGMENT = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -19,23 +19,23 @@ export function reviewerAgentName(loop: string, persona: string): string {
 export interface ReviewerAgentSpec {
   loop: string;
   persona: string;
-  tools: readonly string[];
+  tools: ReviewerTools;
   charter: string;
 }
 
-/** A sub-agent with no `tools:` line inherits every tool, so a reviewer declaring none is refused rather than
- *  installed with write access it was never given. */
+/** A sub-agent with no `tools:` line inherits every tool, so an empty list is refused rather than installed
+ *  as every tool. */
 export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
   for (const part of [spec.loop, spec.persona]) {
     if (!NAME_SEGMENT.test(part)) throw new Error(`${JSON.stringify(part)} cannot name a reviewer sub-agent: use lowercase letters, digits and single hyphens`);
   }
-  if (spec.tools.length === 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares no tools`);
+  if (spec.tools !== 'all' && spec.tools.length === 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares no tools`);
   const name = reviewerAgentName(spec.loop, spec.persona);
   return [
     '---',
     `name: ${name}`,
     `description: The ${spec.persona} reviewer of the ${spec.loop} loop. Spawned by the agent-terminal loop engine's review-and-fix turn; its instructions are its charter, installed with the example loops.`,
-    `tools: ${spec.tools.join(', ')}`,
+    ...(spec.tools === 'all' ? [] : [`tools: ${spec.tools.join(', ')}`]),
     '---',
     spec.charter,
   ].join('\n');
@@ -80,7 +80,7 @@ const AGENT_FILE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 export interface InstalledReviewer {
   persona: string;
   charter: string;
-  tools: readonly string[];
+  tools: ReviewerTools;
   agent: string;
 }
 
@@ -117,7 +117,8 @@ export function installedReviewerProblem(agentsDir: string | null, reviewer: Ins
     return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
   }
   if (m[2] !== charter) return `the sub-agent ${reviewer.agent} carries a different charter than ${reviewer.charter}`;
-  const tools = typeof fields.tools === 'string' ? fields.tools.split(',').map((t) => t.trim()) : [];
-  if (tools.join(',') !== reviewer.tools.join(',')) return `the sub-agent ${reviewer.agent} declares the tools ${tools.join(', ') || 'none'}, not ${reviewer.tools.join(', ')}`;
+  const named = (t: ReviewerTools): string => (t === 'all' ? 'every tool' : t.join(', '));
+  const tools: ReviewerTools = fields.tools === undefined ? 'all' : typeof fields.tools === 'string' ? fields.tools.split(',').map((t) => t.trim()) : [];
+  if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${reviewer.agent} has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
   return null;
 }
