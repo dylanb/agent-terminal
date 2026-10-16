@@ -3,7 +3,7 @@
 
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -15,6 +15,8 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
+import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { roundReportWithDisposition } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
@@ -465,21 +467,20 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
   return cfg;
 }
 // ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
-const CHAIN_IMPL12 = ['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`);
 // A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the
 // global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
 const CHAIN_LOOP_MS = 15_000;
 export const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
-export const CHAIN_ROSTERS: Record<string, string[]> = {
-  groom: ['review-plan-intent'],
-  'plan-bundle': ['review-plan-principal', 'review-plan-intent', 'review-plan-tracer-slicer'],
-  'plan-polish': [...['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts'].map((l) => `review-plan-${l}`), 'review-plan-test-architect', 'review-plan-determinism', 'review-plan-tracer-slicer'],
-  infra: [...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
-  red: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'],
-  green: [...CHAIN_IMPL12, 'impl-review-regression-guard'],
-  refactor: CHAIN_IMPL12,
-  'integration-slice': [...CHAIN_IMPL12, 'review-plan-tracer-slicer'],
-};
+// §27.5
+const CHAIN_STEPS = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'] as const;
+function shippedRoster(step: string): string[] {
+  const repoDir = resolve(__dirname, '..', '..');
+  const appBundled = resolveExampleLoopsV2Dir({ packaged: false, appPath: repoDir });
+  const r = resolveLoopDefV2(`${step}-loop`, { tiers: { operator: null, appBundled, retired: null }, repoDir, flow: FEATURE_DEV_ID });
+  if (!r.ok) throw new Error(`${step}-loop: ${r.reason}`);
+  return r.def.reviewers.map((rev) => rev.persona);
+}
+export const CHAIN_ROSTERS: Record<string, string[]> = Object.fromEntries(CHAIN_STEPS.map((step) => [step, shippedRoster(step)]));
 
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files. The n-th consolidate turn of a step
@@ -530,7 +531,7 @@ export function seedFullTddChainAgent(
     );
   };
 
-  const steps = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'];
+  const steps = CHAIN_STEPS;
   const cases = steps
     .flatMap((s) => [
       `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,

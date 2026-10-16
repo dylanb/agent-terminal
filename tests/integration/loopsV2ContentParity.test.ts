@@ -282,3 +282,27 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect(promote?.args.artifact).toBe('plan');
   });
 });
+
+describe('planning and phase work recipes carry every reviewer standard they are graded against', () => {
+  const repoDir = resolve(__dirname, '..', '..');
+  const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
+  const STANDARDS_LEAD = 'Standards to apply:';
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+  const standardsOf = (charterBody: string): string | null => {
+    const para = charterBody.split(/\n\s*\n/).find((p) => p.startsWith(STANDARDS_LEAD));
+    return para === undefined ? null : flat(para.slice(STANDARDS_LEAD.length)).trim();
+  };
+
+  for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
+    it(`${loop}: the work recipe restates each reviewer's standards`, () => {
+      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow: FEATURE_DEV_ID });
+      if (!r.ok) throw new Error(r.reason);
+      const recipe = flat(readFileSync(r.def.work.recipe, 'utf8'));
+      for (const reviewer of r.def.reviewers) {
+        const standards = standardsOf(readFileSync(reviewer.charter, 'utf8'));
+        expect(standards, `${reviewer.persona}: charter has no standards paragraph`).not.toBeNull();
+        expect(recipe, `${loop} recipe omits ${reviewer.persona}'s standards`).toContain(standards);
+      }
+    });
+  }
+});
