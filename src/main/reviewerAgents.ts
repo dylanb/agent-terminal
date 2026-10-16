@@ -1,4 +1,4 @@
-// §27.4 — each reviewer runs as a Claude Code sub-agent whose own instructions are its charter.
+// §27.4, §18.1 v2.199.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -25,11 +25,49 @@ export interface ReviewerAgentSpec {
 
 /** A sub-agent with no `tools:` line inherits every tool, so an empty list is refused rather than installed
  *  as every tool. */
-export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
+function checkReviewerSpec(spec: ReviewerAgentSpec): void {
   for (const part of [spec.loop, spec.persona]) {
     if (!NAME_SEGMENT.test(part)) throw new Error(`${JSON.stringify(part)} cannot name a reviewer sub-agent: use lowercase letters, digits and single hyphens`);
   }
   if (spec.tools !== 'all' && spec.tools.length === 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares no tools`);
+}
+
+/** §18.1 v2.199: Codex rejects an agent name holding anything but lowercase letters, digits and underscores. */
+export function codexReviewerAgentName(loop: string, persona: string): string {
+  return reviewerAgentName(loop, persona).replaceAll('-', '_');
+}
+
+const CODEX_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'Bash']);
+export const CODEX_REVIEWER_PREAMBLE = 'You are a reviewer. Never create, edit or delete any file: report your findings only.';
+const TOML_MULTILINE_LITERAL_QUOTES = "'''";
+
+/** §18.1 v2.199. */
+export function renderCodexReviewerAgent(spec: ReviewerAgentSpec): string {
+  checkReviewerSpec(spec);
+  const granted = spec.tools === 'all' ? [] : spec.tools.filter((t) => !CODEX_READ_ONLY_TOOLS.has(t));
+  if (granted.length > 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares ${granted.join(', ')}, which a read-only Codex reviewer cannot be given`);
+  if (spec.charter.includes(TOML_MULTILINE_LITERAL_QUOTES)) throw new Error(`the charter of ${spec.persona} in ${spec.loop} holds ${TOML_MULTILINE_LITERAL_QUOTES}, which a TOML literal string cannot carry`);
+  const name = codexReviewerAgentName(spec.loop, spec.persona);
+  return [
+    `name = "${name}"`,
+    `description = "The ${spec.persona} reviewer of the ${spec.loop} loop, installed with the agent-terminal example loops. Its instructions are its charter."`,
+    `developer_instructions = ${TOML_MULTILINE_LITERAL_QUOTES}`,
+    `${CODEX_REVIEWER_PREAMBLE}\n\n${spec.charter}${TOML_MULTILINE_LITERAL_QUOTES}`,
+    '',
+  ].join('\n');
+}
+
+export interface ReviewerAgentFormat {
+  name: (loop: string, persona: string) => string;
+  extension: string;
+  render: (spec: ReviewerAgentSpec) => string;
+}
+
+export const CLAUDE_REVIEWER_AGENT: ReviewerAgentFormat = { name: reviewerAgentName, extension: '.md', render: renderReviewerAgent };
+export const CODEX_REVIEWER_AGENT: ReviewerAgentFormat = { name: codexReviewerAgentName, extension: '.toml', render: renderCodexReviewerAgent };
+
+export function renderReviewerAgent(spec: ReviewerAgentSpec): string {
+  checkReviewerSpec(spec);
   const name = reviewerAgentName(spec.loop, spec.persona);
   return [
     '---',
@@ -51,7 +89,7 @@ export interface PlannedReviewerAgent {
 /** Every reviewer of every loop def in a loops-v2 tree (`<root>/<flow>/<loop>/<loop>.yaml`), one file per
  *  sub-agent name. Two flows shipping one loop's persona must ship the same charter and tools: one name
  *  cannot carry two charters. */
-export function planReviewerAgents(loopsRoot: string): PlannedReviewerAgent[] {
+export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentFormat): PlannedReviewerAgent[] {
   const byName = new Map<string, PlannedReviewerAgent & { rendered: string }>();
   for (const flow of readDirEntries(loopsRoot)) {
     if (!flow.isDirectory) continue;
@@ -60,15 +98,15 @@ export function planReviewerAgents(loopsRoot: string): PlannedReviewerAgent[] {
       const r = resolveLoopDefV2(loop.name, { tiers: { operator: null, appBundled: loopsRoot, retired: null }, repoDir: loopsRoot, flow: flow.name });
       if (!r.ok) throw new Error(`the bundled loop ${flow.name}/${loop.name} does not resolve: ${r.reason}`);
       for (const reviewer of r.def.reviewers) {
-        const render = (): string => renderReviewerAgent({ loop: loop.name, persona: reviewer.persona, tools: reviewer.tools, charter: readFileSync(reviewer.charter, 'utf8') });
+        const render = (): string => format.render({ loop: loop.name, persona: reviewer.persona, tools: reviewer.tools, charter: readFileSync(reviewer.charter, 'utf8') });
         const rendered = render();
-        const name = reviewerAgentName(loop.name, reviewer.persona);
+        const name = format.name(loop.name, reviewer.persona);
         const prior = byName.get(name);
         if (prior !== undefined) {
           if (prior.rendered !== rendered) throw new Error(`the bundled flows disagree on the reviewer ${name}: two charters or tool lists cannot install as one sub-agent`);
           continue;
         }
-        byName.set(name, { rel: `${name}.md`, src: reviewer.charter, bytes: () => Buffer.from(render()), rendered });
+        byName.set(name, { rel: `${name}${format.extension}`, src: reviewer.charter, bytes: () => Buffer.from(render()), rendered });
       }
     }
   }
@@ -88,7 +126,7 @@ export interface InstalledReviewer {
  *  resolved, or null when it can. */
 export function installedReviewerProblem(agentsDir: string | null, reviewer: InstalledReviewer): string | null {
   if (agentsDir === null) return `there is no Claude Code agents directory to find ${reviewer.agent} in: set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude`;
-  const file = path.join(agentsDir, `${reviewer.agent}.md`);
+  const file = path.join(agentsDir, `${reviewer.agent}${CLAUDE_REVIEWER_AGENT.extension}`);
   const missing = `no sub-agent ${reviewer.agent} is installed (${file})`;
   const jail = resolveOwnedDirJail(agentsDir);
   if (jail === null) return missing;

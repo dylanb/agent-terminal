@@ -5,7 +5,12 @@
 
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { resolveExampleCommandsDir, resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from './exampleAssets';
+import {
+  resolveExampleCodexSkillsDir,
+  resolveExampleCommandsDir,
+  resolveExampleFlowsDir,
+  resolveExampleLoopsV2Dir,
+} from './exampleAssets';
 
 /** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
  *  link committed under `example/` would be laundered into the bundle — and the install-time walker, which
@@ -36,5 +41,11 @@ export function copyExampleLoopsV2(rootDir: string, mainOutDir: string): string 
 export function copyExampleCommands(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleCommandsDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'commands'), dest);
+  return dest;
+}
+
+export function copyExampleCodexSkills(rootDir: string, mainOutDir: string): string {
+  const dest = resolveExampleCodexSkillsDir({ packaged: false, appPath: mainOutDir });
+  copyTree(path.join(rootDir, 'example', 'codex-skills'), dest);
   return dest;
 }

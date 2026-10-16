@@ -982,6 +982,9 @@ export const INSTALL_DESTINATION_IDS = [
   'appLoops',
   'commands',
   'agents',
+  'codexLoops',
+  'codexAgents',
+  'codexSkills',
 ] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
@@ -1045,13 +1048,24 @@ export interface InstallExamplesWritten {
   skipped: InstallDestinationFiles[];
 }
 
-/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same
- *  created / overwritten / skipped sets: the action does not roll back a write that already landed, so a
- *  failure names exactly what it wrote — and what it left alone — before failing. All three are empty
- *  when the pre-write container check refused, which is the all-or-nothing case. */
+/** A destination skipped because the tool it installs for is absent: `root` is that tool's home, which does
+ *  not exist (§18.1 v2.199). */
+export interface InstallDestinationNotInstalled {
+  destination: InstallDestinationId;
+  root: string;
+}
+
+export interface InstallExamplesReport extends InstallExamplesWritten {
+  notInstalled: InstallDestinationNotInstalled[];
+}
+
+/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same report:
+ *  the action does not roll back a write that already landed, so a failure names exactly what it wrote —
+ *  and what it left alone — before failing. The report is empty when the install was refused before any
+ *  write, which is the all-or-nothing case. */
 export type InstallExamplesResult =
-  | ({ ok: true } & InstallExamplesWritten)
-  | ({ ok: false; error: string } & InstallExamplesWritten);
+  | ({ ok: true } & InstallExamplesReport)
+  | ({ ok: false; error: string } & InstallExamplesReport);
 
 // ---- Preload-exposed API surfaces (§6) ----
 

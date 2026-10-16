@@ -5,6 +5,8 @@ import {
   resolveExampleFlowsDir,
   resolveFeatureDevFlowDir,
   resolveExampleCommandsDir,
+  resolveExampleLoopsV2Dir,
+  resolveExampleCodexSkillsDir,
 } from '../../src/main/exampleAssets';
 import type { BundleLocation } from '../../src/main/bundleLocation';
 
@@ -79,6 +81,8 @@ describe('extraResources packaged-path coupling', () => {
   for (const [tree, resolve] of [
     ['flows', resolveExampleFlowsDir],
     ['commands', resolveExampleCommandsDir],
+    ['loops-v2', resolveExampleLoopsV2Dir],
+    ['codex-skills', resolveExampleCodexSkillsDir],
   ] as const) {
     it(`ships example/${tree} under the exact path its packaged resolver reads back`, () => {
       const to = path.relative(RESOURCES, resolve(packaged));

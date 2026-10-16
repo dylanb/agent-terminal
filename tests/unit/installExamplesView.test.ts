@@ -49,6 +49,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     created: [{ destination: 'flow', files: rels('flow.yaml') }],
     overwritten: [],
     skipped: [],
+    notInstalled: [],
     ...over,
   });
   const deps = (over: Partial<InstallExamplesDeps> = {}): InstallExamplesDeps => ({
@@ -242,6 +243,15 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(reportGroup('commands')?.textContent).not.toContain('plan-loop.yaml');
   });
 
+  it('reports a destination skipped because its tool is not installed, naming the missing directory (§18.1 v2.199)', async () => {
+    const apply = vi.fn(async () => okResult({ notInstalled: [{ destination: 'codexLoops', root: '/home/u/.codex' }] }));
+    createInstallExamples(host, deps({ apply }));
+    button().click();
+    await vi.waitFor(() => expect(reportGroup('codexLoops')).not.toBeNull());
+    expect(reportGroup('codexLoops')?.textContent).toContain('Codex loop definitions');
+    expect(reportGroup('codexLoops')?.textContent).toContain('not installed: /home/u/.codex does not exist');
+  });
+
   it('summarizes the outcome in the live region rather than reading out every file name (WCAG 4.1.3)', async () => {
     const many = rels(...Array.from({ length: 20 }, (_, i) => `f${i}.md`));
     const apply = vi.fn(async () => okResult({ created: [{ destination: 'appLoops', files: many }] }));
@@ -261,6 +271,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         created: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         overwritten: [],
         skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
+        notInstalled: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -305,6 +316,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         ],
         overwritten: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         skipped: [],
+        notInstalled: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -358,6 +370,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         created: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         overwritten: [],
         skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
+        notInstalled: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -408,7 +421,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('announces an install error through the assertive alert region (WCAG 4.1.3)', async () => {
     const apply = vi.fn(
-      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [], skipped: [] }),
+      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [], skipped: [], notInstalled: [] }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();
