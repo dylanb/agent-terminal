@@ -31,3 +31,8 @@ export function resolveExampleCommandsDir(loc: BundleLocation): string {
 export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'loops-v2');
 }
+
+/** §18.1 v2.199. */
+export function resolveExampleCodexSkillsDir(loc: BundleLocation): string {
+  return path.join(bundleRoot(loc), 'example', 'codex-skills');
+}

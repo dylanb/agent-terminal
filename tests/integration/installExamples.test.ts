@@ -82,7 +82,11 @@ const commandRel = 'groom-ticket.md';
 // The real bundle resolves from cwd (path.resolve('example', …)), so appPath: process.cwd() yields the
 // actual bundled trees; home/configRoot give the temp install targets. Tests that need a broken bundle
 // swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
-const seam = (): InstallDestination[] => exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
+/** Codex's home under the temp HOME, absent unless a test creates it — so no fixture can ever reach the
+ *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1 v2.199). */
+const codexHomeOf = (): string => path.join(home, '.codex');
+const seam = (): InstallDestination[] =>
+  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, codexHomeOf());
 const destOf = (id: InstallDestinationId): InstallDestination => dirs.find((d) => d.id === id) as InstallDestination;
 /** The destination's target. `targetDir` is nullable because a relative CLAUDE_CONFIG_DIR is refused; these
  *  fixtures always supply an absolute one, so a null here is a broken fixture, not a case under test. */
@@ -134,7 +138,7 @@ const conflictsFor = (
 // reporting success, and be discovered from there on a later run (CWE-829).
 describe('a relative user-config root is refused, not anchored at the process cwd', () => {
   const relativeDirs = (): InstallDestination[] =>
-    exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, '~/.claude');
+    exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, '~/.claude', codexHomeOf());
 
   it('refuses the apply, names CLAUDE_CONFIG_DIR, and writes nothing anywhere', () => {
     const before = walk(home);
@@ -160,7 +164,7 @@ describe('a relative user-config root is refused, not anchored at the process cw
   // The gate is at the RESOLVER: a relative flow home yields a null targetDir. Asserting that FIRST means a
   // regression fails here — before any write — so the probe can never pollute the repo the bug targets.
   it('refuses the flow destination when its home root is relative (empty $HOME)', () => {
-    const relFlowDirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, '', configRoot);
+    const relFlowDirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, '', configRoot, codexHomeOf());
     const flow = relFlowDirs.find((d) => d.id === 'flow');
     expect(flow?.targetDir).toBeNull(); // the gate — a removed gate fails here, no filesystem touched
 
@@ -669,6 +673,78 @@ describe('applyInstallExamples — first run seeds a config root that does not e
   });
 });
 
+describe('Codex destinations are installed only where Codex is (§18.1 v2.199)', () => {
+  it('copies the whole loops-v2 bundle tree into an existing Codex home, byte for byte', () => {
+    mkdirSync(codexHomeOf());
+    const res = okOf(applyInstallExamples(dirs, []));
+    expect(filesFor(res.created, 'codexLoops').sort()).toEqual([...APP_LOOPS_SET].sort());
+    for (const rel of APP_LOOPS_SET) {
+      expect(readFileSync(targetOf('codexLoops', rel))).toEqual(readFileSync(path.join(BUNDLE_APP_LOOPS, rel)));
+    }
+    expect(res.notInstalled).toEqual([]);
+  });
+
+  it('skips the Codex destination when the Codex home does not exist, creates nothing there, and names why', () => {
+    const res = okOf(applyInstallExamples(dirs, []));
+    expect(existsSync(codexHomeOf())).toBe(false);
+    expect(filesFor(res.created, 'codexLoops')).toEqual([]);
+    expect(res.notInstalled).toEqual([
+      { destination: 'codexLoops', root: codexHomeOf() },
+      { destination: 'codexAgents', root: codexHomeOf() },
+      { destination: 'codexSkills', root: codexHomeOf() },
+    ]);
+    // The Claude destinations still install: an absent Codex is not a refusal.
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(true);
+  });
+
+  it('names no skipped destination when the install as a whole was refused before writing', () => {
+    const broken = withBundle('appLoops', path.join(home, 'no-such-bundle'));
+    const res = applyInstallExamples(broken, []);
+    expect(res.ok).toBe(false);
+    expect(res.notInstalled).toEqual([]);
+  });
+
+  it('refuses a Codex home that exists but is not a directory, writing nothing anywhere', () => {
+    writeFileSync(codexHomeOf(), 'not a directory');
+    const res = applyInstallExamples(dirs, []);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain(codexHomeOf());
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
+  });
+
+  it('refuses a relative CODEX_HOME, naming CODEX_HOME and not CLAUDE_CONFIG_DIR', () => {
+    const relative = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, null);
+    const res = applyInstallExamples(relative, []);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toContain('CODEX_HOME');
+    expect(res.error).not.toContain('CLAUDE_CONFIG_DIR');
+  });
+
+  it('consent to replace in the app loop definitions never replaces in the Codex copy', () => {
+    mkdirSync(codexHomeOf());
+    okOf(applyInstallExamples(dirs, []));
+    writeFileSync(targetOf('appLoops', planDefRel), 'edited app\n');
+    writeFileSync(targetOf('codexLoops', planDefRel), 'edited codex\n');
+    const preview = previewInstallExamples(dirs);
+    expect(conflictsFor(preview, 'codexLoops')).toEqual([planDefRel]);
+    const res = okOf(applyInstallExamples(dirs, ['appLoops']));
+    expect(filesFor(res.overwritten, 'appLoops')).toEqual([planDefRel]);
+    expect(readFileSync(targetOf('codexLoops', planDefRel), 'utf8')).toBe('edited codex\n');
+  });
+
+  it('refuses an apply when the Codex home appeared after the preview', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const preview = coordinator.preview({ sessionId: SESSION_ID });
+    if (!preview.ok) throw new Error(preview.error);
+    mkdirSync(codexHomeOf());
+    const res = coordinator.apply({ sessionId: SESSION_ID, previewId: preview.previewId, replace: [] });
+    expect(res.ok).toBe(false);
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
+  });
+});
+
 describe('applyInstallExamples — a failure once writing has begun names everything already written', () => {
   it('reports every created/overwritten file, and no file outside that list differs from its pre-action bytes', () => {
     // A directory standing where a command file must be written: the pre-flight (a container check)
@@ -1114,7 +1190,7 @@ describe('applyInstallExamples — an unresolvable destination jail is a refusal
     // NOT the same refusal as a link that escapes, and must not be reported as one.
     const cfgLink = path.join(configRoot, 'dangling');
     symlinkSync(path.join(configRoot, 'no-such-target'), cfgLink);
-    const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, cfgLink);
+    const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, cfgLink, codexHomeOf());
     const res = applyInstallExamples(linked, []);
     expect(res.ok).toBe(false);
     // A DANGLING link is unresolvable, not an escape: nothing is being redirected out of the jail, the

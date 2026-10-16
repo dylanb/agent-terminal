@@ -53,7 +53,7 @@ let dirs: InstallDestination[];
 let fx: CatalogFixture;
 
 const seam = (): InstallDestination[] =>
-  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
+  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, path.join(home, '.codex'));
 const withBundle = (id: InstallDestinationId, bundleDir: string): InstallDestination[] =>
   dirs.map((d) => (d.id === id ? { ...d, bundleDir } : d));
 

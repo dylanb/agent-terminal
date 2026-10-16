@@ -2475,14 +2475,16 @@ const installReportGroup = (dest: string) =>
 const consentBox = (dest: string) =>
   page.locator(`#install-examples-view .flow-modal input[type="checkbox"][data-destination="${dest}"]`);
 
-/** A temp HOME plus a temp Claude config root, so a green run can never write into the developer's own
- *  ~/.claude skills or commands directory (§24.2.3; CLAUDE_CONFIG_DIR is the engine's own redirect). */
-function installEnv(home: string, configDir: string): Record<string, string> {
+/** A temp HOME plus a temp Claude config root and Codex home, so a green run can never write into the
+ *  developer's own ~/.claude or ~/.codex (§24.2.3; CLAUDE_CONFIG_DIR and CODEX_HOME are the tools' own
+ *  redirects). The Codex home defaults to one that does not exist, so Codex counts as not installed. */
+function installEnv(home: string, configDir: string, codexHome: string = join(home, '.codex')): Record<string, string> {
   return {
     ...(process.env as Record<string, string>),
     APP_SHELL: 'bash',
     HOME: home,
     CLAUDE_CONFIG_DIR: configDir,
+    CODEX_HOME: codexHome,
     APP_SUBMIT_DELAY_MS: '100',
   };
 }
@@ -2493,9 +2495,10 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // renders the bundled steps.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-cfg-'));
+  const codexHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-codex-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-repo-'));
   mkdirSync(join(repo, '.git'), { recursive: true }); // its own repo key; no local flow → global is used
-  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir, codexHome) });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2528,6 +2531,19 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
   expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
   expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v2', 'green-loop', 'charter', 'principal.md'), 'utf8'));
+  // §18.1 v2.199 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
+  const codexLoopRel = join('loops-v2', 'feature-dev-v2', 'integration-slice-loop', 'integration-slice-loop.yaml');
+  expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
+  await expect(installReportGroup('codexLoops')).toContainText('integration-slice-loop.yaml');
+  // Each bundled reviewer landed as a Codex custom agent, its charter as its instructions.
+  const codexAgent = readIf(join(codexHome, 'agents', 'green_loop__impl_review_principal.toml'));
+  expect(codexAgent).toContain('name = "green_loop__impl_review_principal"');
+  expect(codexAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v2', 'green-loop', 'charter', 'principal.md'), 'utf8'));
+  await expect(installReportGroup('codexAgents')).toContainText('green_loop__impl_review_principal.toml');
+  // The skill telling Codex where the loops are and how to run their reviewers landed too.
+  const skillRel = join('agent-terminal-loops', 'SKILL.md');
+  expect(readIf(join(codexHome, 'skills', skillRel))).toBe(readFileSync(join('example', 'codex-skills', skillRel), 'utf8'));
+  await expect(installReportGroup('codexSkills')).toContainText('SKILL.md');
 
   // A second click reports every file SKIPPED — not silently re-written — and never asks the user to decide
   // a replacement. The counts are what distinguish the two: a regression that overwrites byte-identical
@@ -2551,7 +2567,31 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   await app.close();
   rmSync(home, { recursive: true, force: true });
   rmSync(configDir, { recursive: true, force: true });
+  rmSync(codexHome, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
+});
+
+test('with no Codex home, installing the examples creates nothing for Codex and says why (§18.1 v2.199)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-nocodex-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-nocodex-cfg-'));
+  const codexHome = join(home, '.codex');
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir, codexHome) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+
+  await expect(installReportGroup('codexLoops')).toContainText(`not installed: ${codexHome} does not exist`);
+  await expect(installReportGroup('codexAgents')).toContainText(`not installed: ${codexHome} does not exist`);
+  await expect(installReportGroup('codexSkills')).toContainText(`not installed: ${codexHome} does not exist`);
+  expect(existsSync(codexHome)).toBe(false);
+  expect(existsSync(join(configDir, 'loops-v2', 'feature-dev-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
 test('installing the bundled examples seeds a catalog of >1 flow at the resolver read location (§18.1/§18.7.1 #132)', { tag: '@ownapp' }, async () => {

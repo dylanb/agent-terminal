@@ -32,6 +32,7 @@ describe('install examples view — renders the flow-catalog result group (§18.
     created: [{ destination: FLOW_CATALOG, files: rels(path.join('feature-dev', 'flow.yaml')) }],
     overwritten: [],
     skipped: [],
+    notInstalled: [],
   };
   const deps: InstallExamplesDeps = {
     preview: vi.fn(

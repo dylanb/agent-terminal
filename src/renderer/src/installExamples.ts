@@ -7,7 +7,7 @@ import {
   type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
-  type InstallExamplesWritten,
+  type InstallExamplesReport,
   type InstallPreviewId,
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
@@ -31,11 +31,14 @@ const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   appLoops: 'App loop definitions',
   commands: 'Claude Code commands',
   agents: 'Claude Code reviewer agents',
+  codexLoops: 'Codex loop definitions',
+  codexAgents: 'Codex reviewer agents',
+  codexSkills: 'Codex skills',
 };
 
 // The created/overwritten/skipped sets are the contract's own vocabulary — derive from it so the two
 // cannot drift (CLAUDE.md shared-semantics rule).
-type Report = InstallExamplesWritten;
+type Report = InstallExamplesReport;
 
 function total(groups: InstallDestinationFiles[]): number {
   return groups.reduce((n, g) => n + g.files.length, 0);
@@ -77,7 +80,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'kp-help',
-      'Copies the flow to ~/.agent-terminal, and the app loop definitions and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
+      'Copies the flow to ~/.agent-terminal, the app loop definitions and commands to your Claude config directory, and the loop definitions, reviewer agents and a skill for running them to your Codex home if Codex is installed. Files you already have are left untouched unless you choose to replace them.',
     ),
   );
   const btn = el('button', 'pill signal', 'Install examples');
@@ -131,6 +134,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         const files = groups.find((g) => g.destination === id)?.files ?? [];
         if (files.length > 0) lines.push(`${label} ${files.length}: ${files.join(', ')}`);
       }
+      const absent = report.notInstalled.find((n) => n.destination === id);
+      if (absent !== undefined) lines.push(`not installed: ${absent.root} does not exist`);
       if (lines.length === 0) continue;
       const item = el('li');
       item.setAttribute('data-destination', id);

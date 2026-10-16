@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
-import { installedReviewerProblem, renderReviewerAgent } from '../../src/main/reviewerAgents';
+import { installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
+import { parse as parseToml } from 'smol-toml';
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
 // are its charter, so a reviewer is never asked to go and read it. Expected values come from the bundle itself.
 const BUNDLE_LOOPS = path.resolve('example', 'loops-v2');
+
+const codexName = (loop: string, persona: string): string => reviewerAgentName(loop, persona).replaceAll('-', '_');
 
 interface BundledReviewer {
   loop: string;
@@ -47,7 +50,7 @@ let dirs: InstallDestination[];
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-cfg-'));
-  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
+  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot, path.join(home, '.codex'));
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
@@ -92,6 +95,76 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toContain(`${shared[0].loop}--${shared[0].persona}`);
       expect(existsSync(path.join(configRoot, 'agents'))).toBe(false);
+    } finally {
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
+});
+
+// §18.1 v2.199 — the same reviewers, installed as Codex custom agents where Codex is.
+describe('installing the examples installs each bundled reviewer as a Codex custom agent', () => {
+  const codexHome = (): string => path.join(home, '.codex');
+  const install = (): void => {
+    mkdirSync(codexHome());
+    const res = applyInstallExamples(dirs, []);
+    if (!res.ok) throw new Error(res.error);
+  };
+
+  it('writes <codex>/agents/<loop>__<persona>.toml for every reviewer: valid TOML, named so, a no-file-changes line then its charter', () => {
+    install();
+    const reviewers = bundledReviewers(BUNDLE_LOOPS);
+    for (const r of reviewers) {
+      const name = codexName(r.loop, r.persona);
+      expect(name).toMatch(/^[a-z0-9_]+$/);
+      const file = path.join(codexHome(), 'agents', `${name}.toml`);
+      expect(existsSync(file), file).toBe(true);
+      const agent = parseToml(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      expect(agent.name).toBe(name);
+      expect(typeof agent.description).toBe('string');
+      const instructions = String(agent.developer_instructions);
+      expect(instructions.endsWith(readFileSync(r.charterPath, 'utf8'))).toBe(true);
+      expect(instructions.slice(0, instructions.length - readFileSync(r.charterPath, 'utf8').length)).toMatch(/never create, edit or delete/i);
+    }
+  });
+
+  it('installs one Codex agent for exactly each Claude Code sub-agent', () => {
+    install();
+    const claude = readdirSync(path.join(configRoot, 'agents')).map((f) => f.replace(/\.md$/, '').replaceAll('-', '_')).sort();
+    const codex = readdirSync(path.join(codexHome(), 'agents')).map((f) => f.replace(/\.toml$/, '')).sort();
+    expect(codex).toEqual(claude);
+  });
+
+  it('installs no Codex agent when the Codex home does not exist', () => {
+    const res = applyInstallExamples(dirs, []);
+    if (!res.ok) throw new Error(res.error);
+    expect(existsSync(codexHome())).toBe(false);
+    expect(res.notInstalled).toContainEqual({ destination: 'codexAgents', root: codexHome() });
+  });
+
+  it('installs a reviewer that has every tool (§27.4 v2.198), carrying the no-file-changes line', () => {
+    const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: 'all', charter: 'c' })) as Record<string, unknown>;
+    expect(agent.name).toBe('green_loop__impl_review_tests');
+    expect(String(agent.developer_instructions)).toMatch(/never create, edit or delete/i);
+  });
+
+  it('refuses a reviewer whose explicit tool list grants more than reading, since a Codex agent cannot be narrowed to it', () => {
+    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read', 'Edit'], charter: 'c' })).toThrow(/Edit/);
+  });
+
+  it("refuses a charter a TOML literal string cannot carry (one holding ''')", () => {
+    expect(() => renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: ['Read'], charter: "x ''' y" })).toThrow(/'''/);
+  });
+
+  it('refuses, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
+    const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-codex-bundle-'));
+    try {
+      cpSync(BUNDLE_LOOPS, bundle, { recursive: true });
+      const shared = bundledReviewers(bundle).filter((r, _i, all) => all.some((o) => o !== r && o.loop === r.loop && o.persona === r.persona));
+      writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
+      mkdirSync(codexHome());
+      const res = applyInstallExamples(dirs.map((d) => (d.id === 'codexAgents' ? { ...d, bundleDir: bundle } : d)), []);
+      expect(res.ok).toBe(false);
+      expect(existsSync(path.join(codexHome(), 'agents'))).toBe(false);
     } finally {
       rmSync(bundle, { recursive: true, force: true });
     }

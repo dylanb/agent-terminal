@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
+import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills } from '../../src/main/exampleAssetsBuild';
 import {
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
+  resolveExampleCodexSkillsDir,
 } from '../../src/main/exampleAssets';
 
 // The unpackaged runtime resolvers read <app.getAppPath()>/example/<tree>, and app.getAppPath() is the
@@ -33,6 +34,10 @@ beforeEach(() => {
   mkdirSync(path.join(v2Dir, 'charter'), { recursive: true });
   writeFileSync(path.join(v2Dir, 'plan-loop.yaml'), 'version: v2\nname: plan-loop\n');
   writeFileSync(path.join(v2Dir, 'charter', 'principal.md'), '# principal\n');
+
+  const skillDir = path.join(root, 'example', 'codex-skills', 'agent-terminal-loops');
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: agent-terminal-loops\n---\n');
 });
 
 afterEach(() => {
@@ -51,6 +56,14 @@ describe('copyExampleFlows — places the catalog bundle where the unpackaged re
     expect(existsSync(path.join(out, 'example', 'flows'))).toBe(false);
     copyExampleFlows(root, out);
     expect(readFileSync(path.join(out, 'example', 'flows', 'feature-dev', 'todo-templates', 'a.md'), 'utf8')).toContain('# A');
+  });
+});
+
+describe('copyExampleCodexSkills — places the bundled Codex skills where the unpackaged resolver reads them', () => {
+  it('copies example/codex-skills to the path resolveExampleCodexSkillsDir reads for that out dir', () => {
+    const dest = copyExampleCodexSkills(root, out);
+    expect(dest).toBe(resolveExampleCodexSkillsDir({ packaged: false, appPath: out }));
+    expect(readFileSync(path.join(dest, 'agent-terminal-loops', 'SKILL.md'), 'utf8')).toContain('name: agent-terminal-loops');
   });
 });
 

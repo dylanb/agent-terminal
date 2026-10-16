@@ -13,17 +13,20 @@ import {
   resolveExampleFlowsDir,
   resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
+  resolveExampleCodexSkillsDir,
 } from './exampleAssets';
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
-import { planReviewerAgents } from './reviewerAgents';
+import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
+import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
   type InstallDestinationFiles,
   type InstallDestinationId,
+  type InstallDestinationNotInstalled,
   type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
@@ -189,76 +192,121 @@ export interface InstallDestination {
    *  both names a variable that is blameless for whichever destination actually failed. */
   rootFix: string;
   plan: (bundleDir: string) => Plan;
+  /** The home of the tool this destination installs for, when it installs only where that tool is: absent,
+   *  the destination is skipped rather than created (§18.1 v2.199). */
+  onlyIfPresent?: string;
+}
+
+interface Roots {
+  flowGlobalDir: string;
+  configDir: string | undefined;
+  codexHome: string | null;
 }
 
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
-  target: (flowGlobalDir: string, configDir?: string) => string | null;
+  target: (roots: Roots) => string | null;
+  onlyIfPresent?: (roots: Roots) => string | null;
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   overwrite: InstallDestination['overwrite'];
 }
 
 /** §27.4. */
-function reviewerAgentFiles(loopsBundleDir: string): Plan {
-  if (absent(loopsBundleDir)) return null;
-  return planReviewerAgents(loopsBundleDir).map((a) => ({ rel: destRelative(a.rel), src: a.src, bytes: a.bytes }));
-}
+const reviewerAgentFiles =
+  (format: ReviewerAgentFormat) =>
+  (loopsBundleDir: string): Plan => {
+    if (absent(loopsBundleDir)) return null;
+    return planReviewerAgents(loopsBundleDir, format).map((a) => ({ rel: destRelative(a.rel), src: a.src, bytes: a.bytes }));
+  };
 
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
+const CODEX_ROOT_FIX = 'Set CODEX_HOME to an absolute path, or unset it to use ~/.codex.';
 
 /** §18.1/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveFeatureDevFlowDir,
-    target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
     rootFix: HOME_ROOT_FIX,
     plan: flowFiles,
     overwrite: { mode: 'confirm-overwrite' },
   },
   flowCatalog: {
     bundle: resolveExampleFlowsDir,
-    target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowCatalogDir(flowGlobalDir) : null),
+    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? flowCatalogDir(flowGlobalDir) : null),
     rootFix: HOME_ROOT_FIX,
     plan: catalogFiles,
     overwrite: { mode: 'confirm-overwrite' },
   },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
-    target: (_flow, cfg) => userConfigLoopsV2Dir(cfg),
+    target: ({ configDir }) => userConfigLoopsV2Dir(configDir),
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
   commands: {
     bundle: resolveExampleCommandsDir,
-    target: (_flow, cfg) => userConfigCommandsDir(cfg),
+    target: ({ configDir }) => userConfigCommandsDir(configDir),
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
   agents: {
     bundle: resolveExampleLoopsV2Dir,
-    target: (_flow, cfg) => userConfigAgentsDir(cfg),
+    target: ({ configDir }) => userConfigAgentsDir(configDir),
     rootFix: CONFIG_ROOT_FIX,
-    plan: reviewerAgentFiles,
+    plan: reviewerAgentFiles(CLAUDE_REVIEWER_AGENT),
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  codexLoops: {
+    bundle: resolveExampleLoopsV2Dir,
+    target: ({ codexHome }) => (codexHome === null ? null : codexLoopsV2Dir(codexHome)),
+    onlyIfPresent: ({ codexHome }) => codexHome,
+    rootFix: CODEX_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  codexAgents: {
+    bundle: resolveExampleLoopsV2Dir,
+    target: ({ codexHome }) => (codexHome === null ? null : codexAgentsDir(codexHome)),
+    onlyIfPresent: ({ codexHome }) => codexHome,
+    rootFix: CODEX_ROOT_FIX,
+    plan: reviewerAgentFiles(CODEX_REVIEWER_AGENT),
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  codexSkills: {
+    bundle: resolveExampleCodexSkillsDir,
+    target: ({ codexHome }) => (codexHome === null ? null : codexSkillsDir(codexHome)),
+    onlyIfPresent: ({ codexHome }) => codexHome,
+    rootFix: CODEX_ROOT_FIX,
+    plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
   },
 };
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
  *  from the user's surfaces. Order is the contract's, so the report cannot be reordered against it. */
-export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
+export function exampleInstallDirs(
+  loc: BundleLocation,
+  flowGlobalDir: string,
+  configDir: string | undefined,
+  codexHome: string | null,
+): InstallDestination[] {
+  const roots: Roots = { flowGlobalDir, configDir, codexHome };
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
+    const onlyIfPresent = d.onlyIfPresent?.(roots) ?? undefined;
     return {
       id,
       bundleDir: d.bundle(loc),
-      targetDir: d.target(flowGlobalDir, configDir),
+      targetDir: d.target(roots),
       rootFix: d.rootFix,
       plan: d.plan,
       overwrite: d.overwrite,
+      ...(onlyIfPresent !== undefined ? { onlyIfPresent } : {}),
     };
   });
 }
@@ -303,7 +351,23 @@ interface ResolvedDestination {
   files: ResolvedFile[];
   overwrite: InstallDestination['overwrite'];
 }
-type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
+type Resolution =
+  | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
+  | { ok: false; error: string };
+
+/** Whether a tool's home is there to install into. A home that exists but is not a directory is no install
+ *  the user meant to skip, so it refuses rather than reading as absent. */
+function toolPresent(root: string): boolean {
+  let isDir: boolean;
+  try {
+    isDir = statSync(root).isDirectory();
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return false;
+    throw e;
+  }
+  if (!isDir) throw new Error(`${root} exists but is not a directory`);
+  return true;
+}
 
 /** The two refusals call for opposite fixes — replace the link vs. fix the permissions — so the message
  *  names the one that actually happened. */
@@ -314,6 +378,7 @@ const refusal = (what: string, dir: string, cause: PathRefusal): string =>
 
 function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
+  const notInstalled: InstallDestinationNotInstalled[] = [];
   for (const dest of destinations) {
     if (dest.targetDir === null) {
       // Every install target must be an absolute directory. A relative one — a relative CLAUDE_CONFIG_DIR
@@ -325,6 +390,10 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
         ok: false,
         error: `Could not install the ${dest.id} examples: its install location is not an absolute path. ${dest.rootFix}`,
       };
+    }
+    if (dest.onlyIfPresent !== undefined && !toolPresent(dest.onlyIfPresent)) {
+      notInstalled.push({ destination: dest.id, root: dest.onlyIfPresent });
+      continue;
     }
     const files = dest.plan(dest.bundleDir);
     if (files === null) {
@@ -346,7 +415,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       overwrite: dest.overwrite,
     });
   }
-  return { ok: true, destinations: out };
+  return { ok: true, destinations: out, notInstalled };
 }
 
 type Groups = Map<InstallDestinationId, DestRelativePath[]>;
@@ -545,7 +614,7 @@ function applyInstallExamplesWithAuthorization(
   replace: InstallDestinationId[],
   authorization?: InstallAuthorization,
 ): InstallExamplesResult {
-  const empty = { created: [], overwritten: [], skipped: [] };
+  const empty = { created: [], overwritten: [], skipped: [], notInstalled: [] };
   let resolution: Resolution;
   try {
     resolution = resolveAll(destinations);
@@ -623,6 +692,7 @@ function applyInstallExamplesWithAuthorization(
     created: report(created),
     overwritten: report(overwritten),
     skipped: report(skipped),
+    notInstalled: resolution.notInstalled,
   });
 
   for (const dest of plan) {
@@ -656,7 +726,13 @@ function applyInstallExamplesWithAuthorization(
       }
     }
   }
-  return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
+  return {
+    ok: true,
+    created: report(created),
+    overwritten: report(overwritten),
+    skipped: report(skipped),
+    notInstalled: resolution.notInstalled,
+  };
 }
 
 export function applyInstallExamples(
@@ -673,6 +749,7 @@ function failedInstall(error: string): InstallExamplesResult {
     created: [],
     overwritten: [],
     skipped: [],
+    notInstalled: [],
   };
 }
 
