@@ -169,16 +169,10 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
   return `${lines.join('\n')}\n`;
 }
 
-export interface ReviewerHandoffReq {
-  ticket?: number;
-  subjectRel?: string;
-  slice?: number;
-  carried: ChainedInput[];
-}
+export type ReviewerHandoffReq = Pick<ReviewAndFixPromptReq, 'ticket' | 'subjectRel' | 'slice'> & { carried: ChainedInput[] };
 
 /** §27.4 */
 export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
-  const carried = req.carried;
   const lines: string[] = [];
   lines.push(
     req.ticket !== undefined
@@ -199,8 +193,8 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   if (req.slice !== undefined) {
     lines.push(`This round covers impl-slice ${req.slice} of the plan only; work that belongs to another slice is not under review.`);
   }
-  if (carried.length > 0) {
-    lines.push('Grade it against these documents, beside the ticket:', ...carried.map((i) => `  - ${i.id}: ${i.rel}`));
+  if (req.carried.length > 0) {
+    lines.push('Grade it against these documents, beside the ticket:', ...req.carried.map((i) => `  - ${i.id}: ${i.rel}`));
   }
   lines.push(
     ...flowDocumentLines('described-elsewhere').slice(1),
@@ -225,7 +219,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Receive their findings into your own context, then fix or dismiss each per the criterion below.',
     '',
     REVIEWER_HANDOFF_BEGIN,
-    ...reviewerHandoffLines({ ticket: req.ticket, subjectRel: req.subjectRel, slice: req.slice, carried }),
+    ...reviewerHandoffLines({ ...req, carried }),
     REVIEWER_HANDOFF_END,
   );
   if (req.loopBrief !== undefined) {

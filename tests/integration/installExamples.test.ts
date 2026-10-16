@@ -725,8 +725,9 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
     writeFileSync(codexHomeOf(), 'not a directory');
     const res = applyInstallExamples(dirs, []);
     expect(res.ok).toBe(false);
+    expect(res.notInstalled).toEqual([]);
     if (res.ok) return;
-    expect(res.error).toContain(codexHomeOf());
+    expect(res.error).toContain(`${codexHomeOf()} exists but is not a directory`);
     expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
   });
 
