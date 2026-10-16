@@ -41,8 +41,7 @@ const CODEX_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glo
 export const CODEX_REVIEWER_PREAMBLE = 'You are a reviewer. Never create, edit or delete any file: report your findings only.';
 const TOML_MULTILINE_LITERAL_QUOTES = "'''";
 
-/** §18.1 v2.199: a Codex subagent runs with its parent's permissions and its file cannot narrow them, so a def
- *  whose explicit list grants more than reading is refused rather than installed as an agent that may write. */
+/** §18.1 v2.199. */
 export function renderCodexReviewerAgent(spec: ReviewerAgentSpec): string {
   checkReviewerSpec(spec);
   const granted = spec.tools === 'all' ? [] : spec.tools.filter((t) => !CODEX_READ_ONLY_TOOLS.has(t));
