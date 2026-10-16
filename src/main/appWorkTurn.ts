@@ -100,6 +100,8 @@ export interface AppWorkPromptReq {
   ticket?: number;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
   sliceBrief?: SliceBrief;
+  /** §27.3 */
+  loopBrief?: string;
 }
 
 /** §28.4.2 — the back-to-RED brief as the work turn states it. */
@@ -131,11 +133,12 @@ export function flowDocumentLines(): string[] {
   ];
 }
 
-/** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
- *  instruction to end the artifact with the completion marker, then the shared done-signal instruction
- *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
+/** Compose the §27 work-turn prompt (§27.3): the loop brief and the def's recipe body, then — for a
+ *  file-producing turn — the instruction to end the artifact with the completion marker, then the shared
+ *  done-signal instruction pointing at the §27 done-file (and, for a file-producing turn, verifying the
+ *  artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
-  const parts = [req.recipeBody.trimEnd()];
+  const parts = [...(req.loopBrief !== undefined ? [req.loopBrief.trimEnd(), ''] : []), req.recipeBody.trimEnd()];
   // Bind the turn to the engine-resolved issue (ticketPromptLines — one shared source across the work /
   // consolidate / review composers, so they cannot drift) — the SAME identity the gate's update-issue-body writes
   // to — so the agent works THIS ticket rather than one inferred from the branch, open PR, or cwd (CLAUDE.md: the

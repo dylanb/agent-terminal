@@ -677,3 +677,30 @@ describe('resolveLoopDefV2 — the running flow’s own loop folder (§27.8)', (
     expect(personas(r)).toEqual(['review-plan-principal', 'review-plan-security']);
   });
 });
+
+describe('resolveLoopDefV2 — the loop brief (§27.8)', () => {
+  const withBrief = (ref: string): string => VALID_DEF.replace('work:\n', `brief: ${ref}\nwork:\n`);
+
+  it('resolves a declared brief to its file beside the def', () => {
+    const tierRoot = join(appDir, 'loops-v2');
+    plantDef(tierRoot, 'plan-loop', withBrief('prompts/brief.md'));
+    writeFileSync(join(tierRoot, 'plan-loop', 'prompts', 'brief.md'), 'standing\n');
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    if (!r.ok) throw new Error(r.reason);
+    expect(readFileSync(r.def.brief!, 'utf8')).toBe('standing\n');
+  });
+
+  it('has no brief when the def declares none', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.def.brief).toBeUndefined();
+  });
+
+  it('rejects a brief reference that escapes the tier root', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withBrief('../../../../etc/passwd'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/brief reference escapes/);
+  });
+});

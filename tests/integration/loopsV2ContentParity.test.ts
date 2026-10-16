@@ -236,12 +236,12 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   const repoDir = resolve(__dirname, '..', '..');
   const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
 
-  // The recipe carries more than one fenced ```text example, so each test picks the fence for ITS grammar
+  // The brief carries more than one fenced ```text example, so each test picks the fence for ITS grammar
   // (by a token only that grammar's block contains) rather than "the first fence".
   const fences = (recipe: string): string[] => [...recipe.matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1]);
 
-  it('the work recipe embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
+  it('the brief embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
+    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(EPIC_GRAMMAR.subTicketsHeading));
     expect(example, 'the recipe must embed a fenced epic example').not.toBeUndefined();
     expect(isEpicPlan(example ?? '')).toBe(true);
@@ -251,8 +251,8 @@ describe('plan-bundle epic classification content (§28.7)', () => {
     expect((example ?? '').trim()).toBe(exampleEpicPlan(2).trim());
   });
 
-  it('§28.4.1 — the work recipe embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/work.md') ?? '';
+  it('§28.4.1 — the brief embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
+    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(SLICE_GRAMMAR.implSlicesHeading));
     expect(example, 'the recipe must embed a fenced impl-slices example').not.toBeUndefined();
     expect(slicePlanWellFormed(example ?? '')).toBe(true);
@@ -293,15 +293,52 @@ describe('planning and phase work recipes carry every reviewer standard they are
     return para === undefined ? null : flat(para.slice(STANDARDS_LEAD.length)).trim();
   };
 
-  for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
-    it(`${loop}: the work recipe restates each reviewer's standards`, () => {
-      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow: FEATURE_DEV_ID });
+  const loops = [
+    ...['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((loop) => ({ flow: FEATURE_DEV_ID, loop })),
+    { flow: 'plan-only', loop: 'groom-loop' },
+  ];
+  for (const { flow, loop } of loops) {
+    it(`${flow}/${loop}: the brief, which the work and review-and-fix turns both carry, restates each reviewer's standards once`, () => {
+      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow });
       if (!r.ok) throw new Error(r.reason);
+      expect(r.def.brief, `${loop} declares no brief`).toBeDefined();
+      const brief = flat(readFileSync(r.def.brief!, 'utf8'));
       const recipe = flat(readFileSync(r.def.work.recipe, 'utf8'));
       for (const reviewer of r.def.reviewers) {
         const standards = standardsOf(readFileSync(reviewer.charter, 'utf8'));
         expect(standards, `${reviewer.persona}: charter has no standards paragraph`).not.toBeNull();
-        expect(recipe, `${loop} recipe omits ${reviewer.persona}'s standards`).toContain(standards);
+        expect(brief, `${loop} brief omits ${reviewer.persona}'s standards`).toContain(standards);
+        expect(recipe, `${loop} work recipe repeats ${reviewer.persona}'s standards`).not.toContain(standards);
+      }
+    });
+  }
+});
+
+describe('the standing rules every fix must also meet live in the brief, not the work recipe (§27.3)', () => {
+  const repoDir = resolve(__dirname, '..', '..');
+  const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
+  const AC_RULE = 'No acceptance criterion may be deferred';
+  const TODO_RULE = 'Do not add a TODO or FIXME comment';
+  const loops: { flow: string; loop: string; rules: string[] }[] = [
+    { flow: FEATURE_DEV_ID, loop: 'plan-bundle-loop', rules: [AC_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'plan-polish-loop', rules: [AC_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'infra-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'red-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'green-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'refactor-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'integration-slice-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: 'plan-only', loop: 'plan-loop', rules: [AC_RULE] },
+  ];
+  for (const { flow, loop, rules } of loops) {
+    it(`${flow}/${loop}: the brief carries ${rules.length === 1 ? 'the AC rule' : 'the AC and TODO rules'}`, () => {
+      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow });
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.def.brief, `${loop} declares no brief`).toBeDefined();
+      const brief = readFileSync(r.def.brief!, 'utf8');
+      const recipe = readFileSync(r.def.work.recipe, 'utf8');
+      for (const rule of rules) {
+        expect(brief, rule).toContain(rule);
+        expect(recipe, rule).not.toContain(rule);
       }
     });
   }

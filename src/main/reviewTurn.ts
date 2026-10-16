@@ -89,6 +89,8 @@ export interface ReviewAndFixPromptReq {
   inputs?: ChainedInput[];
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
   sliceBrief?: SliceBrief;
+  /** §27.3 */
+  loopBrief?: string;
 }
 
 /** The round-report format rules (§27.5), from the ONE shared descriptor the completion predicate reads.
@@ -182,6 +184,16 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Each pulls what it needs with tools. Receive their findings into your own context, then fix or dismiss each',
     'per the criterion below.',
   );
+  if (req.loopBrief !== undefined) {
+    lines.push(
+      '',
+      "STANDING INSTRUCTIONS — this loop's brief, which the work turn followed. Every fix you make must meet it.",
+      'A step in it that only the work turn takes, such as interviewing the operator, does not run again here: a',
+      `fix that needs the operator's decision is \`${NEEDS_HUMAN_DISPOSITION}\`.`,
+      '',
+      req.loopBrief.trimEnd(),
+    );
+  }
   // §19.1 — bind the turn to the engine-resolved ticket it hands each reviewer (one shared source).
   if (req.ticket !== undefined) lines.push(...ticketPromptLines(req.ticket));
   if (req.subjectRel !== undefined) {

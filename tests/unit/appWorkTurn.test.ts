@@ -461,3 +461,22 @@ describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion m
     expect(greenPrompt()).not.toContain('work-turn-complete');
   });
 });
+
+describe('composeAppWorkPrompt — the loop brief leads the work turn (§27.3)', () => {
+  const base = {
+    recipeBody: '# work turn\nImplement the plan.',
+    turnKey: 'work-implement',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: null,
+  };
+
+  it('puts the brief ahead of the recipe', () => {
+    const prompt = composeAppWorkPrompt({ ...base, loopBrief: 'You are a principal engineer.' });
+    expect(prompt.indexOf('You are a principal engineer.')).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf('You are a principal engineer.')).toBeLessThan(prompt.indexOf('Implement the plan.'));
+  });
+
+  it('starts with the recipe when the loop declares no brief', () => {
+    expect(composeAppWorkPrompt(base).startsWith('# work turn')).toBe(true);
+  });
+});

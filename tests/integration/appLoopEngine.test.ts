@@ -3402,3 +3402,46 @@ describe('§28.5.3 — a GREEN loop review round refreshes the changed-test flag
     expect(readChangedTests(h.repo)).toBeNull();
   });
 });
+
+describe('§27.3 — the loop brief reaches both the work turn and the review-and-fix turn', () => {
+  const BRIEF_PATH = '/tiers/plan-loop/prompts/brief.md';
+  const BRIEF_TEXT = 'No acceptance criterion may be deferred.';
+  const readRecipe = (p: string): string => (p === BRIEF_PATH ? BRIEF_TEXT : '# work turn\nProduce the plan.');
+
+  it('injects the brief into the work prompt and into the review prompt after the context is cleared', () => {
+    h.defResult = resolved({ ...fileDef(), brief: BRIEF_PATH });
+    const engine = makeEngine(undefined, undefined, undefined, { readRecipe });
+    enterAndInjectWork(engine);
+    const workPrompt = h.injected[h.injected.length - 1];
+    expect(workPrompt).toContain('Produce the plan.');
+    expect(workPrompt).toContain(BRIEF_TEXT);
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    const reviewPrompt = h.injected[h.injected.length - 1];
+    expect(reviewPrompt).toContain('review-and-fix');
+    expect(reviewPrompt).toContain(BRIEF_TEXT);
+  });
+
+  it('composes no review-and-fix prompt when the brief cannot be read by the time the round starts', () => {
+    h.defResult = resolved({ ...fileDef(), brief: BRIEF_PATH });
+    let briefReadable = true;
+    const engine = makeEngine(undefined, undefined, undefined, { readRecipe: (p) => (p === BRIEF_PATH && !briefReadable ? null : readRecipe(p)) });
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    briefReadable = false;
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((t) => t.includes('review-and-fix'))).toBe(false);
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error', errorReason: expect.stringContaining('could not compose prompt') });
+  });
+
+  it('composes no prompt when the declared brief cannot be read', () => {
+    h.defResult = resolved({ ...fileDef(), brief: BRIEF_PATH });
+    const engine = makeEngine(undefined, undefined, undefined, { readRecipe: (p) => (p === BRIEF_PATH ? null : readRecipe(p)) });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((t) => t.includes('Produce the plan.'))).toBe(false);
+  });
+});

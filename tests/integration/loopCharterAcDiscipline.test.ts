@@ -13,7 +13,7 @@ const NO_DEFER_TODO_MARKER = 'already-filed future ticket';
 const INTEGRATION_MARKER = 'every acceptance criterion of every slice';
 
 const intent = (loop: string): string => `${loop}/charter/intent.md`;
-const worker = (loop: string): string => `${loop}/prompts/work.md`;
+const worker = (loop: string): string => `${loop}/prompts/brief.md`;
 
 // refactor-loop carries no intent lens (a behavior-preserving turn); its worker still carries the ban below.
 const AC_INTENT = ['green-loop', 'red-loop', 'integration-slice-loop', 'plan-loop', 'plan-bundle-loop', 'plan-polish-loop'].map(intent);
@@ -45,5 +45,6 @@ describe('loop charters forbid deferring a ticket AC (every loop but groom)', ()
   it('the groom loop is EXEMPT — it may change the ticket, so it carries no AC-deferral ban', () => {
     expect(read(intent('groom-loop'))).not.toContain(AC_MARKER);
     expect(read(worker('groom-loop'))).not.toContain(AC_MARKER);
+    expect(read('groom-loop/prompts/work.md')).not.toContain(AC_MARKER);
   });
 });

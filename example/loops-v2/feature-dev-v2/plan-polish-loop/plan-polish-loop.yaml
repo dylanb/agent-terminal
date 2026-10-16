@@ -1,5 +1,6 @@
 version: v2
 name: plan-polish-loop
+brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: plan

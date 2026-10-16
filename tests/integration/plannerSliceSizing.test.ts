@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { bundledPath } from '../helpers/bundledLoops';
 
-// Slice sizing is planning-agent-only guidance: the planner's recipes carry it, no reviewer charter grades it,
+// Slice sizing is planning-agent-only guidance: the planner's briefs carry it, no reviewer charter grades it,
 // and the slicing reviewer is told it is not a finding — so a plan that merges small slices is not re-litigated.
 const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8');
 
@@ -16,8 +16,8 @@ const charters = (loop: string): string[] =>
 describe('planner slice sizing (planning-agent-only guidance)', () => {
   for (const loop of PLANNERS) {
     for (const marker of SIZING_MARKERS) {
-      it(`${loop}/prompts/work.md carries the sizing rule "${marker}"`, () =>
-        expect(read(`${loop}/prompts/work.md`)).toContain(marker));
+      it(`${loop}/prompts/brief.md carries the sizing rule "${marker}"`, () =>
+        expect(read(`${loop}/prompts/brief.md`)).toContain(marker));
     }
 
     for (const f of charters(loop)) {
