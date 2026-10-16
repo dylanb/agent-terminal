@@ -161,7 +161,7 @@ export interface LoopDefV2 {
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
-  /** §27.3 — the standing instructions both the work turn and the review-and-fix turn carry. */
+  /** §27.3 */
   brief?: string;
 }
 
