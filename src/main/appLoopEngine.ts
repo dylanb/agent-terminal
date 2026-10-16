@@ -30,7 +30,7 @@ import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
-import { failedReviewers, roundReportProblems, roundReportWellFormed } from '../shared/roundReport';
+import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
@@ -165,6 +165,8 @@ export interface AppLoopEngineDeps {
   currentBranch(repoDir: string): GitBranchRead;
   /** §27.10 */
   pickupBranch(repoDir: string): PickupBranch;
+  /** §27.4 — why this reviewer cannot run as the installed sub-agent carrying its charter, or null when it can. */
+  reviewerAgentProblem(reviewer: RosterEntry): string | null;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
@@ -928,6 +930,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
   };
 
+  const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
+    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r)).filter((p): p is string => p !== null);
+    if (problems.length === 0) return null;
+    return `this round's reviewers cannot run: ${problems.join('; ')}. Reviewers run as the Claude Code sub-agents installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+  };
+
   runner = createTurnRunner({
     compose: (turnKey, retry) => {
       if (!active) return null;
@@ -1011,8 +1019,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (opts?.preamble && active) deps.audit(active.repoDir, boundaryAuditCmd(active), null);
     },
     hostedAgent: () => deps.hostedAgent(),
-    injectionRefusal: () => (active ? offPickupBranch(active.repoDir) : null),
+    injectionRefusal: () => {
+      if (!active) return null;
+      return offPickupBranch(active.repoDir) ?? (active.phase === 'review' ? reviewerAgentsRefusal(active.reviewers) : null);
+    },
     completionShortfall,
+    unretryableShortfall: () => {
+      if (!active || active.phase !== 'review' || active.completion.kind === 'unresolved') return null;
+      const unloaded = unloadedReviewers(deps.readArtifact(active.reportPath) ?? '');
+      if (unloaded.length === 0) return null;
+      return `this agent session cannot spawn the reviewers ${unloaded.join(', ')}: it started before their sub-agents were installed. Restart your agent session so it loads them, then Retry`;
+    },
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {

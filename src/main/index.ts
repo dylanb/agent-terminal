@@ -120,6 +120,8 @@ import {
 import { provideAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
+import { installedReviewerProblem } from './reviewerAgents';
+import { userConfigAgentsDir } from './userConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
@@ -402,6 +404,7 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
+    reviewerAgentProblem: (reviewer) => installedReviewerProblem(userConfigAgentsDir(), reviewer),
     pickupBranch: (repoDir) =>
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),

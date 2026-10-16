@@ -981,6 +981,7 @@ export const INSTALL_DESTINATION_IDS = [
   'flowCatalog',
   'appLoops',
   'commands',
+  'agents',
 ] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];

@@ -30,6 +30,7 @@ const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flowCatalog: 'Flow catalog',
   appLoops: 'App loop definitions',
   commands: 'Claude Code commands',
+  agents: 'Claude Code reviewer agents',
 };
 
 // The created/overwritten/skipped sets are the contract's own vocabulary — derive from it so the two

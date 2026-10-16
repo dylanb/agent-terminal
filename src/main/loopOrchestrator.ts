@@ -53,6 +53,8 @@ export interface TurnRunnerDeps {
   /** Null when the turn's completion condition holds (§27.12); otherwise the operator-facing clause it falls
    *  short on, phrased to follow "done-signal received but …". */
   completionShortfall(): string | null;
+  /** Why this turn's output can never complete however often it is retried, or null — an error at once. */
+  unretryableShortfall?(): string | null;
   /** Arm (or re-arm) the stall watchdog; the host calls `onStall()` when it elapses with no intervening
    *  `noteActivity()`. Not a completion deadline — a working turn keeps it reset via visible activity. */
   armTimer(): void;
@@ -207,6 +209,13 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     // the runner (§28 Option C). A false gate carries ITS OWN reason; under a passing gate the completion
     // shortfall's own text is reported — so the two failure causes never mislabel each other.
     const shortfall = deps.completionShortfall();
+    const unretryable = deps.unretryableShortfall?.() ?? null;
+    if (unretryable !== null) {
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError(unretryable);
+      return;
+    }
     if (shortfall === null && g.ok) succeed();
     else fail(g.ok ? `done-signal received but ${shortfall}` : g.reason);
   };

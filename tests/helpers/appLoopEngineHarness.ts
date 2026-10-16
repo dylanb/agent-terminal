@@ -240,6 +240,7 @@ export class AppLoopEngineHarness {
       },
       currentBranch: () => ({ ok: true, branch: currentBranchOverride }),
       pickupBranch: () => ({ kind: 'none' }),
+      reviewerAgentProblem: () => null,
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
       currentSlice: () => this.currentSliceResult,

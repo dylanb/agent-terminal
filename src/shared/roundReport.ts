@@ -29,6 +29,7 @@ export interface ReportGrammar {
   whatChangedLabel: string;
   emptyMarker: string;
   failedMarker: string;
+  notLoadedMarker: string;
 }
 
 export const REPORT_GRAMMAR: ReportGrammar = {
@@ -40,6 +41,7 @@ export const REPORT_GRAMMAR: ReportGrammar = {
   whatChangedLabel: 'what-changed',
   emptyMarker: '_no findings_',
   failedMarker: '_failed to run_',
+  notLoadedMarker: '_not loaded in this agent session_',
 };
 
 /** The def-declared sections and the round's roster, as primitive string vocabulary — never the parsed-def
@@ -160,6 +162,16 @@ export function roundReportWellFormed(report: string, spec: RoundReportSpec): bo
  *  issue, never a failed lens). The marker is only recognized inside a persona record — prose outside one is
  *  never mistaken for it — so the engine's clean-guard reads the same grammar the validator single-sources. */
 export function failedReviewers(report: string): string[] {
+  return reviewersMarked(report, REPORT_GRAMMAR.failedMarker);
+}
+
+/** §27.4 — the personas whose sub-agent type this agent session could not spawn, recorded with the not-loaded
+ *  marker inside their own record. */
+export function unloadedReviewers(report: string): string[] {
+  return reviewersMarked(report, REPORT_GRAMMAR.notLoadedMarker);
+}
+
+function reviewersMarked(report: string, marker: string): string[] {
   const g = REPORT_GRAMMAR;
   const failed: string[] = [];
   let currentPersona: string | null = null;
@@ -173,7 +185,7 @@ export function failedReviewers(report: string): string[] {
       currentPersona = null;
       continue;
     }
-    if (currentPersona !== null && line.trim() === g.failedMarker && !failed.includes(currentPersona)) {
+    if (currentPersona !== null && line.trim() === marker && !failed.includes(currentPersona)) {
       failed.push(currentPersona);
     }
   }

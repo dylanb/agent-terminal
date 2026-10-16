@@ -4,6 +4,7 @@ import {
   REPORT_GRAMMAR,
   exampleRoundReport,
   failedReviewers,
+  unloadedReviewers,
   reportHasFailedReviewer,
   reportNeedsAHuman,
   roundReportProblems,
@@ -316,5 +317,31 @@ describe('reportNeedsAHuman — whether a round report records a `needs a human`
   it('is null when an issue\'s disposition is outside the closed set, so the caller fails toward (a)', () => {
     const report = roundReportWithDisposition(['summary'], SPEC.roster, 'fixed').replace(`${REPORT_GRAMMAR.dispositionLabel}: fixed`, `${REPORT_GRAMMAR.dispositionLabel}: maybe later`);
     expect(reportNeedsAHuman(report)).toBeNull();
+  });
+});
+
+describe('not-loaded reviewer marker + classifier (§27.4 — a reviewer the agent session cannot spawn)', () => {
+  const g = REPORT_GRAMMAR;
+  const SPEC2: RoundReportSpec = { sections: ['summary'], roster: ['review-principal', 'review-security'] };
+  const withMarkers = (principal: string, security: string): string =>
+    `## summary\n\n### review-principal\n\n${principal}\n\n### review-security\n\n${security}\n`;
+
+  it('is a marker of its own, distinct from the empty and failed markers', () => {
+    expect(g.notLoadedMarker.length).toBeGreaterThan(0);
+    expect(new Set([g.notLoadedMarker, g.emptyMarker, g.failedMarker]).size).toBe(3);
+  });
+
+  it('names each reviewer whose record carries it, and keeps the report well-formed', () => {
+    const report = withMarkers(g.notLoadedMarker, g.emptyMarker);
+    expect(unloadedReviewers(report)).toEqual(['review-principal']);
+    expect(roundReportWellFormed(report, SPEC2)).toBe(true);
+  });
+
+  it('names no reviewer when every record ran or failed', () => {
+    expect(unloadedReviewers(withMarkers(g.emptyMarker, g.failedMarker))).toEqual([]);
+  });
+
+  it('is recognised only inside a reviewer record', () => {
+    expect(unloadedReviewers(`## summary\n\n${g.notLoadedMarker}\n\n### review-principal\n\n${g.emptyMarker}\n`)).toEqual([]);
   });
 });
