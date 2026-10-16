@@ -52,7 +52,7 @@ flowchart TD
     DFC["flowCatalog — ~/.agent-terminal/flows/ &#40;§18.7.1&#41;"]
     DV["appLoops — user-config loops-v2 dir read by V2 resolver &#40;§27.15&#41;"]
     DC["commands — user-config commands dir &#40;Claude Code&#41;"]
-    DA["agents — user-config agents dir &#40;Claude Code, §27.4&#41;"]
+    DA["agents — user-config agents dir &#40;Claude Code, §27.4&#41;"]:::changed
     DXL["codexLoops — Codex home loops-v2 dir"]:::changed
     DXA["codexAgents — Codex home agents dir"]:::changed
     DXS["codexSkills — Codex home skills dir"]:::changed
