@@ -191,8 +191,8 @@ export interface InstallDestination {
    *  blameless for whichever destination actually failed. */
   rootFix: string;
   plan: (bundleDir: string) => Plan;
-  /** The home of the tool this destination installs for, when it installs only where that tool is: absent,
-   *  the destination is skipped rather than created (§18.1 v2.199). */
+  /** Set only on a destination that installs where its tool is: when this directory does not exist, the
+   *  destination is skipped rather than created (§18.1 v2.199). Unset, the destination always installs. */
   toolHome?: string;
 }
 
