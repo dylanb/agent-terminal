@@ -727,6 +727,16 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
     expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
   });
 
+  it('refuses a Codex home it cannot check, rather than reporting it absent', () => {
+    const blocker = path.join(home, 'a-file');
+    writeFileSync(blocker, 'not a directory');
+    const under = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(blocker, '.codex') });
+    const res = applyInstallExamples(under, []);
+    expect(res.ok).toBe(false);
+    expect(res.notInstalled).toEqual([]);
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
+  });
+
   it('refuses a relative CODEX_HOME, naming CODEX_HOME and not CLAUDE_CONFIG_DIR', () => {
     const relative = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: null });
     const res = applyInstallExamples(relative, []);

@@ -1,4 +1,4 @@
-// §27.4 — each reviewer runs as a Claude Code sub-agent whose own instructions are its charter.
+// §27.4, §18.1 v2.199.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
