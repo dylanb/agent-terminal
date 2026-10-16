@@ -293,9 +293,13 @@ describe('planning and phase work recipes carry every reviewer standard they are
     return para === undefined ? null : flat(para.slice(STANDARDS_LEAD.length)).trim();
   };
 
-  for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
-    it(`${loop}: the brief, which the work and review-and-fix turns both carry, restates each reviewer's standards once`, () => {
-      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow: FEATURE_DEV_ID });
+  const loops = [
+    ...['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((loop) => ({ flow: FEATURE_DEV_ID, loop })),
+    { flow: 'plan-only', loop: 'groom-loop' },
+  ];
+  for (const { flow, loop } of loops) {
+    it(`${flow}/${loop}: the brief, which the work and review-and-fix turns both carry, restates each reviewer's standards once`, () => {
+      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow });
       if (!r.ok) throw new Error(r.reason);
       expect(r.def.brief, `${loop} declares no brief`).toBeDefined();
       const brief = flat(readFileSync(r.def.brief!, 'utf8'));
