@@ -295,7 +295,7 @@ describe('planning and phase work recipes carry every reviewer standard they are
     return para === undefined ? null : flat(para.slice(STANDARDS_LEAD.length)).trim();
   };
 
-  for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
+  for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
     it(`${loop}: the work recipe restates each reviewer's standards`, () => {
       const r = resolveLoopDefV2(loop, { tiers, repoDir, flow: FEATURE_DEV_ID });
       if (!r.ok) throw new Error(r.reason);

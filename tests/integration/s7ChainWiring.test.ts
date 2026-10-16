@@ -35,6 +35,8 @@ interface LoopRow {
   consolidateSource: string;
   input: { id: string; path: string };
   output: { id: string; path: string } | null;
+  // Flow documents a loop writes beside its product that no completion gate reads (§27.4).
+  records?: { id: string; path: string }[];
   personas: PersonaRow[];
   polish: 'fix' | 'defer';
 }
@@ -76,11 +78,14 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'infra-loop', kind: 'impl', completion: null, gate: ['commit'], pickup: false,
-    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: null,
+    consolidateSource: 'infra-loop', input: PLAN_INPUT, output: null,
+    records: [{ id: 'infra-capabilities', path: 'infra-capabilities.md' }],
     polish: 'defer',
+    // Authored here, not copied: infra's lenses also grade the deterministic capabilities the ticket could add
+    // to the repository (§28.6), which no other loop's charters do.
     personas: [
-      ...['tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(impl),
-      fromPlanPolish('review-plan-determinism', 'determinism'),
+      ...['principal', 'tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map(authoredImpl),
+      authored('review-plan-determinism', 'determinism'),
     ],
   },
   {
@@ -230,6 +235,15 @@ describe.each(WIRED)('s7 wiring — %s matches its manifest row', (name) => {
     const binding = mustResolve(name).outputs.find((o) => o.id === out.id);
     expect(binding, `${name} output ${out.id}`).toBeDefined();
     expect(binding?.rel.split('/').pop()).toBe(out.path);
+  });
+
+  it('binds every record output the manifest declares (id + path)', () => {
+    const outputs = mustResolve(name).outputs;
+    for (const rec of row.records ?? []) {
+      const binding = outputs.find((o) => o.id === rec.id);
+      expect(binding, `${name} record ${rec.id}`).toBeDefined();
+      expect(binding?.rel.split('/').pop()).toBe(rec.path);
+    }
   });
 
   // §28.5.5 / CLAUDE.md shared-semantics — a reused charter/consolidate recipe is a byte-copy of its

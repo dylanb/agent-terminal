@@ -4,6 +4,9 @@ work:
   recipe: prompts/work.md
   artifact: commits
 reviewers:
+  - persona: impl-review-principal
+    charter: charter/principal.md
+    tools: [Read, Grep, Glob]
   - persona: impl-review-tests
     charter: charter/tests.md
     tools: [Read, Grep, Glob, Bash]
@@ -47,3 +50,6 @@ gate:
 inputs:
   - id: plan
     path: plan.md
+outputs:
+  - id: infra-capabilities
+    path: infra-capabilities.md
