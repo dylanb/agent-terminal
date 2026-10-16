@@ -192,8 +192,9 @@ export interface InstallDestination {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   /** The home of the tool this destination installs for, when it installs only where that tool is: absent,
-   *  the destination is skipped rather than created (§18.1 v2.199). */
-  onlyIfPresent?: string;
+   *  the destination is skipped rather than created (§18.1 v2.199). `null` when that home has no absolute
+   *  location, which refuses as `targetDir: null` does. */
+  onlyIfPresent?: string | null;
 }
 
 export interface InstallRoots {
@@ -291,7 +292,6 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
-    const onlyIfPresent = d.onlyIfPresent?.(roots) ?? undefined;
     return {
       id,
       bundleDir: d.bundle(loc),
@@ -299,7 +299,7 @@ export function exampleInstallDirs(loc: BundleLocation, roots: InstallRoots): In
       rootFix: d.rootFix,
       plan: d.plan,
       overwrite: d.overwrite,
-      ...(onlyIfPresent !== undefined ? { onlyIfPresent } : {}),
+      ...(d.onlyIfPresent !== undefined ? { onlyIfPresent: d.onlyIfPresent(roots) } : {}),
     };
   });
 }
@@ -373,7 +373,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
   const notInstalled: InstallDestinationNotInstalled[] = [];
   for (const dest of destinations) {
-    if (dest.targetDir === null) {
+    if (dest.targetDir === null || dest.onlyIfPresent === null) {
       // A relative install target has no single meaning and would seed into the process cwd, so the whole
       // install refuses rather than guessing (CWE-829), naming the fix for this destination's own root.
       return {

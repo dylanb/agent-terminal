@@ -697,6 +697,30 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
     expect(existsSync(targetOf('appLoops', planDefRel))).toBe(true);
   });
 
+  it('follows a Codex home the user symlinked, installing through it', () => {
+    const dotfiles = mkdtempSync(path.join(tmpdir(), 'codex-dotfiles-'));
+    try {
+      const real = path.join(dotfiles, 'codex');
+      mkdirSync(real);
+      symlinkSync(real, codexHomeOf());
+      const res = okOf(applyInstallExamples(dirs, []));
+      expect(res.notInstalled).toEqual([]);
+      expect(readFileSync(path.join(real, 'loops-v2', planDefRel))).toEqual(readFileSync(path.join(BUNDLE_APP_LOOPS, planDefRel)));
+    } finally {
+      rmSync(dotfiles, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses, writing nothing, a destination whose tool home has no absolute location even when its target does', () => {
+    const res = applyInstallExamples(
+      dirs.map((d) => (d.id === 'codexLoops' ? { ...d, onlyIfPresent: null } : d)),
+      [],
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('CODEX_HOME');
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(false);
+  });
+
   it('names no skipped destination when the install as a whole was refused before writing', () => {
     const broken = withBundle('appLoops', path.join(home, 'no-such-bundle'));
     const res = applyInstallExamples(broken, []);

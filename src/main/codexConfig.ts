@@ -1,5 +1,4 @@
-// Codex's home (§18.1 v2.199). One definition of the root, consumed by every Codex install destination, so a
-// CODEX_HOME redirect can never move one of them without the others.
+// §18.1 v2.199.
 
 import os from 'node:os';
 import path from 'node:path';

@@ -36,8 +36,6 @@ const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   codexSkills: 'Codex skills',
 };
 
-// The created/overwritten/skipped sets are the contract's own vocabulary — derive from it so the two
-// cannot drift (CLAUDE.md shared-semantics rule).
 type Report = InstallExamplesReport;
 
 function total(groups: InstallDestinationFiles[]): number {
@@ -166,7 +164,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     try {
       const res = await deps.apply(previewId, replace);
       renderReport(res);
-      // The failure arm carries the same created/overwritten/skipped sets, and this is the branch where
+      // The failure arm carries the same report, and this is the branch where
       // the user most needs them: a partial install is not rolled back (§18.1), so the alert has to say
       // what landed, not just what broke (WCAG 4.1.3).
       if (res.ok) showStatus('cli-status ok', summarize(res));

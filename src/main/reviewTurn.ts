@@ -176,7 +176,7 @@ export interface ReviewerHandoffReq {
   carried: ChainedInput[];
 }
 
-/** §27.4. The bundled Codex skill (`example/codex-skills`) carries these lines as its hand-off. */
+/** §27.4 */
 export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   const carried = req.carried;
   const lines: string[] = [];

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
+import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { codexReviewerAgentName } from '../../src/main/reviewerAgents';
 import { reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
 
@@ -74,5 +75,30 @@ describe('the bundled Codex skill', () => {
     const skilled = skillHandoffLines();
     for (const line of engine) expect(skilled.has(line), line).toBe(true);
     for (const line of skilled) expect(engine.has(line), line).toBe(true);
+  });
+
+  it('names the Codex home directories the installer writes the loops and the reviewer agents to', () => {
+    const home = path.resolve('/codex-home');
+    for (const dir of [codexLoopsV2Dir(home), codexAgentsDir(home)]) {
+      expect(skill()).toContain(`\`<codex home>/${path.relative(home, dir)}/`);
+    }
+  });
+
+  it('points at each loop file through the definition field every bundled loop names it by', () => {
+    const fields = [...skill().matchAll(/`((?:work|consolidator)\.recipe|brief|reviewers\[\]\.charter)`/g)].map((m) => m[1]);
+    expect(new Set(fields)).toEqual(new Set(['work.recipe', 'consolidator.recipe', 'brief', 'reviewers[].charter']));
+    for (const flow of readdirSync(BUNDLE_LOOPS)) {
+      for (const loop of readdirSync(path.join(BUNDLE_LOOPS, flow))) {
+        const dir = path.join(BUNDLE_LOOPS, flow, loop);
+        const def = parseYaml(readFileSync(path.join(dir, `${loop}.yaml`), 'utf8')) as {
+          work: { recipe: string };
+          consolidator: { recipe: string };
+          brief?: string;
+          reviewers: { charter: string }[];
+        };
+        const named = [def.work.recipe, def.consolidator.recipe, ...(def.brief !== undefined ? [def.brief] : []), ...def.reviewers.map((r) => r.charter)];
+        for (const rel of named) expect(existsSync(path.join(dir, rel)), `${loop}: ${rel}`).toBe(true);
+      }
+    }
   });
 });

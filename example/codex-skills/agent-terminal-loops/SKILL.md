@@ -5,18 +5,19 @@ description: Run an agent-terminal loop (groom, plan, red, green, refactor, inte
 
 # agent-terminal loops
 
-agent-terminal's **Install examples** action put everything this skill uses in your Codex home
-(`$CODEX_HOME`, else `~/.codex`). Use these installed files. Do not go looking for loop
-definitions or charters anywhere else, such as the Claude config directory, and do not rebuild them
-from memory.
+agent-terminal's **Install examples** action put everything this skill uses in your Codex home, written
+`<codex home>` below: `$CODEX_HOME` when that is set, else `~/.codex`. Use these installed files. Do not go
+looking for loop definitions or charters anywhere else, such as the Claude config directory, and do not
+rebuild them from memory.
 
 ## Where things are
 
-- **Loop definitions:** `$CODEX_HOME/loops-v2/<flow>/<loop>/<loop>.yaml`, for example
-  `loops-v2/feature-dev-v2/integration-slice-loop/integration-slice-loop.yaml`. Beside each definition are
-  `charter/*.md` (one per reviewer) and `prompts/` (`work.md`, `consolidate.md`, and `brief.md` when the
-  definition names a `brief`).
-- **Reviewer agents:** one custom agent per reviewer, in `$CODEX_HOME/agents/`. Its name is the loop
+- **Loop definitions:** `<codex home>/loops-v2/<flow>/<loop>/<loop>.yaml`, for example
+  `loops-v2/feature-dev-v2/integration-slice-loop/integration-slice-loop.yaml`. A definition names its own
+  files, as paths relative to its directory: its work recipe in `work.recipe`, its judging recipe in
+  `consolidator.recipe`, its standing instructions in `brief` when it has them, and each reviewer's charter
+  in `reviewers[].charter`.
+- **Reviewer agents:** one custom agent per reviewer, in `<codex home>/agents/`. Its name is the loop
   name and the persona name joined by `__`, with every `-` written as `_`. The `impl-review-reliability`
   reviewer of `integration-slice-loop`, for example, is `integration_slice_loop__impl_review_reliability`.
   Its instructions already are its charter.
@@ -29,8 +30,8 @@ starts. Do not stand in for a missing piece with something else.
 
 1. **Read the definition.** Open the loop's `<loop>.yaml`. Its `reviewers:` list is the round's roster,
    one entry per `persona`.
-2. **Work.** If the definition names a `brief`, follow it for the whole loop, including every fix in step 3.
-   Then do what `prompts/work.md` asks.
+2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
+   Then do what its work recipe asks.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives
@@ -91,7 +92,7 @@ starts. Do not stand in for a missing piece with something else.
    Do not hand it a charter, a diff, a prior review, or other reviewers' findings: it pulls what it needs
    with its tools. Take every finding into your own context, then fix it or dismiss it with a reason. A
    finding only the user can settle is "needs a human".
-4. **Judge the round.** Follow `prompts/consolidate.md`. It decides between clean, another round with a
+4. **Judge the round.** Follow the definition's judging recipe. It decides between clean, another round with a
    smaller roster, and stopping for a human. For another round, go back to step 3 with the roster it chose.
 
 ## Saying how you know

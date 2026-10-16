@@ -1060,10 +1060,10 @@ export interface InstallExamplesReport extends InstallExamplesWritten {
   notInstalled: InstallDestinationNotInstalled[];
 }
 
-/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same
- *  created / overwritten / skipped sets: the action does not roll back a write that already landed, so a
- *  failure names exactly what it wrote — and what it left alone — before failing. All three are empty
- *  when the pre-write container check refused, which is the all-or-nothing case. */
+/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same report:
+ *  the action does not roll back a write that already landed, so a failure names exactly what it wrote —
+ *  and what it left alone — before failing. The report is empty when the install was refused before any
+ *  write, which is the all-or-nothing case. */
 export type InstallExamplesResult =
   | ({ ok: true } & InstallExamplesReport)
   | ({ ok: false; error: string } & InstallExamplesReport);
