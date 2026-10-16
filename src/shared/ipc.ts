@@ -1055,7 +1055,6 @@ export interface InstallDestinationNotInstalled {
   root: string;
 }
 
-/** What an apply did, and the destinations it skipped because their tool is absent. */
 export interface InstallExamplesReport extends InstallExamplesWritten {
   notInstalled: InstallDestinationNotInstalled[];
 }

@@ -19,6 +19,7 @@ import {
   exampleInstallDirs,
   createInstallExamplesCoordinator,
   type InstallDestination,
+  type InstallRoots,
   type InstallExamplesInspection,
 } from '../../src/main/installExamples';
 import { load as parseYaml } from 'js-yaml';
@@ -85,8 +86,8 @@ const commandRel = 'groom-ticket.md';
 /** Codex's home under the temp HOME, absent unless a test creates it — so no fixture can ever reach the
  *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1 v2.199). */
 const codexHomeOf = (): string => path.join(home, '.codex');
-const seam = (): InstallDestination[] =>
-  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf() });
+const seam = (over: Partial<InstallRoots> = {}): InstallDestination[] =>
+  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf(), ...over });
 const destOf = (id: InstallDestinationId): InstallDestination => dirs.find((d) => d.id === id) as InstallDestination;
 /** The destination's target. `targetDir` is nullable because a relative CLAUDE_CONFIG_DIR is refused; these
  *  fixtures always supply an absolute one, so a null here is a broken fixture, not a case under test. */
@@ -138,7 +139,7 @@ const conflictsFor = (
 // reporting success, and be discovered from there on a later run (CWE-829).
 describe('a relative user-config root is refused, not anchored at the process cwd', () => {
   const relativeDirs = (): InstallDestination[] =>
-    exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: '~/.claude', codexHome: codexHomeOf() });
+    seam({ configDir: '~/.claude' });
 
   it('refuses the apply, names CLAUDE_CONFIG_DIR, and writes nothing anywhere', () => {
     const before = walk(home);
@@ -164,7 +165,7 @@ describe('a relative user-config root is refused, not anchored at the process cw
   // The gate is at the RESOLVER: a relative flow home yields a null targetDir. Asserting that FIRST means a
   // regression fails here — before any write — so the probe can never pollute the repo the bug targets.
   it('refuses the flow destination when its home root is relative (empty $HOME)', () => {
-    const relFlowDirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: '', configDir: configRoot, codexHome: codexHomeOf() });
+    const relFlowDirs = seam({ flowGlobalDir: '' });
     const flow = relFlowDirs.find((d) => d.id === 'flow');
     expect(flow?.targetDir).toBeNull(); // the gate — a removed gate fails here, no filesystem touched
 
@@ -734,7 +735,7 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
   it('refuses a Codex home it cannot check, rather than reporting it absent', () => {
     const blocker = path.join(home, 'a-file');
     writeFileSync(blocker, 'not a directory');
-    const under = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(blocker, '.codex') });
+    const under = seam({ codexHome: path.join(blocker, '.codex') });
     const res = applyInstallExamples(under, []);
     expect(res.ok).toBe(false);
     expect(res.notInstalled).toEqual([]);
@@ -742,7 +743,7 @@ describe('Codex destinations are installed only where Codex is (§18.1 v2.199)',
   });
 
   it('refuses a relative CODEX_HOME, naming CODEX_HOME and not CLAUDE_CONFIG_DIR', () => {
-    const relative = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: null });
+    const relative = seam({ codexHome: null });
     const res = applyInstallExamples(relative, []);
     expect(res.ok).toBe(false);
     if (res.ok) return;
@@ -1224,7 +1225,7 @@ describe('applyInstallExamples — an unresolvable destination jail is a refusal
     // NOT the same refusal as a link that escapes, and must not be reported as one.
     const cfgLink = path.join(configRoot, 'dangling');
     symlinkSync(path.join(configRoot, 'no-such-target'), cfgLink);
-    const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: cfgLink, codexHome: codexHomeOf() });
+    const linked = seam({ configDir: cfgLink });
     const res = applyInstallExamples(linked, []);
     expect(res.ok).toBe(false);
     // A DANGLING link is unresolvable, not an escape: nothing is being redirected out of the jail, the

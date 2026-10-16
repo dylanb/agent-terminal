@@ -350,8 +350,7 @@ type Resolution =
   | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
   | { ok: false; error: string };
 
-/** Whether a tool's home is there to install into. A home that exists but is not a directory is no install
- *  the user meant to skip, so it refuses rather than reading as absent. */
+/** §18.1 v2.199. */
 function toolPresent(root: string): boolean {
   let isDir: boolean;
   try {
