@@ -3424,6 +3424,20 @@ describe('§27.3 — the loop brief reaches both the work turn and the review-an
     expect(reviewPrompt).toContain(BRIEF_TEXT);
   });
 
+  it('composes no review-and-fix prompt when the brief cannot be read by the time the round starts', () => {
+    h.defResult = resolved({ ...fileDef(), brief: BRIEF_PATH });
+    let briefReadable = true;
+    const engine = makeEngine(undefined, undefined, undefined, { readRecipe: (p) => (p === BRIEF_PATH && !briefReadable ? null : readRecipe(p)) });
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    briefReadable = false;
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((t) => t.includes('review-and-fix'))).toBe(false);
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error', errorReason: expect.stringContaining('could not compose prompt') });
+  });
+
   it('composes no prompt when the declared brief cannot be read', () => {
     h.defResult = resolved({ ...fileDef(), brief: BRIEF_PATH });
     const engine = makeEngine(undefined, undefined, undefined, { readRecipe: (p) => (p === BRIEF_PATH ? null : readRecipe(p)) });

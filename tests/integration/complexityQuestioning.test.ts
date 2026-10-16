@@ -64,6 +64,11 @@ for (const flow of GROOM_FLOWS) {
       expect(body.indexOf('interview the operator')).toBeLessThan(body.indexOf('Then write the groomed ticket'));
     });
 
+    it('the work recipe lists what to draft for the interview right under the step that asks for it', () => {
+      expect(recipe()).toMatch(/Then draft, for yourself:\n\n- \*\*The MVP:\*\*/);
+      expect(groomFile(flow, 'prompts/brief.md')).not.toContain('**The MVP:**');
+    });
+
     it('the work recipe writes the MVP and lists gaps, ambiguities and contradictions for the operator', () => {
       const body = recipe();
       for (const marker of [MVP_HEADING, GAPS_HEADING, AMBIGUITIES_HEADING, OPERATOR_DECISION, PROPOSE_ONLY]) {
