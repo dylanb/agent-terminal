@@ -1,6 +1,8 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { planReviewerAgents } from '../../src/main/reviewerAgents';
+import { userConfigAgentsDir } from '../../src/main/userConfig';
 
 /** An operator config whose shared loops-v2/<loop>/ folder holds the bundled defs, so a fixture flow of any
  *  name resolves the real shipped loops (§27.8 fallback). The bundle groups defs by flow; a loop shipped by
@@ -16,5 +18,9 @@ export function seedSharedExampleConfig(): string {
     }
   }
   cpSync(join(process.cwd(), 'example', 'commands'), join(root, 'commands'), { recursive: true });
+  const agents = userConfigAgentsDir(root);
+  if (agents === null) throw new Error(`no agents directory under ${root}`);
+  mkdirSync(agents, { recursive: true });
+  for (const agent of planReviewerAgents(bundle)) writeFileSync(join(agents, agent.rel), agent.bytes());
   return root;
 }

@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { reviewRoster } from '../../src/main/reviewTurn';
+import { installedReviewerProblem } from '../../src/main/reviewerAgents';
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
 // are its charter, so a reviewer is never asked to go and read it. Expected values come from the bundle itself.
@@ -91,5 +94,51 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
     } finally {
       rmSync(bundle, { recursive: true, force: true });
     }
+  });
+});
+
+describe('a reviewer runs only as the installed sub-agent carrying the charter this run resolved', () => {
+  const agentsDir = (): string => path.join(configRoot, 'agents');
+  const greenRoster = () => {
+    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v2' });
+    if (!r.ok) throw new Error(r.reason);
+    return reviewRoster(r.def);
+  };
+  const install = (): void => {
+    const res = applyInstallExamples(dirs, []);
+    if (!res.ok) throw new Error(res.error);
+  };
+
+  it('finds no problem with any reviewer of a bundled loop once the examples are installed', () => {
+    install();
+    for (const reviewer of greenRoster()) expect(installedReviewerProblem(agentsDir(), reviewer)).toBeNull();
+  });
+
+  it('names the missing sub-agent when it was never installed', () => {
+    const [reviewer] = greenRoster();
+    expect(installedReviewerProblem(agentsDir(), reviewer)).toContain(reviewer.agent);
+  });
+
+  it('names the charter when the run resolved a different one than the sub-agent carries', () => {
+    install();
+    const [reviewer] = greenRoster();
+    const edited = path.join(home, 'edited-principal.md');
+    writeFileSync(edited, `${readFileSync(reviewer.charter, 'utf8')}\nAn operator edit.\n`);
+    const problem = installedReviewerProblem(agentsDir(), { ...reviewer, charter: edited });
+    expect(problem).toContain(reviewer.agent);
+    expect(problem).toContain(edited);
+  });
+
+  it('names the tools when the run declares different tools than the sub-agent carries', () => {
+    install();
+    const [reviewer] = greenRoster();
+    const problem = installedReviewerProblem(agentsDir(), { ...reviewer, tools: [...reviewer.tools, 'Edit'] });
+    expect(problem).toContain(reviewer.agent);
+    expect(problem).toMatch(/tools/i);
+  });
+
+  it('reports a problem, never a pass, when there is no agents directory to look in', () => {
+    const [reviewer] = greenRoster();
+    expect(installedReviewerProblem(null, reviewer)).toMatch(/CLAUDE_CONFIG_DIR/);
   });
 });

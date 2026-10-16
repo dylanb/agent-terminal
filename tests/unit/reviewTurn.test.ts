@@ -96,6 +96,10 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     }
   });
 
+  it('tells the fixer to record a reviewer whose sub-agent type cannot be found with the not-loaded marker', () => {
+    expect(composeReviewAndFixPrompt(req())).toContain(REPORT_GRAMMAR.notLoadedMarker);
+  });
+
   it('requires that exact sub-agent type, never a substitute, for each reviewer', () => {
     const p = composeReviewAndFixPrompt(req());
     expect(p).toMatch(/exactly that subagent_type/i);

@@ -3076,6 +3076,73 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 // §27.12 — a report that is on disk but malformed is repaired, not re-reviewed: the retry names the missing
 // record and hands the agent the loop's own checker, which the agent runs (the real bundled script, under this
 // app binary) and sees pass before signalling; the round then completes and the loop moves on.
+test('§27.4 — a review round whose reviewer is not installed as a sub-agent stops on the loop-error dialog naming it, before any reviewer runs', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-noagent-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-home-'));
+  const cfg = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noagent-cfg-'));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  const missingAgent = `plan-loop--${PLAN_V2_ROSTER[1]}`;
+  rmSync(join(cfg, 'agents', `${missingAgent}.md`), { force: true });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noagent-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText(missingAgent);
+  await expect(errorDialog).toContainText(/restart your agent session/i);
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
+
+  await errorDialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+});
+
+test('§27.4 — a reviewer this agent session cannot spawn stops the round at once on the loop-error dialog asking for a restart, never re-running the round', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-notloaded-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-notloaded-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-notloaded-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'not-loaded', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText(PLAN_V2_ROSTER[0]);
+  await expect(errorDialog).toContainText(/restart your agent session/i);
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log')).split('Spawn each reviewer').length - 1).toBe(1);
+
+  await errorDialog.locator('.dismiss').click();
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a §27 malformed round report is retried as a repair naming the problem; the bundled checker passes the fix and the round completes (§27.12)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-repair-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-repair-home-'));
@@ -3447,6 +3514,7 @@ function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) =>
   const after = transform(before);
   expect(after).not.toBe(before);
   writeFileSync(defFile, after);
+  cpSync(join(exampleConfigDir, 'agents'), join(root, 'agents'), { recursive: true });
   return root;
 }
 
@@ -3920,6 +3988,7 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   const retiredDef = join(retiredDir, 'plan-loop.yaml');
   const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
   writeFileSync(retiredDef, retiredContent);
+  cpSync(join(exampleConfigDir, 'agents'), join(config, 'agents'), { recursive: true });
   const migratedDef = join(config, 'loops-v2', 'plan-only', 'plan-loop', 'plan-loop.yaml');
   expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');

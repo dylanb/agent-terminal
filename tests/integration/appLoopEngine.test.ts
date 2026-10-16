@@ -200,6 +200,51 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
   });
 });
 
+describe('§27.4 — a review round runs only when every reviewer is installed carrying this run\'s charter', () => {
+  const MISSING = 'review-plan-security';
+  const problemFor = (missing: () => boolean) => (reviewer: { persona: string; agent: string }): string | null =>
+    missing() && reviewer.persona === MISSING ? `no sub-agent ${reviewer.agent} is installed` : null;
+
+  it('refuses the review round before injecting it, naming the reviewer, while the work turn ran as usual', () => {
+    const engine = makeEngine(undefined, undefined, undefined, { reviewerAgentProblem: problemFor(() => true) });
+    enterAndInjectWork(engine);
+    expect(h.injected.some((p) => p.includes('Produce the plan.'))).toBe(true);
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes('review-and-fix turn'))).toBe(false);
+    const live = engine.liveErrorFor(h.repo);
+    expect(live?.kind).toBe('turn-error');
+    expect(live?.reason).toContain(`no sub-agent plan-loop--${MISSING} is installed`);
+    expect(live?.reason).toMatch(/restart your agent session/i);
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error' });
+  });
+
+  it('Retry stays refused while a reviewer is still missing, and runs the round once it is installed', () => {
+    let missing = true;
+    const engine = makeEngine(undefined, undefined, undefined, { reviewerAgentProblem: problemFor(() => missing) });
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain(MISSING);
+
+    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes('review-and-fix turn'))).toBe(false);
+
+    missing = false;
+    engine.routeOut(h.repo, STEP, REVIEW_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(h.injected.some((p) => p.includes('review-and-fix turn'))).toBe(true);
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+  });
+});
+
 describe('§27.10 — every turn after pickup runs on the branch pickup created', () => {
   const PICKUP_BRANCH = 'plan-loop/issue-180';
   const OTHER_BRANCH = 'fix/review-subject-artifact';
@@ -1267,6 +1312,19 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(h.emitError).toHaveBeenCalled();
     // AC8 — the review-round error is recorded in the §25 audit with its reason (exit 1).
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining(state!.errorReason!), 1);
+  });
+
+  it('a report recording a reviewer as not loaded in this agent session stops at once, naming it, without a retry (§27.4)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const afterReviewPrompt = h.injected.length;
+    writeReport(`## summary\n\n### ${ROSTER[0]}\n\n${REPORT_GRAMMAR.emptyMarker}\n\n### ${ROSTER[1]}\n\n${REPORT_GRAMMAR.notLoadedMarker}\n`);
+    engine.onDoneSignal();
+    expect(h.injected.length).toBe(afterReviewPrompt);
+    const state = readAppLoopState(h.repo);
+    expect(state).toMatchObject({ turnKey: REVIEW_KEY, status: 'error', round: 1 });
+    expect(state?.errorReason).toContain(ROSTER[1]);
+    expect(state?.errorReason).toMatch(/restart your agent session/i);
   });
 
   // §27.12 — the agent can run the same checker the engine gates on before it signals done.

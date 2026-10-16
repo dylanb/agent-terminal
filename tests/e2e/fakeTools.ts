@@ -185,17 +185,18 @@ export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
 // A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
 // consolidator clean-guard keys on.
-const failedReport = (sections: string[], roster: string[]): string => {
+const firstMarkedReport = (sections: string[], roster: string[], marker: string): string => {
   const g = REPORT_GRAMMAR;
   const parts = sections.flatMap((s) => [`${g.sectionPrefix}${s}`, '']);
   roster.forEach((persona, idx) => {
-    parts.push(`${g.personaPrefix}${persona}`, '', idx === 0 ? g.failedMarker : g.emptyMarker, '');
+    parts.push(`${g.personaPrefix}${persona}`, '', idx === 0 ? marker : g.emptyMarker, '');
   });
   return parts.join('\n') + '\n';
 };
+const failedReport = (sections: string[], roster: string[]): string => firstMarkedReport(sections, roster, REPORT_GRAMMAR.failedMarker);
 
 export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor' | 'ask';
-export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair';
+export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair' | 'not-loaded';
 
 // One step's script for the fake agent (§27.15 test seam).
 //   work:  complete — marker-bearing artifact + done-file → the work turn completes and chains review.
@@ -340,7 +341,8 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const omit = b64(exampleRoundReport({ sections, roster: [roster[0]] }));
   const failed = b64(failedReport(sections, roster));
   const needsHuman = b64(roundReportWithDisposition(sections, roster, 'needs a human'));
-  const r1 = reviewKind === 'failed' ? failed : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
+  const notLoaded = b64(firstMarkedReport(sections, roster, REPORT_GRAMMAR.notLoadedMarker));
+  const r1 = reviewKind === 'failed' ? failed : reviewKind === 'not-loaded' ? notLoaded : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
   const r2 = (opts.review2 ?? 'full') === 'failed' ? failed : full;
   const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${k === 'needs-human' ? needsHuman : full}' ;;`).join(' ');
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
