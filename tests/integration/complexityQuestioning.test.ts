@@ -47,6 +47,43 @@ for (const flow of GROOM_FLOWS) {
   });
 }
 
+// §28.8.1 — groom settles the MVP with the operator before writing the ticket. Each list the interview fills is
+// written by the recipe, graded by the reviewer and gated by the consolidator under one heading.
+const MVP_HEADING = '## MVP';
+const GAPS_HEADING = '## Gaps raised';
+const AMBIGUITIES_HEADING = '## Ambiguities and contradictions raised';
+
+for (const flow of GROOM_FLOWS) {
+  describe(`${flow} groom settles the MVP with the operator before writing the ticket`, () => {
+    const recipe = (): string => groomFile(flow, 'prompts/work.md');
+
+    it('the work recipe interviews the operator in business language, with no question limit, before writing', () => {
+      const body = recipe();
+      for (const marker of ['interview the operator', 'plain business language', 'full context', 'no question limit']) {
+        expect(body, marker).toContain(marker);
+      }
+      expect(body.indexOf('interview the operator')).toBeLessThan(body.indexOf('Then write the groomed ticket'));
+    });
+
+    it('the work recipe writes the MVP and lists gaps, ambiguities and contradictions for the operator', () => {
+      const body = recipe();
+      for (const marker of [MVP_HEADING, GAPS_HEADING, AMBIGUITIES_HEADING, OPERATOR_DECISION, PROPOSE_ONLY]) {
+        expect(body, marker).toContain(marker);
+      }
+    });
+
+    it('the intent reviewer grades the MVP and routes an unlisted gap, ambiguity or contradiction to the operator', () => {
+      const charter = groomFile(flow, 'charter/intent.md');
+      for (const marker of [MVP_HEADING, GAPS_HEADING, AMBIGUITIES_HEADING, 'needs a human']) expect(charter, marker).toContain(marker);
+    });
+
+    it('the consolidator stops for a human on any undecided gap, ambiguity or contradiction', () => {
+      const body = groomFile(flow, 'prompts/consolidate.md');
+      for (const marker of [GAPS_HEADING, AMBIGUITIES_HEADING]) expect(body, marker).toContain(marker);
+    });
+  });
+}
+
 describe('plan-bundle names the criteria driving complexity and suggests alternatives', () => {
   const recipe = (): string => read('plan-bundle-loop/prompts/work.md');
 
