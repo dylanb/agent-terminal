@@ -422,3 +422,32 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     expect(p).toContain('re-read .agent-terminal/loop/reports/1.md');
   });
 });
+
+describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.4)', () => {
+  const req = () => ({
+    roster: reviewRoster(def()),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+  });
+  const BRIEF = 'You are a principal engineer.\n\nNo acceptance criterion may be deferred.';
+
+  it('carries the brief verbatim as the standing instructions every fix must meet', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), loopBrief: BRIEF });
+    expect(p).toContain(BRIEF);
+    expect(p).toMatch(/every fix/i);
+  });
+
+  it('routes a fix that needs the operator to needs a human rather than re-running the work turn\'s steps', () => {
+    const p = composeReviewAndFixPrompt({ ...req(), loopBrief: BRIEF });
+    const block = p.slice(p.indexOf(BRIEF) - 600, p.indexOf(BRIEF));
+    expect(block).toContain(`\`${'needs a human'}\``);
+  });
+
+  it('carries no brief block when the loop declares none', () => {
+    const p = composeReviewAndFixPrompt(req());
+    expect(p).not.toMatch(/standing instructions/i);
+  });
+});

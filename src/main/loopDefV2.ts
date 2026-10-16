@@ -145,7 +145,7 @@ export interface ExecSideEffect {
   program: string;
 }
 
-/** A fully-parsed §27 def. Every path-valued field (`work.recipe`, each `reviewers[].charter`,
+/** A fully-parsed §27 def. Every path-valued field (`brief`, `work.recipe`, each `reviewers[].charter`,
  *  `consolidator`, each `inputs[]`/`outputs[]` path) is already confined to the boundary its role dictates;
  *  an escape is a resolution failure, so a parsed def carries no escaping path. */
 export interface LoopDefV2 {
@@ -161,6 +161,8 @@ export interface LoopDefV2 {
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
+  /** §27.3 — the standing instructions both the work turn and the review-and-fix turn carry. */
+  brief?: string;
 }
 
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
@@ -193,6 +195,7 @@ const ALLOWED_TOP_KEYS = new Set([
   'inputs',
   'outputs',
   'exec',
+  'brief',
 ]);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
@@ -370,6 +373,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   // accepted only when it agrees, so the parsed def has one source of truth for its id.
   if (rec.name !== undefined && rec.name !== name) fail(`declared name ${String(rec.name)} disagrees with the resolved name ${name}`);
 
+  const brief = rec.brief === undefined ? undefined : confineDefRelative(tierRoot, defDir, requireString(rec.brief, 'brief'), 'brief');
+
   const work = requireRecord(rec.work, 'work');
   const workRecipe = confineDefRelative(tierRoot, defDir, requireString(work.recipe, 'work recipe'), 'work recipe');
   const workArtifact = requireString(work.artifact, 'work artifact');
@@ -425,6 +430,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
     outputs,
     exec,
+    ...(brief !== undefined ? { brief } : {}),
   };
 }
 

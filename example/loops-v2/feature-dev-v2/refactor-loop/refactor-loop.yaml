@@ -1,5 +1,6 @@
 version: v2
 name: refactor-loop
+brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: commits

@@ -255,6 +255,8 @@ type ActiveAppTurn =
       turnKey: string;
       boundaryCmd: string;
       recipePath: string;
+      /** §27.3 */
+      briefPath?: string;
       completion: AppCompletion;
       /** §27.9/AC5 — the operator's redo instruction carried into this work turn, threaded into the work
        *  prompt as the clean-slate directive; absent on an ordinary (non-redo) work run. Persisted so a
@@ -297,6 +299,8 @@ type ActiveAppTurn =
       subjectRel?: string;
       /** §27.10/§27.4 */
       inputs?: ChainedInput[];
+      /** §27.3 */
+      briefPath?: string;
     }
   | {
       phase: 'consolidate';
@@ -421,6 +425,7 @@ function activeTurnFor(
     stepId,
     turnKey: `${WORK_TURN_PREFIX}${stepId}`,
     recipePath: def.work.recipe,
+    ...(def.brief !== undefined ? { briefPath: def.brief } : {}),
     boundaryCmd: entryBoundaryCommand(def),
     completion:
       def.work.completion === 'red' || def.work.completion === 'green'
@@ -936,6 +941,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return `this round's reviewers cannot run: ${problems.join('; ')}. Reviewers run as the Claude Code sub-agents installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
+  const readBrief = (a: { briefPath?: string }): string | undefined | null =>
+    a.briefPath === undefined ? undefined : deps.readRecipe(a.briefPath);
+
   runner = createTurnRunner({
     compose: (turnKey, retry) => {
       if (!active) return null;
@@ -965,6 +973,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §19.1 — the ticket handed to each reviewer is the engine-resolved issue, the SAME identity every other
         // turn binds to, never one a reviewer re-derives from the branch/PR/cwd.
         const reviewTicket = deps.workRefs(active.repoDir).ticket;
+        const loopBrief = readBrief(active);
+        if (loopBrief === null) return null;
         return composeReviewAndFixPrompt({
           roster: active.reviewers,
           sections: active.sections,
@@ -978,6 +988,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.subjectRel !== undefined ? { subjectRel: active.subjectRel } : {}),
           ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
           ...briefFor(active),
+          ...(loopBrief !== undefined ? { loopBrief } : {}),
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
@@ -988,7 +999,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         });
       }
       const body = deps.readRecipe(active.recipePath);
-      if (body === null) return null;
+      const workBrief = readBrief(active);
+      if (body === null || workBrief === null) return null;
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
       const ticket = deps.workRefs(active.repoDir).ticket;
@@ -1009,6 +1021,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...briefFor(active),
+        ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
       });
     },
     inject: (prompt, opts) => {
@@ -1146,6 +1159,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       ...(feedback !== undefined ? { feedback } : {}),
       ...(subject !== null ? { subjectRel: subject.rel } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
+      ...(r.def.brief !== undefined ? { briefPath: r.def.brief } : {}),
     };
   };
 

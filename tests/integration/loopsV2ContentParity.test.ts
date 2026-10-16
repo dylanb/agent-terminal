@@ -294,14 +294,47 @@ describe('planning and phase work recipes carry every reviewer standard they are
   };
 
   for (const loop of ['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
-    it(`${loop}: the work recipe restates each reviewer's standards`, () => {
+    it(`${loop}: the brief, which the work and review-and-fix turns both carry, restates each reviewer's standards once`, () => {
       const r = resolveLoopDefV2(loop, { tiers, repoDir, flow: FEATURE_DEV_ID });
       if (!r.ok) throw new Error(r.reason);
+      expect(r.def.brief, `${loop} declares no brief`).toBeDefined();
+      const brief = flat(readFileSync(r.def.brief!, 'utf8'));
       const recipe = flat(readFileSync(r.def.work.recipe, 'utf8'));
       for (const reviewer of r.def.reviewers) {
         const standards = standardsOf(readFileSync(reviewer.charter, 'utf8'));
         expect(standards, `${reviewer.persona}: charter has no standards paragraph`).not.toBeNull();
-        expect(recipe, `${loop} recipe omits ${reviewer.persona}'s standards`).toContain(standards);
+        expect(brief, `${loop} brief omits ${reviewer.persona}'s standards`).toContain(standards);
+        expect(recipe, `${loop} work recipe repeats ${reviewer.persona}'s standards`).not.toContain(standards);
+      }
+    });
+  }
+});
+
+describe('the standing rules every fix must also meet live in the brief, not the work recipe (§27.3)', () => {
+  const repoDir = resolve(__dirname, '..', '..');
+  const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
+  const AC_RULE = 'No acceptance criterion may be deferred';
+  const TODO_RULE = 'Do not add a TODO or FIXME comment';
+  const loops: { flow: string; loop: string; rules: string[] }[] = [
+    { flow: FEATURE_DEV_ID, loop: 'plan-bundle-loop', rules: [AC_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'plan-polish-loop', rules: [AC_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'infra-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'red-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'green-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'refactor-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'integration-slice-loop', rules: [AC_RULE, TODO_RULE] },
+    { flow: 'plan-only', loop: 'plan-loop', rules: [AC_RULE] },
+  ];
+  for (const { flow, loop, rules } of loops) {
+    it(`${flow}/${loop}: the brief carries ${rules.length === 1 ? 'the AC rule' : 'the AC and TODO rules'}`, () => {
+      const r = resolveLoopDefV2(loop, { tiers, repoDir, flow });
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.def.brief, `${loop} declares no brief`).toBeDefined();
+      const brief = readFileSync(r.def.brief!, 'utf8');
+      const recipe = readFileSync(r.def.work.recipe, 'utf8');
+      for (const rule of rules) {
+        expect(brief, rule).toContain(rule);
+        expect(recipe, rule).not.toContain(rule);
       }
     });
   }

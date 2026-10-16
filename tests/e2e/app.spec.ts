@@ -3112,6 +3112,35 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   rmSync(cfg, { recursive: true, force: true });
 });
 
+// §27.3 — the review-and-fix turn follows a cleared context, so it carries the loop's brief itself.
+test('§27.3 — the bundled loop brief reaches both the work prompt and the review-and-fix prompt', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-brief-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-brief-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-brief-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  const rule = 'No acceptance criterion may be deferred';
+  const log = (): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+  await expect.poll(() => log().includes('Spawn each reviewer'), { timeout: 40_000 }).toBe(true);
+  await expect.poll(() => log().lastIndexOf(rule) > log().indexOf('Spawn each reviewer'), { timeout: 15_000 }).toBe(true);
+  const workPart = log().slice(0, log().indexOf('Spawn each reviewer'));
+  expect(workPart).toContain(rule);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('§27.4 — a reviewer this agent session cannot spawn stops the round at once on the loop-error dialog asking for a restart, never re-running the round', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-notloaded-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-notloaded-home-'));

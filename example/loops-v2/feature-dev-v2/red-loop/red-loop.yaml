@@ -1,5 +1,6 @@
 version: v2
 name: red-loop
+brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: red-result

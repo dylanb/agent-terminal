@@ -6,15 +6,15 @@ import { bundledPath } from '../helpers/bundledLoops';
 
 const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8');
 const RESTRUCTURE = /fails before it reaches[\s\S]*restructur/i;
-const NO_DEFERRAL = /never[\s\S]*instruction[\s\S]*GREEN/i;
+const NO_DEFERRAL = /never\s+(?:leave\s+GREEN\s+an\s+instruction|an\s+instruction\s+telling\s+GREEN)/i;
 
 describe('red-loop: a check hidden behind an earlier failure is restructured, not deferred', () => {
-  it('the work recipe tells the agent to restructure such a test', () => {
-    expect(read('red-loop/prompts/work.md')).toMatch(RESTRUCTURE);
+  it('the brief tells the agent to restructure such a test', () => {
+    expect(read('red-loop/prompts/brief.md')).toMatch(RESTRUCTURE);
   });
 
-  it('the work recipe forbids leaving GREEN an instruction to see the check fail later', () => {
-    expect(read('red-loop/prompts/work.md')).toMatch(NO_DEFERRAL);
+  it('the brief forbids leaving GREEN an instruction to see the check fail later', () => {
+    expect(read('red-loop/prompts/brief.md')).toMatch(NO_DEFERRAL);
   });
 
   it('the red-authenticity charter grades a hidden check as a test to restructure', () => {

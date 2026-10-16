@@ -70,8 +70,8 @@ describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
     expect(recipe).toContain('real-run check');
   });
 
-  it('the work recipe forbids adding scope beyond the ticket', () =>
-    expect(read(`${LOOP}/prompts/work.md`)).toContain(SCOPE_MARKER));
+  it('the brief forbids adding scope beyond the ticket', () =>
+    expect(read(`${LOOP}/prompts/brief.md`)).toContain(SCOPE_MARKER));
 
   it('the security charter bounds the adversary and routes a new attack class to a human', () => {
     const security = read(`${POLISH_LOOP}/charter/security.md`);
@@ -88,7 +88,7 @@ describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   });
 
   it('the plan is written at contract altitude, and maintainability no longer demands code-level detail', () => {
-    expect(read(`${LOOP}/prompts/work.md`)).toContain(ALTITUDE_MARKER);
+    expect(read(`${LOOP}/prompts/brief.md`)).toContain(ALTITUDE_MARKER);
     const maintainability = read(`${POLISH_LOOP}/charter/maintainability.md`);
     expect(maintainability).toContain(ALTITUDE_MARKER);
     expect(maintainability).not.toContain('Layer-3 detail');
@@ -107,7 +107,7 @@ describe('plan-polish work turn', () => {
   const recipe = (): string => {
     const r = resolveDef(POLISH_LOOP);
     if (!r.ok) throw new Error(r.reason);
-    return readFileSync(r.def.work.recipe, 'utf8');
+    return `${readFileSync(r.def.brief!, 'utf8')}\n${readFileSync(r.def.work.recipe, 'utf8')}`;
   };
 
   it('carries the full plan-polish method', () => {

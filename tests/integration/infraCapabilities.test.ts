@@ -22,17 +22,20 @@ function infraDef(): LoopDefV2 {
   return r.def;
 }
 const flat = (path: string): string => readFileSync(path, 'utf8').replace(/\s+/g, ' ');
-const recipe = (): string => flat(infraDef().work.recipe);
+const recipe = (): string => {
+  const def = infraDef();
+  return `${flat(def.brief!)} ${flat(def.work.recipe)}`;
+};
 
 describe('infra adds proportionate deterministic capabilities and settles large ones with the operator', () => {
-  it('the work recipe records every capability under the three headings, each large one and follow-up decided', () => {
+  it('the work turn records every capability under the three headings, each large one and follow-up decided', () => {
     const body = recipe();
     for (const marker of [RECORD_FILE, BUILT_HEADING, LARGE_HEADING, FOLLOW_UP_HEADING, OPERATOR_DECISION, USED_BY_THIS_TICKET]) {
       expect(body, marker).toContain(marker);
     }
   });
 
-  it('the work recipe interviews the operator in business language, with no question limit, before building a large one', () => {
+  it('the work turn interviews the operator in business language, with no question limit, before building a large one', () => {
     const body = recipe();
     for (const marker of ['interview the operator', 'plain business language', 'full context', 'no question limit']) {
       expect(body, marker).toContain(marker);
