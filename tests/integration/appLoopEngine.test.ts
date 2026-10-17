@@ -29,7 +29,8 @@ import {
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { exampleRoundReport } from '../../src/shared/roundReport';
+import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import type { FlowStateView } from '../../src/shared/ipc';
 import {
@@ -1291,7 +1292,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     engine.onDoneSignal(); // done-signal but NO report yet → not well-formed → one retry
     expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
     expect(h.injected.length).toBe(afterReviewPrompt + 1); // re-injected once
-    writeReport(); // a well-formed report accounting for the full roster, at reports/1.md
+    writeReport(); // a well-formed report accounting for the full roster, at reports/1.json
     expect(existsSync(roundReportFile(h.repo, 1)!)).toBe(true);
     engine.onDoneSignal(); // done-signal + well-formed report → the review round completes and chains the consolidator (§27.6/N4)
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'working', round: 1 });
@@ -1318,7 +1319,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     const engine = makeEngine();
     driveToReviewInjected(engine);
     const afterReviewPrompt = h.injected.length;
-    writeReport(`## summary\n\n### ${ROSTER[0]}\n\n${REPORT_GRAMMAR.emptyMarker}\n\n### ${ROSTER[1]}\n\n${REPORT_GRAMMAR.notLoadedMarker}\n`);
+    writeReport(roundReportWithStatuses(['summary'], ROSTER, { [ROSTER[1]]: 'not loaded' }));
     engine.onDoneSignal();
     expect(h.injected.length).toBe(afterReviewPrompt);
     const state = readAppLoopState(h.repo);
@@ -1379,7 +1380,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     engine.onDoneSignal();
     const retry = h.injected[h.injected.length - 1];
     expect(retry).not.toBe(firstPrompt);
-    expect(retry).toContain(`### ${ROSTER[1]}`);
+    expect(retry).toContain(`no record for ${ROSTER[1]}`);
     expect(retry).toContain(roundReportRel(1));
     expect(retry.toLowerCase()).toContain('do not re-run the reviewers');
     expect(retry).not.toContain('Spawn each reviewer');
@@ -2095,10 +2096,7 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
     // verdict governs, the engine adds no override. Here the consolidator emits `clean` and it is honored.
     const engine = makeEngine();
     driveToReviewInjected(engine);
-    const g = REPORT_GRAMMAR;
-    const report =
-      `## summary\n\n### ${ROSTER[0]}\n\n- issue: a judgment call\n  disposition: needs a human\n  reason: escalated\n\n### ${ROSTER[1]}\n\n${g.emptyMarker}\n`;
-    writeReport(report);
+    writeReport(roundReportWithDisposition(['summary'], ROSTER, 'needs a human'));
     engine.onDoneSignal(); // review completes → consolidator chains
     engine.onInjectable();
     engine.onInjectable();

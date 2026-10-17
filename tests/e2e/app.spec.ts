@@ -3274,7 +3274,7 @@ test('a §27 malformed round report is retried as a repair naming the problem; t
 
   // The agent ran the checker the prompt handed it: it passed the repaired report.
   const checkerLog = readIf(join(repo, '.agent-terminal', 'checker-log'));
-  expect(checkerLog, injectedLog.split('\n').filter((l) => l.includes('ELECTRON_RUN_AS_NODE')).join('\n')).toContain('OK: .agent-terminal/loop/reports/1.md');
+  expect(checkerLog, injectedLog.split('\n').filter((l) => l.includes('ELECTRON_RUN_AS_NODE')).join('\n')).toContain('OK: .agent-terminal/loop/reports/1.json');
   expect(checkerLog).toContain('exit=0');
 
   await app.close();
@@ -5415,7 +5415,7 @@ test('a §27 turn stranded `working` by a relaunch surfaces a route-out and Retr
 });
 
 // §27.6 tracer bullet (b) — a round that fixed something → `another round` over the consolidator's chosen
-// roster, and a SECOND review-and-fix round runs (its report is written to reports/2.md).
+// roster, and a SECOND review-and-fix round runs (its report is written to reports/2.json).
 test('a §27 `another round` verdict crosses the boundary back into a second review-and-fix round (§27.6 / AC4)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-round2-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-round2-home-'));
@@ -5437,7 +5437,7 @@ test('a §27 `another round` verdict crosses the boundary back into a second rev
   await typeCommand('fake-agent');
   await flowControl().click(); // enter the app step → work → review round 1 → consolidate
 
-  // Round 1's `another round` loops back into a second review-and-fix round (reports/2.md is proof it ran),
+  // Round 1's `another round` loops back into a second review-and-fix round (reports/2.json is proof it ran),
   // then round 2's consolidator emits clean → the gate.
   await expect.poll(() => existsSync(join(repo, '.agent-terminal', 'loop', 'reports', '2.md')), { timeout: 40_000 }).toBe(true);
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
@@ -7753,7 +7753,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
     'plan-polish': `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
   };
   const arm = (step: string): string => {
-    const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}; ${done(`review-${step}`)}`;
+    const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}; ${done(`review-${step}`)}`;
     const con = `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
     return `    *turn-done:consolidate-${step}*) ${con} ;;\n    *turn-done:review-${step}*) ${rev} ;;\n    *turn-done:work-${step}*) ${workArm[step]} ;;`;
   };
@@ -8054,7 +8054,7 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
       'impl-approve': writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')]),
     },
     ['plan-bundle', 'plan-polish'].flatMap((step) => [
-      `    *turn-done:review-${step}*) mkdir -p .agent-terminal/loop/reports; printf %s '${b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }))}' | base64 -d > .agent-terminal/loop/reports/1.md; mkdir -p .agent-terminal/loop; printf '%s' 'review-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
+      `    *turn-done:review-${step}*) mkdir -p .agent-terminal/loop/reports; printf %s '${b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }))}' | base64 -d > .agent-terminal/loop/reports/1.json; mkdir -p .agent-terminal/loop; printf '%s' 'review-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
       `    *turn-done:consolidate-${step}*) mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}' | base64 -d > .agent-terminal/loop/consolidate/1.md; printf '%s' 'consolidate-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
     ]),
   );

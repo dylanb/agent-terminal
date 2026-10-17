@@ -32,7 +32,7 @@ const ARMED_INTERRUPT_FILE = 'armed-interrupt.yaml';
 const POLISH_FILE = 'polish.yaml';
 /** The round-keyed leaf filename — spelled once so each write-target and its read-source cannot diverge on
  *  the naming scheme (CLAUDE.md writer↔reader-location). */
-const roundLeaf = (round: number): string => `${round}.md`;
+const roundLeaf = (round: number, ext: 'json' | 'md' = 'md'): string => `${round}.${ext}`;
 
 /** A round is a positive integer or it is no round at all. The ONE gate both the writer and the reader of the
  *  persisted `round` field consult, so a value the writer drops can never be one the reader keeps (CLAUDE.md
@@ -320,7 +320,7 @@ export function readAppLoopState(repoDir: string): AppLoopRunState | null {
  *  the one resolver whose READ-source half is `roundReportFile`, so the two cannot drift (CLAUDE.md
  *  writer↔reader-location). */
 export function roundReportRel(round: number): string {
-  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, roundLeaf(round)].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, roundLeaf(round, 'json')].join('/');
 }
 
 /** The confined absolute round-report path the engine READS back to gate completion (§27.5), or null when
@@ -329,7 +329,7 @@ export function roundReportRel(round: number): string {
 export function roundReportFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+  return confinedRealPath(jail, path.join(jail, roundLeaf(round, 'json')));
 }
 
 /** The repo-relative consolidator-output path the consolidator is instructed to write (§27.6) — the

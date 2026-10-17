@@ -10,7 +10,7 @@ import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
+import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -107,23 +107,21 @@ export interface ReviewAndFixPromptReq {
 }
 
 /** The round-report format rules (§27.5), from the ONE shared descriptor the completion predicate reads.
- *  `whichReviewers` names the roster the per-persona records must cover. */
+ *  `whichReviewers` names the roster the reviewer records must cover. */
 function reportFormatLines(sections: string[], whichReviewers: string, kind: AgentKind): string[] {
-  const g = REPORT_GRAMMAR;
+  const f = REPORT_FIELDS;
+  const [ran, failed, notLoaded] = REVIEWER_STATUSES;
   return [
-    `- one \`${g.sectionPrefix.trim()} <section>\` heading for each of these sections: ${sections.join(', ')}`,
-    `- one \`${g.personaPrefix.trim()} <persona>\` record for ${whichReviewers} — including any that failed to`,
-    "  run or found nothing. Dropping a reviewer makes the report malformed. In a reviewer's record:",
-    `  a reviewer that RAN and raised no issues carries the line \`${g.emptyMarker}\`; a reviewer that FAILED to`,
-    `  run (crashed, timed out, produced nothing usable) carries the line \`${g.failedMarker}\` instead — the two`,
-    '  are distinct, and a round with a failed reviewer can never be judged clean (§27.5/§27.6). A reviewer whose',
-    kind === 'codex'
-      ? `  Codex agent cannot be found carries the line \`${g.notLoadedMarker}\`: this agent session started`
-      : `  subagent_type the Task tool cannot find carries the line \`${g.notLoadedMarker}\`: this agent session started`,
+    `- \`"${f.sections}"\`: an object with a text value for each of these sections: ${sections.join(', ')}`,
+    `- \`"${f.reviewers}"\`: a list with one record for ${whichReviewers} — including any that failed to run or`,
+    `  found nothing. Dropping a reviewer makes the report malformed. Each record has \`"${f.persona}"\`, \`"${f.status}"\` and`,
+    `  \`"${f.issues}"\`. The status is \`"${ran}"\` for a reviewer that ran (its issues list may be empty), \`"${failed}"\` for one`,
+    '  that FAILED to run (crashed, timed out, produced nothing usable) — a round with a failed reviewer can never be',
+    `  judged clean (§27.5/§27.6) — and \`"${notLoaded}"\` for one whose`,
+    kind === 'codex' ? '  Codex agent cannot be found: this agent session started' : '  subagent_type the Task tool cannot find: this agent session started',
     '  before it was installed, so record it and spawn nothing in its place.',
-    `- for every issue you record under a reviewer, the labelled lines \`${g.issueLabel}:\`, \`${g.dispositionLabel}:\`,`,
-    `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
-    `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,
+    `- each issue: \`"${f.issue}"\`, \`"${f.disposition}"\`, \`"${f.reason}"\`, and (when fixed) \`"${f.whatChanged}"\`, each as text.`,
+    `- each \`"${f.disposition}"\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`"${d}"\``).join(' / ')} — spelled`,
     '  verbatim, no other value.',
   ];
 }
@@ -166,7 +164,7 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
     'Problems:',
     ...req.problems.map((p) => `- ${p}`),
     '',
-    'The report must have:',
+    'The report is a JSON object with:',
     ...reportFormatLines(req.sections, `EVERY reviewer of this round (${req.roster.join(', ')})`, req.agentKind),
   ];
   if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'report'));
@@ -363,7 +361,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       feedback,
     );
   }
-  lines.push('', `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`, ...reportFormatLines(req.sections, 'EVERY reviewer above', req.agentKind));
+  lines.push('', `Then write the round report to ${req.reportRel}, a JSON object with:`, ...reportFormatLines(req.sections, 'EVERY reviewer above', req.agentKind));
   // §28.5.3 — a refactor round writes a phase-result file the round gate reads (softer than GREEN: {passed},
   // no build), via the shared writer so this instruction stays single-sourced with the parse predicate. The
   // done-signal verifies the RESULT, not the report — it is the artifact the fixer is least habituated to (the

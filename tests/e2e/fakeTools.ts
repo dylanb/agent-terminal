@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput, type ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
@@ -17,7 +17,7 @@ import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { roundReportWithDisposition } from '../helpers/roundReports';
+import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 
@@ -185,15 +185,9 @@ export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
 // A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
 // consolidator clean-guard keys on.
-const firstMarkedReport = (sections: string[], roster: string[], marker: string): string => {
-  const g = REPORT_GRAMMAR;
-  const parts = sections.flatMap((s) => [`${g.sectionPrefix}${s}`, '']);
-  roster.forEach((persona, idx) => {
-    parts.push(`${g.personaPrefix}${persona}`, '', idx === 0 ? marker : g.emptyMarker, '');
-  });
-  return parts.join('\n') + '\n';
-};
-const failedReport = (sections: string[], roster: string[]): string => firstMarkedReport(sections, roster, REPORT_GRAMMAR.failedMarker);
+const firstMarkedReport = (sections: string[], roster: string[], status: ReviewerStatus): string =>
+  roundReportWithStatuses(sections, roster, roster.length > 0 ? { [roster[0]]: status } : {});
+const failedReport = (sections: string[], roster: string[]): string => firstMarkedReport(sections, roster, 'failed');
 
 export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor' | 'ask';
 export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair' | 'not-loaded';
@@ -341,18 +335,18 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const omit = b64(exampleRoundReport({ sections, roster: [roster[0]] }));
   const failed = b64(failedReport(sections, roster));
   const needsHuman = b64(roundReportWithDisposition(sections, roster, 'needs a human'));
-  const notLoaded = b64(firstMarkedReport(sections, roster, REPORT_GRAMMAR.notLoadedMarker));
+  const notLoaded = b64(firstMarkedReport(sections, roster, 'not loaded'));
   const r1 = reviewKind === 'failed' ? failed : reviewKind === 'not-loaded' ? notLoaded : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
   const r2 = (opts.review2 ?? 'full') === 'failed' ? failed : full;
   const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${k === 'needs-human' ? needsHuman : full}' ;;`).join(' ');
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
-  // reports/2.md, keeping the last-two-report window real (§27.6/AC2).
+  // reports/2.json, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =
     'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
     `RB='${r1}'; case "$r" in 2) RB='${r2}' ;; esac; ` +
     (roundCases.length > 0 ? `case "$r" in ${roundCases} esac; ` : '') +
     `[ -f .agent-terminal/repairing ] && RB='${full}'; ` +
-    'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
+    'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.json';
   // §28.5.3 — a REFACTOR loop's review ROUND also writes the round-keyed phase-result the gate reads and makes a
   // behavior-preserving change so the approve commit has content.
   const writeRefactorResult =
@@ -403,7 +397,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
   const repairing = scripts.find(([, s]) => s.review === 'omit-then-repair')?.[1];
   const repairArm = repairing
     ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; r=$(rnd); mkdir -p .agent-terminal/loop/reports; ` +
-      `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.md ;;\n`
+      `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.json ;;\n`
     : '';
   const logInjected = scripts.some(([, s]) => s.logInjected === true)
     ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n'
@@ -519,7 +513,7 @@ export function seedFullTddChainAgent(
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
   };
   const reviewArm = (step: string): string => {
-    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}`;
+    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}`;
     // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
     return step === 'refactor'
       ? `${base}; mkdir -p .agent-terminal/loop/refactor-results; ${decode(b64(examplePhaseResult('passed')), '.agent-terminal/loop/refactor-results/$r.md')}; n=$(turn_count review-refactor); printf '%s\\n' "export const rf = $n;" > refactor.ts; ${done('review-refactor')}`

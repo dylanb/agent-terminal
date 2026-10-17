@@ -10,7 +10,7 @@ import { exampleGoalProgress } from '../../src/shared/goalProgress';
 
 const SECTIONS = ['summary', 'findings', 'disposition'];
 const ROSTER = ['impl-review-tests', 'impl-review-intent'];
-const REPORT: ArtifactCheck = { kind: 'report', rel: '.agent-terminal/loop/reports/1.md', sections: SECTIONS, roster: ROSTER };
+const REPORT: ArtifactCheck = { kind: 'report', rel: '.agent-terminal/loop/reports/1.json', sections: SECTIONS, roster: ROSTER };
 const VERDICT: ArtifactCheck = { kind: 'verdict', rel: '.agent-terminal/loop/consolidate/1.md', catalog: ROSTER };
 
 /** The argv a POSIX shell hands the checker script for `command` (everything after the script operand). */
@@ -34,7 +34,7 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
   it('fails a report missing a reviewer record, naming that record', () => {
     const r = runArtifactCheck(argvOf(REPORT), files({ [REPORT.rel]: exampleRoundReport({ sections: SECTIONS, roster: [ROSTER[0]] }) }));
     expect(r.exitCode).toBe(1);
-    expect(r.output).toContain(`### ${ROSTER[1]}`);
+    expect(r.output).toContain(`no record for ${ROSTER[1]}`);
     expect(r.output).not.toContain(ARTIFACT_CHECK_PASSED);
   });
 

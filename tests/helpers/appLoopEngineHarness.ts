@@ -25,7 +25,8 @@ import { probeChainedInput } from '../../src/main/chainedInputProbe';
 import type { ArtifactBinding, LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
-import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { exampleRoundReport } from '../../src/shared/roundReport';
+import { roundReportWithStatuses } from './roundReports';
 
 export const STEP = 'plan';
 // §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
@@ -268,14 +269,9 @@ export class AppLoopEngineHarness {
 
   /** Write a well-formed round-N report; `failed` names personas recorded as failed-to-run (§27.5/AC7). */
   writeRoundReport = (round: number, failed: string[] = []): void => {
-    const g = REPORT_GRAMMAR;
-    const parts = ['## summary', ''];
-    for (const persona of ROSTER) {
-      parts.push(`### ${persona}`, '', failed.includes(persona) ? g.failedMarker : g.emptyMarker, '');
-    }
     const p = roundReportFile(this.repo, round)!;
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, `${parts.join('\n')}\n`);
+    writeFileSync(p, roundReportWithStatuses(['summary'], ROSTER, Object.fromEntries(failed.map((persona) => [persona, 'failed' as const]))));
   };
 
   writeConsolidatorOutput = (round: number, content: string): void => {

@@ -227,11 +227,11 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     const r = createTurnRunner(deps);
     r.requestTurn('review-plan');
     artifact = false;
-    shortfall = 'the round report .agent-terminal/loop/reports/1.md is not well-formed';
+    shortfall = 'the round report .agent-terminal/loop/reports/1.json is not well-formed';
     r.onDoneSignal();
     expect(inject.mock.calls.map((c) => c[0])).toEqual([
       'PROMPT for review-plan',
-      'RETRY for review-plan: done-signal received but the round report .agent-terminal/loop/reports/1.md is not well-formed',
+      'RETRY for review-plan: done-signal received but the round report .agent-terminal/loop/reports/1.json is not well-formed',
     ]);
   });
 
@@ -405,7 +405,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
 
   it('the error names what fell short, on both the done-signal and the manual mark-complete', () => {
     artifact = false;
-    shortfall = 'the round report .agent-terminal/loop/reports/3.md is not well-formed';
+    shortfall = 'the round report .agent-terminal/loop/reports/3.json is not well-formed';
     const signalled = createTurnRunner(deps);
     signalled.requestTurn('review-refactor');
     signalled.onDoneSignal();

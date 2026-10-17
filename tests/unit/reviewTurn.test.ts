@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { composeAppWorkPrompt } from '../../src/main/appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
-import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
+import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../../src/shared/phaseResult';
@@ -83,7 +83,7 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -98,8 +98,8 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     }
   });
 
-  it('tells the fixer to record a reviewer whose sub-agent type cannot be found with the not-loaded marker', () => {
-    expect(composeReviewAndFixPrompt(req())).toContain(REPORT_GRAMMAR.notLoadedMarker);
+  it('tells the fixer to record a reviewer whose sub-agent type cannot be found as not loaded', () => {
+    expect(composeReviewAndFixPrompt(req())).toMatch(/"not loaded"` for one whose\s+subagent_type the Task tool cannot find/);
   });
 
   it('requires that exact sub-agent type, never a substitute, for each reviewer', () => {
@@ -135,27 +135,21 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     for (const d of DISPOSITIONS) expect(p).toContain(d);
   });
 
-  it('tells the fixer exactly the per-issue element labels and empty marker the predicate requires', () => {
+  it('tells the fixer exactly the JSON fields the predicate requires', () => {
     const p = composeReviewAndFixPrompt(req());
-    for (const label of [REPORT_GRAMMAR.issueLabel, REPORT_GRAMMAR.dispositionLabel, REPORT_GRAMMAR.reasonLabel, REPORT_GRAMMAR.whatChangedLabel]) {
-      expect(p).toContain(label);
-    }
-    expect(p).toContain(REPORT_GRAMMAR.emptyMarker);
+    for (const key of Object.values(REPORT_FIELDS)) expect(p).toContain(`"${key}"`);
   });
 
-  it('instructs the failed marker for a reviewer that FAILED TO RUN, distinct from the empty marker (§27.5/AC7)', () => {
-    // §27.5/v2.137 — a lens that failed to run must be recorded DISTINCTLY from one that ran and found
-    // nothing; the failed marker is the signal the consolidator's clean-guard keys on, so the prompt must
-    // name it (single-sourced from the grammar) rather than telling the fixer both carry the empty marker.
+  it('tells the fixer each reviewer status, so a reviewer that FAILED TO RUN is recorded apart from one that found nothing (§27.5/AC7)', () => {
     const p = composeReviewAndFixPrompt(req());
-    expect(p).toContain(REPORT_GRAMMAR.failedMarker);
-    expect(REPORT_GRAMMAR.failedMarker).not.toBe(REPORT_GRAMMAR.emptyMarker);
+    for (const status of REVIEWER_STATUSES) expect(p).toContain(`"${status}"`);
+    expect(p).toMatch(/"failed"` for one\s+that FAILED to run/);
   });
 
   it('names the prescribed report sections and the round-keyed report location', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const s of def().report.sections) expect(p).toContain(s);
-    expect(p).toContain('.agent-terminal/loop/reports/1.md');
+    expect(p).toContain(req().reportRel);
   });
 
   it('embeds a few-shot example that is itself well-formed against the predicate (no prompt↔predicate drift)', () => {
@@ -163,17 +157,17 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     // The few-shot the prompt shows the fixer must validate against the same predicate that gates the turn,
     // or the fixer is instructed to write something the engine will reject.
     const spec = { sections: def().report.sections, roster: reviewRoster(def()).map((r) => r.persona) };
-    // The example is the whole trailing block after the marker line the composer emits before it.
-    const example = p.slice(p.indexOf('# Round report'));
-    expect(example).toContain('# Round report');
-    expect(roundReportWellFormed(example, spec)).toBe(true);
+    // The example is the whole trailing block after the line the composer emits before it.
+    const lead = 'A well-formed example:';
+    expect(p).toContain(lead);
+    expect(roundReportWellFormed(p.slice(p.indexOf(lead) + lead.length), spec)).toBe(true);
   });
 
   it('ends by instructing the §27 done-file, verifying the report on disk first (§27.12a)', () => {
     const p = composeReviewAndFixPrompt(req());
     expect(p).toContain('turn-done:review-plan');
     expect(p).toContain('.agent-terminal/loop/turn-done');
-    expect(p).toContain('.agent-terminal/loop/reports/1.md'); // the artifact to verify before signalling
+    expect(p).toContain(req().reportRel); // the artifact to verify before signalling
   });
 });
 
@@ -182,7 +176,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -225,7 +219,7 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -263,7 +257,7 @@ describe('composeReviewAndFixPrompt — fixing a document subject lifts, never a
   const req = (subjectRel?: string) => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -302,7 +296,7 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
   const req = (polish?: 'fix' | 'defer') => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -332,7 +326,7 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
   const reqWith = (feedback?: string) => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/2.md',
+    reportRel: '.agent-terminal/loop/reports/2.json',
     round: 2,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -365,9 +359,9 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
   it('still carries the done-signal instruction and the well-formed example — feedback never displaces the turn contract', () => {
     const p = composeReviewAndFixPrompt(reqWith('address the taint flow'));
     expect(p).toContain('turn-done:review-plan');
-    expect(p).toContain('.agent-terminal/loop/reports/2.md');
+    expect(p).toContain('.agent-terminal/loop/reports/2.json');
     // The few-shot example still trails so the fixer sees the well-formed report shape.
-    expect(p).toContain('# Round report');
+    expect(p).toContain('A well-formed example:');
     // The feedback appears BEFORE the done-signal contract, not after the example.
     expect(p.indexOf('address the taint flow')).toBeLessThan(p.indexOf('turn-done:review-plan'));
   });
@@ -383,7 +377,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
   const refactorReq = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -395,7 +389,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     const p = composeReviewAndFixPrompt(refactorReq());
     for (const s of def().report.sections) expect(p).toContain(s);
     for (const d of DISPOSITIONS) expect(p).toContain(d);
-    expect(p).toContain('.agent-terminal/loop/reports/1.md'); // the report is still written
+    expect(p).toContain(refactorReq().reportRel); // the report is still written
   });
 
   it('appends the phase-result WRITER block naming the result file, the outcome vocabulary, and the passed few-shot', () => {
@@ -417,7 +411,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     const p = composeReviewAndFixPrompt(refactorReq());
     const verify = p.slice(p.indexOf('FIRST confirm'), p.indexOf('turn-done:review-plan'));
     expect(verify).toContain(RESULT_REL);
-    expect(verify).toContain('.agent-terminal/loop/reports/1.md');
+    expect(verify).toContain('.agent-terminal/loop/reports/1.json');
   });
 
   it('adds NO phase-result block when resultRel is absent (RED/GREEN loops\' review rounds are unchanged)', () => {
@@ -427,7 +421,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     expect(p).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // no phase-result section
     expect(p).not.toContain('Run the test command for this change and classify'); // no classify instruction
     // the plain review round still verifies the REPORT on disk (unchanged)
-    expect(p).toContain('re-read .agent-terminal/loop/reports/1.md');
+    expect(p).toContain('re-read .agent-terminal/loop/reports/1.json');
   });
 });
 
@@ -435,7 +429,7 @@ describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.3)'
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -465,7 +459,7 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -532,7 +526,7 @@ describe('the format design check, before patching a parser (§27.3/§27.6 v2.20
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.md',
+    reportRel: '.agent-terminal/loop/reports/1.json',
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',

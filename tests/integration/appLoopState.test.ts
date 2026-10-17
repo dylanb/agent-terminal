@@ -517,9 +517,9 @@ describe('§27 loop-state — the chained-input carry for a work run', () => {
 // tree (resolveJail). The pin runs first-run: the fixture mkdtemp'd only the repo, so the reports tree is
 // absent — a resolver that only works when the anchor already exists would fail here.
 describe('§27 round-report location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/reports/<N>.md, write-target === read-source', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/reports/<N>.json, write-target === read-source', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
-    expect(roundReportRel(1)).toBe('.agent-terminal/loop/reports/1.md');
+    expect(roundReportRel(1)).toBe('.agent-terminal/loop/reports/1.json');
     expect(roundReportFile(repo, 1)).toBe(join(realpathSync(repo), roundReportRel(1)));
     expect(roundReportFile(repo, 2)).toBe(join(realpathSync(repo), roundReportRel(2)));
   });

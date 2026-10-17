@@ -60,7 +60,7 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
   const req = {
     recipeBody: '# plan-loop — consolidator\nJudge the round.',
     catalog,
-    reportRels: ['.agent-terminal/loop/reports/1.md', '.agent-terminal/loop/reports/2.md'],
+    reportRels: ['.agent-terminal/loop/reports/1.json', '.agent-terminal/loop/reports/2.json'],
     outputRel: '.agent-terminal/loop/consolidate/2.md',
     round: 2,
     turnKey: 'consolidate-plan',

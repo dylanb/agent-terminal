@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
-import { roundReportWellFormed } from '../../src/shared/roundReport';
+import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/roundReport';
 import { parseConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 
@@ -159,9 +159,9 @@ describe('the per-step fake agent', () => {
     expect(existsSync(join(repo, 'extra-review-1'))).toBe(false);
     await turn(send, repo, 'review-a');
     expect(readIf(join(repo, 'extra-review-1'))).toBe('r');
-    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.md'));
+    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.json'));
     expect(roundReportWellFormed(report, { sections, roster })).toBe(true);
-    expect(report).toMatch(/^\s*disposition: needs a human$/m);
+    expect(reportNeedsAHuman(report)).toBe(true);
 
     expect(existsSync(join(repo, 'extra-consolidate-1'))).toBe(false);
     await turn(send, repo, 'consolidate-a');
