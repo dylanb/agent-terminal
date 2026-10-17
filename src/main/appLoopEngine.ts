@@ -29,12 +29,14 @@ import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from 
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
+import { rmSync } from 'node:fs';
+import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearGoalProgress, clearInterrupt, clearRefactorResult, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalProgress, clearInterrupt, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -1262,15 +1264,37 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     noteSettle: () => deps.noteSettle(),
   });
 
+  /** §27.3 — a fresh goal turn starts without the progress or refactor result an earlier turn left; the reason
+   *  it could not, or null. */
+  const clearEarlierGoalFiles = (turn: Extract<ActiveAppTurn, { phase: 'work' }>): string | null => {
+    try {
+      clearGoalProgress(turn.repoDir);
+      if (turn.completion.kind === 'refactor') {
+        const loc = deps.resolveRefactorResultLocation(turn.repoDir, FIRST_ROUND);
+        if (loc !== null) rmSync(loc.abs, { force: true });
+      }
+      return null;
+    } catch (e) {
+      return `could not clear an earlier turn's goal progress or result: ${errMsg(e)} — retry or terminate`;
+    }
+  };
+
+  // §27.3 — the goal turn whose start could not clear the earlier files, so its Retry tries the clear again.
+  let unclearedGoalTurn: string | null = null;
+
   const start = (turn: ActiveAppTurn, defer = false): void => {
     active = turn;
     if (turn.phase === 'work' && turn.run.kind === 'goal') {
-      try {
-        clearGoalProgress(turn.repoDir);
-        if (turn.completion.kind === 'refactor') clearRefactorResult(turn.repoDir, FIRST_ROUND);
-      } catch (e) {
-        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress or result: ${e instanceof Error ? e.message : String(e)}`, 1);
+      const failed = clearEarlierGoalFiles(turn);
+      if (failed !== null) {
+        unclearedGoalTurn = turn.turnKey;
+        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} ${failed}`, 1);
+        setLiveError('turn-error', failed);
+        persist('error', failed);
+        deps.emitError(failed);
+        return;
       }
+      unclearedGoalTurn = null;
     }
     persist('working');
     // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
@@ -1681,6 +1705,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     routeOut(repoDir, stepId, turnKey, action) {
       // §6 — act only on the turn the payload names; a decision for a turn the engine is not running is inert.
       if (!active || active.repoDir !== repoDir || active.stepId !== stepId || active.turnKey !== turnKey) return;
+      // §27.12 — every goal leg shares the turn key, so a route-out for a leg that already moved on reaches a
+      // turn that is running; only Terminate acts on one.
+      if (action !== 'terminate' && runner.state() === 'in-flight') return;
       if (action === 'terminate') {
         deps.terminateFlow(repoDir);
         return;
@@ -1913,6 +1940,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           return;
         }
         active = rebuilt;
+      }
+      if (active.phase === 'work' && unclearedGoalTurn === active.turnKey) {
+        const failed = clearEarlierGoalFiles(active);
+        if (failed !== null) {
+          refuseRouteOut('turn-error', failed);
+          return;
+        }
+        unclearedGoalTurn = null;
       }
       persist('working');
       const retryAudit =

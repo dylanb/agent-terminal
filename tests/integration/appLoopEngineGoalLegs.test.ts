@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { goalProgressRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
@@ -62,6 +62,16 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     expect(prompt).toContain('Leg: 1');
   });
 
+  it('the prompt holds only a done leg to the completion check, so a checkpoint or a block may write the done-signal without it', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+
+    const prompt = promptOf(lastGoal());
+    expect(prompt).toMatch(/only `done` is held to the completion check/i);
+    expect(prompt).toMatch(/on `checkpoint` or `blocked`, write the done-signal once the progress file is written/i);
+  });
+
   it('the command ends a leg after the declared passes when the goal does not yet hold', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -92,6 +102,27 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
 
     expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
     expect(h.injected.filter((p) => p.startsWith('/goal ')).length).toBe(2);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a turn that cannot clear an earlier turn\'s progress does not start on it, and Retry starts it once it can', () => {
+    writeProgress(exampleGoalProgress(1, 'done'));
+    const area = dirname(join(h.repo, goalProgressRel()));
+    chmodSync(area, 0o555);
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    try {
+      enterAndInjectWork(engine);
+      expect(goalCommands()).toEqual([]);
+      expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/could not clear/);
+    } finally {
+      chmodSync(area, 0o755);
+    }
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+
+    expect(goalCommands().length).toBe(1);
+    expect(existsSync(join(h.repo, goalProgressRel()))).toBe(false);
   });
 
   it('finishes and goes to the gate as clean when the progress records the goal done', () => {
@@ -313,6 +344,15 @@ describe('Accept on a stalled goal session follows what its progress file record
     writeProgress(exampleGoalProgress(1, 'done'));
     engine.onDoneSignal();
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
+  });
+
+  it('an Accept that arrives after the stalled leg checkpointed by itself leaves the running next leg alone', () => {
+    const engine = stalledWith(exampleGoalProgress(1, 'checkpoint'));
+    engine.onDoneSignal();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'working', leg: 2 });
   });
 
   it('a done session with no artifact is still refused', () => {
