@@ -125,7 +125,7 @@ export class AppLoopEngineHarness {
       { persona: ROSTER[0], charter: join(this.repo, 'charter', 'principal.md'), tools: ['Read'] },
       { persona: ROSTER[1], charter: join(this.repo, 'charter', 'security.md'), tools: ['Read', 'Bash'] },
     ],
-    consolidator: join(this.repo, 'recipe', 'consolidate.md'),
+    rounds: { kind: 'engine', consolidator: join(this.repo, 'recipe', 'consolidate.md') },
     boundaries: [
       { boundary: 'pre-work', mode: 'clear' },
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },

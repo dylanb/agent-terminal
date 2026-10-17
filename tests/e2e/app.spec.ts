@@ -7816,6 +7816,64 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
 }
 
+// ---- §27.3 v2.200 — feature-dev-v3 grooms in three steps: interview, one goal session, then the operator's approval ----
+// The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
+// one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
+function seedGroomV3Agent(binDir: string): void {
+  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
+  const art = '.agent-terminal/loop/artifacts';
+  const write = (file: string, lines: string[]): string => `mkdir -p ${art}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${art}/${file}`;
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    `    /goal*) printf '%s\\n' "$line" > .agent-terminal/goal-command-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${write('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ${write('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${done('work-groom')} ;;\n` +
+    `    *turn-done:work-groom-intent*) ${write('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')])}; ${done('work-groom-intent')} ;;\n` +
+    `    *turn-done:work-groom-approve*) ${write('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')])}; ${done('work-groom-approve')} ;;\n` +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
+test('§27.3 v2.200 — feature-dev-v3 interviews, grooms in one goal session that runs its own reviewer, and publishes the ticket when the operator approves', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-groomv3-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-groomv3-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-groomv3-bin-', { realCommitOps: true });
+  seedGroomV3Agent(binDir);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+  await passAutoGate(home, repo, 'groom');
+
+  // The groom step was one `/goal` command, and the prompt file it named told the session to run the step's own reviewer.
+  expect(readIf(join(repo, '.agent-terminal', 'goal-command-seen'))).toMatch(/^\/goal .*turn-done:work-groom\)/);
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
+
+  // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: groom-approve[\s\S]*verdict: clean/);
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect.poll(() => readIf(`${logFile}.issue-body.176`), { timeout: 30_000 }).toContain('# Groomed ticket 176');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-bundle');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('§28.7 S8 — an epic-classified plan surfaces its sub-ticket split at the plan-polish gate', { tag: '@ownapp' }, async () => {
   const repo = seedEpicChainRepo('agent-term-e2e-epicA-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-epicA-home-'));

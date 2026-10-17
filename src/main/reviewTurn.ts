@@ -205,6 +205,62 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   return lines;
 }
 
+/** §27.6 */
+export function fixCriterionLines(): string[] {
+  return [
+    '',
+    // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on
+    // prose: an in-scope finding that changes no observable outcome must be DISMISSED, not fixed, or each
+    // rewrite of already-correct text manufactures the next round's findings and the loop never converges.
+    'Fix an issue only when acting on it changes an OBSERVABLE OUTCOME — correctness, safety, a contract two',
+    'surfaces actually read, or whether the next reader/implementer can follow the artifact. An in-scope finding',
+    'that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct',
+    'where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not',
+    'require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`. Do not rewrite an already-correct',
+    'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
+    'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
+    'only what the loop is not entitled to decide.',
+    '',
+    'Test-support code — a fake, stand-in, or double of a real tool, and the fixtures and helpers around it —',
+    'exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it',
+    'has no test of its own, changes an observable outcome only when a test the ticket needs relies on that',
+    'behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is',
+    '`dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never',
+    'runs out. A test written later that relies on the behaviour is reviewed in its own round.',
+  ];
+}
+
+/** §27.4 */
+export function reviewerSpawnLines(handoff: ReviewerHandoffReq, fixedHow: string): string[] {
+  return [
+    'Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, and give each the',
+    'reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
+    'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
+    'other type for it.',
+    `Receive their findings into your own context, then fix or dismiss each ${fixedHow}.`,
+    '',
+    REVIEWER_HANDOFF_BEGIN,
+    ...reviewerHandoffLines(handoff),
+    REVIEWER_HANDOFF_END,
+  ];
+}
+
+/** §27.4 */
+export function rosterLines(roster: RosterEntry[]): string[] {
+  return ['', 'Reviewers (persona — subagent_type):', ...roster.map((r) => `- ${r.persona} — subagent_type: ${r.agent}`)];
+}
+
+/** §27.3/§27.4 */
+export function composeGoalReviewLines(roster: RosterEntry[], handoff: ReviewerHandoffReq): string[] {
+  return [
+    '',
+    'REVIEWS — this turn reviews its own work with the reviewers below, as often as your instructions say.',
+    ...reviewerSpawnLines(handoff, 'per the criterion below'),
+    ...fixCriterionLines(),
+    ...rosterLines(roster),
+  ];
+}
+
 /** §27.3/§27.4/§27.5/§27.12a */
 export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   const lines: string[] = [];
@@ -212,15 +268,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    'Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, and give each the',
-    'reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
-    'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
-    'other type for it.',
-    'Receive their findings into your own context, then fix or dismiss each per the criterion below.',
-    '',
-    REVIEWER_HANDOFF_BEGIN,
-    ...reviewerHandoffLines({ ...req, carried }),
-    REVIEWER_HANDOFF_END,
+    ...reviewerSpawnLines({ ...req, carried }, 'per the criterion below'),
   );
   if (req.loopBrief !== undefined) {
     lines.push(
@@ -255,27 +303,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     );
   }
   lines.push(...flowDocumentLines());
-  lines.push(
-    '',
-    // §27.6 — the materiality floor that lets "clean = a round that changed nothing" reach a fixed point on
-    // prose: an in-scope finding that changes no observable outcome must be DISMISSED, not fixed, or each
-    // rewrite of already-correct text manufactures the next round's findings and the loop never converges.
-    'Fix an issue only when acting on it changes an OBSERVABLE OUTCOME — correctness, safety, a contract two',
-    'surfaces actually read, or whether the next reader/implementer can follow the artifact. An in-scope finding',
-    'that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct',
-    'where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not',
-    'require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`. Do not rewrite an already-correct',
-    'artifact for such a refinement: that only manufactures the next round\'s findings and keeps the loop from',
-    'ever producing a no-change round. Dismiss what is out of scope or invalid; escalate to `needs a human`',
-    'only what the loop is not entitled to decide.',
-    '',
-    'Test-support code — a fake, stand-in, or double of a real tool, and the fixtures and helpers around it —',
-    'exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it',
-    'has no test of its own, changes an observable outcome only when a test the ticket needs relies on that',
-    'behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is',
-    '`dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never',
-    'runs out. A test written later that relies on the behaviour is reviewed in its own round.',
-  );
+  lines.push(...fixCriterionLines());
   if (req.polish === 'defer') {
     lines.push(
       '',
@@ -287,11 +315,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       'findings are polish therefore changes nothing.',
     );
   }
-  lines.push(
-    '',
-    'Reviewers (persona — subagent_type):',
-  );
-  for (const r of req.roster) lines.push(`- ${r.persona} — subagent_type: ${r.agent}`);
+  lines.push(...rosterLines(req.roster));
   if (req.sliceBrief !== undefined) lines.push(...sliceBriefLines(req.sliceBrief, 'fixer'));
   // This block is the OUTER framing every request-changes feedback carries ("weigh this / record how you
   // addressed it"). The compose-with-agent mode adds its own inner "Synthesize…" prefix upstream in the

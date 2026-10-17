@@ -21,6 +21,10 @@ function infraDef(): LoopDefV2 {
   if (!r.ok) throw new Error(r.reason);
   return r.def;
 }
+function engineConsolidator(def: LoopDefV2): string {
+  if (def.rounds.kind !== 'engine') throw new Error(`${def.name} runs no review rounds`);
+  return def.rounds.consolidator;
+}
 const flat = (path: string): string => readFileSync(path, 'utf8').replace(/\s+/g, ' ');
 const recipe = (): string => {
   const def = infraDef();
@@ -55,7 +59,7 @@ describe('infra adds proportionate deterministic capabilities and settles large 
   });
 
   it('the consolidator stops for a human on any undecided large capability or follow-up, ahead of every other verdict', () => {
-    const body = flat(infraDef().consolidator);
+    const body = flat(engineConsolidator(infraDef()));
     for (const marker of [RECORD_FILE, LARGE_HEADING, FOLLOW_UP_HEADING, OPERATOR_DECISION, PRECEDENCE]) expect(body, marker).toContain(marker);
   });
 });

@@ -15,8 +15,8 @@ rebuild them from memory.
 - **Loop definitions:** `<codex home>/loops-v2/<flow>/<loop>/<loop>.yaml`, for example
   `loops-v2/feature-dev-v2/integration-slice-loop/integration-slice-loop.yaml`. A definition names its own
   files, as paths relative to its directory: its work recipe in `work.recipe`, its judging recipe in
-  `consolidator.recipe`, its standing instructions in `brief` when it has them, and each reviewer's charter
-  in `reviewers[].charter`.
+  `consolidator.recipe` when it has review rounds, its standing instructions in `brief` when it has them, and
+  each reviewer's charter in `reviewers[].charter`. A definition with a `work.goal` reviews its own work.
 - **Reviewer agents:** one custom agent per reviewer, in `<codex home>/agents/`. Its name is the loop
   name and the persona name joined by `__`, with every `-` written as `_`. The `impl-review-reliability`
   reviewer of `integration-slice-loop`, for example, is `integration_slice_loop__impl_review_reliability`.
@@ -31,7 +31,8 @@ starts. Do not stand in for a missing piece with something else.
 1. **Read the definition.** Open the loop's `<loop>.yaml`. Its `reviewers:` list is the round's roster,
    one entry per `persona`.
 2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
-   Then do what its work recipe asks.
+   Then do what its work recipe asks. A definition with no `consolidator` has no review rounds: the loop
+   ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives

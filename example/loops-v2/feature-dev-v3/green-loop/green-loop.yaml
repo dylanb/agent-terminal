@@ -1,0 +1,51 @@
+version: v2
+name: green-loop
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: green-result
+  completion: green
+reviewers:
+  - persona: impl-review-principal
+    charter: charter/principal.md
+  - persona: impl-review-tests
+    charter: charter/tests.md
+  - persona: impl-review-security
+    charter: charter/security.md
+  - persona: impl-review-taint
+    charter: charter/taint.md
+  - persona: impl-review-reliability
+    charter: charter/reliability.md
+  - persona: impl-review-architecture
+    charter: charter/architecture.md
+  - persona: impl-review-contracts
+    charter: charter/contracts.md
+  - persona: impl-review-intent
+    charter: charter/intent.md
+  - persona: impl-review-accessibility
+    charter: charter/accessibility.md
+  - persona: impl-review-regression-guard
+    charter: charter/regression-guard.md
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+  polish: defer
+gate:
+  - option: approve
+    side_effects:
+      - kind: commit
+        label: GREEN
+  - option: request-changes
+  - option: redo
+  - option: polish
+  - option: back-to-red
+inputs:
+  - id: plan
+    path: plan.md
+outputs:
+  - id: green-result
+    path: green-result.md

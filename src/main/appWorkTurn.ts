@@ -102,6 +102,16 @@ export interface AppWorkPromptReq {
   sliceBrief?: SliceBrief;
   /** §27.3 */
   loopBrief?: string;
+  /** §27.3 */
+  goalReview?: string[];
+}
+
+/** §27.3 — Claude Code's `/goal <condition>`, submitted as one line. */
+export function composeGoalCommand(req: { condition: string; promptRel: string; turnKey: string; doneRelPath: string }): string {
+  return (
+    `/goal Every instruction in ${req.promptRel} is carried out, so this holds: ${req.condition.replace(/[.\s]+$/, '')}. ` +
+    `Its last instruction writes ${req.doneRelPath} (turn-done:${req.turnKey}).`
+  );
 }
 
 /** §28.4.2 — the back-to-RED brief as the work turn states it. */
@@ -170,6 +180,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
     );
   }
   if (req.sliceBrief !== undefined) parts.push(...sliceBriefLines(req.sliceBrief, 'work'));
+  if (req.goalReview !== undefined) parts.push(...req.goalReview);
   if (req.completion?.kind === 'file') {
     parts.push(
       '',

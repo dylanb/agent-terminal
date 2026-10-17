@@ -1,0 +1,18 @@
+version: v2
+name: groom-intent-loop
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: groom-intent
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+  - option: redo
+outputs:
+  - id: groom-intent
+    path: groom-intent.md

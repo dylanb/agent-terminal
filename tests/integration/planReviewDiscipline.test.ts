@@ -160,7 +160,8 @@ describe('plan-polish consolidator', () => {
   const consolidator = (): string => {
     const r = resolveDef(POLISH_LOOP);
     if (!r.ok) throw new Error(r.reason);
-    return readFileSync(r.def.consolidator, 'utf8');
+    if (r.def.rounds.kind !== 'engine') throw new Error('plan-polish-loop runs no review rounds');
+    return readFileSync(r.def.rounds.consolidator, 'utf8');
   };
 
   it('reads the polish report, not only the round reports', () => expect(consolidator()).toContain(POLISH_REPORT_HEADING));
