@@ -386,7 +386,7 @@ export interface AppLoopBootstrapJob {
   issue: number | null;
   entry: AppLoopEntry;
   // §28.4 D1 — the impl-slice this work turn is for (the flow's `currentSlice`, default 1). The engine keys
-  // the turn's result artifact off it (`red-result.slice-N.md`) so a loop-back re-entry writes fresh.
+  // the turn's result artifact off it (`red-result.slice-N.json`) so a loop-back re-entry writes fresh.
   slice?: number;
   bootstrap: AppLoopBootstrapSpec | null;
   // §B.5 item 6 / AC10: present when the step's bound def declares a `pickup:` block AND carries a skill —

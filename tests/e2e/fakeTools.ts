@@ -9,7 +9,7 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput, type ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
-import { exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
+import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
@@ -185,9 +185,9 @@ export const PLAN_V2_ROSTER = [
 export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
 /** Shell that writes a §28.5.5 phase result at `pathExpr` and its raw captured run beside it, where the engine reads
- *  it (phaseOutputRel: the result's extension replaced by `.output.txt`). */
+ *  it. */
 export const writePhaseResultSh = (pathExpr: string, result: string, captured = exampleCapturedOutput('passed')): string =>
-  `rp=${pathExpr}; mkdir -p "$(dirname "$rp")"; printf %s '${b64(result)}' | base64 -d > "$rp"; printf %s '${b64(captured)}' | base64 -d > "\${rp%.*}.output.txt"`;
+  `rp=${pathExpr}; mkdir -p "$(dirname "$rp")"; printf %s '${b64(result)}' | base64 -d > "$rp"; printf %s '${b64(captured)}' | base64 -d > "\${rp%.*}${PHASE_OUTPUT_SUFFIX}"`;
 // A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
 // consolidator clean-guard keys on.
 const firstMarkedReport = (sections: string[], roster: string[], status: ReviewerStatus): string =>

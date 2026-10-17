@@ -1338,6 +1338,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     writeReport(JSON.stringify(doc));
     engine.onDoneSignal();
     engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.status).not.toBe('error');
     expect(readAppLoopState(h.repo)?.errorReason ?? '').not.toContain('ghost-persona');
     expect(h.emitError).not.toHaveBeenCalledWith(expect.stringContaining('ghost-persona'));
   });

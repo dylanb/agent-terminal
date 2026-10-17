@@ -294,8 +294,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       parts.push('', ...composeRedCheckInstruction({ command, reportRel: redCheckReportRel(resultRel), resultRel }));
     }
   } else if (req.completion?.kind === 'green') {
-    // §28.5.3 §7d — the GREEN phase-result instruction: the same shared writer, additionally classifying the
-    // build (`build:`) via `build`. The phase-specific bar prose is threaded as `closing`.
+    // §28.5.3 §7d — only the phase-specific bar prose (NOT derivable from the outcome) is spelled here.
     const f = PHASE_RESULT_FIELDS;
     parts.push(
       '',

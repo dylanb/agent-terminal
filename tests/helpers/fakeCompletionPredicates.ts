@@ -1,7 +1,6 @@
-// A scriptable LoopCompletionPredicates for the RED/GREEN engine gate tests (§28.5.3). The domain-seam fake
-// INHERITS the real classifyOutcome/resultOutcome (the shared grammar — no re-spelling, so it cannot drift from
-// production's composition) and overrides only the git/log ground truth (workingTreeTestPaths, changedTestPaths,
-// recoverExitCode) a unit test can't drive, with inert defaults + per-test knobs.
+// A scriptable LoopCompletionPredicates for the RED/GREEN engine gate tests (§28.5.3). It inherits the real
+// predicates and overrides only the git/log ground truth a unit test can't drive, with inert defaults and
+// per-test knobs.
 
 import {
   createLoopCompletionPredicates,
@@ -13,7 +12,7 @@ export function makeFakeCompletionPredicates(
   overrides: Partial<LoopCompletionPredicates> = {},
 ): LoopCompletionPredicates {
   return {
-    ...createLoopCompletionPredicates(), // the REAL classifyOutcome/resultOutcome (shared grammar)
+    ...createLoopCompletionPredicates(),
     changedTestPaths: async () => ({ ok: true, paths: [] }),
     workingTreeTestPaths: async () => ({ ok: true, paths: [] }),
     recoverExitCode: async () => null,

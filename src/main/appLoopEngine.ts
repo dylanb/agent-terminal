@@ -479,7 +479,7 @@ function activeTurnFor(
   def: LoopDefV2,
   opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number; goal?: GoalPlace },
 ): ActiveAppTurn {
-  // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.md`; slice 1 is unsliced.
+  // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.json`; slice 1 is unsliced.
   const base = completionArtifact(def);
   const artifact = base ? sliceArtifact(base, opts?.slice ?? 1) : base;
   return {
@@ -687,8 +687,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.onViewChanged();
   };
 
-  /** The phase-result clause (§28.5.3): the result is present, well-formed, and classifies `want`. The echoed
-   *  outcome is a member of the closed PhaseOutcome set (only a well-formed result yields one), never file text. */
+  /** The phase-result clause (§28.5.3), decided by the same `phaseResultEnd` the agent's own check runs. */
   const resultShortfall = (rel: string, abs: string, want: { outcome: PhaseOutcome; build?: BuildOutcome }): string | null => {
     const content = deps.readArtifact(abs);
     if (content === null) return `the phase result ${rel} is missing`;
@@ -774,8 +773,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       case 'red':
         // §28.5.3 — the SYNCHRONOUS RED clause. The async "a test file was added" + exit-direction clauses are the
         // engine's redAsyncGate; BOTH completion routes AND it in — the done-signal via the runner's
-        // PrecomputedGate (§28 Option C), the human-accept via routeOut computing the same gate — so AC2 holds on both paths (§28.5.6 keeps "a test was added"
-        // machine-authoritative, not a human-override target).
+        // PrecomputedGate (§28 Option C), the human-accept via routeOut computing the same gate — so AC2 holds on
+        // both paths (§28.5.6 keeps "a test was added" machine-authoritative, not a human-override target).
         return resultShortfall(active.completion.resultRel, active.completion.resultPath, { outcome: RED_COMPLETING_OUTCOME });
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause. The async clauses (baseline present+branch-matched, the
