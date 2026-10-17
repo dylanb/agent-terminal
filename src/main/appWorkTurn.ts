@@ -211,6 +211,17 @@ export function flowDocumentLines(code: 'working-tree' | 'described-elsewhere' =
   ];
 }
 
+/** §27.3/§27.6 */
+export function formatDesignCheckLines(): string[] {
+  return [
+    '',
+    'BEFORE YOU PATCH A PARSER — when a fix would add one more special case to code that reads a format this repository defines',
+    '(a file an agent is prompted to write, a config or report grammar), first ask whether changing the format would remove',
+    'the case. If it would, change the format instead: structured data checked by one shared predicate, with free text the',
+    'code does not judge kept outside the parsed part. If a patch is still right, say why where you record the fix.',
+  ];
+}
+
 /** Compose the §27 work-turn prompt (§27.3): the loop brief and the def's recipe body, then — for a
  *  file-producing turn — the instruction to end the artifact with the completion marker, then the shared
  *  done-signal instruction pointing at the §27 done-file (and, for a file-producing turn, verifying the
@@ -223,7 +234,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
   if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
-  parts.push(...flowDocumentLines());
+  parts.push(...flowDocumentLines(), ...formatDesignCheckLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {

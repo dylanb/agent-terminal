@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { composeAppWorkPrompt } from '../../src/main/appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
@@ -521,5 +522,37 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
     expect(h).toMatch(/do not rate severity/i);
     expect(h).toContain('no findings');
     expect(h).toMatch(/do not change any file/i);
+  });
+});
+
+// §27.3/§27.6 (v2.202) — a fixer that patches one more special case into a parser for a format the repository
+// itself defines is how #208 spent rounds on a Markdown grammar: every finding was new, so §27.6's spinning
+// check never fired. The fixer and the work agent are both told to question the format first.
+describe('the format design check, before patching a parser (§27.3/§27.6 v2.202)', () => {
+  const req = () => ({
+    roster: reviewRoster(def()),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/1.md',
+    round: 1,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
+  });
+  const work = { recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion: null };
+  const asks = /special case[\s\S]*format this repository defines[\s\S]*changing the format would remove/i;
+
+  it('asks the fixer whether changing the format would remove the case, and to say why when it patches', () => {
+    const p = composeReviewAndFixPrompt(req());
+    expect(p).toMatch(asks);
+    expect(p).toMatch(/say why/i);
+  });
+
+  it('asks the work agent the same, in the same words', () => {
+    const block = (p: string): string => {
+      const m = asks.exec(p);
+      if (m === null) throw new Error('no design check');
+      return p.slice(p.lastIndexOf('\n\n', m.index), p.indexOf('\n\n', m.index + m[0].length));
+    };
+    expect(block(composeAppWorkPrompt(work))).toBe(block(composeReviewAndFixPrompt(req())));
   });
 });

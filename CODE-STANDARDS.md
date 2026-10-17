@@ -111,6 +111,15 @@ Three disciplines hold it, the last two easy to drop:
    the full roster, and each issue's labelled elements with a disposition from the closed set — never exact
    spacing or ordering. Over-constrain it and the test's fake agent passes while a real model's legitimate
    variation is rejected: mocking the VT parser, one layer out.
+4. **The artifact is structured data, and the agent can run the predicate itself.** A format the loop both
+   writes (through a prompt) and reads is JSON, parsed by the platform parser and judged by the shared
+   predicate, never a hand-written grammar over Markdown. The prompt hands the agent a command that runs that
+   same predicate (the bundled checker, §27.12) and tells it to fix the file until the check passes before it
+   signals done. Free text the predicate does not judge — notes, raw captured output — lives outside the
+   parsed structure, in a file nothing parses. The motivating defect: #208's goal progress file was Markdown
+   read by a hand-written parser, and the review loop found a new valid edge case in it every round (fences,
+   indented code, emphasis) — never a repeat, so §27.6's spinning check could not see it. JSON removed the
+   whole class.
 
 ## Independent-lifecycle state lives in its own file, disjoint from any wholesale-rewritten document
 
