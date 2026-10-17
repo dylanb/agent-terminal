@@ -144,22 +144,27 @@ function headingsOf(lines: readonly string[]): ({ level: number; text: string } 
 }
 
 /** The section under the `## <name>` heading: what follows the name on the heading line, then the lines up to
- *  the next heading. */
+ *  the next heading of its level or higher. */
 function sectionBody(lines: readonly string[], heading: string): string | null {
   const want = atxHeading(heading);
   if (want === null) return null;
   const headings = headingsOf(lines);
   let tail = '';
   const at = headings.findIndex((h) => {
-    if (h === null || h.level !== want.level || !h.text.startsWith(want.text)) return false;
-    const rest = h.text.slice(want.text.length);
+    const text = h === null ? '' : unmarked(h.text);
+    if (h === null || h.level !== want.level || !text.startsWith(want.text)) return false;
+    const rest = text.slice(want.text.length);
     if (rest !== '' && rest[0] !== ':' && !isBlank(rest[0])) return false;
     tail = (rest[0] === ':' ? rest.slice(1) : rest).trim();
     return true;
   });
   if (at < 0) return null;
   const body: string[] = tail.length > 0 ? [tail] : [];
-  for (let i = at + 1; i < lines.length && headings[i] === null; i++) body.push(lines[i]);
+  for (let i = at + 1; i < lines.length; i++) {
+    const h = headings[i];
+    if (h !== null && h.level <= want.level) break;
+    body.push(lines[i]);
+  }
   const text = body.join('\n').trim();
   return text.length > 0 ? text : null;
 }

@@ -58,6 +58,15 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${before}## Blocked\nreal reason\n`)?.blocked).toBe('real reason');
   });
 
+  it('keeps sub-headings under Blocked in the reason, and ends it at the next heading of its level', () => {
+    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n### Question\nModal or page?\n### Recommendation\nShip the modal.\n## Next\n- wait\n';
+    expect(parseGoalProgress(text)?.blocked).toBe('### Question\nModal or page?\n### Recommendation\nShip the modal.');
+  });
+
+  it('reads a Blocked heading written with emphasis', () => {
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## **Blocked**\nWhich one?\n')?.blocked).toBe('Which one?');
+  });
+
   it('reads a Blocked heading with a closing sequence or a tab after it', () => {
     expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked ##\nWhich one?\n')?.blocked).toBe('Which one?');
     expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\tNeed a decision\n')?.blocked).toBe('Need a decision');
