@@ -568,9 +568,9 @@ describe('§27 consolidator-output location resolver', () => {
 // read-source (the round gate, via refactorResultFile) from ONE resolver, round-keyed and disjoint from the
 // round reports and the consolidator output (writer↔reader-location). Confined to the untrusted repo tree.
 describe('§28 refactor-result location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/refactor-results/<N>.md, write-target === read-source', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/refactor-results/<N>.json, write-target === read-source', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
-    expect(refactorResultRel(1)).toBe('.agent-terminal/loop/refactor-results/1.md');
+    expect(refactorResultRel(1)).toBe('.agent-terminal/loop/refactor-results/1.json');
     expect(refactorResultFile(repo, 1)).toBe(join(realpathSync(repo), refactorResultRel(1)));
     expect(refactorResultFile(repo, 2)).toBe(join(realpathSync(repo), refactorResultRel(2)));
   });

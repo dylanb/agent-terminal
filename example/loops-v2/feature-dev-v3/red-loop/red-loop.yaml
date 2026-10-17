@@ -38,6 +38,6 @@ inputs:
     path: impl-report.md
 outputs:
   - id: red-result
-    path: red-result.md
+    path: red-result.json
   - id: impl-report
     path: impl-report.md

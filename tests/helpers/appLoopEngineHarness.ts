@@ -1,4 +1,5 @@
 import { vi, type Mock } from 'vitest';
+import { writePhaseResult } from './phaseResults';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -46,8 +47,6 @@ export const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
 export const INJECTED_MARKER = 'injected-toolkit-marker';
 const completionPredicatesSentinel: LoopCompletionPredicates = {
   classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
-  resultOutcome: () => null,
-  resultBuildOutcome: () => null,
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   recoverExitCode: async () => null,
@@ -105,7 +104,7 @@ export class AppLoopEngineHarness {
     mkdirSync(join(this.repo, 'recipe'), { recursive: true });
     writeFileSync(join(this.repo, 'recipe', 'work.md'), '# work turn\nProduce the plan.\n');
     this.artifactPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md');
-    this.resultPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'red-result.md');
+    this.resultPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'red-result.json');
     this.hosted = 'idle';
     this.defResult = this.resolved(this.fileDef());
   };
@@ -252,16 +251,15 @@ export class AppLoopEngineHarness {
           ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
           : check.kind === 'verdict'
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
-            : `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`,
+            : check.kind === 'progress'
+              ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
+              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);
   };
 
-  writeResult = (content: string): void => {
-    mkdirSync(join(this.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
-    writeFileSync(this.resultPath, content);
-  };
+  writeResult = (content: string, captured?: string | null): void => writePhaseResult(this.resultPath, content, captured);
 
   writeArtifact = (withMarker: boolean): void => {
     mkdirSync(join(this.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });

@@ -10,7 +10,7 @@ import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
 import { ticketPromptLines } from '../shared/currentTicket';
-import { checkerLines } from './reviewTurn';
+import { checkerLines } from './artifactCheck';
 
 /** The boundary name preceding CONSOLIDATE in the §27.3 chain (`REVIEW-AND-FIX → boundary → CONSOLIDATE`).
  *  The engine runs whatever the def declares under this name, never a hardcoded choice (§27.7). */

@@ -52,6 +52,6 @@ inputs:
     path: impl-report.md
 outputs:
   - id: green-result
-    path: green-result.md
+    path: green-result.json
   - id: impl-report
     path: impl-report.md

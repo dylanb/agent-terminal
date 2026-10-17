@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writePhaseResult } from '../helpers/phaseResults';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import { BUNDLED_LOOPS_ROOT, bundledFlowOf } from '../helpers/bundledLoops';
 import { createAppLoopEngine } from '../../src/main/appLoopEngine';
 import { createLoopCompletionPredicates, type LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
-import { examplePhaseResult, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 import { makeFakeCompletionPredicates, deferredWorkingTree, deferredChangedTestPaths } from '../helpers/fakeCompletionPredicates';
@@ -104,16 +105,16 @@ function bindSeededInput(dir: string): string {
 }
 
 describe('§28.4 slice D — per-slice result-artifact identity', () => {
-  it('a RED work turn entered for slice N names its own slice-keyed result artifact (red-result.slice-N.md), so a re-entered RED writes fresh instead of resuming the prior slice', () => {
+  it('a RED work turn entered for slice N names its own slice-keyed result artifact (red-result.slice-N.json), so a re-entered RED writes fresh instead of resuming the prior slice', () => {
     h.defResult = resolved(redDef());
     const engine = makeEngine();
     engine.enter(h.repo, 'red-loop', STEP, 'chain-advance', { slice: 2 });
     engine.onInjectable(); // drain the pre-work boundary so the work prompt injects
     const workPrompt = h.injected[h.injected.length - 1];
     // §28.4 D1 — the prompt must send the agent at slice 2's OWN result file; a re-entered RED that named the
-    // static red-result.md would read slice 1's product back and its sync completion clause would pass vacuously.
-    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.md');
-    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.md');
+    // static red-result.json would read slice 1's product back and its sync completion clause would pass vacuously.
+    expect(workPrompt).toContain('.agent-terminal/loop/artifacts/red-result.slice-2.json');
+    expect(workPrompt).not.toContain('.agent-terminal/loop/artifacts/red-result.json');
   });
 });
 
@@ -2357,8 +2358,9 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     // `null` composes a plain work prompt with NO result instruction (and the done-signal loses its verify
     // clause) — a real agent would never be told to write the file. This pins that wiring at the injected
     // boundary, mirroring the file case's injected[1] assertions (recipe + marker + done-signal).
-    expect(h.injected[1]).toContain('red-result.md'); // the resultRel the engine threaded — the file to write
-    expect(h.injected[1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // the grammar the agent must emit
+    expect(h.injected[1]).toContain(basename(h.resultPath)); // the resultRel the engine threaded — the file to write
+    expect(h.injected[1]).toContain(phaseOutputRel(basename(h.resultPath))); // where the raw run goes
+    expect(h.injected[1]).toMatch(new RegExp(`check-artifact result \\S*${basename(h.resultPath)} ${RED_COMPLETING_OUTCOME} no-build`));
     expect(h.injected[1]).toContain(RED_COMPLETING_OUTCOME); // the RED bar named in the instruction
   });
 
@@ -2580,7 +2582,8 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     seedBaseline();
     enterGreen(engine);
     expect(h.injected[1]).toContain(basename(h.resultPath)); // the result file the engine threaded
-    expect(h.injected[1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    expect(h.injected[1]).toContain(phaseOutputRel(basename(h.resultPath)));
+    expect(h.injected[1]).toMatch(new RegExp(`check-artifact result \\S*${basename(h.resultPath)} ${GREEN_COMPLETING_OUTCOME} ${GREEN_COMPLETING_BUILD_OUTCOME}`));
     expect(h.injected[1]).toContain(GREEN_COMPLETING_OUTCOME); // `passed`
     expect(h.injected[1]).toContain(GREEN_COMPLETING_BUILD_OUTCOME); // `built`
   });
@@ -2652,7 +2655,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(reviewChained()).toBe(false);
   });
 
-  it('IT-GREEN-3c: passed but NO build line (resultBuildOutcome null) does NOT complete → retry-then-error', async () => {
+  it('IT-GREEN-3c: passed but NO build field does NOT complete → retry-then-error', async () => {
     const engine = makeEngine(undefined, greenFake());
     seedBaseline();
     enterGreen(engine);
@@ -2663,6 +2666,22 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     await flushGate();
     expect(h.emitError).toHaveBeenCalled();
     expect(reviewChained()).toBe(false);
+  });
+
+  // §28.5.5 (v2.202) — the raw run is evidence the result is required to keep beside it.
+  it('IT-GREEN-3d: passed and built but with no captured run, or an empty one, does NOT complete, naming the run file', async () => {
+    for (const captured of [null, '  \n']) {
+      const engine = makeEngine(undefined, greenFake());
+      seedBaseline();
+      enterGreen(engine);
+      writeResult(examplePhaseResult('passed', { build: 'built' }), captured);
+      engine.onDoneSignal();
+      await flushGate();
+      engine.onDoneSignal();
+      await flushGate();
+      expect(reviewChained()).toBe(false);
+      expect(readAppLoopState(h.repo)?.errorReason).toMatch(new RegExp(`its captured run \\S*${phaseOutputRel(basename(h.resultPath))} is (missing|empty)`));
+    }
   });
 
   it('IT-GREEN-4: exit-direction — exit non-zero rejects a passed claim (OPPOSITE of RED); exit 0 allows it', async () => {
@@ -2872,7 +2891,8 @@ describe('§28.5.3 — the refactor loop review-turn shape', () => {
     driveToReviewInjected(engine); // work (commits) → review round 1 prompt injects
     // The injected review prompt names the round-keyed refactor-result rel (from resolveRefactorResultLocation).
     expect(h.injected[h.injected.length - 1]).toContain(refactorResultRel(1));
-    expect(h.injected[h.injected.length - 1]).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    expect(h.injected[h.injected.length - 1]).toContain(phaseOutputRel(refactorResultRel(1)));
+    expect(h.injected[h.injected.length - 1]).toContain(`check-artifact result ${refactorResultRel(1)} passed no-build`);
   });
 
   it('IT-REFAC-turn: a NON-refactor loop\'s review round names no result file (regression — existing loops unchanged)', () => {
@@ -2907,11 +2927,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
   const passed = (): string => examplePhaseResult(REFACTOR_COMPLETING_OUTCOME); // `outcome: passed`, no build
-  const writeRefactorResult = (content: string, round = 1): void => {
-    const p = refactorResultFile(h.repo, round)!;
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, content);
-  };
+  const writeRefactorResult = (content: string, round = 1): void => writePhaseResult(refactorResultFile(h.repo, round)!, content);
   const writeMalformedReport = (round = 1): void => {
     const p = roundReportFile(h.repo, round)!;
     mkdirSync(dirname(p), { recursive: true });

@@ -24,7 +24,8 @@ import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completi
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
-import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME, type BuildOutcome } from '../shared/buildOutcome';
+import { phaseOutputRel, phaseResultEnd } from '../shared/phaseResult';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
@@ -35,7 +36,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearGoalSessionFiles, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -688,11 +689,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   /** The phase-result clause (§28.5.3): the result is present, well-formed, and classifies `want`. The echoed
    *  outcome is a member of the closed PhaseOutcome set (only a well-formed result yields one), never file text. */
-  const resultShortfall = (rel: string, content: string | null, want: PhaseOutcome): string | null => {
+  const resultShortfall = (rel: string, abs: string, want: { outcome: PhaseOutcome; build?: BuildOutcome }): string | null => {
+    const content = deps.readArtifact(abs);
     if (content === null) return `the phase result ${rel} is missing`;
-    const outcome = deps.completionPredicates.resultOutcome(content);
-    if (outcome === null) return `the phase result ${rel} is not well-formed`;
-    return outcome === want ? null : `the phase result ${rel} reports ${outcome}, not ${want}`;
+    const output = phaseOutputFile(abs);
+    const end = phaseResultEnd({ result: content, captured: output === null ? null : deps.readArtifact(output), capturedRel: phaseOutputRel(rel) }, want);
+    return end.ok ? null : `the phase result ${rel}: ${end.problem}`;
   };
 
   const UNRESOLVED_SHORTFALL = 'the loop definition no longer resolves';
@@ -743,7 +745,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // (no build). The exit-direction is the async refactorAsyncGate (§28.5.3:124); the frozen check is a
         // non-blocking side probe, NOT part of this gate (§28.8.3).
         const { resultRel, resultPath } = active.completion;
-        return resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME);
+        return resultShortfall(resultRel, resultPath, { outcome: REFACTOR_COMPLETING_OUTCOME });
       }
       return null;
     }
@@ -759,7 +761,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.run.kind !== 'goal') return 'a refactor work turn runs only as a goal session';
         const abs = goalRefactorResultFile(active.repoDir, active.run.session);
         if (abs === null) return 'the refactor result location cannot be resolved';
-        return resultShortfall(goalRefactorResultRel(active.run.session), deps.readArtifact(abs), REFACTOR_COMPLETING_OUTCOME);
+        return resultShortfall(goalRefactorResultRel(active.run.session), abs, { outcome: REFACTOR_COMPLETING_OUTCOME });
       }
       case 'unresolved':
         return UNRESOLVED_SHORTFALL; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
@@ -776,18 +778,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // routes AND it in — the done-signal via the runner's PrecomputedGate (§28 Option C), the human-accept
         // via routeOut computing the same gate — so AC2 holds on both paths (§28.5.6 keeps "a test was added"
         // machine-authoritative, not a human-override target).
-        return resultShortfall(active.completion.resultRel, deps.readArtifact(active.completion.resultPath), RED_COMPLETING_OUTCOME);
+        return resultShortfall(active.completion.resultRel, active.completion.resultPath, { outcome: RED_COMPLETING_OUTCOME });
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause: the result file is shape-valid AND classifies `passed` AND its
         // build classifies `built` (both from the injected predicates, which return a value only for a well-formed
         // result). The async clauses (baseline present+branch-matched, the exit-direction, and the NON-blocking
         // frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
         const { resultRel, resultPath } = active.completion;
-        const content = deps.readArtifact(resultPath);
-        const outcome = resultShortfall(resultRel, content, GREEN_COMPLETING_OUTCOME);
-        if (outcome !== null || content === null) return outcome;
-        const build = deps.completionPredicates.resultBuildOutcome(content);
-        return build === GREEN_COMPLETING_BUILD_OUTCOME ? null : `the phase result ${resultRel} reports build ${build ?? 'unclassified'}, not ${GREEN_COMPLETING_BUILD_OUTCOME}`;
+        return resultShortfall(resultRel, resultPath, { outcome: GREEN_COMPLETING_OUTCOME, build: GREEN_COMPLETING_BUILD_OUTCOME });
       }
     }
   };
@@ -1001,7 +999,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (problems.length === 0) return null;
       if (active.completion.kind === 'refactor-report') {
         const { resultRel, resultPath } = active.completion;
-        if (resultShortfall(resultRel, deps.readArtifact(resultPath), REFACTOR_COMPLETING_OUTCOME) !== null) return null;
+        if (resultShortfall(resultRel, resultPath, { outcome: REFACTOR_COMPLETING_OUTCOME }) !== null) return null;
       }
       return composeReportRepairPrompt({
         reportRel: active.reportRel,
@@ -1087,9 +1085,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     );
   };
 
-  const refactorPromptCompletion = (session: string): { kind: 'refactor'; resultRel: string } => ({
+  const refactorPromptCompletion = (session: string): { kind: 'refactor'; resultRel: string; checkCommand: string } => ({
     kind: 'refactor',
     resultRel: goalRefactorResultRel(session),
+    checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: goalRefactorResultRel(session), outcome: REFACTOR_COMPLETING_OUTCOME }),
   });
 
   const readBrief = (a: { briefPath?: string }): string | undefined | null =>
@@ -1145,7 +1144,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
           // §28.5.3 — a refactor round carries its round-keyed result path so the composer appends the
           // phase-result instruction; a plain review round has no `refactor-report` completion and none.
-          ...(active.completion.kind === 'refactor-report' ? { resultRel: active.completion.resultRel } : {}),
+          ...(active.completion.kind === 'refactor-report'
+            ? {
+                resultRel: active.completion.resultRel,
+                resultCheckCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: REFACTOR_COMPLETING_OUTCOME }),
+              }
+            : {}),
           ...(active.completion.kind === 'red-report'
             ? { redCheck: { command: deps.completionPredicates.redCheckCommand(active.repoDir), resultRel: active.completion.resultRel } }
             : {}),
@@ -1167,9 +1171,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           active.completion.kind === 'file'
             ? { kind: 'file', artifactRel: active.completion.artifactRel, marker: active.completion.marker }
             : active.completion.kind === 'red'
-              ? { kind: 'red', resultRel: active.completion.resultRel, redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir) }
+              ? {
+                  kind: 'red',
+                  resultRel: active.completion.resultRel,
+                  checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: RED_COMPLETING_OUTCOME }),
+                  redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir),
+                }
               : active.completion.kind === 'green'
-                ? { kind: 'green', resultRel: active.completion.resultRel }
+                ? {
+                    kind: 'green',
+                    resultRel: active.completion.resultRel,
+                    checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: GREEN_COMPLETING_OUTCOME, build: GREEN_COMPLETING_BUILD_OUTCOME }),
+                  }
                 : active.completion.kind === 'refactor' && active.run.kind === 'goal'
                   ? refactorPromptCompletion(active.run.session)
                   : null,
@@ -1769,12 +1782,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // truth, not a human-override target, the RED/GREEN twin), keeping AC2 route-invariant. When it
           // finalizes it records the non-blocking flag on this route (accept has no onComplete to drain the stash).
           if (active.completion.kind === 'refactor-report') {
-            const result = deps.readArtifact(active.completion.resultPath);
-            if (result === null) {
+            if (deps.readArtifact(active.completion.resultPath) === null) {
               refuseRouteOut('turn-error', 'the refactor round has no result to accept — retry or terminate', active.round);
               return;
             }
-            if (deps.completionPredicates.resultOutcome(result) !== REFACTOR_COMPLETING_OUTCOME) {
+            if (resultShortfall(active.completion.resultRel, active.completion.resultPath, { outcome: REFACTOR_COMPLETING_OUTCOME }) !== null) {
               refuseRouteOut('turn-error', "the refactor round's tests are not passing — retry or terminate", active.round);
               return;
             }

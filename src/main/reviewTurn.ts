@@ -11,8 +11,8 @@ import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, exampleRoundReport } from '../shared/roundReport';
-import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
-import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
+import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
+import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
@@ -85,6 +85,8 @@ export interface ReviewAndFixPromptReq {
    *  additionally runs the targeted tests and writes the result the round gate reads (softer than GREEN —
    *  {passed}, no build). Absent for RED/GREEN loops' review rounds (no phase-result block emitted). */
   resultRel?: string;
+  /** §27.12 — the command that runs the loop's own check on the refactor round's phase result; absent omits it. */
+  resultCheckCommand?: string;
   /** §28.5.3 */
   redCheck?: { command: string | null; resultRel: string };
   /** §19.1 — the GitHub issue the flow resolved (the SAME identity the gate side-effects act on), named so the
@@ -123,17 +125,6 @@ function reportFormatLines(sections: string[], whichReviewers: string, kind: Age
     `- each issue: \`"${f.issue}"\`, \`"${f.disposition}"\`, \`"${f.reason}"\`, and (when fixed) \`"${f.whatChanged}"\`, each as text.`,
     `- each \`"${f.disposition}"\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`"${d}"\``).join(' / ')} — spelled`,
     '  verbatim, no other value.',
-  ];
-}
-
-/** §27.12 — tell the agent to run the loop's own checker and fix the file until it passes, before done. */
-export function checkerLines(checkCommand: string, what: string): string[] {
-  return [
-    '',
-    `Before writing the done-signal, run the loop's own format check on the ${what} from the repo root and fix`,
-    `the ${what} until it prints \`${ARTIFACT_CHECK_PASSED}\` — the loop accepts the turn only when this check passes:`,
-    '',
-    `    ${checkCommand}`,
   ];
 }
 
@@ -373,9 +364,10 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
         resultRel: req.resultRel,
         completingOutcome: REFACTOR_COMPLETING_OUTCOME,
         closing: [
-          `This round is done only when the tests still pass (\`${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${REFACTOR_COMPLETING_OUTCOME}\`).`,
+          `This round is done only when the tests still pass (\`"${PHASE_RESULT_FIELDS.outcome}": "${REFACTOR_COMPLETING_OUTCOME}"\`).`,
           'A failing or errored test does NOT complete it — fix so the tests pass, then re-run and re-classify.',
           '(A legitimate fixture change is recorded and flagged for regression-guard and the human, not blocked.)',
+          ...(req.resultCheckCommand !== undefined ? checkerLines(req.resultCheckCommand, 'phase result') : []),
         ],
       }),
     );

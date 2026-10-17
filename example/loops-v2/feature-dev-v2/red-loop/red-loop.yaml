@@ -34,4 +34,4 @@ inputs:
     path: plan.md
 outputs:
   - id: red-result
-    path: red-result.md
+    path: red-result.json

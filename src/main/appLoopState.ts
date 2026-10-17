@@ -10,6 +10,7 @@ import { errMsg, isErrno } from './errno';
 import { readDirEntries } from './dirEntries';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
+import { phaseOutputRel } from '../shared/phaseResult';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
  *  def parsing); this keys resume-file compatibility. A file declaring any other value fails to parse. */
@@ -32,7 +33,7 @@ const ARMED_INTERRUPT_FILE = 'armed-interrupt.yaml';
 const POLISH_FILE = 'polish.yaml';
 /** The round-keyed leaf filename — spelled once so each write-target and its read-source cannot diverge on
  *  the naming scheme (CLAUDE.md writer↔reader-location). */
-const roundLeaf = (round: number, ext: 'json' | 'md' = 'md'): string => `${round}.${ext}`;
+const roundLeaf = (round: number): string => `${round}.json`;
 
 /** A round is a positive integer or it is no round at all. The ONE gate both the writer and the reader of the
  *  persisted `round` field consult, so a value the writer drops can never be one the reader keeps (CLAUDE.md
@@ -147,7 +148,8 @@ export function isGoalSession(v: unknown): v is string {
 const GOAL_SESSION_FILES = {
   progress: { prefix: 'goal-progress.', suffix: '.json' },
   notes: { prefix: 'goal-notes.', suffix: '.md' },
-  refactorResult: { prefix: 'refactor-result.', suffix: '.md' },
+  refactorResult: { prefix: 'refactor-result.', suffix: '.json' },
+  refactorOutput: { prefix: 'refactor-result.', suffix: '.output.txt' },
 } as const;
 type GoalSessionFile = keyof typeof GOAL_SESSION_FILES;
 
@@ -320,7 +322,7 @@ export function readAppLoopState(repoDir: string): AppLoopRunState | null {
  *  the one resolver whose READ-source half is `roundReportFile`, so the two cannot drift (CLAUDE.md
  *  writer↔reader-location). */
 export function roundReportRel(round: number): string {
-  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, roundLeaf(round, 'json')].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, roundLeaf(round)].join('/');
 }
 
 /** The confined absolute round-report path the engine READS back to gate completion (§27.5), or null when
@@ -329,14 +331,23 @@ export function roundReportRel(round: number): string {
 export function roundReportFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, roundLeaf(round, 'json')));
+  return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+}
+
+/** §28.5.5 — the confined path of the raw captured run kept beside the phase result at `resultPath`, which is
+ *  itself already confined; null when the sibling cannot be reduced to a symlink-free path inside the result's own
+ *  directory (CWE-22/59). */
+export function phaseOutputFile(resultPath: string): string | null {
+  const jail = resolveJail(path.dirname(resultPath));
+  if (jail === null) return null;
+  return confinedRealPath(jail, path.join(jail, phaseOutputRel(path.basename(resultPath))));
 }
 
 /** The repo-relative consolidator-output path the consolidator is instructed to write (§27.6) — the
  *  WRITE-target half of the resolver whose READ-source half is `consolidatorOutputFile`, so the two cannot
  *  drift. Disjoint from the round reports so a round's report and its verdict never collide. */
 export function consolidatorOutputRel(round: number): string {
-  return [...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR, roundLeaf(round, 'json')].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR, roundLeaf(round)].join('/');
 }
 
 /** The confined absolute consolidator-output path the engine READS back to gate the consolidator turn
@@ -344,7 +355,7 @@ export function consolidatorOutputRel(round: number): string {
 export function consolidatorOutputFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, roundLeaf(round, 'json')));
+  return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }
 
 /** §28.5.3 — the repo-relative refactor-result path the fixer is instructed to write, the WRITE-target half of

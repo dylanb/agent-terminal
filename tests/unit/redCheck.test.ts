@@ -1,16 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-  INTENDED_FAILURES_HEADING,
   composeRedCheckInstruction,
   exampleIntendedFailures,
   exampleRedCheckReport,
-  parseIntendedFailures,
   parseRedCheckReport,
   redCheckReportRel,
   redCheckVerdict,
   type RedCheckReport,
 } from '../../src/shared/redCheck';
-import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../../src/shared/phaseResult';
+import { PHASE_RESULT_FIELDS, examplePhaseResult, readPhaseResult, type IntendedFailure } from '../../src/shared/phaseResult';
 
 const report = (tests: RedCheckReport['tests']): string => JSON.stringify({ version: 1, tests });
 const parsed = (text: string): RedCheckReport => {
@@ -18,12 +16,11 @@ const parsed = (text: string): RedCheckReport => {
   if (!r.ok) throw new Error(r.reason);
   return r.report;
 };
-const resultWith = (intended: string[]): string =>
-  ['# Phase result', '', 'outcome: failed-assertion', '', INTENDED_FAILURES_HEADING, '', ...intended, '', PHASE_RESULT_GRAMMAR.capturedOutputHeading, '', 'raw run', ''].join('\n');
-const intendedOf = (text: string) => {
-  const r = parseIntendedFailures(text);
-  if (!r.ok) throw new Error(r.reason);
-  return r.intended;
+const resultWith = (intendedFailures: IntendedFailure[]): string => examplePhaseResult('failed-assertion', { intendedFailures });
+const intendedOf = (text: string): IntendedFailure[] => {
+  const r = readPhaseResult(text);
+  if (!r.ok) throw new Error(r.problem);
+  return r.result.intendedFailures ?? [];
 };
 
 describe('parseRedCheckReport (§28.5.2)', () => {
@@ -44,24 +41,6 @@ describe('parseRedCheckReport (§28.5.2)', () => {
     ['a file carrying a control character', report([{ file: 'tests/a\n.test.ts', name: 'x', outcome: 'passed', failures: [] }])],
   ])('rejects %s', (_label, text) => {
     expect(parseRedCheckReport(text).ok).toBe(false);
-  });
-});
-
-describe('parseIntendedFailures (§28.5.3)', () => {
-  it('reads each declared file:line from the intended-failures section', () => {
-    expect(intendedOf(resultWith(['- tests/a.test.ts:12', '- tests/b.test.ts:40']))).toEqual([
-      { file: 'tests/a.test.ts', line: 12 },
-      { file: 'tests/b.test.ts', line: 40 },
-    ]);
-  });
-
-  it('never reads a look-alike line from the captured output', () => {
-    const text = `${examplePhaseResult('failed-assertion')}\n${INTENDED_FAILURES_HEADING}\n- tests/a.test.ts:12\n`;
-    expect(intendedOf(text)).toEqual([]);
-  });
-
-  it('rejects an entry that is not file:line', () => {
-    expect(parseIntendedFailures(resultWith(['- tests/a.test.ts'])).ok).toBe(false);
   });
 });
 
@@ -168,11 +147,17 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
     expect(v).toEqual({ ok: true, unchecked: [] });
   });
 
-  it('the instruction names the command, the report path, and the intended-failures heading', () => {
-    const text = composeRedCheckInstruction({ command: 'node scripts/red-check.mjs', reportRel: 'r.check.json', resultRel: 'r.md' }).join('\n');
+  it('the instruction names the command, the report path, and the intended-failures field', () => {
+    const text = composeRedCheckInstruction({ command: 'node scripts/red-check.mjs', reportRel: 'r.check.json', resultRel: 'r.json' }).join('\n');
     expect(text).toContain('node scripts/red-check.mjs');
     expect(text).toContain('r.check.json');
-    expect(text).toContain(INTENDED_FAILURES_HEADING);
+    expect(text).toContain(`"${PHASE_RESULT_FIELDS.intendedFailures}"`);
+  });
+
+  it('the result the instruction shows declares the failures its example report observes', () => {
+    const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.json' }).join('\n');
+    const shown = text.slice(text.lastIndexOf('{\n  "outcome"'));
+    expect(redCheckVerdict({ report: parsed(exampleRedCheckReport()), intended: intendedOf(shown), addedTestPaths: ['tests/adder.test.ts'] })).toEqual({ ok: true, unchecked: [] });
   });
 
   it('the instruction says a declared failure in a file the check does not run is still declared, and recorded as unchecked', () => {

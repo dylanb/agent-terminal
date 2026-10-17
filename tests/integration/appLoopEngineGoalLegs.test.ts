@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { goalNotesRel, goalProgressRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { goalNotesRel, goalProgressRel, goalRefactorResultRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
@@ -141,6 +142,18 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
 
     expect(existsSync(join(h.repo, goalProgressRel(EARLIER_SESSION)))).toBe(false);
     expect(progressRel()).not.toBe(goalProgressRel(EARLIER_SESSION));
+  });
+
+  it('a fresh work turn starts without the refactor result, or its captured run, an earlier turn left', () => {
+    const result = goalRefactorResultRel(EARLIER_SESSION);
+    writeProgressAt(result, examplePhaseResult('passed'));
+    writeProgressAt(phaseOutputRel(result), 'raw run');
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+
+    expect(existsSync(join(h.repo, result))).toBe(false);
+    expect(existsSync(join(h.repo, phaseOutputRel(result)))).toBe(false);
   });
 
   it('each fresh work turn keeps its progress in a file of its own', () => {

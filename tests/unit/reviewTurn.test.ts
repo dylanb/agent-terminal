@@ -4,7 +4,7 @@ import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, R
 import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
-import { PHASE_RESULT_GRAMMAR, examplePhaseResult } from '../../src/shared/phaseResult';
+import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.3/§27.4/§27.5 — the pure, data-driven pieces of the §27 review-and-fix turn: the pre-review boundary
@@ -373,7 +373,7 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
 // than GREEN — no build classification) after the report block, and verifies the RESULT on disk before the
 // done-file. Absent `resultRel`, the prompt is the pre-S5 review prompt (RED/GREEN loops' review rounds unchanged).
 describe('composeReviewAndFixPrompt — the refactor round phase-result instruction (§28.5.3)', () => {
-  const RESULT_REL = '.agent-terminal/loop/artifacts/refactor-result-1.md';
+  const RESULT_REL = '.agent-terminal/loop/refactor-results/1.json';
   const refactorReq = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
@@ -395,15 +395,15 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
   it('appends the phase-result WRITER block naming the result file, the outcome vocabulary, and the passed few-shot', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
     expect(p).toContain(RESULT_REL);
-    expect(p).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel);
-    expect(p).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
+    expect(p).toContain(phaseOutputRel(RESULT_REL));
     for (const outcome of PHASE_OUTCOMES) expect(p).toContain(outcome);
     expect(p).toContain(examplePhaseResult(REFACTOR_COMPLETING_OUTCOME).trimEnd());
   });
 
   it('is SOFTER than GREEN — no build classification (§28.5.3: refactor gates on {passed}, not build)', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
-    expect(p).not.toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}:`);
+    expect(p).not.toContain(`"${PHASE_RESULT_FIELDS.build}"`);
     for (const b of BUILD_OUTCOMES) expect(p).not.toContain(b);
   });
 
@@ -418,8 +418,8 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     const { resultRel: _drop, ...withoutResult } = refactorReq();
     const p = composeReviewAndFixPrompt(withoutResult);
     expect(p).not.toContain(RESULT_REL);
-    expect(p).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // no phase-result section
-    expect(p).not.toContain('Run the test command for this change and classify'); // no classify instruction
+    expect(p).not.toContain(phaseOutputRel(RESULT_REL)); // no phase-result section
+    expect(p).not.toContain('Run the test command for this change'); // no classify instruction
     // the plain review round still verifies the REPORT on disk (unchanged)
     expect(p).toContain('re-read .agent-terminal/loop/reports/1.json');
   });

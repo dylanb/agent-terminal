@@ -8,14 +8,14 @@ import type { SliceBrief } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
-import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
+import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
-import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
+import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -35,8 +35,8 @@ export function completionArtifact(def: LoopDefV2): { path: string; rel: string 
   return binding ? { path: binding.path, rel: binding.rel } : null;
 }
 
-/** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.md` →
- *  `.../red-result.slice-2.md`. Only the basename is rewritten (the directory is untouched), and `slice` is a
+/** Insert `.slice-N` before the final extension of a path's last segment: `.../red-result.json` →
+ *  `.../red-result.slice-2.json`. Only the basename is rewritten (the directory is untouched), and `slice` is a
  *  positive integer, so nothing traversal-shaped can reach the string — the already-confined location stays in
  *  its artifacts subtree. */
 function insertSliceSuffix(p: string, slice: number): string {
@@ -85,9 +85,9 @@ export interface AppWorkPromptReq {
    *  (done-signal alone). `red` and `green` share the result-file shape, differing only in the bar the prose sets. */
   completion:
     | { kind: 'file'; artifactRel: string; marker: string }
-    | { kind: 'red'; resultRel: string; redCheckCommand: string | null }
-    | { kind: 'green'; resultRel: string }
-    | { kind: 'refactor'; resultRel: string }
+    | { kind: 'red'; resultRel: string; checkCommand: string; redCheckCommand: string | null }
+    | { kind: 'green'; resultRel: string; checkCommand: string }
+    | { kind: 'refactor'; resultRel: string; checkCommand: string }
     | null;
   /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
@@ -222,6 +222,9 @@ export function formatDesignCheckLines(): string[] {
   ];
 }
 
+/** §27.3 — a goal session's result is judged only once it records the goal done, not at a checkpoint. */
+const resultCheckMoment = (req: AppWorkPromptReq): string => (req.goalProgress !== undefined ? 'you record the goal done' : 'writing the done-signal');
+
 /** Compose the §27 work-turn prompt (§27.3): the loop brief and the def's recipe body, then — for a
  *  file-producing turn — the instruction to end the artifact with the completion marker, then the shared
  *  done-signal instruction pointing at the §27 done-file (and, for a file-producing turn, verifying the
@@ -271,16 +274,16 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
     // §28.5.5 §7d — the RED phase-result instruction, composed by the shared writer (composePhaseResultInstruction:
     // grammar tokens + outcome vocabulary from the descriptors, the canonical few-shot embedded fence-free). Only
     // the phase-specific bar prose (NOT derivable from the outcome) is spelled here and threaded as `closing`.
-    const g = PHASE_RESULT_GRAMMAR;
     parts.push(
       '',
       ...composePhaseResultInstruction({
         resultRel: req.completion.resultRel,
         completingOutcome: RED_COMPLETING_OUTCOME,
         closing: [
-          `This turn is a valid RED only when a test you ADDED fails by assertion (\`${g.outcomeLabel}: ${RED_COMPLETING_OUTCOME}\`).`,
+          `This turn is a valid RED only when a test you ADDED fails by assertion (\`"${PHASE_RESULT_FIELDS.outcome}": "${RED_COMPLETING_OUTCOME}"\`).`,
           'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
           'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+          ...checkerLines(req.completion.checkCommand, 'phase result', resultCheckMoment(req)),
         ],
       }),
     );
@@ -292,7 +295,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   } else if (req.completion?.kind === 'green') {
     // §28.5.3 §7d — the GREEN phase-result instruction: the same shared writer, additionally classifying the
     // build (`build:`) via `build`. The phase-specific bar prose is threaded as `closing`.
-    const g = PHASE_RESULT_GRAMMAR;
+    const f = PHASE_RESULT_FIELDS;
     parts.push(
       '',
       ...composePhaseResultInstruction({
@@ -300,9 +303,10 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
         completingOutcome: GREEN_COMPLETING_OUTCOME,
         build: { completingBuildOutcome: GREEN_COMPLETING_BUILD_OUTCOME },
         closing: [
-          `This turn is a valid GREEN only when the tests pass (\`${g.outcomeLabel}: ${GREEN_COMPLETING_OUTCOME}\`) AND the build succeeds (\`${g.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}\`).`,
+          `This turn is a valid GREEN only when the tests pass (\`"${f.outcome}": "${GREEN_COMPLETING_OUTCOME}"\`) AND the build succeeds (\`"${f.build}": "${GREEN_COMPLETING_BUILD_OUTCOME}"\`).`,
           'A failing or errored test, a broken build (`build-failed`), or any non-passing outcome does NOT complete it —',
           'fix the implementation so the tests pass and the build succeeds, then re-run and re-classify.',
+          ...checkerLines(req.completion.checkCommand, 'phase result', resultCheckMoment(req)),
         ],
       }),
     );
@@ -314,8 +318,9 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
         resultRel: req.completion.resultRel,
         completingOutcome: REFACTOR_COMPLETING_OUTCOME,
         closing: [
-          `This turn is done only when the tests still pass (\`${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${REFACTOR_COMPLETING_OUTCOME}\`).`,
+          `This turn is done only when the tests still pass (\`"${PHASE_RESULT_FIELDS.outcome}": "${REFACTOR_COMPLETING_OUTCOME}"\`).`,
           'A failing or errored test does NOT complete it — fix so the tests pass, then re-run and re-classify.',
+          ...checkerLines(req.completion.checkCommand, 'phase result', resultCheckMoment(req)),
         ],
       }),
     );
