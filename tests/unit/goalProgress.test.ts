@@ -20,6 +20,14 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     expect(parseGoalProgress(text)).toEqual({ leg: 3, status: 'checkpoint', blocked: null });
   });
 
+  it.each([
+    ['in code spans', '- Leg: `2`\n- Status: `checkpoint`\n', { leg: 2, status: 'checkpoint' }],
+    ['with bold labels', '**Leg:** 1\n**Status:** done\n', { leg: 1, status: 'done' }],
+    ['in bold values and capitals', 'Leg: **1**\nStatus: **Done**\n', { leg: 1, status: 'done' }],
+  ])('reads the fields written %s', (_how, text, want) => {
+    expect(parseGoalProgress(text)).toEqual({ ...want, blocked: null });
+  });
+
   it('returns the blocked section text as the reason', () => {
     const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\nThe plan says both A and B.\nPick one.\n\n## Next\n- wait\n';
     expect(parseGoalProgress(text)?.blocked).toBe('The plan says both A and B.\nPick one.');
@@ -31,6 +39,7 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     ['a leg that is not a positive whole number', 'Leg: 0\nStatus: done\n'],
     ['a fractional leg', 'Leg: 1.5\nStatus: done\n'],
     ['an unknown status', 'Leg: 1\nStatus: finished\n'],
+    ['an unknown status in a code span', 'Leg: 1\nStatus: `finished`\n'],
     ['blocked with nothing under Blocked', 'Leg: 1\nStatus: blocked\n\n## Blocked\n\n## Next\n'],
     ['blocked with no Blocked section', 'Leg: 1\nStatus: blocked\n'],
   ])('is not well-formed with %s', (_what, text) => {

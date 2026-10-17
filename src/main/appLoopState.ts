@@ -6,6 +6,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
+import { readDirEntries } from './dirEntries';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
@@ -74,6 +75,8 @@ export interface AppLoopRunState {
   chainedInputs?: string[];
   /** §27.3 */
   leg?: number;
+  /** §27.3 */
+  goalSession?: string;
 }
 
 /** Non-empty text is text; blank or non-string is none. The ONE gate the writer and reader of any human-typed
@@ -124,23 +127,43 @@ export function writeGoalPrompt(repoDir: string, prompt: string): boolean {
   }
 }
 
-const GOAL_PROGRESS_FILE = 'goal-progress.md';
+const GOAL_PROGRESS_PREFIX = 'goal-progress.';
+const GOAL_PROGRESS_SUFFIX = '.md';
+const GOAL_SESSION_LENGTH = 8;
 
-/** §27.3 */
-export function goalProgressRel(): string {
-  return [...APP_LOOP_DIR_SEGMENTS, GOAL_PROGRESS_FILE].join('/');
+/** §27.3 — the id a fresh goal turn keeps its progress under: eight lowercase hex digits. */
+export function isGoalSession(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length !== GOAL_SESSION_LENGTH) return false;
+  for (const c of v) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  return true;
+}
+
+function goalProgressLeaf(session: string): string {
+  if (!isGoalSession(session)) throw new Error(`not a goal session id: ${JSON.stringify(session)}`);
+  return `${GOAL_PROGRESS_PREFIX}${session}${GOAL_PROGRESS_SUFFIX}`;
 }
 
 /** §27.3 */
-export function goalProgressFile(repoDir: string): string | null {
-  return loopAreaFile(repoDir, GOAL_PROGRESS_FILE);
+export function goalProgressRel(session: string): string {
+  return [...APP_LOOP_DIR_SEGMENTS, goalProgressLeaf(session)].join('/');
 }
 
-/** §27.3 — best-effort; an absent file is already the cleared state. */
+/** §27.3 */
+export function goalProgressFile(repoDir: string, session: string): string | null {
+  return loopAreaFile(repoDir, goalProgressLeaf(session));
+}
+
+/** §27.3 — removes every goal session's progress file; an absent loop area is already the cleared state. */
 export function clearGoalProgress(repoDir: string): void {
-  const file = goalProgressFile(repoDir);
-  if (file === null) return;
-  rmSync(file, { force: true });
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null) return;
+  for (const e of readDirEntries(jail)) {
+    if (!e.isFile || !e.name.startsWith(GOAL_PROGRESS_PREFIX) || !e.name.endsWith(GOAL_PROGRESS_SUFFIX)) continue;
+    const session = e.name.slice(GOAL_PROGRESS_PREFIX.length, -GOAL_PROGRESS_SUFFIX.length);
+    if (!isGoalSession(session)) continue;
+    const file = goalProgressFile(repoDir, session);
+    if (file !== null) rmSync(file, { force: true });
+  }
 }
 
 /** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
@@ -181,6 +204,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // §27.10 — absent reads back as "carried nothing", so a recovered carry fails toward NOT carrying.
   if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
   if (isPositiveWhole(state.leg)) doc.leg = state.leg;
+  if (isGoalSession(state.goalSession)) doc.goal_session = state.goalSession;
   return yaml.dump(doc);
 }
 
@@ -222,6 +246,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
       ? (doc.chained_inputs as string[])
       : undefined;
   const leg = isPositiveWhole(doc.leg) ? doc.leg : undefined;
+  const goalSession = isGoalSession(doc.goal_session) ? doc.goal_session : undefined;
   return {
     loop,
     step,
@@ -236,6 +261,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(instruction !== undefined ? { instruction } : {}),
     ...(chainedInputs !== undefined ? { chainedInputs } : {}),
     ...(leg !== undefined ? { leg } : {}),
+    ...(goalSession !== undefined ? { goalSession } : {}),
   };
 }
 

@@ -23,8 +23,22 @@ const goalDef = (passes?: number): LoopDefV2 => {
   return { ...base, work: { ...base.work, goal: GOAL, ...(passes !== undefined ? { checkpoint: { passes } } : {}) }, rounds: { kind: 'none' } };
 };
 
+const EARLIER_SESSION = '0badc0de';
+/** The progress file of the goal session the engine is running, which a fresh turn draws anew. */
+const progressRel = (): string => {
+  const session = readAppLoopState(h.repo)?.goalSession;
+  if (session === undefined) throw new Error('no goal session is persisted');
+  return goalProgressRel(session);
+};
+
+const writeProgressAt = (rel: string, text: string): void => {
+  const p = join(h.repo, rel);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, text);
+};
+
 const writeProgress = (text: string): void => {
-  const p = join(h.repo, goalProgressRel());
+  const p = join(h.repo, progressRel());
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, text);
 };
@@ -58,7 +72,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     enterAndInjectWork(engine);
 
     const prompt = promptOf(lastGoal());
-    expect(prompt).toContain(goalProgressRel());
+    expect(prompt).toContain(progressRel());
     expect(prompt).toContain('Leg: 1');
   });
 
@@ -85,12 +99,24 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
   });
 
   it('a fresh work turn starts without the progress an earlier turn left', () => {
-    writeProgress(exampleGoalProgress(4, 'checkpoint'));
+    writeProgressAt(goalProgressRel(EARLIER_SESSION), exampleGoalProgress(4, 'checkpoint'));
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
     enterAndInjectWork(engine);
 
-    expect(existsSync(join(h.repo, goalProgressRel()))).toBe(false);
+    expect(existsSync(join(h.repo, goalProgressRel(EARLIER_SESSION)))).toBe(false);
+    expect(progressRel()).not.toBe(goalProgressRel(EARLIER_SESSION));
+  });
+
+  it('each fresh work turn keeps its progress in a file of its own', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    const first = progressRel();
+    const again = makeEngine();
+    enterAndInjectWork(again);
+
+    expect(progressRel()).not.toBe(first);
   });
 
   it('a done-signal with no progress file does not finish the turn', () => {
@@ -104,25 +130,20 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     expect(h.injected.filter((p) => p.startsWith('/goal ')).length).toBe(2);
   });
 
-  it.skipIf(process.getuid?.() === 0)('a turn that cannot clear an earlier turn\'s progress does not start on it, and Retry starts it once it can', () => {
-    writeProgress(exampleGoalProgress(1, 'done'));
-    const area = dirname(join(h.repo, goalProgressRel()));
+  it.skipIf(process.getuid?.() === 0)('an earlier turn\'s finished progress that could not be cleared is never read as a fresh turn\'s own', () => {
+    writeProgressAt(goalProgressRel(EARLIER_SESSION), exampleGoalProgress(1, 'done'));
+    writeArtifact(true);
+    const area = dirname(join(h.repo, goalProgressRel(EARLIER_SESSION)));
     chmodSync(area, 0o555);
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
     try {
       enterAndInjectWork(engine);
-      expect(goalCommands()).toEqual([]);
-      expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/could not clear/);
+      engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+      expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/goal progress file \S+ is missing/);
     } finally {
       chmodSync(area, 0o755);
     }
-    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
-    engine.onInjectable();
-    engine.onInjectable();
-
-    expect(goalCommands().length).toBe(1);
-    expect(existsSync(join(h.repo, goalProgressRel()))).toBe(false);
   });
 
   it('finishes and goes to the gate as clean when the progress records the goal done', () => {
@@ -148,7 +169,7 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
 
     const after = h.injected.slice(before);
     expect(after[0]).toMatch(/^\/compact /);
-    expect(after[0]).toContain(goalProgressRel());
+    expect(after[0]).toContain(progressRel());
     expect(after[1]).toMatch(/^\/goal .*leg 2/i);
     expect(promptOf(after[1])).toContain('Leg: 2');
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: TURN_KEY, status: 'working', leg: 2 });
@@ -283,6 +304,23 @@ describe('the leg change itself (§27.3 v2.201)', () => {
     engine.onDoneSignal();
 
     expect(existsSync(doneFile())).toBe(false);
+  });
+
+  it('a done-signal that arrives before the next leg\'s prompt goes in is not graded against that leg', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(exampleGoalProgress(1, 'checkpoint'));
+    engine.onDoneSignal();
+    const before = h.injected.length;
+    engine.onDoneSignal();
+
+    expect(h.injected.length).toBe(before);
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(goalCommands().length).toBe(2);
+    expect(promptOf(lastGoal())).not.toContain('not this leg');
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'working', leg: 2 });
   });
 
   it('records the compact it sent between legs, never the clear it did not', () => {

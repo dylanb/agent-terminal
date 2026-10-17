@@ -29,7 +29,7 @@ const writeAt = (abs: string, text: string): void => {
   writeFileSync(abs, text);
 };
 const finish = (result: string | null): void => {
-  writeAt(join(h.repo, goalProgressRel()), exampleGoalProgress(1, 'done'));
+  writeAt(join(h.repo, goalProgressRel(readAppLoopState(h.repo)!.goalSession!)), exampleGoalProgress(1, 'done'));
   if (result !== null) writeAt(refactorResultFile(h.repo, 1)!, result);
 };
 const promptFile = (): string => {

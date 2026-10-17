@@ -29,6 +29,7 @@ import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from 
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
+import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
@@ -280,8 +281,8 @@ type ActiveAppTurn =
       verdict?: ConsolidatorVerdict;
       /** §27.3 */
       verdictReason?: string;
-      /** §27.3 — the goal leg an unresolved turn had reached, so a later resolvable Retry re-runs it. */
-      heldLeg?: number;
+      /** §27.3 — where an unresolved goal turn had reached, so a later resolvable Retry re-runs it. */
+      heldGoal?: GoalPlace;
     }
   | {
       phase: 'review';
@@ -347,10 +348,21 @@ type ActiveAppTurn =
 type WorkRun =
   | { kind: 'rounds' }
   | { kind: 'gate' }
-  | { kind: 'goal'; condition: string; reviewers: RosterEntry[]; polish: PolishPolicy; slicePhase: boolean; leg: number; passes?: number };
+  | { kind: 'goal'; condition: string; reviewers: RosterEntry[]; polish: PolishPolicy; slicePhase: boolean; leg: number; session: string; passes?: number };
+
+/** §27.3 — the leg a goal turn has reached, and the session whose progress file it keeps, which a fresh turn
+ *  draws anew so no earlier turn's progress can ever be read as its own. */
+interface GoalPlace {
+  leg: number;
+  session: string;
+}
+
+function newGoalSession(): string {
+  return randomBytes(4).toString('hex');
+}
 
 /** §27.3 */
-function workRunFor(def: LoopDefV2, leg = 1): WorkRun {
+function workRunFor(def: LoopDefV2, place: GoalPlace = { leg: 1, session: newGoalSession() }): WorkRun {
   if (def.work.goal !== undefined) {
     return {
       kind: 'goal',
@@ -358,7 +370,8 @@ function workRunFor(def: LoopDefV2, leg = 1): WorkRun {
       reviewers: reviewRoster(def),
       polish: def.report.polish,
       slicePhase: def.work.completion !== undefined,
-      leg,
+      leg: place.leg,
+      session: place.session,
       ...(def.work.checkpoint !== undefined ? { passes: def.work.checkpoint.passes } : {}),
     };
   }
@@ -431,7 +444,7 @@ function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: num
  *  and the retry lever's def-unresolvable refuse so the shape lives in one place (matching the review and
  *  consolidate seeders). Carries only the identity a later resolvable retry re-resolves the def by — no
  *  `recipePath`/`inputs` a `compose` could ever build a work prompt from for a turn whose def is gone. */
-function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string; leg?: number }): Extract<ActiveAppTurn, { phase: 'work' }> {
+function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string; goal?: GoalPlace }): Extract<ActiveAppTurn, { phase: 'work' }> {
   return {
     phase: 'work',
     repoDir: args.repoDir,
@@ -443,13 +456,13 @@ function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: str
     completion: { kind: 'unresolved' },
     run: { kind: 'rounds' },
     ...(args.instruction !== undefined ? { instruction: args.instruction } : {}),
-    ...(args.leg !== undefined ? { heldLeg: args.leg } : {}),
+    ...(args.goal !== undefined ? { heldGoal: args.goal } : {}),
   };
 }
 
 /** §27.3 */
-function legReached(turn: Extract<ActiveAppTurn, { phase: 'work' }>): number | undefined {
-  return turn.run.kind === 'goal' ? turn.run.leg : turn.heldLeg;
+function goalReached(turn: Extract<ActiveAppTurn, { phase: 'work' }>): GoalPlace | undefined {
+  return turn.run.kind === 'goal' ? { leg: turn.run.leg, session: turn.run.session } : turn.heldGoal;
 }
 
 /** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
@@ -469,7 +482,7 @@ function activeTurnFor(
   loopName: string,
   stepId: string,
   def: LoopDefV2,
-  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number; leg?: number },
+  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number; goal?: GoalPlace },
 ): ActiveAppTurn {
   // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.md`; slice 1 is unsliced.
   const base = completionArtifact(def);
@@ -502,7 +515,7 @@ function activeTurnFor(
           : artifact
             ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
             : { kind: 'commits' },
-    run: workRunFor(def, opts?.leg),
+    run: workRunFor(def, opts?.goal),
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
   };
@@ -521,6 +534,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // pass. This flag suppresses a duplicate signal WHILE a gate is pending; a genuine retry's real done-signal
   // (after the flag clears) still spawns a fresh gate. One slot suffices — only one work turn is active at a time.
   let asyncGatePendingFor: ActiveAppTurn | null = null;
+  // §27.3 — every leg shares the turn key, so a done-signal before the next leg's prompt went in is the last leg's.
+  let legPromptPending = false;
   // §28.5.3/§28.8.3 — the changed-test paths AWAITING their record (a distinct sense from `asyncGatePendingFor`,
   // which tracks an in-flight gate): resolved by greenAsyncGate on a GREEN work turn or reviewRoundFrozenProbe on a
   // GREEN/refactor review round, drained by that turn's onComplete. Identity-carrying (`turn`) so a stale gate/probe
@@ -615,8 +630,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const instruction = active.phase === 'work' ? active.instruction : undefined;
     // §27.10
     const chainedInputs = liveCarry(active.repoDir, active.stepId) ?? undefined;
-    const reached = active.phase === 'work' ? legReached(active) : undefined;
-    const leg = reached !== undefined && reached > 1 ? reached : undefined;
+    const reached = active.phase === 'work' ? goalReached(active) : undefined;
+    const leg = reached !== undefined && reached.leg > 1 ? reached.leg : undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -633,6 +648,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(instruction !== undefined ? { instruction } : {}),
         ...(chainedInputs !== undefined && chainedInputs.length > 0 ? { chainedInputs } : {}),
         ...(leg !== undefined ? { leg } : {}),
+        ...(reached !== undefined ? { goalSession: reached.session } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -690,8 +706,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     a: ActiveAppTurn,
     run: Extract<WorkRun, { kind: 'goal' }>,
   ): { kind: 'shortfall'; reason: string } | { kind: 'progress'; progress: GoalProgress } => {
-    const rel = goalProgressRel();
-    const file = goalProgressFile(a.repoDir);
+    const rel = goalProgressRel(run.session);
+    const file = goalProgressFile(a.repoDir, run.session);
     const text = file === null ? null : deps.readArtifact(file);
     if (text === null) return { kind: 'shortfall', reason: `the goal progress file ${rel} is missing` };
     const progress = parseGoalProgress(text);
@@ -1170,7 +1186,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.run.kind === 'goal'
           ? {
               goalReview: goalReviewFor(active, active.run, ticket),
-              goalProgress: goalProgressLines({ progressRel: goalProgressRel(), ...goalLegOf(active.run) }),
+              goalProgress: goalProgressLines({ progressRel: goalProgressRel(active.run.session), ...goalLegOf(active.run) }),
             }
           : {}),
       });
@@ -1180,7 +1196,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return composeGoalCommand({
         condition: active.run.condition,
         promptRel: goalPromptRel(),
-        progressRel: goalProgressRel(),
+        progressRel: goalProgressRel(active.run.session),
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         ...goalLegOf(active.run),
@@ -1190,6 +1206,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // Clear the prior turn's done-signal at the PROMPT inject (not the preamble): any earlier and a
       // completion arriving during the boundary drain would be dropped (§27.12/D46 parallel).
       if (!opts?.preamble && active) clearTurnDone(active.repoDir, APP_TURN_DONE_SUBDIR);
+      if (!opts?.preamble) legPromptPending = false;
       deps.inject(prompt);
       if (opts?.preamble && active) deps.audit(active.repoDir, boundaryAuditCmd(active, prompt), null);
     },
@@ -1264,37 +1281,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     noteSettle: () => deps.noteSettle(),
   });
 
-  /** §27.3 — a fresh goal turn starts without the progress or refactor result an earlier turn left; the reason
-   *  it could not, or null. */
-  const clearEarlierGoalFiles = (turn: Extract<ActiveAppTurn, { phase: 'work' }>): string | null => {
-    try {
-      clearGoalProgress(turn.repoDir);
-      if (turn.completion.kind === 'refactor') {
-        const loc = deps.resolveRefactorResultLocation(turn.repoDir, FIRST_ROUND);
-        if (loc !== null) rmSync(loc.abs, { force: true });
-      }
-      return null;
-    } catch (e) {
-      return `could not clear an earlier turn's goal progress or result: ${errMsg(e)} — retry or terminate`;
-    }
-  };
-
-  // §27.3 — the goal turn whose start could not clear the earlier files, so its Retry tries the clear again.
-  let unclearedGoalTurn: string | null = null;
-
   const start = (turn: ActiveAppTurn, defer = false): void => {
     active = turn;
+    legPromptPending = false;
     if (turn.phase === 'work' && turn.run.kind === 'goal') {
-      const failed = clearEarlierGoalFiles(turn);
-      if (failed !== null) {
-        unclearedGoalTurn = turn.turnKey;
-        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} ${failed}`, 1);
-        setLiveError('turn-error', failed);
-        persist('error', failed);
-        deps.emitError(failed);
-        return;
+      // §27.3 — housekeeping only: the fresh session's own progress file is one no earlier turn wrote.
+      try {
+        clearGoalProgress(turn.repoDir);
+        if (turn.completion.kind === 'refactor') {
+          const loc = deps.resolveRefactorResultLocation(turn.repoDir, FIRST_ROUND);
+          if (loc !== null) rmSync(loc.abs, { force: true });
+        }
+      } catch (e) {
+        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress or result: ${errMsg(e)}`, 1);
       }
-      unclearedGoalTurn = null;
     }
     persist('working');
     // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
@@ -1503,7 +1503,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     active = { ...turn, run: { ...run, leg: run.leg + 1 } };
     persist('working');
     clearTurnDone(turn.repoDir, APP_TURN_DONE_SUBDIR);
-    runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel()) });
+    legPromptPending = true;
+    runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel(run.session)) });
   };
 
   /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued
@@ -1630,6 +1631,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       runner.onInjectable();
     },
     onDoneSignal() {
+      if (legPromptPending) return;
       const a = active;
       if (goalStopsShort(a)) {
         runner.onDoneSignal();
@@ -1909,14 +1911,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // same def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
           // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
           // resolves. A later retry with a resolvable def rebuilds via `activeTurnFor` from the preserved id.
-          const leg = legReached(active);
+          const goal = goalReached(active);
           active = unresolvedWorkTurn({
             repoDir,
             loopName: active.loopName,
             stepId,
             turnKey,
             ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
-            ...(leg !== undefined ? { leg } : {}),
+            ...(goal !== undefined ? { goal } : {}),
           });
           refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
           return;
@@ -1924,7 +1926,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
         active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
           ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
-          ...(legReached(active) !== undefined ? { leg: legReached(active) } : {}),
+          ...(goalReached(active) !== undefined ? { goal: goalReached(active) } : {}),
           inputs,
         });
       } else if (active.phase === 'review') {
@@ -1940,14 +1942,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           return;
         }
         active = rebuilt;
-      }
-      if (active.phase === 'work' && unclearedGoalTurn === active.turnKey) {
-        const failed = clearEarlierGoalFiles(active);
-        if (failed !== null) {
-          refuseRouteOut('turn-error', failed);
-          return;
-        }
-        unclearedGoalTurn = null;
       }
       persist('working');
       const retryAudit =
@@ -2033,10 +2027,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       const r = deps.resolveDef(repoDir, state.loop);
+      const goal: GoalPlace | undefined = state.goalSession !== undefined ? { leg: state.leg ?? 1, session: state.goalSession } : undefined;
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
             instruction: state.instruction,
-            ...(state.leg !== undefined ? { leg: state.leg } : {}),
+            ...(goal !== undefined ? { goal } : {}),
             inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
           })
         : unresolvedWorkTurn({
@@ -2045,7 +2040,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             stepId: state.step,
             turnKey: state.turnKey,
             ...(state.instruction !== undefined ? { instruction: state.instruction } : {}),
-            ...(state.leg !== undefined ? { leg: state.leg } : {}),
+            ...(goal !== undefined ? { goal } : {}),
           });
       makeRoutable();
     },

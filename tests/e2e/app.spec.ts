@@ -18,7 +18,7 @@ import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/rev
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
-import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA, goalProgressRel, refactorResultRel } from '../../src/main/appLoopState';
+import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA, refactorResultRel } from '../../src/main/appLoopState';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { flowCatalogDir, flowDefinitionFile, flowHomeDir, loadUntrustedFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
@@ -7823,9 +7823,9 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
 // The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
 // one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
 /** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
-const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf 'Leg: %s\\nStatus: ${status}\\n' "$leg" > ${goalProgressRel()}`;
-/** The shell that reads the leg a `/goal` line in `$line` names into `$leg`. */
-const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9)`;
+const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf 'Leg: %s\\nStatus: ${status}\\n' "$leg" > "$gp"`;
+/** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
+const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.md' | head -1)`;
 
 function seedGroomV3Agent(binDir: string): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
@@ -7921,7 +7921,7 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-stallv3-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stallv3-bin-', { realCommitOps: true });
   // The groom goal says nothing until the operator tells it to write its turn-done file; it then reports itself blocked.
-  const blocked = `mkdir -p .agent-terminal/loop; printf 'Leg: 1\\nStatus: blocked\\n\\n## Blocked\\nThe ticket asks for two exports.\\n' > ${goalProgressRel()}; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const blocked = `mkdir -p .agent-terminal/loop; printf 'Leg: 1\\nStatus: blocked\\n\\n## Blocked\\nThe ticket asks for two exports.\\n' > "$gp"; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
   seedV3GoalAgent(binDir, 'fake-agent', {}, { 'groom-intent': V3_GROOM_INTENT }, [`    *"write the turn-done file now"*) ${blocked} ;;\n`]);
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -8074,7 +8074,7 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
   // Every implementation step was a goal session; GREEN's took two legs with a compact between them.
   const goals = readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n');
   expect(goals.filter((g) => g.includes('turn-done:work-green)')).map((g) => /for leg (\d+)/.exec(g)?.[1])).toEqual(['1', '2']);
-  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes(goalProgressRel()))).toHaveLength(1);
+  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes('.agent-terminal/loop/goal-progress.'))).toHaveLength(1);
   for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) {
     expect(goals.some((g) => g.includes(`turn-done:work-${step})`)), step).toBe(true);
     expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);

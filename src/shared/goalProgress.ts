@@ -1,7 +1,7 @@
 // §27.3 — the progress file a goal session keeps. The goal prompt that tells the session how to write it and
 // the engine that reads it at the done-signal both take the vocabulary from here, so the two cannot drift.
 
-import { fieldValue } from './markdownFields';
+import { stripLeadingBullet } from './markdownFields';
 
 export const GOAL_PROGRESS_STATUSES = ['working', 'checkpoint', 'done', 'blocked'] as const;
 export type GoalProgressStatus = (typeof GOAL_PROGRESS_STATUSES)[number];
@@ -18,6 +18,24 @@ export interface GoalProgress {
   status: GoalProgressStatus;
   /** What the session needs from the operator; present only when blocked. */
   blocked: string | null;
+}
+
+const MARKUP = '`*_';
+
+function unmarked(v: string): string {
+  let a = 0;
+  let b = v.length;
+  while (a < b && (MARKUP.includes(v[a]) || v[a] === ' ')) a++;
+  while (b > a && (MARKUP.includes(v[b - 1]) || v[b - 1] === ' ')) b--;
+  return v.slice(a, b);
+}
+
+/** A `label: value` field with any code-span or emphasis markup around the label or the value set aside. */
+function plainField(line: string, label: string): string | null {
+  const t = stripLeadingBullet(line.trim());
+  const idx = t.indexOf(':');
+  if (idx < 0 || unmarked(t.slice(0, idx)) !== label) return null;
+  return unmarked(t.slice(idx + 1));
 }
 
 function isStatus(v: string): v is GoalProgressStatus {
@@ -46,14 +64,14 @@ export function parseGoalProgress(text: string): GoalProgress | null {
   let status: string | null = null;
   for (const line of lines) {
     if (leg === null) {
-      const v = fieldValue(line, GOAL_PROGRESS_GRAMMAR.legLabel);
+      const v = plainField(line, GOAL_PROGRESS_GRAMMAR.legLabel);
       if (v !== null) {
         leg = positiveWhole(v);
         if (leg === null) return null;
         continue;
       }
     }
-    if (status === null) status = fieldValue(line, GOAL_PROGRESS_GRAMMAR.statusLabel);
+    if (status === null) status = plainField(line, GOAL_PROGRESS_GRAMMAR.statusLabel)?.toLowerCase() ?? null;
   }
   if (leg === null || status === null || !isStatus(status)) return null;
   if (status !== 'blocked') return { leg, status, blocked: null };

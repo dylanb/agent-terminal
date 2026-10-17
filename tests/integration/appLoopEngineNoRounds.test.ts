@@ -136,7 +136,7 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
     writeArtifact(true);
-    const progress = join(h.repo, goalProgressRel());
+    const progress = join(h.repo, goalProgressRel(readAppLoopState(h.repo)!.goalSession!));
     mkdirSync(dirname(progress), { recursive: true });
     writeFileSync(progress, exampleGoalProgress(1, 'done'));
     engine.onDoneSignal();
