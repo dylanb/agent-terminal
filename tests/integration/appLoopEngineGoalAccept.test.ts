@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { goalProgressRel, goalRefactorResultFile, readAppLoopState, recordBaselineCommit } from '../../src/main/appLoopState';
+import { goalProgressRel, goalRefactorResultFile, readAppLoopState, recordBaselineCommit, writeAppLoopState, type AppLoopRunState } from '../../src/main/appLoopState';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
@@ -135,10 +135,6 @@ describe('an Accept reads the goal progress again after its machine check (§27.
   });
 
   it.each(PHASES)('$name: a session the done-signal already sent to the gate while the check ran is not sent again', async (phase) => {
-    let release!: () => void;
-    const held = new Promise<void>((r) => {
-      release = r;
-    });
     const engine = makeEngine(
       undefined,
       makeFakeCompletionPredicates(
@@ -155,8 +151,6 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     writeProgress(exampleGoalProgress(1, 'done'));
     phase.writeResult();
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
-    release();
-    await held;
     await flush();
     await flush();
 
@@ -174,6 +168,67 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     phase.writeResult();
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+
+    const blocks = h.audit.mock.calls.map((c) => String(c[1])).filter((l) => l.includes('blocked on the operator'));
+    expect(blocks).toHaveLength(1);
+  });
+
+  it.each(PHASES)('$name: a finished session whose gate could not be saved is accepted once the save works', async (phase) => {
+    let failNextComplete = true;
+    const persist = (repoDir: string, state: AppLoopRunState): void => {
+      if (state.status === 'complete' && failNextComplete) {
+        failNextComplete = false;
+        throw new Error('ENOSPC: no space left on device');
+      }
+      writeAppLoopState(repoDir, state);
+    };
+    const engine = makeEngine(persist, makeFakeCompletionPredicates(phase.predicates(() => {})));
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.onDoneSignal();
+    await flush();
+    expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/could not be saved/);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).toBe('complete');
+  });
+
+  it('an Accept on a turn Retry has since replaced does not lift the guard on the new turn\'s Accept', async () => {
+    const phase = PHASES[2];
+    const waits: (() => void)[] = [];
+    const engine = makeEngine(
+      undefined,
+      makeFakeCompletionPredicates({
+        changedTestPaths: () =>
+          new Promise((r) => {
+            writeProgress(BLOCKED);
+            waits.push(() => r({ ok: true, paths: [] }));
+          }),
+      }),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    waits[0]();
+    await flush();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    for (const w of waits.slice(1)) w();
     await flush();
 
     const blocks = h.audit.mock.calls.map((c) => String(c[1])).filter((l) => l.includes('blocked on the operator'));
