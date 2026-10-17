@@ -7972,7 +7972,11 @@ for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detec
   for (const agent of planReviewerAgents(join(process.cwd(), 'example', 'loops-v2'), CODEX_REVIEWER_AGENT)) writeFileSync(join(codexHome, 'agents', agent.rel), agent.bytes());
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-codexv3-bin-', { realCommitOps: true });
   seedV3GoalAgent(binDir, 'codex-impl', {}, { 'groom-intent': V3_GROOM_INTENT });
-  writeFileSync(join(binDir, 'codex'), '#!/usr/bin/env bash\nexec -a codex bash "$(dirname "$0")/codex-impl"\n', { mode: 0o755 });
+  // Laid out as an npm install: `codex` runs the package's entry script under node, which runs the agent.
+  const entry = join(binDir, 'lib', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  mkdirSync(dirname(entry), { recursive: true });
+  writeFileSync(entry, `const c = require('child_process').spawn('bash', [${JSON.stringify(join(binDir, 'codex-impl'))}], { stdio: 'inherit' });\nc.on('exit', (code) => process.exit(code ?? 0));\n`);
+  writeFileSync(join(binDir, 'codex'), `#!/usr/bin/env bash\nexec node ${JSON.stringify(entry)}\n`, { mode: 0o755 });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', APP_SHELL_INTEGRATION: integration, APP_LAUNCH_DIR: repo, HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, CODEX_HOME: codexHome, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },

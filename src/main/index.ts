@@ -122,6 +122,7 @@ import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactChec
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
 import { hostedAgentKind } from './agentKind';
+import { foregroundCommand } from './foregroundCommand';
 import { userConfigAgentsDir } from './userConfig';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
@@ -412,11 +413,13 @@ async function createWindow(): Promise<void> {
       return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
     },
     hostedAgentKind: () => {
-      let foreground: string;
-      try {
-        foreground = ptyProcess.process;
-      } catch {
-        foreground = resolveShellPath(process.env);
+      let foreground = foregroundCommand(ptyProcess.pid);
+      if (foreground === null) {
+        try {
+          foreground = ptyProcess.process;
+        } catch {
+          foreground = resolveShellPath(process.env);
+        }
       }
       return hostedAgentKind(tracker.summaries(), foreground);
     },

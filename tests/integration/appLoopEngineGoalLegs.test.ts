@@ -131,7 +131,8 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
     signalAndDrain(engine);
 
     const logged = h.audit.mock.calls.map((c) => c[1]);
-    expect(logged).toContain(`§27 goal turn ${TURN_KEY} leg 1 checkpointed after 3 review passes`);
+    expect(logged).toContain(`§27 goal turn ${TURN_KEY} leg 1 checkpointed`);
+    expect(logged.some((l) => String(l).includes("review passes"))).toBe(false);
     expect(logged).not.toContain(`§27 work turn ${TURN_KEY} complete`);
   });
 
@@ -197,6 +198,26 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
     engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
     engine.onInjectable();
     engine.onInjectable();
+
+    expect(lastGoal()).toMatch(/leg 2/i);
+  });
+
+  it('a relaunch while the def does not resolve keeps the leg reached, and Retry re-runs it once the def resolves', () => {
+    const first = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(first);
+    writeProgress(exampleGoalProgress(1, 'checkpoint'));
+    signalAndDrain(first);
+
+    const good = h.defResult;
+    h.defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const relaunched = makeEngine();
+    relaunched.resume(h.repo);
+    relaunched.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    h.defResult = good;
+    relaunched.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    relaunched.onInjectable();
+    relaunched.onInjectable();
 
     expect(lastGoal()).toMatch(/leg 2/i);
   });
@@ -281,6 +302,17 @@ describe('Accept on a stalled goal session follows what its progress file record
 
     expect(readAppLoopState(h.repo)?.status).toBe('error');
     expect(engine.liveErrorFor(h.repo)?.reason).toContain('still working');
+  });
+
+  it('a refused Accept leaves the turn held as stalled, so its own done-signal still finishes it', () => {
+    const engine = stalledWith(exampleGoalProgress(1, 'working'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(engine.liveErrorFor(h.repo)?.stalled).toBe(true);
+    writeArtifact(true);
+    writeProgress(exampleGoalProgress(1, 'done'));
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
   });
 
   it('a done session with no artifact is still refused', () => {

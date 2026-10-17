@@ -16,6 +16,9 @@ describe('which agent a terminal command runs (§27.4 v2.201)', () => {
     ['nice -n 10 codex', 'codex'],
     ['env -u OPENAI_BASE_URL codex', 'codex'],
     ['npx --package @openai/codex codex', 'codex'],
+    ['node /usr/local/lib/node_modules/@openai/codex/bin/codex.js', 'codex'],
+    ['node /Users/me/Library/pnpm/global/5/node_modules/@openai/codex/bin/codex.js --yolo', 'codex'],
+    ['node /Users/me/.local/share/claude/cli.js', 'claude-code'],
     ['nice -n 10 claude', 'claude-code'],
     ['claude --model codex', 'claude-code'],
     ['claude', 'claude-code'],
@@ -37,6 +40,10 @@ describe('which agent the terminal is hosting (§27.4 v2.201)', () => {
 
   it("is the terminal's foreground program when no command span is known", () => {
     expect(hostedAgentKind([], '/usr/local/bin/codex')).toBe('codex');
+  });
+
+  it('is Codex when the terminal runs Codex under a name the typed command does not show', () => {
+    expect(hostedAgentKind([span('cx', true)], 'node /usr/local/lib/node_modules/@openai/codex/bin/codex.js')).toBe('codex');
   });
 
   it('is the terminal program when the only commands have finished', () => {

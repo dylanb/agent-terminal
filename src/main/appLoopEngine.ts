@@ -278,6 +278,8 @@ type ActiveAppTurn =
       verdict?: ConsolidatorVerdict;
       /** §27.3 */
       verdictReason?: string;
+      /** §27.3 — the goal leg an unresolved turn had reached, so a later resolvable Retry re-runs it. */
+      heldLeg?: number;
     }
   | {
       phase: 'review';
@@ -427,7 +429,7 @@ function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: num
  *  and the retry lever's def-unresolvable refuse so the shape lives in one place (matching the review and
  *  consolidate seeders). Carries only the identity a later resolvable retry re-resolves the def by — no
  *  `recipePath`/`inputs` a `compose` could ever build a work prompt from for a turn whose def is gone. */
-function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string }): Extract<ActiveAppTurn, { phase: 'work' }> {
+function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string; leg?: number }): Extract<ActiveAppTurn, { phase: 'work' }> {
   return {
     phase: 'work',
     repoDir: args.repoDir,
@@ -439,7 +441,13 @@ function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: str
     completion: { kind: 'unresolved' },
     run: { kind: 'rounds' },
     ...(args.instruction !== undefined ? { instruction: args.instruction } : {}),
+    ...(args.leg !== undefined ? { heldLeg: args.leg } : {}),
   };
+}
+
+/** §27.3 */
+function legReached(turn: Extract<ActiveAppTurn, { phase: 'work' }>): number | undefined {
+  return turn.run.kind === 'goal' ? turn.run.leg : turn.heldLeg;
 }
 
 /** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
@@ -605,7 +613,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const instruction = active.phase === 'work' ? active.instruction : undefined;
     // §27.10
     const chainedInputs = liveCarry(active.repoDir, active.stepId) ?? undefined;
-    const leg = active.phase === 'work' && active.run.kind === 'goal' && active.run.leg > 1 ? active.run.leg : undefined;
+    const reached = active.phase === 'work' ? legReached(active) : undefined;
+    const leg = reached !== undefined && reached > 1 ? reached : undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -657,7 +666,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  persisting a fabricated `complete`. Used by the unresolved-accept guards and the failed-write guards. */
   const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
     if (!active) return;
-    setLiveError(kind, reason, round);
+    // §27.12 — a refused route-out leaves a stalled turn resumable by its own done-signal.
+    const stillStalled = liveError?.stalled === true && liveError.turnKey === active.turnKey && runner.state() === 'error';
+    setLiveError(kind, reason, round, stillStalled);
     deps.emitError(reason);
     deps.onViewChanged();
   };
@@ -1457,7 +1468,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   /** §27.3 */
   const nextLeg = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>): void => {
-    deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} leg ${run.leg} checkpointed after ${run.passes} review passes`, 0);
+    deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} leg ${run.leg} checkpointed`, 0);
     active = { ...turn, run: { ...run, leg: run.leg + 1 } };
     persist('working');
     clearTurnDone(turn.repoDir, APP_TURN_DONE_SUBDIR);
@@ -1864,12 +1875,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // same def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
           // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
           // resolves. A later retry with a resolvable def rebuilds via `activeTurnFor` from the preserved id.
+          const leg = legReached(active);
           active = unresolvedWorkTurn({
             repoDir,
             loopName: active.loopName,
             stepId,
             turnKey,
             ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+            ...(leg !== undefined ? { leg } : {}),
           });
           refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
           return;
@@ -1877,7 +1890,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
         active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
           ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
-          ...(active.run.kind === 'goal' ? { leg: active.run.leg } : {}),
+          ...(legReached(active) !== undefined ? { leg: legReached(active) } : {}),
           inputs,
         });
       } else if (active.phase === 'review') {
@@ -1984,7 +1997,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ...(state.leg !== undefined ? { leg: state.leg } : {}),
             inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
           })
-        : unresolvedWorkTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) });
+        : unresolvedWorkTurn({
+            repoDir,
+            loopName: state.loop,
+            stepId: state.step,
+            turnKey: state.turnKey,
+            ...(state.instruction !== undefined ? { instruction: state.instruction } : {}),
+            ...(state.leg !== undefined ? { leg: state.leg } : {}),
+          });
       makeRoutable();
     },
     activeTurnKey: () => active?.turnKey ?? null,
