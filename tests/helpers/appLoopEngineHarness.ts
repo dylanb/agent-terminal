@@ -27,6 +27,7 @@ import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopP
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { roundReportWithStatuses } from './roundReports';
+import { verdictOutput } from './consolidatorOutputs';
 
 export const STEP = 'plan';
 // §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
@@ -328,7 +329,7 @@ export class AppLoopEngineHarness {
     engine.onDoneSignal();
     engine.onInjectable();
     engine.onInjectable();
-    this.completeConsolidate(engine, 1, 'verdict: clean\n');
+    this.completeConsolidate(engine, 1, verdictOutput('clean'));
   };
 
   /** From an in-flight review round `round` (just chained, awaiting injectable): drive the review prompt, land

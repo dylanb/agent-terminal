@@ -46,6 +46,7 @@ import {
   binding,
   flushRedGate,
 } from '../helpers/appLoopEngineHarness';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 // §27.3/§27.12 — the §27 work-turn engine, driven at its observable boundary with REAL fs (the run-state
 // file, the completion artifact) and its domain ports as controllable fakes (hostedAgent injectability, the
@@ -1659,11 +1660,11 @@ describe('§27 engine — the consolidator completion gate (AC3)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
     const firstPrompt = h.injected[h.injected.length - 1];
-    writeConsolidatorOutput(1, 'verdict: another round\nroster: ghost-persona\n');
+    writeConsolidatorOutput(1, verdictOutput('another round', { roster: ['ghost-persona'] }));
     engine.onDoneSignal();
     const retry = h.injected[h.injected.length - 1];
     expect(retry).not.toBe(firstPrompt);
-    expect(retry).toContain('ghost-persona');
+    expect(retry).toContain('"roster"[0] is not in this loop\'s reviewer catalog');
     expect(retry).toContain(consolidatorOutputRel(1));
     expect(retry).toContain(`check-artifact verdict ${consolidatorOutputRel(1)}`);
     expect(retry).toContain(CONSOLIDATE_KEY);
@@ -1672,23 +1673,23 @@ describe('§27 engine — the consolidator completion gate (AC3)', () => {
   it('an `another round` naming a persona outside the catalog is malformed → error (§27.4)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: another round\nroster: ghost-persona\n');
-    completeConsolidate(engine, 1, 'verdict: another round\nroster: ghost-persona\n');
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ['ghost-persona'] }));
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ['ghost-persona'] }));
     expect(readAppLoopState(h.repo)?.status).toBe('error');
   });
 
   it('an `another round` with an empty roster is malformed → error (a round must run someone)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: another round\nroster:\n');
-    completeConsolidate(engine, 1, 'verdict: another round\nroster:\n');
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: [] }));
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: [] }));
     expect(readAppLoopState(h.repo)?.status).toBe('error');
   });
 
   it('a terminal verdict needs no roster — `clean` completes and routes to the gate (AC3, AC5)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'complete', round: 1, verdict: 'clean' });
   });
 });
@@ -1698,7 +1699,7 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
     const afterConsolidate = h.injected.length;
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER[0]}\n`); // subset: principal only
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: [ROSTER[0]] })); // subset: principal only
     engine.onInjectable(); // pre-review boundary drains
     engine.onInjectable(); // the round-2 review prompt injects
     const prompt = h.injected[h.injected.length - 1];
@@ -1711,21 +1712,21 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
   it('`clean` on a no-change round routes to the gate; the panel-facing state carries the verdict (AC5, AC6)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
   });
 
   it('`stop for a human` routes to the gate carrying the consolidator reason (AC5)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: stop for a human\nreason: the reviewers disagree on the API shape\n');
+    completeConsolidate(engine, 1, verdictOutput('stop for a human', { reason: 'the reviewers disagree on the API shape' }));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human', verdictReason: 'the reviewers disagree on the API shape' });
   });
 
   it('the engine routes on the EMITTED verdict and does not recompute cleanness — `another round` on a fixed round loops (AC6)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER }));
     expect(readAppLoopState(h.repo)?.turnKey).toBe(REVIEW_KEY); // looped back, not gated
   });
 
@@ -1739,7 +1740,7 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
       writeAppLoopState(repoDir, state, FIXED);
     });
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: stop for a human\nreason: the reviewers disagree on the API\n');
+    completeConsolidate(engine, 1, verdictOutput('stop for a human', { reason: 'the reviewers disagree on the API' }));
     expect(engine.liveErrorFor(h.repo)).not.toBeNull(); // the human is summoned even though the write failed
     expect(engine.liveErrorFor(h.repo)).toMatchObject({ kind: 'turn-error', step: STEP, turnKey: CONSOLIDATE_KEY });
     expect(h.emitError).toHaveBeenCalled(); // pushed so the panel renders the retry/terminate route-out
@@ -1752,8 +1753,8 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
     // on a verdict it can no longer read.
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    writeConsolidatorOutput(1, 'verdict: clean\n');
-    h.readArtifact.mockImplementationOnce(() => 'verdict: clean\n').mockImplementationOnce(() => null);
+    writeConsolidatorOutput(1, verdictOutput('clean'));
+    h.readArtifact.mockImplementationOnce(() => verdictOutput('clean')).mockImplementationOnce(() => null);
     engine.onDoneSignal();
     const state = readAppLoopState(h.repo);
     expect(state).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'complete', verdict: 'stop for a human' });
@@ -1763,9 +1764,9 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
   it('there is no iteration cap — a run that keeps emitting `another round` keeps iterating (AC10)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER }));
     advanceReviewToConsolidateInjected(engine, 2);
-    completeConsolidate(engine, 2, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 2, verdictOutput('another round', { roster: ROSTER }));
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: REVIEW_KEY, round: 3 }); // round 3, still no cap
   });
 });
@@ -1776,7 +1777,7 @@ describe('§27 engine — request-changes returns to a review-and-fix round carr
   /** Drive work → review round 1 → consolidator → a terminal `clean` gate (status complete, round 1, verdict). */
   function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
   }
 
   it('re-enters review at round+1 carrying the feedback, and persists it on the review run-state', () => {
@@ -1846,7 +1847,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
   /** Drive work → review round 1 → consolidator → a terminal `clean` gate (status complete, round 1, verdict). */
   function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
   }
 
   it('re-enters the WORK turn carrying the instruction, and persists it on the work run-state', () => {
@@ -1988,7 +1989,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
 describe('§27 engine — the polish stand-down suppresses the orchestrator levers (§27.9 / AC6)', () => {
   function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
   }
 
   it('refuses request-changes while polish is active — no review round starts, nothing is injected', () => {
@@ -2062,7 +2063,7 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
   it('a FRESH failed lens forces a re-review with that lens, even when the consolidator emits `clean`', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine, [ROSTER[0]]); // round-1 report records principal failed-to-run
-    completeConsolidate(engine, 1, 'verdict: clean\n'); // consolidator says clean, but a lens failed
+    completeConsolidate(engine, 1, verdictOutput('clean')); // consolidator says clean, but a lens failed
     engine.onInjectable();
     engine.onInjectable();
     // The loop does NOT present the round as clean — it re-reviews with the failed lens in the roster.
@@ -2074,9 +2075,9 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
   it('a REPEAT failed lens (failed in the previous report too) stops for a human — bounding auto re-reviews to one', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine, [ROSTER[0]]); // round 1: principal failed
-    completeConsolidate(engine, 1, 'verdict: clean\n'); // → forced re-review of principal
+    completeConsolidate(engine, 1, verdictOutput('clean')); // → forced re-review of principal
     advanceReviewToConsolidateInjected(engine, 2, [ROSTER[0]]); // round 2: principal failed AGAIN
-    completeConsolidate(engine, 2, 'verdict: clean\n');
+    completeConsolidate(engine, 2, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human' });
   });
 
@@ -2086,7 +2087,7 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
     // human-owned stop into another autonomous round — the stop routes to the gate now, and the human decides.
     const engine = makeEngine();
     driveToConsolidateInjected(engine, [ROSTER[0]]); // round-1 report records principal failed-to-run (a fresh failure)
-    completeConsolidate(engine, 1, 'verdict: stop for a human\nreason: the reviewers disagree on the API\n');
+    completeConsolidate(engine, 1, verdictOutput('stop for a human', { reason: 'the reviewers disagree on the API' }));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human' });
     expect(readAppLoopState(h.repo)?.turnKey).toBe(CONSOLIDATE_KEY); // gated, not looped into a round-2 review
   });
@@ -2100,7 +2101,7 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
     engine.onDoneSignal(); // review completes → consolidator chains
     engine.onInjectable();
     engine.onInjectable();
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' }); // clean honored, no failed-lens override
   });
 });
@@ -2110,7 +2111,7 @@ describe('§27 engine — the armed interrupt routes to the gate at the next con
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
     armInterrupt(h.repo, STEP); // the operator arms during iteration
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`); // would loop back…
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER })); // would loop back…
     // …but the armed interrupt routes to the gate instead, surfacing the would-be `another round`.
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'another round' });
     expect(readAppLoopState(h.repo)?.turnKey).toBe(CONSOLIDATE_KEY); // stopped at the consolidator's gate, not a new review turn
@@ -2120,7 +2121,7 @@ describe('§27 engine — the armed interrupt routes to the gate at the next con
   it('with no interrupt armed the same `another round` loops back (the interrupt is the only thing that diverts it)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER }));
     expect(readAppLoopState(h.repo)?.turnKey).toBe(REVIEW_KEY); // looped back — no diversion
     // §25/AC9 — a round that reaches the gate on its OWN verdict records NO interrupt-honored event, so a
     // regression emitting the interrupt event unconditionally would be caught here (the emission GATE is
@@ -2135,7 +2136,7 @@ describe('§27 engine — the armed interrupt routes to the gate at the next con
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
     armInterrupt(h.repo, STEP);
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER }));
     expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('interrupt'), expect.anything());
   });
 });
@@ -2197,7 +2198,7 @@ describe('§27 engine — consolidator error route-out + resume (AC11, AC12)', (
     armInterrupt(h.repo, STEP); // armed, then the app is relaunched
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
-    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    completeConsolidate(engine, 1, verdictOutput('another round', { roster: ROSTER }));
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'another round' }); // honored post-relaunch
     expect(readArmedInterrupt(h.repo)).toBeNull();
   });
@@ -2840,7 +2841,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     await flushGate();
     engine.onInjectable();
     engine.onInjectable();
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)?.status).toBe('complete'); // reached the gate
     expect(readChangedTests(h.repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
   });
@@ -3244,7 +3245,7 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     await flushGate();
     engine.onInjectable();
     engine.onInjectable();
-    completeConsolidate(engine, 1, 'verdict: clean\n');
+    completeConsolidate(engine, 1, verdictOutput('clean'));
     expect(readAppLoopState(h.repo)?.status).toBe('complete'); // reached the gate
     expect(readChangedTests(h.repo)?.paths).toContain('tests/a.test.ts'); // the flag survived every run-state write
   });

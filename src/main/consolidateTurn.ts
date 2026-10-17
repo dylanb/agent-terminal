@@ -8,7 +8,7 @@
 import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
+import { CONSOLIDATOR_FIELDS, CONSOLIDATOR_VERDICTS, exampleConsolidatorOutput } from '../shared/consolidatorOutput';
 import { ticketPromptLines } from '../shared/currentTicket';
 import { checkerLines } from './reviewTurn';
 
@@ -55,11 +55,12 @@ export interface ConsolidatePromptReq {
 
 /** The verdict format rules (§27.6), from the shared consolidator-output vocabulary. */
 function verdictFormatLines(catalog: string[]): string[] {
+  const f = CONSOLIDATOR_FIELDS;
   return [
-    `- \`verdict: <one of: ${CONSOLIDATOR_VERDICTS.map((v) => `\`${v}\``).join(' / ')}>\` — spelled verbatim.`,
-    '- ONLY when the verdict is `another round`: `roster: <comma-separated personas>` — a non-empty subset of',
-    `  the reviewer catalog below (a persona the catalog does not declare can never be invoked): ${catalog.join(', ')}`,
-    '- ONLY when the verdict is `stop for a human`: `reason: <why a human must decide>`.',
+    `- \`"${f.verdict}"\`: EXACTLY one of ${CONSOLIDATOR_VERDICTS.map((v) => `\`"${v}"\``).join(' / ')}, spelled verbatim.`,
+    `- ONLY when the verdict is \`"another round"\`: \`"${f.roster}"\`, a non-empty list of personas drawn from the`,
+    `  reviewer catalog below (a persona the catalog does not declare can never be invoked): ${catalog.join(', ')}`,
+    `- ONLY when the verdict is \`"stop for a human"\`: \`"${f.reason}"\`, text saying why a human must decide.`,
   ];
 }
 
@@ -86,7 +87,7 @@ export function composeVerdictRepairPrompt(req: VerdictRepairPromptReq): string 
     'Problems:',
     ...req.problems.map((p) => `- ${p}`),
     '',
-    'The verdict must carry these labelled lines:',
+    'The verdict is a JSON object with:',
     ...verdictFormatLines(req.catalog),
   ];
   if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'verdict'));
@@ -121,7 +122,7 @@ export function composeConsolidatePrompt(req: ConsolidatePromptReq): string {
   lines.push(
     '',
     'Judge the round and choose the next step. Then write your verdict to',
-    `${req.outputRel} as a Markdown document with these labelled lines:`,
+    `${req.outputRel} as a JSON object with:`,
     ...verdictFormatLines(req.catalog),
     '',
     '`clean` means the round changed nothing (every issue dismissed, nothing fixed); a round that fixed',

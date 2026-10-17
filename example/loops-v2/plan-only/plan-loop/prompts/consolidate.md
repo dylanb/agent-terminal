@@ -14,5 +14,5 @@ judge the round against the ticket. Emit a verdict and, for `another round`, the
 - `stop for a human` — a reviewer raised an issue only a human can resolve, or a reviewer failed to run
   again after a re-review. Give the reason.
 
-Write your verdict in the exact labelled-line format the turn instruction specifies. Do not merge or
+Write your verdict in the exact JSON format the turn instruction specifies. Do not merge or
 re-rank findings — that was the round's job; yours is to judge the round and choose what runs next.

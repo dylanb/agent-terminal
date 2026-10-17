@@ -336,7 +336,7 @@ export function roundReportFile(repoDir: string, round: number): string | null {
  *  WRITE-target half of the resolver whose READ-source half is `consolidatorOutputFile`, so the two cannot
  *  drift. Disjoint from the round reports so a round's report and its verdict never collide. */
 export function consolidatorOutputRel(round: number): string {
-  return [...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR, roundLeaf(round)].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR, roundLeaf(round, 'json')].join('/');
 }
 
 /** The confined absolute consolidator-output path the engine READS back to gate the consolidator turn
@@ -344,7 +344,7 @@ export function consolidatorOutputRel(round: number): string {
 export function consolidatorOutputFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+  return confinedRealPath(jail, path.join(jail, roundLeaf(round, 'json')));
 }
 
 /** §28.5.3 — the repo-relative refactor-result path the fixer is instructed to write, the WRITE-target half of

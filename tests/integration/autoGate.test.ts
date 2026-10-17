@@ -61,6 +61,7 @@ import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { AUTO_GATE_DECISION_DEFAULT_MS, resolveRuntimeConfig } from '../../src/main/runtimeConfig';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 // §27.9.1 N9b.4–N9b.6, N9b.9 — Impl-slice 1 of #137: the engine-held gate controller driven at its own
 // boundary (the approve operation it invokes, the §25 entries it writes, the view it feeds the strip, panel and
@@ -314,7 +315,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
   it('AC1: every view pushed for the transition is not human-needed, the notifier never raises, and the flow advances through the engine approve', async () => {
     const { rig, engine } = wired();
     h.driveToConsolidateInjected(engine);
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     expect(rig.views.length).toBeGreaterThan(0);
     expect(rig.views.map((v) => v.humanNeeded)).toEqual(rig.views.map(() => false));
@@ -326,7 +327,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     const { rig, engine } = wired();
     h.driveToConsolidateInjected(engine);
     armInterrupt(h.repo, STEP);
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     expect(rig.view(h.repo).autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('interrupt-armed');
     expect(rig.approvals).toEqual([]);
@@ -342,7 +343,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     engine.onDoneSignal();
     engine.onInjectable();
     engine.onInjectable();
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, turnKey: CONSOLIDATE_KEY, status: 'complete' });
     expect(rig.approvals).toEqual([]);
@@ -365,7 +366,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
     engine.onDoneSignal();
     engine.onInjectable();
     engine.onInjectable();
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, turnKey: CONSOLIDATE_KEY, status: 'complete' });
     expect(rig.approvals).toEqual([]);
@@ -380,7 +381,7 @@ describe('autoGate — a clean `auto` gate through the real §27 engine (AC1, AC
       writeAppLoopState(dir, state, FIXED);
     });
     h.driveToConsolidateInjected(engine);
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     const atOnce = rig.view(h.repo);
     expect(atOnce.humanNeeded).toBe(true);
@@ -533,7 +534,7 @@ describe('autoGate — the interrupt arm is run-scoped in a run with an `auto` s
     const { rig, engine } = wiredWith(loopSteps('human'));
     h.driveToConsolidateInjected(engine);
     armInterrupt(h.repo, 'some-earlier-step');
-    h.completeConsolidate(engine, 1, 'verdict: clean\n');
+    h.completeConsolidate(engine, 1, verdictOutput('clean'));
     await flush();
     expect(readAppLoopState(h.repo)).toMatchObject({ step: STEP, status: 'complete', verdict: 'clean' });
     expect(rig.view(h.repo)).not.toHaveProperty('autoGate');

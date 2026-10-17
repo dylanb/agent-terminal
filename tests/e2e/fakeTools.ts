@@ -20,6 +20,7 @@ import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -369,8 +370,8 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const attemptCase = (opts.consolidateAttempts ?? []).map((v, i) => `${i + 1}) OUTB='${b64(v)}' ;;`).join(' ');
   const consolidateAction =
     'mkdir -p .agent-terminal; printf x >> .agent-terminal/consolidate-runs; ' +
-    `r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; case "$n" in ${attemptCase} esac; ` +
-    'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
+    `r=$(rnd); OUTB='${b64(verdictOutput('clean'))}'; case "$r" in ${verdictCase} esac; case "$n" in ${attemptCase} esac; ` +
+    'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ' +
     `${byTurn('n', opts.extraShell?.consolidate)}; ${doneSignal(consolidateKey)}`;
   const consolidateAct = opts.holdConsolidate
     ? `${count(consolidateKey, 'n')}; ${heldAction(opts.holdConsolidate.sentinel, consolidateAction)}`
@@ -523,7 +524,7 @@ export function seedFullTddChainAgent(
     const scripted = (opts.verdicts?.[step] ?? []).map((v, i) => `${i + 1}) OUTB='${b64(exampleConsolidatorOutput(v, CHAIN_ROSTERS[step]))}' ;;`).join(' ');
     return (
       `n=$(turn_count consolidate-${step}); OUTB='${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}'; case "$n" in ${scripted} esac; ` +
-      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`
+      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${done(`consolidate-${step}`)}`
     );
   };
 

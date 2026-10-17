@@ -544,8 +544,8 @@ describe('§27 round-report location resolver', () => {
 // read-source (the completion gate, via consolidatorOutputFile) that derive from ONE resolver, round-keyed
 // and disjoint from the round reports (writer↔reader-location).
 describe('§27 consolidator-output location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/consolidate/<N>.md, write-target === read-source', () => {
-    expect(consolidatorOutputRel(2)).toBe('.agent-terminal/loop/consolidate/2.md');
+  it('resolves round N to <repo>/.agent-terminal/loop/consolidate/<N>.json, write-target === read-source', () => {
+    expect(consolidatorOutputRel(2)).toBe('.agent-terminal/loop/consolidate/2.json');
     expect(consolidatorOutputFile(repo, 2)).toBe(join(realpathSync(repo), consolidatorOutputRel(2)));
   });
 

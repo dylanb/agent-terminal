@@ -40,6 +40,7 @@ import {
   writeCatalogEntry,
 } from './fakeTools';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -5424,7 +5425,7 @@ test('a §27 `another round` verdict crosses the boundary back into a second rev
     stepId: 'plan',
     artifactRel: APP_ARTIFACT_REL,
     work: 'complete',
-    verdicts: [`verdict: another round\nroster: ${PLAN_V2_ROSTER[0]}\n`, 'verdict: clean\n'],
+    verdicts: [verdictOutput('another round', { roster: [PLAN_V2_ROSTER[0]] }), verdictOutput('clean')],
   });
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -5454,7 +5455,7 @@ test('a §27 failed reviewer is never read as clean: fresh re-reviews, repeat st
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-failed-bin-');
   // Both rounds record review-plan-principal as failed-to-run; the consolidator says `clean` both times, but
   // the engine's failed-lens guard overrides: round 1 fresh → re-review, round 2 repeat → stop for a human.
-  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'failed', review2: 'failed', verdicts: ['verdict: clean\n', 'verdict: clean\n'] });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'failed', review2: 'failed', verdicts: [verdictOutput('clean'), verdictOutput('clean')] });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -5590,7 +5591,7 @@ test('an armed §27 interrupt routes to the gate with the would-be verdict state
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-arm-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-arm-bin-');
   // Round 1's consolidator would return `another round` (loop back), but the armed interrupt diverts it.
-  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', verdicts: [`verdict: another round\nroster: ${PLAN_V2_ROSTER[0]}\n`] });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', verdicts: [verdictOutput('another round', { roster: [PLAN_V2_ROSTER[0]] })] });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7754,7 +7755,7 @@ function seedEpicChainAgent(binDir: string, subTickets = 2): void {
   };
   const arm = (step: string): string => {
     const rev = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}; ${done(`review-${step}`)}`;
-    const con = `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf 'verdict: clean\\n' > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`;
+    const con = `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(verdictOutput('clean'))}' | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${done(`consolidate-${step}`)}`;
     return `    *turn-done:consolidate-${step}*) ${con} ;;\n    *turn-done:review-${step}*) ${rev} ;;\n    *turn-done:work-${step}*) ${workArm[step]} ;;`;
   };
   const script =
@@ -8055,7 +8056,7 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
     },
     ['plan-bundle', 'plan-polish'].flatMap((step) => [
       `    *turn-done:review-${step}*) mkdir -p .agent-terminal/loop/reports; printf %s '${b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }))}' | base64 -d > .agent-terminal/loop/reports/1.json; mkdir -p .agent-terminal/loop; printf '%s' 'review-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
-      `    *turn-done:consolidate-${step}*) mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}' | base64 -d > .agent-terminal/loop/consolidate/1.md; printf '%s' 'consolidate-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
+      `    *turn-done:consolidate-${step}*) mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}' | base64 -d > .agent-terminal/loop/consolidate/1.json; printf '%s' 'consolidate-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
     ]),
   );
   app = await electron.launch({

@@ -4,6 +4,7 @@ import { ARTIFACT_CHECK_PASSED, artifactCheckCommand, runArtifactCheck, type Art
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 // §27.12 — the agent-runnable checker: the command the prompt hands the agent, parsed back by the checker, runs
 // the same predicates the engine gates on. Asserted end to end through the argv the command line carries.
@@ -11,7 +12,7 @@ import { exampleGoalProgress } from '../../src/shared/goalProgress';
 const SECTIONS = ['summary', 'findings', 'disposition'];
 const ROSTER = ['impl-review-tests', 'impl-review-intent'];
 const REPORT: ArtifactCheck = { kind: 'report', rel: '.agent-terminal/loop/reports/1.json', sections: SECTIONS, roster: ROSTER };
-const VERDICT: ArtifactCheck = { kind: 'verdict', rel: '.agent-terminal/loop/consolidate/1.md', catalog: ROSTER };
+const VERDICT: ArtifactCheck = { kind: 'verdict', rel: '.agent-terminal/loop/consolidate/1.json', catalog: ROSTER };
 
 /** The argv a POSIX shell hands the checker script for `command` (everything after the script operand). */
 function argvOf(check: ArtifactCheck): string[] {
@@ -38,10 +39,11 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
     expect(r.output).not.toContain(ARTIFACT_CHECK_PASSED);
   });
 
-  it('fails a verdict naming a persona outside the catalog', () => {
-    const r = runArtifactCheck(argvOf(VERDICT), files({ [VERDICT.rel]: 'verdict: another round\nroster: ghost\n' }));
+  it('fails a verdict naming a persona outside the catalog, by position', () => {
+    const r = runArtifactCheck(argvOf(VERDICT), files({ [VERDICT.rel]: verdictOutput('another round', { roster: ['ghost'] }) }));
     expect(r.exitCode).toBe(1);
-    expect(r.output).toContain('ghost');
+    expect(r.output).toContain('"roster"[0] is not in this loop\'s reviewer catalog');
+    expect(r.output).not.toContain('ghost');
   });
 
   it('passes a goal progress file that ends this leg, and fails one that does not, saying why', () => {

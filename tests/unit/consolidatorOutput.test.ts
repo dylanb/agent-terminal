@@ -9,13 +9,14 @@ import {
   type ConsolidatorVerdict,
 } from '../../src/shared/consolidatorOutput';
 
-// §27.6 — the consolidator's output is a serialized vocabulary with one writer (the consolidator actor) and
+// §27.6 (v2.202) — the consolidator's output is JSON with one writer (the consolidator actor) and
 // readers (the completion validator that gates the turn, the branch that reads the verdict + roster). One
 // definition in the shared layer so the prompt composer, the completion gate, and the loop-state
 // reader/provider cannot drift. It grades the CLOSED verdict set and the roster⊆catalog relationship — never
 // the quality of the judgment.
 
 const CATALOG = ['review-plan-principal', 'review-plan-security', 'review-plan-contracts'];
+const out = (o: Record<string, unknown>): string => JSON.stringify(o);
 
 describe('the verdict set is spec-fixed (§27.6)', () => {
   it('is exactly the three-value closed set', () => {
@@ -32,61 +33,69 @@ describe('consolidatorOutputWellFormed — the canonical example anchors every v
 });
 
 describe('consolidatorOutputWellFormed — verdict membership (AC3)', () => {
-  it('rejects output missing a verdict entirely', () => {
-    expect(consolidatorOutputWellFormed('# nothing here\n\njust prose\n', CATALOG)).toBe(false);
-  });
-
-  it('rejects a verdict outside the closed set', () => {
-    expect(consolidatorOutputWellFormed('verdict: looks fine\n', CATALOG)).toBe(false);
+  it.each([
+    ['not JSON', 'verdict: clean\n', /not valid JSON/],
+    ['not an object', '"clean"', /not a JSON object/],
+    ['no verdict', out({ roster: CATALOG }), /verdict/],
+    ['a verdict outside the closed set', out({ verdict: 'looks fine' }), /verdict/],
+  ])('rejects output that is %s, and says so', (_what, text, problem) => {
+    expect(consolidatorOutputWellFormed(text, CATALOG)).toBe(false);
+    expect(consolidatorOutputProblems(text, CATALOG).join('\n')).toMatch(problem);
   });
 
   it('accepts a terminal verdict with NO roster (a terminal verdict needs none, AC3)', () => {
-    expect(consolidatorOutputWellFormed('verdict: clean\n', CATALOG)).toBe(true);
-    expect(consolidatorOutputWellFormed('verdict: stop for a human\nreason: two reviewers disagree\n', CATALOG)).toBe(true);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'clean' }), CATALOG)).toBe(true);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'stop for a human', reason: 'two reviewers disagree' }), CATALOG)).toBe(true);
   });
 
   it('a roster supplied on a terminal verdict is IGNORED, not malformed (AC3)', () => {
-    expect(consolidatorOutputWellFormed('verdict: clean\nroster: not-a-real-persona\n', CATALOG)).toBe(true);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'clean', roster: ['not-a-real-persona'] }), CATALOG)).toBe(true);
+  });
+
+  it('reads output with a byte order mark', () => {
+    expect(consolidatorOutputWellFormed(`\uFEFF${out({ verdict: 'clean' })}`, CATALOG)).toBe(true);
   });
 });
 
 describe('consolidatorOutputWellFormed — the roster⊆catalog relationship for `another round` (AC3/AC4)', () => {
   it('accepts `another round` with a subset roster drawn from the catalog', () => {
-    expect(consolidatorOutputWellFormed('verdict: another round\nroster: review-plan-principal\n', CATALOG)).toBe(true);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'another round', roster: ['review-plan-principal'] }), CATALOG)).toBe(true);
   });
 
   it('accepts `another round` with the whole catalog as the roster', () => {
-    expect(consolidatorOutputWellFormed(`verdict: another round\nroster: ${CATALOG.join(', ')}\n`, CATALOG)).toBe(true);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'another round', roster: CATALOG }), CATALOG)).toBe(true);
   });
 
-  it('rejects `another round` with an EMPTY roster (a round must run someone, AC3)', () => {
-    expect(consolidatorOutputWellFormed('verdict: another round\nroster:\n', CATALOG)).toBe(false);
-    expect(consolidatorOutputWellFormed('verdict: another round\n', CATALOG)).toBe(false);
+  it('rejects `another round` with an EMPTY or missing roster, or one that is not a list (a round must run someone, AC3)', () => {
+    for (const roster of [[], undefined, 'review-plan-principal']) {
+      expect(consolidatorOutputWellFormed(out({ verdict: 'another round', roster }), CATALOG)).toBe(false);
+    }
   });
 
   it('rejects `another round` naming a persona the catalog does not declare (§27.4 — never invocable)', () => {
-    expect(consolidatorOutputWellFormed('verdict: another round\nroster: review-plan-principal, ghost-persona\n', CATALOG)).toBe(false);
+    expect(consolidatorOutputWellFormed(out({ verdict: 'another round', roster: ['review-plan-principal', 'ghost-persona'] }), CATALOG)).toBe(false);
   });
 });
 
 describe('parseConsolidatorOutput — the branch reads verdict + roster + reason', () => {
   it('parses a well-formed `another round` to its verdict and chosen roster', () => {
-    const parsed = parseConsolidatorOutput('verdict: another round\nroster: review-plan-security, review-plan-contracts\n');
+    const parsed = parseConsolidatorOutput(out({ verdict: 'another round', roster: ['review-plan-security', 'review-plan-contracts'] }));
     expect(parsed).toEqual({ verdict: 'another round', roster: ['review-plan-security', 'review-plan-contracts'], reason: null });
   });
 
-  it('parses a `stop for a human` verdict with its reason', () => {
-    const parsed = parseConsolidatorOutput('verdict: stop for a human\nreason: the reviewers disagree on the API shape\n');
+  it('parses a `stop for a human` verdict with its reason, trimmed', () => {
+    const parsed = parseConsolidatorOutput(out({ verdict: 'stop for a human', reason: ' the reviewers disagree on the API shape ' }));
     expect(parsed?.verdict).toBe('stop for a human');
     expect(parsed?.reason).toBe('the reviewers disagree on the API shape');
   });
 
   it('parses `clean` with an empty roster and no reason', () => {
-    expect(parseConsolidatorOutput('verdict: clean\n')).toEqual({ verdict: 'clean', roster: [], reason: null });
+    expect(parseConsolidatorOutput(out({ verdict: 'clean' }))).toEqual({ verdict: 'clean', roster: [], reason: null });
   });
 
   it('returns null when there is no verdict to read', () => {
-    expect(parseConsolidatorOutput('roster: review-plan-principal\n')).toBeNull();
+    expect(parseConsolidatorOutput(out({ roster: ['review-plan-principal'] }))).toBeNull();
+    expect(parseConsolidatorOutput('verdict: clean\n')).toBeNull();
   });
 });
 
@@ -108,17 +117,26 @@ describe('consolidatorOutputProblems — names each defect (§27.6/§27.12)', ()
   });
 
   it('names a missing verdict and quotes the allowed values', () => {
-    const problems = consolidatorOutputProblems('verdict: probably fine\n', CATALOG).join('\n');
+    const problems = consolidatorOutputProblems(out({ verdict: 'probably fine' }), CATALOG).join('\n');
     for (const v of CONSOLIDATOR_VERDICTS) expect(problems).toContain(v);
   });
 
-  it('names an `another round` with no roster, and a roster persona outside the catalog', () => {
-    expect(consolidatorOutputProblems('verdict: another round\n', CATALOG).join('\n')).toContain('roster');
-    expect(consolidatorOutputProblems('verdict: another round\nroster: review-plan-ghost\n', CATALOG).join('\n')).toContain('review-plan-ghost');
+  it('names an `another round` with no roster, and a roster entry outside the catalog by position, listing the catalog', () => {
+    expect(consolidatorOutputProblems(out({ verdict: 'another round' }), CATALOG).join('\n')).toContain('roster');
+    const problems = consolidatorOutputProblems(out({ verdict: 'another round', roster: ['review-plan-principal', 'review-plan-ghost'] }), CATALOG).join('\n');
+    expect(problems).toContain('"roster"[1]');
+    for (const p of CATALOG) expect(problems).toContain(p);
+  });
+
+  it('never repeats text from the output', () => {
+    const problems = consolidatorOutputProblems(out({ verdict: '<script>x</script>' }), CATALOG)
+      .concat(consolidatorOutputProblems(out({ verdict: 'another round', roster: ['<script>y</script>'] }), CATALOG))
+      .join('\n');
+    expect(problems).not.toContain('script');
   });
 
   it('agrees with consolidatorOutputWellFormed', () => {
-    for (const t of ['', 'verdict: clean\n', 'verdict: another round\n', 'verdict: another round\nroster: review-plan-ghost\n']) {
+    for (const t of ['', out({ verdict: 'clean' }), out({ verdict: 'another round' }), out({ verdict: 'another round', roster: ['review-plan-ghost'] })]) {
       expect(consolidatorOutputWellFormed(t, CATALOG)).toBe(consolidatorOutputProblems(t, CATALOG).length === 0);
     }
   });
