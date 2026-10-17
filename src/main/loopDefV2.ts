@@ -99,7 +99,16 @@ export interface WorkRecipe {
   recipe: string;
   artifact: string;
   completion?: WorkCompletion;
+  /** §27.3 */
+  goal?: string;
 }
+
+/** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
+ *  engine's framing around the condition must fit beside it. */
+export const GOAL_CONDITION_MAX_CHARS = 2000;
+
+/** §27.3/§27.8 */
+export type ReviewRounds = { kind: 'engine'; consolidator: string } | { kind: 'none' };
 
 /** §27.10 */
 export interface ArtifactBinding {
@@ -156,7 +165,7 @@ export interface LoopDefV2 {
   name: string;
   work: WorkRecipe;
   reviewers: ReviewerCatalogEntry[];
-  consolidator: string;
+  rounds: ReviewRounds;
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
@@ -389,8 +398,23 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     workCompletion = c;
   }
 
-  const cons = requireRecord(rec.consolidator, 'consolidator');
-  const consolidator = confineDefRelative(tierRoot, defDir, requireString(cons.recipe, 'consolidator recipe'), 'consolidator recipe');
+  let workGoal: string | undefined;
+  if (work.goal !== undefined) {
+    workGoal = requireNonBlankString(work.goal, 'work goal');
+    if (/[\r\n]/.test(workGoal)) fail('work goal must be one line');
+    if (workGoal.length > GOAL_CONDITION_MAX_CHARS) fail(`work goal must be at most ${GOAL_CONDITION_MAX_CHARS} characters`);
+  }
+
+  const reviewers = toReviewers(rec.reviewers, tierRoot, defDir);
+  let rounds: ReviewRounds;
+  if (rec.consolidator !== undefined) {
+    if (workGoal !== undefined) fail('a work goal runs its reviewers itself, so the def must not declare a consolidator');
+    const cons = requireRecord(rec.consolidator, 'consolidator');
+    rounds = { kind: 'engine', consolidator: confineDefRelative(tierRoot, defDir, requireString(cons.recipe, 'consolidator recipe'), 'consolidator recipe') };
+  } else {
+    if (workGoal === undefined && reviewers.length > 0) fail('reviewers are declared but no consolidator judges their rounds and no work goal runs them');
+    rounds = { kind: 'none' };
+  }
 
   const report = requireRecord(rec.report, 'report');
   const sections = report.sections;
@@ -400,6 +424,11 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     const p = requireString(report.polish, 'report polish');
     if (!isPolishPolicy(p)) fail(`unknown report polish policy: ${p} (expected ${POLISH_POLICIES.join(' or ')})`);
     polish = p;
+  }
+
+  const gate = toGate(rec.gate);
+  if (rounds.kind === 'none' && gate.some((g) => g.option === 'request-changes')) {
+    fail('gate option request-changes re-enters a review round, and this loop runs none');
   }
 
   let exec: ExecSideEffect | null = null;
@@ -424,12 +453,13 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       recipe: workRecipe,
       artifact: workArtifact,
       ...(workCompletion !== undefined ? { completion: workCompletion } : {}),
+      ...(workGoal !== undefined ? { goal: workGoal } : {}),
     },
-    reviewers: toReviewers(rec.reviewers, tierRoot, defDir),
-    consolidator,
+    reviewers,
+    rounds,
     boundaries: toBoundaries(rec.boundaries),
     report: { sections: sections as string[], polish },
-    gate: toGate(rec.gate),
+    gate,
     pickup: toPickup(rec.pickup),
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
     outputs,

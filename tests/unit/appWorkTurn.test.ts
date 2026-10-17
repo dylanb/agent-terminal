@@ -34,7 +34,7 @@ function def(over: Partial<LoopDefV2>): LoopDefV2 {
     name: 'plan-loop',
     work: { recipe: '/abs/prompts/work.md', artifact: 'plan' },
     reviewers: [],
-    consolidator: '/abs/prompts/consolidate.md',
+    rounds: { kind: 'engine', consolidator: '/abs/prompts/consolidate.md' },
     boundaries: [],
     report: { sections: ['summary'], polish: 'fix' },
     gate: [],

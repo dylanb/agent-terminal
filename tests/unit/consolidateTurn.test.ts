@@ -18,7 +18,7 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
       { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md', tools: ['Read'] },
       { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md', tools: ['Read', 'Bash'] },
     ],
-    consolidator: '/tiers/plan-loop/prompts/consolidate.md',
+    rounds: { kind: 'engine', consolidator: '/tiers/plan-loop/prompts/consolidate.md' },
     boundaries: [
       { boundary: 'pre-work', mode: 'clear' },
       { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },

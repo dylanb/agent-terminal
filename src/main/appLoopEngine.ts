@@ -20,12 +20,12 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, sliceArtifact } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, sliceArtifact } from './appWorkTurn';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
-import { catalogPersonas, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
+import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
@@ -33,7 +33,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearInterrupt, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -264,6 +264,10 @@ type ActiveAppTurn =
       instruction?: string;
       /** §27.10 (N6) */
       inputs?: ChainedInput[];
+      /** §27.3 */
+      run: WorkRun;
+      /** §27.3 */
+      verdict?: ConsolidatorVerdict;
     }
   | {
       phase: 'review';
@@ -324,6 +328,15 @@ type ActiveAppTurn =
       verdictReason?: string;
       chosenRoster?: string[];
     };
+
+/** §27.3 */
+type WorkRun = { kind: 'rounds' } | { kind: 'gate' } | { kind: 'goal'; condition: string; reviewers: RosterEntry[] };
+
+/** §27.3 */
+function workRunFor(def: LoopDefV2): WorkRun {
+  if (def.work.goal !== undefined) return { kind: 'goal', condition: def.work.goal, reviewers: reviewRoster(def) };
+  return def.rounds.kind === 'engine' ? { kind: 'rounds' } : { kind: 'gate' };
+}
 
 /** The entry context boundary before WORK (§27.3): the def's first declared boundary, defaulting to
  *  `clear` when the def names none (every turn boundary is clear-or-compact, §27.7). */
@@ -397,6 +410,7 @@ function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: str
     boundaryCmd: '/clear',
     recipePath: '',
     completion: { kind: 'unresolved' },
+    run: { kind: 'rounds' },
     ...(args.instruction !== undefined ? { instruction: args.instruction } : {}),
   };
 }
@@ -448,6 +462,7 @@ function activeTurnFor(
           : artifact
             ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
             : { kind: 'commits' },
+    run: workRunFor(def),
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
   };
@@ -550,7 +565,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (!active) return false;
     if (status !== 'error') liveError = null;
     const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
-    const verdict = active.phase === 'consolidate' ? active.verdict : undefined;
+    const verdict = active.phase === 'consolidate' || active.phase === 'work' ? active.verdict : undefined;
     const verdictReason = active.phase === 'consolidate' ? active.verdictReason : undefined;
     const chosenRoster = active.phase === 'consolidate' || active.phase === 'review' ? active.chosenRoster : undefined;
     // §27.9/AC4 — a review round entered by request-changes carries the operator's feedback; persisted so a
@@ -943,7 +958,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
     const problems = reviewers.map((r) => deps.reviewerAgentProblem(r)).filter((p): p is string => p !== null);
     if (problems.length === 0) return null;
-    return `this round's reviewers cannot run: ${problems.join('; ')}. Reviewers run as the Claude Code sub-agents installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as the Claude Code sub-agents installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+  };
+
+  /** §27.3/§27.4 */
+  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, reviewers: RosterEntry[], ticket: number | null): string[] => {
+    const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
+    return composeGoalReviewLines(reviewers, {
+      ...(ticket !== null ? { ticket } : {}),
+      ...(subjectRel !== undefined ? { subjectRel } : {}),
+      carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
+    });
   };
 
   const readBrief = (a: { briefPath?: string }): string | undefined | null =>
@@ -1010,7 +1035,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // Bind the work prompt to the ticket the flow resolved — the SAME identity the gate side-effects write to
       // — so the agent works the engine-resolved issue, never one inferred from the branch/PR/cwd (CLAUDE.md).
       const ticket = deps.workRefs(active.repoDir).ticket;
-      return composeAppWorkPrompt({
+      const prompt = composeAppWorkPrompt({
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
@@ -1028,7 +1053,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
+        ...(active.run.kind === 'goal' ? { goalReview: goalReviewFor(active, active.run.reviewers, ticket) } : {}),
       });
+      if (active.run.kind !== 'goal') return prompt;
+      // §27.3 — the full prompt outgrows a `/goal` condition, so it goes to a file the one-line command names.
+      if (!writeGoalPrompt(active.repoDir, prompt)) return null;
+      return composeGoalCommand({ condition: active.run.condition, promptRel: goalPromptRel(), turnKey, doneRelPath: APP_DONE_REL_PATH });
     },
     inject: (prompt, opts) => {
       // Clear the prior turn's done-signal at the PROMPT inject (not the preamble): any earlier and a
@@ -1040,7 +1070,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     hostedAgent: () => deps.hostedAgent(),
     injectionRefusal: () => {
       if (!active) return null;
-      return offPickupBranch(active.repoDir) ?? (active.phase === 'review' ? reviewerAgentsRefusal(active.reviewers) : null);
+      const reviewers = active.phase === 'review' ? active.reviewers : active.phase === 'work' && active.run.kind === 'goal' ? active.run.reviewers : [];
+      return offPickupBranch(active.repoDir) ?? reviewerAgentsRefusal(reviewers);
     },
     completionShortfall,
     unretryableShortfall: () => {
@@ -1079,7 +1110,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
-        enterReview(active, FIRST_ROUND);
+        if (active.run.kind === 'rounds') enterReview(active, FIRST_ROUND);
+        else routeWorkToGate(active);
         return;
       }
       if (active.phase === 'review') {
@@ -1193,7 +1225,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  report locations (§27.6/AC2). Returns null when any of those no longer resolve (a routable error). */
   const consolidateTurnFor = (ctx: TurnCtx, round: number): Extract<ActiveAppTurn, { phase: 'consolidate' }> | null => {
     const r = deps.resolveDef(ctx.repoDir, ctx.loopName);
-    if (!r.ok) return null;
+    if (!r.ok || r.def.rounds.kind !== 'engine') return null;
     const out = deps.resolveConsolidatorLocation(ctx.repoDir, round);
     if (!out) return null;
     const reportLocs = lastTwoReportRounds(round).map((rd) => deps.resolveReportLocation(ctx.repoDir, rd));
@@ -1207,7 +1239,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       boundaryCmd: preConsolidateBoundaryCommand(r.def),
       round,
       catalog: catalogPersonas(r.def),
-      recipePath: r.def.consolidator,
+      recipePath: r.def.rounds.consolidator,
       outputPath: out.abs,
       outputRel: out.rel,
       reportRels: reportLocs.map((l) => l!.rel),
@@ -1236,6 +1268,28 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.emitError(reason);
   };
 
+  /** Persist a turn reaching its gate with `verdict`, then stop there (`complete`). The `complete` write is the
+   *  one transition whose purpose is to summon the human, so a failed write holds a live turn-error instead of
+   *  leaving the disk on a pre-terminal `working` (§27.12c/CWE-703/755). */
+  const reachGate = (
+    turn: Extract<ActiveAppTurn, { phase: 'work' | 'consolidate' }>,
+    verdict: ConsolidatorVerdict,
+    cause: GateCause,
+    saveFailReason: string,
+    onSaved: () => void,
+    round?: number,
+  ): void => {
+    // §27.9.1 N9b.5(e) — before the persist, so the view it pushes already reads the engine's decision.
+    hook(() => deps.gateReaching?.(turn.repoDir, turn.stepId, turn.turnKey, verdict, cause));
+    if (!persist('complete')) {
+      hook(() => deps.gateNotReached?.(turn.repoDir, turn.stepId, turn.turnKey));
+      refuseRouteOut('turn-error', saveFailReason, round);
+      return;
+    }
+    onSaved();
+    hook(() => deps.gateReached?.(turn.repoDir, turn.stepId, turn.turnKey));
+  };
+
   /** Persist a routed-to-gate consolidator turn (§27.6): record the verdict, its reason (gated), and the
    *  roster it chose, then stop at the gate (`complete`, N4 gate is display-only). */
   const routeConsolidateToGate = (
@@ -1248,20 +1302,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
     turn.chosenRoster = roster.length > 0 ? roster : undefined;
-    // §27.9.1 N9b.5(e) — before the persist, so the view it pushes already reads the engine's decision.
-    hook(() => deps.gateReaching?.(turn.repoDir, turn.stepId, turn.turnKey, verdict, cause));
-    if (!persist('complete')) {
-      hook(() => deps.gateNotReached?.(turn.repoDir, turn.stepId, turn.turnKey));
-      // §27.12c/CWE-703/755 — the `complete` write failed (ENOSPC/EPERM/a planted symlink), so the disk still
-      // holds the pre-terminal `working`. This is the ONE transition whose purpose is to summon the human (a
-      // `stop for a human`/`clean` gate); nulling liveError and leaving `working` would silently strand them.
-      // Hold a live turn-error so the view keeps the retry/terminate route-out reachable, mirroring writeError.
-      const saveFailReason = 'the consolidator finished but its verdict could not be saved — retry';
-      refuseRouteOut('turn-error', saveFailReason, turn.round);
-      return;
-    }
-    deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
-    hook(() => deps.gateReached?.(turn.repoDir, turn.stepId, turn.turnKey));
+    reachGate(
+      turn,
+      verdict,
+      cause,
+      'the consolidator finished but its verdict could not be saved — retry',
+      () => deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0),
+      turn.round,
+    );
+  };
+
+  /** §27.3 */
+  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>): void => {
+    turn.verdict = 'clean';
+    reachGate(turn, 'clean', 'verdict', 'the work turn finished but could not be saved — retry', () => {});
   };
 
   /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued

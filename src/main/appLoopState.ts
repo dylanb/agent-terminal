@@ -104,6 +104,24 @@ export function loopAreaFile(repoDir: string, leaf: string): string | null {
   return confinedRealPath(jail, path.join(jail, leaf));
 }
 
+const GOAL_PROMPT_FILE = 'goal-prompt.md';
+
+/** §27.3 */
+export function goalPromptRel(): string {
+  return [...APP_LOOP_DIR_SEGMENTS, GOAL_PROMPT_FILE].join('/');
+}
+
+/** §27.3 */
+export function writeGoalPrompt(repoDir: string, prompt: string): boolean {
+  const file = loopAreaFile(repoDir, GOAL_PROMPT_FILE);
+  if (file === null) return false;
+  try {
+    return atomicWriteFileSync(file, prompt);
+  } catch {
+    return false;
+  }
+}
+
 /** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
 export function appLoopStateFile(repoDir: string): string | null {
   return loopAreaFile(repoDir, RUN_STATE_FILE);

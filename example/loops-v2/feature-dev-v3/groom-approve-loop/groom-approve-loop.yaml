@@ -1,0 +1,29 @@
+version: v2
+name: groom-approve-loop
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: groom-summary
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: update-issue-body
+        artifact: groomed-ticket
+  - option: redo
+inputs:
+  - id: groom-intent
+    path: groom-intent.md
+  - id: groomed-ticket
+    path: groomed-ticket.md
+  - id: groom-report
+    path: groom-report.md
+outputs:
+  - id: groom-summary
+    path: groom-summary.md
