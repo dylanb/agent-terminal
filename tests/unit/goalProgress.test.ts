@@ -40,6 +40,15 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${heading}\nModal or page?\n`)?.blocked).toBe(want);
   });
 
+  it.each([
+    ['a fenced code block', '```sh\n# wipes local data\npnpm db:reset\n```'],
+    ['a tilde-fenced code block', '~~~\n# wipes local data\n~~~'],
+    ['an indented code block', '    # wipes local data'],
+  ])('keeps a # line inside %s in the blocked reason', (_what, code) => {
+    const text = `Leg: 1\nStatus: blocked\n\n## Blocked\nRun this?\n${code}\nOr mock the store?\n\n## Next\n- wait\n`;
+    expect(parseGoalProgress(text)?.blocked).toBe(`Run this?\n${code}\nOr mock the store?`);
+  });
+
   it('reads a blocked reason that opens with an issue reference', () => {
     expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\n#208 asks for a modal and a page. Which?\n')?.blocked).toBe('#208 asks for a modal and a page. Which?');
   });

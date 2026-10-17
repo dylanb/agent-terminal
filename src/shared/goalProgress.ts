@@ -61,12 +61,32 @@ function isStatus(v: string): v is GoalProgressStatus {
   return (GOAL_PROGRESS_STATUSES as readonly string[]).includes(v);
 }
 
-/** A Markdown ATX heading: one to six `#` then a space or the end of the line. */
+const MAX_HEADING_INDENT = 3;
+
+function indentOf(line: string): number {
+  let n = 0;
+  while (line[n] === ' ') n++;
+  return n;
+}
+
+/** A CommonMark ATX heading: at most three spaces of indent, one to six `#`, then a space or the end of line. */
 function isHeading(line: string): boolean {
+  if (indentOf(line) > MAX_HEADING_INDENT) return false;
   const t = line.trimStart();
   let n = 0;
   while (t[n] === '#') n++;
   return n >= 1 && n <= 6 && (n === t.length || t[n] === ' ');
+}
+
+/** A CommonMark code fence line: at most three spaces of indent, then three or more backticks or tildes. */
+function fenceOf(line: string): string | null {
+  if (indentOf(line) > MAX_HEADING_INDENT) return null;
+  const t = line.trimStart();
+  const c = t[0];
+  if (c !== '`' && c !== '~') return null;
+  let n = 0;
+  while (t[n] === c) n++;
+  return n >= 3 ? c.repeat(n) : null;
 }
 
 /** The heading's section: what follows the heading on its own line, then the lines up to the next heading. */
@@ -82,7 +102,14 @@ function sectionBody(lines: readonly string[], heading: string): string | null {
   });
   if (at < 0) return null;
   const body: string[] = tail.length > 0 ? [tail] : [];
-  for (let i = at + 1; i < lines.length && !isHeading(lines[i]); i++) body.push(lines[i]);
+  let fence: string | null = null;
+  for (let i = at + 1; i < lines.length; i++) {
+    const f = fenceOf(lines[i]);
+    if (fence === null && f !== null) fence = f;
+    else if (fence !== null && f !== null && f[0] === fence[0] && f.length >= fence.length) fence = null;
+    else if (fence === null && isHeading(lines[i])) break;
+    body.push(lines[i]);
+  }
   const text = body.join('\n').trim();
   return text.length > 0 ? text : null;
 }
