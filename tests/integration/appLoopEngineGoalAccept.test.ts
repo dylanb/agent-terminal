@@ -302,6 +302,43 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     expect(readAppLoopState(h.repo)?.status).toBe('complete');
   });
 
+  it('a repeat Accept during a later Accept\'s wait is still a duplicate once an earlier wait returns', async () => {
+    const phase = PHASES[2];
+    let call = 0;
+    const holds: (() => void)[] = [];
+    const engine = makeEngine(
+      undefined,
+      makeFakeCompletionPredicates({
+        recoverExitCode: () => {
+          call += 1;
+          if (call === 2 || call === 4) return new Promise((r) => holds.push(() => r(null)));
+          return Promise.resolve(call === 3 ? 1 : null);
+        },
+      }),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    await flush();
+    engine.onInjectable();
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.onDoneSignal();
+    await flush();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    holds[0]();
+    await flush();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    for (const release of holds.slice(1)) release();
+    await flush();
+
+    const accepted = h.audit.mock.calls.map((c) => String(c[1])).filter((l) => l.includes('accepted'));
+    expect(accepted).toHaveLength(1);
+  });
+
   it('a refactor goal session\'s frozen check names the work turn in the run log, not a review round', async () => {
     const phase = PHASES[2];
     const engine = makeEngine(undefined, makeFakeCompletionPredicates());

@@ -30,6 +30,21 @@ function unmarked(v: string): string {
   return v.slice(a, b);
 }
 
+const TRAILING = '.,;:!';
+
+/** The value's first word in lower case, with what follows it (punctuation, a note) set aside. */
+function firstWord(v: string): string {
+  let end = 0;
+  while (end < v.length && ((v[end] >= 'a' && v[end] <= 'z') || (v[end] >= 'A' && v[end] <= 'Z'))) end++;
+  return v.slice(0, end).toLowerCase();
+}
+
+function withoutTrailingPunctuation(v: string): string {
+  let end = v.length;
+  while (end > 0 && TRAILING.includes(v[end - 1])) end--;
+  return v.slice(0, end);
+}
+
 /** A `label: value` field with any code-span or emphasis markup around the label or the value set aside. */
 function plainField(line: string, label: string): string | null {
   const t = stripLeadingBullet(line.trim());
@@ -50,7 +65,12 @@ function positiveWhole(v: string): number | null {
 }
 
 function sectionBody(lines: readonly string[], heading: string): string | null {
-  const at = lines.findIndex((l) => l.trim() === heading);
+  const at = lines.findIndex((l) => {
+    const t = l.trim();
+    if (!t.startsWith(heading)) return false;
+    const next = t.slice(heading.length, heading.length + 1);
+    return next === '' || next === ':' || next === ' ';
+  });
   if (at < 0) return null;
   const body: string[] = [];
   for (let i = at + 1; i < lines.length && !lines[i].trimStart().startsWith('#'); i++) body.push(lines[i]);
@@ -66,12 +86,15 @@ export function parseGoalProgress(text: string): GoalProgress | null {
     if (leg === null) {
       const v = plainField(line, GOAL_PROGRESS_GRAMMAR.legLabel);
       if (v !== null) {
-        leg = positiveWhole(v);
+        leg = positiveWhole(withoutTrailingPunctuation(v));
         if (leg === null) return null;
         continue;
       }
     }
-    if (status === null) status = plainField(line, GOAL_PROGRESS_GRAMMAR.statusLabel)?.toLowerCase() ?? null;
+    if (status === null) {
+      const v = plainField(line, GOAL_PROGRESS_GRAMMAR.statusLabel);
+      if (v !== null) status = firstWord(v);
+    }
   }
   if (leg === null || status === null || !isStatus(status)) return null;
   if (status !== 'blocked') return { leg, status, blocked: null };
