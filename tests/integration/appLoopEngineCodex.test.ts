@@ -91,6 +91,17 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4 v2
     expect(asked).toBe(0);
   });
 
+  it('with no agent at the prompt it says so, not that reviewers are missing', () => {
+    const engine = makeEngine(undefined, undefined, undefined, {
+      hostedAgent: () => 'absent',
+      reviewerAgentProblem: (r) => `no sub-agent ${r.persona} is installed`,
+    });
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    expect(engine.liveErrorFor(h.repo)?.reason).toBe('no hosted agent at the prompt');
+  });
+
   it('refuses the turn when the Codex agent of a reviewer is not installed, and says how to install it', () => {
     const engine = engineFor('codex', (persona) => (persona === 'review-plan-security' ? 'no Codex agent plan_loop__review_plan_security is installed' : null));
     h.defResult = resolved(goalDef());

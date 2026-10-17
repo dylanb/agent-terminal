@@ -26,12 +26,27 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     ['in bold values and capitals', 'Leg: **1**\nStatus: **Done**\n', { leg: 1, status: 'done' }],
     ['with a full stop', 'Leg: 2.\nStatus: done.\n', { leg: 2, status: 'done' }],
     ['with a note after the status', 'Leg: 1\nStatus: checkpoint (3 passes run)\n', { leg: 1, status: 'checkpoint' }],
+    ['with punctuation outside the markup', 'Leg: `2`.\nStatus: `done`.\n', { leg: 2, status: 'done' }],
+    ['in bold with a full stop', 'Leg: **2**.\nStatus: done\n', { leg: 2, status: 'done' }],
+    ['with a note after the leg', 'Leg: 2 (of 3)\nStatus: done\n', { leg: 2, status: 'done' }],
   ])('reads the fields written %s', (_how, text, want) => {
     expect(parseGoalProgress(text)).toEqual({ ...want, blocked: null });
   });
 
-  it.each([['## Blocked:'], ['## Blocked on the operator']])('reads the blocked section under %j', (heading) => {
-    expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${heading}\nModal or page?\n`)?.blocked).toBe('Modal or page?');
+  it.each([
+    ['## Blocked:', 'Modal or page?'],
+    ['## Blocked on the operator', 'on the operator\nModal or page?'],
+  ])('reads the blocked section under %j', (heading, want) => {
+    expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${heading}\nModal or page?\n`)?.blocked).toBe(want);
+  });
+
+  it('reads a blocked reason that opens with an issue reference', () => {
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\n#208 asks for a modal and a page. Which?\n')?.blocked).toBe('#208 asks for a modal and a page. Which?');
+  });
+
+  it('reads a blocked reason written on the heading line, and keeps it ahead of the lines below', () => {
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked: Modal or page?\n')?.blocked).toBe('Modal or page?');
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked on the API contract\nWhich version?\n')?.blocked).toBe('on the API contract\nWhich version?');
   });
 
   it('returns the blocked section text as the reason', () => {

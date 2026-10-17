@@ -30,8 +30,6 @@ function unmarked(v: string): string {
   return v.slice(a, b);
 }
 
-const TRAILING = '.,;:!';
-
 /** The value's first word in lower case, with what follows it (punctuation, a note) set aside. */
 function firstWord(v: string): string {
   let end = 0;
@@ -39,10 +37,16 @@ function firstWord(v: string): string {
   return v.slice(0, end).toLowerCase();
 }
 
-function withoutTrailingPunctuation(v: string): string {
-  let end = v.length;
-  while (end > 0 && TRAILING.includes(v[end - 1])) end--;
-  return v.slice(0, end);
+const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+
+/** The value's leading whole number, with what follows it (markup, punctuation, a note) set aside; null when
+ *  the value does not open with one, or opens with a fraction. */
+function leadingWhole(v: string): number | null {
+  let end = 0;
+  while (isDigit(v[end])) end++;
+  if (end === 0 || end > 9 || (v[end] === '.' && isDigit(v[end + 1]))) return null;
+  const n = Number(v.slice(0, end));
+  return n >= 1 ? n : null;
 }
 
 /** A `label: value` field with any code-span or emphasis markup around the label or the value set aside. */
@@ -57,23 +61,28 @@ function isStatus(v: string): v is GoalProgressStatus {
   return (GOAL_PROGRESS_STATUSES as readonly string[]).includes(v);
 }
 
-function positiveWhole(v: string): number | null {
-  if (v.length === 0 || v.length > 9) return null;
-  for (const c of v) if (c < '0' || c > '9') return null;
-  const n = Number(v);
-  return n >= 1 ? n : null;
+/** A Markdown ATX heading: one to six `#` then a space or the end of the line. */
+function isHeading(line: string): boolean {
+  const t = line.trimStart();
+  let n = 0;
+  while (t[n] === '#') n++;
+  return n >= 1 && n <= 6 && (n === t.length || t[n] === ' ');
 }
 
+/** The heading's section: what follows the heading on its own line, then the lines up to the next heading. */
 function sectionBody(lines: readonly string[], heading: string): string | null {
+  let tail = '';
   const at = lines.findIndex((l) => {
     const t = l.trim();
     if (!t.startsWith(heading)) return false;
-    const next = t.slice(heading.length, heading.length + 1);
-    return next === '' || next === ':' || next === ' ';
+    const rest = t.slice(heading.length);
+    if (rest !== '' && rest[0] !== ':' && rest[0] !== ' ') return false;
+    tail = (rest[0] === ':' ? rest.slice(1) : rest).trim();
+    return true;
   });
   if (at < 0) return null;
-  const body: string[] = [];
-  for (let i = at + 1; i < lines.length && !lines[i].trimStart().startsWith('#'); i++) body.push(lines[i]);
+  const body: string[] = tail.length > 0 ? [tail] : [];
+  for (let i = at + 1; i < lines.length && !isHeading(lines[i]); i++) body.push(lines[i]);
   const text = body.join('\n').trim();
   return text.length > 0 ? text : null;
 }
@@ -86,7 +95,7 @@ export function parseGoalProgress(text: string): GoalProgress | null {
     if (leg === null) {
       const v = plainField(line, GOAL_PROGRESS_GRAMMAR.legLabel);
       if (v !== null) {
-        leg = positiveWhole(withoutTrailingPunctuation(v));
+        leg = leadingWhole(v);
         if (leg === null) return null;
         continue;
       }

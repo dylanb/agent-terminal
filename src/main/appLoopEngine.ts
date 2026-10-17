@@ -1213,7 +1213,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     injectionRefusal: () => {
       if (!active) return null;
       const reviewers = active.phase === 'review' ? active.reviewers : active.phase === 'work' && active.run.kind === 'goal' ? active.run.reviewers : [];
-      return offPickupBranch(active.repoDir) ?? reviewerAgentsRefusal(reviewers);
+      // §27.2 — with no agent at the prompt the runner says so; which agent's reviewers to check is unknowable.
+      return offPickupBranch(active.repoDir) ?? (deps.hostedAgent() === 'absent' ? null : reviewerAgentsRefusal(reviewers));
     },
     completionShortfall,
     unretryableShortfall: () => {
