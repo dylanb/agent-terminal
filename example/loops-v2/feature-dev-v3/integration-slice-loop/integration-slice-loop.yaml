@@ -4,6 +4,9 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: commits
+  goal: "the full suite the repository requires before a pull request passes, including the end-to-end tests, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this step's section with its decisions, review history and test evidence"
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: impl-review-principal
     charter: charter/principal.md
@@ -31,8 +34,6 @@ reviewers:
     charter: charter/diagrams.md
   - persona: review-plan-tracer-slicer
     charter: charter/tracer-slicer.md
-consolidator:
-  recipe: prompts/consolidate.md
 boundaries:
   - boundary: pre-work
     mode: clear
@@ -43,13 +44,16 @@ gate:
     side_effects:
       - kind: commit
         label: integration
-      - kind: gh
-        action: publish-pr-body
-        artifact: plan
-  - option: request-changes
   - option: redo
   - option: polish
   - option: back-to-red
 inputs:
   - id: plan
     path: plan.md
+  - id: groom-intent
+    path: groom-intent.md
+  - id: impl-report
+    path: impl-report.md
+outputs:
+  - id: impl-report
+    path: impl-report.md

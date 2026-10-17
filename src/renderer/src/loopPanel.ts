@@ -194,6 +194,36 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.append(group);
   };
 
+  /** §27.12 */
+  const syncStallHelp = (body: HTMLElement, loop: FlowLoopView): void => {
+    const existing = body.querySelector<HTMLElement>('[data-stall-help]');
+    if (loop.status !== 'error' || loop.stalled !== true) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const help = doc.createElement('div');
+    help.className = 'stall-help';
+    help.dataset.stallHelp = '';
+    const lead = doc.createElement('p');
+    lead.textContent = 'The agent has gone quiet. If it is asking you something, answer it in the terminal. To get it going again, type one of these to the agent:';
+    const list = doc.createElement('ul');
+    for (const text of ['Carry on with your instructions.', 'If you have finished, write the turn-done file now.']) {
+      const item = doc.createElement('li');
+      const code = doc.createElement('code');
+      code.dataset.stallPrompt = '';
+      code.textContent = text;
+      item.append(code);
+      list.append(item);
+    }
+    const tail = doc.createElement('p');
+    tail.textContent = 'The step carries on by itself once the agent writes its turn-done file.';
+    help.append(lead, list, tail);
+    const group = body.querySelector('[data-app-route-out-group]');
+    if (group) group.before(help);
+    else body.append(help);
+  };
+
   /** §27.6/AC5 — the round's verdict and (only for `stop for a human`) its reason, kept INSIDE the live
    *  region so they are announced as additions when the consolidator routes to the gate (WCAG 4.1.3). Added
    *  after the reason anchor, ahead of any pr/branch rows, and removed in place when they fall away. */
@@ -396,6 +426,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       syncVerdictRows(liveLoop.ldl, liveLoop.reasonAnchor, loop);
       if (liveLoop.autoGate && loop.autoGate) syncAutoGate(liveLoop.autoGate, loop.autoGate);
       syncAppRouteOut(liveLoop.body, loop);
+      syncStallHelp(liveLoop.body, loop);
       syncCatalog(liveLoop.body, loop);
       syncArmInterrupt(liveLoop.body, loop);
     }
@@ -626,6 +657,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       syncAppRouteOut(body, loop);
+      syncStallHelp(body, loop);
       // §27.4/§27.9/AC8/AC9 — the reviewer catalog (chosen roster distinguished) and the arm-interrupt control.
       syncCatalog(body, loop);
       syncArmInterrupt(body, loop);

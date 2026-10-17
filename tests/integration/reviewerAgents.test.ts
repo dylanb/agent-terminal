@@ -6,7 +6,7 @@ import { load as parseYaml } from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
-import { installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
+import { installedCodexReviewerProblem, installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
 import { parse as parseToml } from 'smol-toml';
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
@@ -203,7 +203,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
 
   it('names the missing sub-agent when it was never installed', () => {
     const [reviewer] = greenRoster();
-    expect(installedReviewerProblem(agentsDir(), reviewer)).toContain(reviewer.agent);
+    expect(installedReviewerProblem(agentsDir(), reviewer)).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
   });
 
   it('names the charter when the run resolved a different one than the sub-agent carries', () => {
@@ -212,7 +212,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     const edited = path.join(home, 'edited-principal.md');
     writeFileSync(edited, `${readFileSync(reviewer.charter, 'utf8')}\nAn operator edit.\n`);
     const problem = installedReviewerProblem(agentsDir(), { ...reviewer, charter: edited });
-    expect(problem).toContain(reviewer.agent);
+    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
     expect(problem).toContain(edited);
   });
 
@@ -220,7 +220,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     install();
     const [reviewer] = greenRoster();
     const problem = installedReviewerProblem(agentsDir(), { ...reviewer, tools: ['Read'] });
-    expect(problem).toContain(reviewer.agent);
+    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
     expect(problem).toMatch(/tools/i);
   });
 
@@ -228,14 +228,53 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
     install();
     const [reviewer] = greenRoster();
     const limited = renderReviewerAgent({ loop: 'green-loop', persona: reviewer.persona, tools: ['Read'], charter: readFileSync(reviewer.charter, 'utf8') });
-    writeFileSync(path.join(agentsDir(), `${reviewer.agent}.md`), limited);
+    writeFileSync(path.join(agentsDir(), `${reviewerAgentName(reviewer.loop, reviewer.persona)}.md`), limited);
     const problem = installedReviewerProblem(agentsDir(), reviewer);
-    expect(problem).toContain(reviewer.agent);
+    expect(problem).toContain(reviewerAgentName(reviewer.loop, reviewer.persona));
     expect(problem).toMatch(/tools/i);
   });
 
   it('reports a problem, never a pass, when there is no agents directory to look in', () => {
     const [reviewer] = greenRoster();
     expect(installedReviewerProblem(null, reviewer)).toMatch(/CLAUDE_CONFIG_DIR/);
+  });
+});
+
+describe('under Codex a reviewer runs only as the installed Codex agent carrying the charter this run resolved', () => {
+  const codexAgents = (): string => path.join(home, '.codex', 'agents');
+  const greenRoster = () => {
+    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v2' });
+    if (!r.ok) throw new Error(r.reason);
+    return reviewRoster(r.def);
+  };
+  const install = (): void => {
+    mkdirSync(path.join(home, '.codex'), { recursive: true });
+    const res = applyInstallExamples(dirs, []);
+    if (!res.ok) throw new Error(res.error);
+  };
+
+  it('finds no problem with any reviewer of a bundled loop once the examples are installed', () => {
+    install();
+    for (const reviewer of greenRoster()) expect(installedCodexReviewerProblem(codexAgents(), reviewer)).toBeNull();
+  });
+
+  it('names the missing Codex agent when it was never installed', () => {
+    const [reviewer] = greenRoster();
+    expect(installedCodexReviewerProblem(codexAgents(), reviewer)).toContain(`no Codex agent ${codexName(reviewer.loop, reviewer.persona)} is installed`);
+  });
+
+  it('names the charter when the run resolved a different one than the Codex agent carries', () => {
+    install();
+    const [reviewer] = greenRoster();
+    const edited = path.join(home, 'edited-principal.md');
+    writeFileSync(edited, `${readFileSync(reviewer.charter, 'utf8')}\nAn operator edit.\n`);
+    const problem = installedCodexReviewerProblem(codexAgents(), { ...reviewer, charter: edited });
+    expect(problem).toContain(codexName(reviewer.loop, reviewer.persona));
+    expect(problem).toContain(edited);
+  });
+
+  it('reports a problem, never a pass, when there is no Codex home to look in', () => {
+    const [reviewer] = greenRoster();
+    expect(installedCodexReviewerProblem(null, reviewer)).toMatch(/CODEX_HOME/);
   });
 });

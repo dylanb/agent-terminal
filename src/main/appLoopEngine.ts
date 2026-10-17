@@ -20,7 +20,8 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, sliceArtifact } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact } from './appWorkTurn';
+import { parseGoalProgress, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
@@ -33,10 +34,11 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearInterrupt, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalProgress, clearInterrupt, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
+import type { AgentKind } from './agentKind';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -77,6 +79,8 @@ export interface AppLoopLiveError {
   /** The review-and-fix round this error belongs to, so the view carries the round number onto the
    *  route-out surface; absent for a work-turn error (no round has run). */
   round?: number;
+  /** §27.12 */
+  stalled?: true;
 }
 
 /** The completion contract of the work turn, as a discriminated union so no mode carries a field another
@@ -88,6 +92,8 @@ type AppCompletion =
   | { kind: 'red'; resultPath: string; resultRel: string }
   | { kind: 'green'; resultPath: string; resultRel: string }
   | { kind: 'commits' }
+  /** §27.3/§28.5.3 */
+  | { kind: 'refactor' }
   | { kind: 'unresolved' };
 
 export interface AppLoopEngineDeps {
@@ -165,8 +171,10 @@ export interface AppLoopEngineDeps {
   currentBranch(repoDir: string): GitBranchRead;
   /** §27.10 */
   pickupBranch(repoDir: string): PickupBranch;
-  /** §27.4 — why this reviewer cannot run as the installed sub-agent carrying its charter, or null when it can. */
-  reviewerAgentProblem(reviewer: RosterEntry): string | null;
+  /** §27.4 — why this reviewer cannot run as the agent `kind` installed for it carrying its charter, or null when it can. */
+  reviewerAgentProblem(reviewer: RosterEntry, kind: AgentKind): string | null;
+  /** §27.4 */
+  hostedAgentKind(): AgentKind;
   /** The GitHub refs the flow has resolved for a repo — the ticket/PR the work turn is operating on, the SAME
    *  identity the gate side-effects act on (resolveAppGateRefs). The composed work prompt names the ticket so
    *  the agent works the engine-resolved issue, never one re-derived from the branch/PR/cwd (CLAUDE.md). Null
@@ -268,6 +276,8 @@ type ActiveAppTurn =
       run: WorkRun;
       /** §27.3 */
       verdict?: ConsolidatorVerdict;
+      /** §27.3 */
+      verdictReason?: string;
     }
   | {
       phase: 'review';
@@ -330,12 +340,29 @@ type ActiveAppTurn =
     };
 
 /** §27.3 */
-type WorkRun = { kind: 'rounds' } | { kind: 'gate' } | { kind: 'goal'; condition: string; reviewers: RosterEntry[] };
+type WorkRun =
+  | { kind: 'rounds' }
+  | { kind: 'gate' }
+  | { kind: 'goal'; condition: string; reviewers: RosterEntry[]; polish: PolishPolicy; slicePhase: boolean; leg: number; passes?: number };
 
 /** §27.3 */
-function workRunFor(def: LoopDefV2): WorkRun {
-  if (def.work.goal !== undefined) return { kind: 'goal', condition: def.work.goal, reviewers: reviewRoster(def) };
+function workRunFor(def: LoopDefV2, leg = 1): WorkRun {
+  if (def.work.goal !== undefined) {
+    return {
+      kind: 'goal',
+      condition: def.work.goal,
+      reviewers: reviewRoster(def),
+      polish: def.report.polish,
+      slicePhase: def.work.completion !== undefined,
+      leg,
+      ...(def.work.checkpoint !== undefined ? { passes: def.work.checkpoint.passes } : {}),
+    };
+  }
   return def.rounds.kind === 'engine' ? { kind: 'rounds' } : { kind: 'gate' };
+}
+
+function goalLegOf(run: Extract<WorkRun, { kind: 'goal' }>): { leg: number; passes?: number } {
+  return { leg: run.leg, ...(run.passes !== undefined ? { passes: run.passes } : {}) };
 }
 
 /** The entry context boundary before WORK (§27.3): the def's first declared boundary, defaulting to
@@ -432,7 +459,7 @@ function activeTurnFor(
   loopName: string,
   stepId: string,
   def: LoopDefV2,
-  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number },
+  opts?: { instruction?: string; inputs?: ChainedInput[]; slice?: number; leg?: number },
 ): ActiveAppTurn {
   // §28.4 D1 — a loop-back re-entry (slice N>1) targets its own `red-result.slice-N.md`; slice 1 is unsliced.
   const base = completionArtifact(def);
@@ -457,12 +484,15 @@ function activeTurnFor(
         : def.work.completion === 'refactor'
           ? // §28.5.3/§28.6 — a refactor loop's work turn is a `commits` turn (the phase gate is on each review
             // ROUND, not the work turn), REGARDLESS of whether work.artifact resolves to a binding — so a
-            // refactor def that names one can never become a marker-`file` turn that would never complete.
-            { kind: 'commits' }
+            // refactor def that names one can never become a marker-`file` turn that would never complete. A
+            // goal session has no rounds, so its work turn carries the round's gate (§27.3).
+            def.work.goal !== undefined
+            ? { kind: 'refactor' }
+            : { kind: 'commits' }
           : artifact
             ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
             : { kind: 'commits' },
-    run: workRunFor(def),
+    run: workRunFor(def, opts?.leg),
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
   };
@@ -566,7 +596,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (status !== 'error') liveError = null;
     const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
     const verdict = active.phase === 'consolidate' || active.phase === 'work' ? active.verdict : undefined;
-    const verdictReason = active.phase === 'consolidate' ? active.verdictReason : undefined;
+    const verdictReason = active.phase === 'consolidate' || active.phase === 'work' ? active.verdictReason : undefined;
     const chosenRoster = active.phase === 'consolidate' || active.phase === 'review' ? active.chosenRoster : undefined;
     // §27.9/AC4 — a review round entered by request-changes carries the operator's feedback; persisted so a
     // relaunch or Retry re-injects it rather than dropping it.
@@ -575,6 +605,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const instruction = active.phase === 'work' ? active.instruction : undefined;
     // §27.10
     const chainedInputs = liveCarry(active.repoDir, active.stepId) ?? undefined;
+    const leg = active.phase === 'work' && active.run.kind === 'goal' && active.run.leg > 1 ? active.run.leg : undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -590,6 +621,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(feedback !== undefined ? { feedback } : {}),
         ...(instruction !== undefined ? { instruction } : {}),
         ...(chainedInputs !== undefined && chainedInputs.length > 0 ? { chainedInputs } : {}),
+        ...(leg !== undefined ? { leg } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -606,9 +638,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   /** Build and hold the live error for the ACTIVE turn's identity — the one place the `AppLoopLiveError`
    *  literal is spelled, so a new field cannot be threaded through one construction site and dropped from
    *  another (§27.12c). Every route-out/persist-failure/resume site that summons the human goes through here. */
-  const setLiveError = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
+  const setLiveError = (kind: AppLoopErrorKind, reason: string, round?: number, stalled = false): void => {
     if (!active) return;
-    liveError = { kind, repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
+    liveError = {
+      kind,
+      repoDir: active.repoDir,
+      loop: active.loopName,
+      step: active.stepId,
+      turnKey: active.turnKey,
+      reason,
+      ...(round !== undefined ? { round } : {}),
+      ...(stalled ? { stalled: true as const } : {}),
+    };
   };
 
   /** Refuse an Accept that has nothing to finalize, or whose finalize write failed (§27.12c): hold a live
@@ -631,6 +672,32 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   const UNRESOLVED_SHORTFALL = 'the loop definition no longer resolves';
+
+  /** §27.3 */
+  const goalEnd = (
+    a: ActiveAppTurn,
+    run: Extract<WorkRun, { kind: 'goal' }>,
+  ): { kind: 'shortfall'; reason: string } | { kind: 'progress'; progress: GoalProgress } => {
+    const rel = goalProgressRel();
+    const file = goalProgressFile(a.repoDir);
+    const text = file === null ? null : deps.readArtifact(file);
+    if (text === null) return { kind: 'shortfall', reason: `the goal progress file ${rel} is missing` };
+    const progress = parseGoalProgress(text);
+    if (progress === null) return { kind: 'shortfall', reason: `the goal progress file ${rel} is not well-formed` };
+    if (progress.leg !== run.leg) return { kind: 'shortfall', reason: `the goal progress file ${rel} records leg ${progress.leg}, not this leg (${run.leg})` };
+    if (progress.status === 'working') return { kind: 'shortfall', reason: `the goal progress file ${rel} records the goal as still working` };
+    if (progress.status === 'checkpoint' && run.passes === undefined) {
+      return { kind: 'shortfall', reason: `the goal progress file ${rel} records a checkpoint, but this loop runs its goal in one leg` };
+    }
+    return { kind: 'progress', progress };
+  };
+
+  /** §27.3 */
+  const goalStopsShort = (a: ActiveAppTurn | null): boolean => {
+    if (a?.phase !== 'work' || a.run.kind !== 'goal') return false;
+    const end = goalEnd(a, a.run);
+    return end.kind === 'progress' && end.progress.status !== 'done';
+  };
 
   const completionShortfall = (): string | null => {
     if (!active) return 'no turn is active';
@@ -661,9 +728,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       return null;
     }
+    if (active.run.kind === 'goal') {
+      const end = goalEnd(active, active.run);
+      if (end.kind === 'shortfall') return end.reason;
+      if (end.progress.status !== 'done') return null;
+    }
     switch (active.completion.kind) {
       case 'commits':
         return null; // the done-signal alone completes it
+      case 'refactor': {
+        const loc = deps.resolveRefactorResultLocation(active.repoDir, FIRST_ROUND);
+        if (loc === null) return 'the refactor result location cannot be resolved';
+        return resultShortfall(loc.rel, deps.readArtifact(loc.abs), REFACTOR_COMPLETING_OUTCOME);
+      }
       case 'unresolved':
         return UNRESOLVED_SHORTFALL; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
       case 'file': {
@@ -913,6 +990,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         turnKey: active.turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         checkCommand: deps.artifactCheckCommand(check),
+        agentKind: deps.hostedAgentKind(),
       });
     }
     if (active.phase === 'consolidate' && active.completion.kind !== 'unresolved') {
@@ -956,19 +1034,32 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
-    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r)).filter((p): p is string => p !== null);
+    const kind = deps.hostedAgentKind();
+    const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind)).filter((p): p is string => p !== null);
     if (problems.length === 0) return null;
-    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as the Claude Code sub-agents installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
+    const installed = kind === 'codex' ? 'the Codex agents' : 'the Claude Code sub-agents';
+    return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
   /** §27.3/§27.4 */
-  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, reviewers: RosterEntry[], ticket: number | null): string[] => {
+  const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, ticket: number | null): string[] => {
     const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
-    return composeGoalReviewLines(reviewers, {
-      ...(ticket !== null ? { ticket } : {}),
-      ...(subjectRel !== undefined ? { subjectRel } : {}),
-      carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
-    });
+    return composeGoalReviewLines(
+      run.reviewers,
+      {
+        ...(ticket !== null ? { ticket } : {}),
+        ...(subjectRel !== undefined ? { subjectRel } : {}),
+        ...(run.slicePhase ? { slice: deps.currentSlice(turn.repoDir) } : {}),
+        carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
+      },
+      run.polish,
+      deps.hostedAgentKind(),
+    );
+  };
+
+  const refactorPromptCompletion = (repoDir: string): { kind: 'refactor'; resultRel: string } | null => {
+    const loc = deps.resolveRefactorResultLocation(repoDir, FIRST_ROUND);
+    return loc === null ? null : { kind: 'refactor', resultRel: loc.rel };
   };
 
   const readBrief = (a: { briefPath?: string }): string | undefined | null =>
@@ -1006,6 +1097,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         const loopBrief = readBrief(active);
         if (loopBrief === null) return null;
         return composeReviewAndFixPrompt({
+          agentKind: deps.hostedAgentKind(),
           roster: active.reviewers,
           sections: active.sections,
           polish: active.polish,
@@ -1048,17 +1140,31 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               ? { kind: 'red', resultRel: active.completion.resultRel, redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir) }
               : active.completion.kind === 'green'
                 ? { kind: 'green', resultRel: active.completion.resultRel }
-                : null,
+                : active.completion.kind === 'refactor'
+                  ? refactorPromptCompletion(active.repoDir)
+                  : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
-        ...(active.run.kind === 'goal' ? { goalReview: goalReviewFor(active, active.run.reviewers, ticket) } : {}),
+        ...(active.run.kind === 'goal'
+          ? {
+              goalReview: goalReviewFor(active, active.run, ticket),
+              goalProgress: goalProgressLines({ progressRel: goalProgressRel(), ...goalLegOf(active.run) }),
+            }
+          : {}),
       });
       if (active.run.kind !== 'goal') return prompt;
       // §27.3 — the full prompt outgrows a `/goal` condition, so it goes to a file the one-line command names.
       if (!writeGoalPrompt(active.repoDir, prompt)) return null;
-      return composeGoalCommand({ condition: active.run.condition, promptRel: goalPromptRel(), turnKey, doneRelPath: APP_DONE_REL_PATH });
+      return composeGoalCommand({
+        condition: active.run.condition,
+        promptRel: goalPromptRel(),
+        progressRel: goalProgressRel(),
+        turnKey,
+        doneRelPath: APP_DONE_REL_PATH,
+        ...goalLegOf(active.run),
+      });
     },
     inject: (prompt, opts) => {
       // Clear the prior turn's done-signal at the PROMPT inject (not the preamble): any earlier and a
@@ -1082,12 +1188,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
-    writeError: (reason) => {
+    writeError: (reason, stalled) => {
       if (!active) return;
       const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
       // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
       // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
-      setLiveError('turn-error', reason, round);
+      setLiveError('turn-error', reason, round, stalled === true);
       persist('error', reason);
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       const errored = active;
@@ -1103,6 +1209,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     onComplete: (turnKey) => {
       if (!active) return;
+      if (active.phase === 'work' && active.run.kind === 'goal') {
+        const end = goalEnd(active, active.run);
+        if (end.kind === 'progress' && end.progress.status === 'checkpoint') {
+          nextLeg(active, active.run);
+          return;
+        }
+        if (end.kind === 'progress' && end.progress.status === 'blocked') {
+          deps.audit(active.repoDir, `§27 goal turn ${turnKey} blocked on the operator`, 0);
+          routeWorkToGate(active, 'stop for a human', end.progress.blocked ?? undefined);
+          return;
+        }
+      }
       if (active.phase === 'work') {
         // §28.5.3/§28.8.3 — a completed GREEN work turn records its (non-blocking) changed-test flag from the
         // gate's stash before advancing.
@@ -1136,6 +1254,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   const start = (turn: ActiveAppTurn, defer = false): void => {
     active = turn;
+    if (turn.phase === 'work' && turn.run.kind === 'goal') {
+      try {
+        clearGoalProgress(turn.repoDir);
+      } catch (e) {
+        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress: ${e instanceof Error ? e.message : String(e)}`, 1);
+      }
+    }
     persist('working');
     // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
     // it from the skill injection's completion so the two never share the input line (AC10/CWE-74). The
@@ -1313,9 +1438,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** §27.3 */
-  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>): void => {
-    turn.verdict = 'clean';
-    reachGate(turn, 'clean', 'verdict', 'the work turn finished but could not be saved — retry', () => {});
+  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, verdict: ConsolidatorVerdict = 'clean', reason?: string): void => {
+    turn.verdict = verdict;
+    turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
+    reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', () => {});
+  };
+
+  /** §27.3 */
+  const nextLeg = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>): void => {
+    deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} leg ${run.leg} checkpointed after ${run.passes} review passes`, 0);
+    active = { ...turn, run: { ...run, leg: run.leg + 1 } };
+    persist('working');
+    runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel()) });
   };
 
   /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued
@@ -1443,7 +1577,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     onDoneSignal() {
       const a = active;
-      if (a?.completion.kind === 'red') {
+      if (goalStopsShort(a)) {
+        runner.onDoneSignal();
+      } else if (a?.completion.kind === 'red') {
         // §28.5.3 / §28 Option C — the RED machine ground truth needs an async git check; compute it, then
         // re-enter the SYNC runner with the pre-evaluated gate. Guards: `asyncGatePendingFor` dedupes a duplicate
         // (un-debounced) done-signal while a gate is pending; a stall during the await leaves the turn resumable,
@@ -1470,7 +1606,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             runner.onDoneSignal(gate);
           }
         });
-      } else if (a?.phase === 'review' && a.completion.kind === 'refactor-report') {
+      } else if ((a?.phase === 'review' && a.completion.kind === 'refactor-report') || (a?.phase === 'work' && a.completion.kind === 'refactor')) {
         // §28.5.3 — the REFACTOR round gates on the exit-direction (blocking, §28.5.3:124) AND runs the frozen
         // check as a non-blocking side probe whose paths are stashed inside the `active === a` guard, so a stale
         // gate/probe cannot record against a fresh turn (IT-REFAC-8/-8b). Same dedup guard as the GREEN gate.
@@ -1656,6 +1792,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           });
           return;
         }
+        // §27.3/§28.5.3
+        if (active.completion.kind === 'refactor') {
+          const a = active;
+          void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
+            if (active !== a) return;
+            if (!completionSatisfied()) return;
+            if (!gate.ok) {
+              refuseRouteOut('turn-error', gate.reason);
+              return;
+            }
+            if (changedTests !== null) recordChangedTestsFlag(a, changedTests);
+            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (refactor gate satisfied)`);
+          });
+          return;
+        }
         // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and
         // WITHOUT injecting. A missing artifact is not acceptable — Retry (re-run) is that path.
         if (!completionSatisfied()) {
@@ -1696,6 +1847,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
         active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
           ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          ...(active.run.kind === 'goal' ? { leg: active.run.leg } : {}),
           inputs,
         });
       } else if (active.phase === 'review') {
@@ -1799,6 +1951,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
             instruction: state.instruction,
+            ...(state.leg !== undefined ? { leg: state.leg } : {}),
             inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
           })
         : unresolvedWorkTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) });
@@ -1811,8 +1964,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     liveErrorFor: (repoDir) => {
       if (!liveError || liveError.repoDir !== repoDir) return null;
-      const { kind, loop, step, turnKey, reason, round } = liveError;
-      return { kind, loop, step, turnKey, reason, ...(round !== undefined ? { round } : {}) };
+      const { kind, loop, step, turnKey, reason, round, stalled } = liveError;
+      return { kind, loop, step, turnKey, reason, ...(round !== undefined ? { round } : {}), ...(stalled ? { stalled } : {}) };
     },
   };
 }

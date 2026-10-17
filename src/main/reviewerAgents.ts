@@ -116,18 +116,19 @@ export function planReviewerAgents(loopsRoot: string, format: ReviewerAgentForma
 const AGENT_FILE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
 
 export interface InstalledReviewer {
+  loop: string;
   persona: string;
   charter: string;
   tools: ReviewerTools;
-  agent: string;
 }
 
 /** Why this reviewer cannot run as the sub-agent installed for it carrying the charter and tools the run
  *  resolved, or null when it can. */
 export function installedReviewerProblem(agentsDir: string | null, reviewer: InstalledReviewer): string | null {
-  if (agentsDir === null) return `there is no Claude Code agents directory to find ${reviewer.agent} in: set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude`;
-  const file = path.join(agentsDir, `${reviewer.agent}${CLAUDE_REVIEWER_AGENT.extension}`);
-  const missing = `no sub-agent ${reviewer.agent} is installed (${file})`;
+  const agent = reviewerAgentName(reviewer.loop, reviewer.persona);
+  if (agentsDir === null) return `there is no Claude Code agents directory to find ${agent} in: set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude`;
+  const file = path.join(agentsDir, `${agent}${CLAUDE_REVIEWER_AGENT.extension}`);
+  const missing = `no sub-agent ${agent} is installed (${file})`;
   const jail = resolveOwnedDirJail(agentsDir);
   if (jail === null) return missing;
   const real = confinedRealPathResult(jail, file);
@@ -147,16 +148,47 @@ export function installedReviewerProblem(agentsDir: string | null, reviewer: Ins
   }
   if (m === null || typeof front !== 'object' || front === null) return `${file} is not a sub-agent definition`;
   const fields = front as Record<string, unknown>;
-  if (fields.name !== reviewer.agent) return `${file} defines the sub-agent ${String(fields.name)}, not ${reviewer.agent}`;
+  if (fields.name !== agent) return `${file} defines the sub-agent ${String(fields.name)}, not ${agent}`;
   let charter: string;
   try {
     charter = readFileSync(reviewer.charter, 'utf8');
   } catch (e) {
     return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
   }
-  if (m[2] !== charter) return `the sub-agent ${reviewer.agent} carries a different charter than ${reviewer.charter}`;
+  if (m[2] !== charter) return `the sub-agent ${agent} carries a different charter than ${reviewer.charter}`;
   const named = (t: ReviewerTools): string => (t === 'all' ? 'every tool' : t.join(', '));
   const tools: ReviewerTools = fields.tools === undefined ? 'all' : typeof fields.tools === 'string' ? fields.tools.split(',').map((t) => t.trim()) : [];
-  if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${reviewer.agent} has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
+  if (named(tools) !== named(reviewer.tools)) return `the sub-agent ${agent} has the tools ${named(tools) || 'none'}, not ${named(reviewer.tools)}`;
   return null;
+}
+
+/** §27.4 — why this reviewer cannot run as the Codex agent installed for it, or null when it can. */
+export function installedCodexReviewerProblem(agentsDir: string | null, reviewer: InstalledReviewer): string | null {
+  const agent = codexReviewerAgentName(reviewer.loop, reviewer.persona);
+  if (agentsDir === null) return `there is no Codex home to find ${agent} in: set CODEX_HOME to an absolute path, or unset it to use ~/.codex`;
+  const file = path.join(agentsDir, `${agent}${CODEX_REVIEWER_AGENT.extension}`);
+  const missing = `no Codex agent ${agent} is installed (${file})`;
+  const jail = resolveOwnedDirJail(agentsDir);
+  if (jail === null) return missing;
+  const real = confinedRealPathResult(jail, file);
+  if (!real.ok) return `the Codex agent file ${file} is not inside ${agentsDir}`;
+  let text: string;
+  try {
+    text = readFileSync(real.path, 'utf8');
+  } catch (e) {
+    return isErrno(e, 'ENOENT') ? missing : `cannot read the Codex agent ${file}: ${errMsg(e)}`;
+  }
+  let charter: string;
+  try {
+    charter = readFileSync(reviewer.charter, 'utf8');
+  } catch (e) {
+    return `cannot read the charter ${reviewer.charter}: ${errMsg(e)}`;
+  }
+  let expected: string;
+  try {
+    expected = renderCodexReviewerAgent({ loop: reviewer.loop, persona: reviewer.persona, tools: reviewer.tools, charter });
+  } catch (e) {
+    return errMsg(e);
+  }
+  return text === expected ? null : `the Codex agent ${agent} carries a different charter or tools than ${reviewer.charter}`;
 }

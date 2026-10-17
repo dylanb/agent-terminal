@@ -57,8 +57,8 @@ describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () =
 
   it('the ONE production source carries each persona, its charter and tools, and the sub-agent installed for it, in order', () => {
     expect(reviewRoster(def())).toEqual([
-      { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md', tools: ['Read'], agent: 'plan-loop--review-plan-principal' },
-      { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md', tools: ['Read', 'Bash'], agent: 'plan-loop--review-plan-security' },
+      { loop: 'plan-loop', persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md', tools: ['Read'] },
+      { loop: 'plan-loop', persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md', tools: ['Read', 'Bash'] },
     ]);
   });
 });
@@ -86,12 +86,13 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
   });
 
   it('names every roster persona by the sub-agent type that carries its charter, and never hands over a charter path', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const r of reviewRoster(def())) {
-      expect(p).toContain(`${r.persona} — subagent_type: ${r.agent}`);
+      expect(p).toContain(`${r.persona} — subagent_type: ${r.loop}--${r.persona}`);
       expect(p).not.toContain(r.charter);
     }
   });
@@ -184,6 +185,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
   });
   const PLAN = { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' };
   const TICKET = { id: 'groomed-ticket', rel: '.agent-terminal/loop/artifacts/groomed-ticket.md' };
@@ -226,6 +228,7 @@ describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
   });
 
   it('tells the fixer to fix only an issue that changes an observable outcome', () => {
@@ -263,6 +266,7 @@ describe('composeReviewAndFixPrompt — fixing a document subject lifts, never a
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
     ...(subjectRel !== undefined ? { subjectRel } : {}),
   });
   const liftClause = /replac\w*\s+(that|the)\s+mechanism\s+with\s+the\s+contract\s+it\s+must\s+meet[\s\S]*never\s+by\s+specifying/i;
@@ -301,6 +305,7 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
     ...(polish !== undefined ? { polish } : {}),
   });
   const deferClause = /polish[\s\S]*`dismissed — out of scope`[\s\S]*later loop/i;
@@ -330,6 +335,7 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
     round: 2,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
     ...(feedback !== undefined ? { feedback } : {}),
   });
 
@@ -380,6 +386,7 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
     resultRel: RESULT_REL,
   });
 
@@ -431,6 +438,7 @@ describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.3)'
     round: 1,
     turnKey: 'review-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
   });
   const BRIEF = 'You are a principal engineer.\n\nNo acceptance criterion may be deferred.';
 
@@ -460,6 +468,7 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
     round: 1,
     turnKey: 'review-green',
     doneRelPath: '.agent-terminal/loop/turn-done',
+    agentKind: 'claude-code' as const,
   });
   const handoff = (p: string): string => {
     const start = p.indexOf(REVIEWER_HANDOFF_BEGIN);

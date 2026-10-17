@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { readAppLoopState } from '../../src/main/appLoopState';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
+import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
@@ -121,7 +122,7 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
 
   it('refuses the goal turn before submitting it when a reviewer sub-agent is not installed', () => {
     const engine = makeEngine(undefined, undefined, undefined, {
-      reviewerAgentProblem: (r) => (r.persona === 'review-plan-security' ? `no sub-agent ${r.agent} is installed` : null),
+      reviewerAgentProblem: (r) => (r.persona === 'review-plan-security' ? `no sub-agent ${r.loop}--${r.persona} is installed` : null),
     });
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
@@ -135,8 +136,57 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
     writeArtifact(true);
+    const progress = join(h.repo, goalProgressRel());
+    mkdirSync(dirname(progress), { recursive: true });
+    writeFileSync(progress, exampleGoalProgress(1, 'done'));
     engine.onDoneSignal();
 
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: TURN_KEY, status: 'complete', verdict: 'clean' });
+  });
+});
+
+describe('a goal session reviews by the same rules as an engine round (§27.3/§27.8 v2.201)', () => {
+  const goalPrompt = (): string => {
+    const cmd = h.injected.find((p) => p.startsWith('/goal '));
+    const rel = cmd === undefined ? undefined : /\.agent-terminal\/\S+\.md/.exec(cmd)?.[0];
+    if (rel === undefined) throw new Error(`no /goal prompt file was named: ${JSON.stringify(h.injected)}`);
+    return readFileSync(join(h.repo, rel), 'utf8');
+  };
+
+  it('a loop that defers polish tells the session to dismiss polish findings, not fix them', () => {
+    const engine = makeEngine();
+    const def = goalDef();
+    h.defResult = resolved({ ...def, report: { ...def.report, polish: 'defer' } });
+    enterAndInjectWork(engine);
+
+    expect(goalPrompt()).toContain('`polish — deferred to a later loop`, NEVER `fixed` in this loop');
+  });
+
+  it('a loop that fixes polish says nothing about deferring it', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    expect(goalPrompt()).not.toContain('polish — deferred to a later loop');
+  });
+
+  it('a finding that only disagrees with a decision the session logged is dismissed', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    expect(goalPrompt()).toMatch(/only disagrees with a decision you made and logged[^\n]*\n[^\n]*`dismissed — invalid`/);
+  });
+
+  it('a TDD phase session hands its reviewers the impl-slice it covers', () => {
+    const engine = makeEngine();
+    const base = h.redDef();
+    h.defResult = resolved({ ...base, work: { ...base.work, goal: GOAL }, rounds: { kind: 'none' } });
+    h.currentSliceResult = 2;
+    enterAndInjectWork(engine);
+
+    const prompt = goalPrompt();
+    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
+    expect(handoff).toContain('This round covers impl-slice 2 of the plan only');
   });
 });

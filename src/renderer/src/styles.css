@@ -555,6 +555,11 @@ button:hover { border-color:var(--dim); }
 .loop-panel .polish-notice { margin:14px 0 4px; padding:9px 11px; font-size:12px; line-height:1.45; color:var(--text); background:var(--signal-wash); border-left:2px solid var(--signal); border-radius:6px; }
 /* §28.5.3/§28.8.3 — the changed-tests flag: a CAUTION callout (amber --reveal), distinct from polish's neutral --signal, so a mouse-only sighted user perceives the flagged state visually (WCAG 1.4.1). */
 .loop-panel .changed-tests-notice { margin:14px 0 4px; padding:9px 11px; font-size:12px; line-height:1.45; color:var(--text); background:var(--reveal-wash); border-left:2px solid var(--reveal); border-radius:6px; }
+.loop-panel .stall-help { margin:14px 0 4px; padding:9px 11px; font-size:12px; line-height:1.45; color:var(--text); background:var(--reveal-wash); border-left:2px solid var(--reveal); border-radius:6px; }
+.loop-panel .stall-help p { margin:0 0 6px; }
+.loop-panel .stall-help p:last-child { margin:6px 0 0; }
+.loop-panel .stall-help ul { margin:0; padding-left:18px; }
+.loop-panel .stall-help code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; }
 .flow-modal .field { margin-bottom:14px; }
 .flow-modal .field .flab { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
 .flow-modal .field .flab .nm { font-size:12px; font-weight:600; }

@@ -60,8 +60,9 @@ export interface TurnRunnerDeps {
   armTimer(): void;
   /** Cancel a previously-armed stall watchdog. */
   cancelTimer(): void;
-  /** Persist `status: error` with the reason (§27.12). */
-  writeError(reason: string): void;
+  /** Persist `status: error` with the reason (§27.12); `stalled` when the turn stopped on a stall after its
+   *  prompt went in, so its own done-signal still completes it. */
+  writeError(reason: string, stalled?: boolean): void;
   /** §27.10 */
   injectionRefusal(): string | null;
   /** §27.12 — a stalled turn's done-signal arrived: the turn is back in flight, so the stall error no longer
@@ -268,6 +269,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         awaitingInjectable
           ? 'stalled: the hosted agent never became injectable'
           : 'stalled: no terminal activity — if the agent is waiting on you, answer it; the turn completes when it writes its done file',
+        stalled,
       );
     },
     markComplete() {

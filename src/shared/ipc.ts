@@ -497,6 +497,8 @@ export interface FlowLoopView {
    *  Claude at the prompt") rather than a bare "error", and is cleared the moment the status recovers.
    *  Absent on every non-error view. */
   errorReason?: string;
+  /** §27.12 — the turn stopped on a stall after its prompt went in, so its own done-signal still completes it. */
+  stalled?: boolean;
   /** §27.12/§27.15 — the identity of the §27 (app-namespace) work turn this view reflects: the flow step it
    *  runs against and its turn key. Present ONLY on a live §27 run view (working/error/complete); absent on
    *  the §27 run-less/def-failure view (no turn has started). The panel carries this onto the §27-only error

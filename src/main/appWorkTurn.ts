@@ -11,9 +11,10 @@ import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
+import { GOAL_PROGRESS_GRAMMAR, exampleGoalProgress } from '../shared/goalProgress';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -85,6 +86,7 @@ export interface AppWorkPromptReq {
     | { kind: 'file'; artifactRel: string; marker: string }
     | { kind: 'red'; resultRel: string; redCheckCommand: string | null }
     | { kind: 'green'; resultRel: string }
+    | { kind: 'refactor'; resultRel: string }
     | null;
   /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
@@ -104,14 +106,65 @@ export interface AppWorkPromptReq {
   loopBrief?: string;
   /** §27.3 */
   goalReview?: string[];
+  /** §27.3 */
+  goalProgress?: string[];
 }
 
-/** §27.3 — Claude Code's `/goal <condition>`, submitted as one line. */
-export function composeGoalCommand(req: { condition: string; promptRel: string; turnKey: string; doneRelPath: string }): string {
+export interface GoalLeg {
+  leg: number;
+  /** Review passes a leg runs before it checkpoints; absent runs the goal in one leg. */
+  passes?: number;
+}
+
+/** §27.3 */
+export function composeGoalCommand(req: { condition: string; promptRel: string; progressRel: string; turnKey: string; doneRelPath: string } & GoalLeg): string {
+  const goal = req.condition.replace(/[.\s]+$/, '');
+  const ends =
+    req.passes !== undefined
+      ? `so either this holds: ${goal}, or ${req.passes} review passes have run in this leg, or the session cannot go on without the operator`
+      : `so either this holds: ${goal}, or the session cannot go on without the operator`;
   return (
-    `/goal Every instruction in ${req.promptRel} is carried out, so this holds: ${req.condition.replace(/[.\s]+$/, '')}. ` +
-    `Its last instruction writes ${req.doneRelPath} (turn-done:${req.turnKey}).`
+    `/goal Every instruction in ${req.promptRel} is carried out for leg ${req.leg} of this goal, ${ends}; ` +
+    `${req.progressRel} records which, and the last instruction writes ${req.doneRelPath} (turn-done:${req.turnKey}).`
   );
+}
+
+/** §27.3 */
+export function checkpointCompactCommand(progressRel: string): string {
+  return `/compact Keep the goal, the decision boundary, and the progress in ${progressRel}: the next leg resumes from that file.`;
+}
+
+/** §27.3 */
+export function goalProgressLines(req: { progressRel: string } & GoalLeg): string[] {
+  const g = GOAL_PROGRESS_GRAMMAR;
+  const lines = [
+    '',
+    `PROGRESS — keep your progress in ${req.progressRel}, so the goal survives a compaction or a restart.`,
+    `This is leg ${req.leg} of the goal.`,
+    req.leg > 1
+      ? 'An earlier leg saved its progress in that file: read it first, carry on from its next steps, and do not redo finished work.'
+      : 'If that file already records this leg, an earlier attempt at it was interrupted: carry on from it.',
+    `After every review pass, rewrite the file with \`${g.legLabel}: ${req.leg}\`, \`${g.statusLabel}: working\`, and`,
+    `\`${g.passesLabel}: <n>\`, then what is done, the open findings, and what comes next.`,
+    `Before you write the done-signal, set its \`${g.statusLabel}:\` to one of:`,
+    '- `done` when the goal holds.',
+  ];
+  if (req.passes !== undefined) {
+    lines.push(
+      `- \`checkpoint\` when ${req.passes} review passes have run in this leg and the goal does not hold yet. The app then`,
+      `  compacts this session and starts leg ${req.leg + 1}, which resumes from this file.`,
+    );
+  }
+  lines.push(
+    `- \`blocked\` when you cannot go on without the operator. Put what you need from them, with your recommendation,`,
+    `  under a \`${g.blockedHeading}\` heading. The step then stops for the operator, so use it only when no choice inside`,
+    '  your decision boundary lets you go on.',
+    '',
+    'A well-formed example:',
+    '',
+    exampleGoalProgress(req.leg, 'working').trimEnd(),
+  );
+  return lines;
 }
 
 /** §28.4.2 — the back-to-RED brief as the work turn states it. */
@@ -181,6 +234,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   }
   if (req.sliceBrief !== undefined) parts.push(...sliceBriefLines(req.sliceBrief, 'work'));
   if (req.goalReview !== undefined) parts.push(...req.goalReview);
+  if (req.goalProgress !== undefined) parts.push(...req.goalProgress);
   if (req.completion?.kind === 'file') {
     parts.push(
       '',
@@ -227,11 +281,24 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
         ],
       }),
     );
+  } else if (req.completion?.kind === 'refactor') {
+    // §28.5.3
+    parts.push(
+      '',
+      ...composePhaseResultInstruction({
+        resultRel: req.completion.resultRel,
+        completingOutcome: REFACTOR_COMPLETING_OUTCOME,
+        closing: [
+          `This turn is done only when the tests still pass (\`${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${REFACTOR_COMPLETING_OUTCOME}\`).`,
+          'A failing or errored test does NOT complete it — fix so the tests pass, then re-run and re-classify.',
+        ],
+      }),
+    );
   }
   const verifyRel =
     req.completion?.kind === 'file'
       ? req.completion.artifactRel
-      : req.completion?.kind === 'red' || req.completion?.kind === 'green'
+      : req.completion?.kind === 'red' || req.completion?.kind === 'green' || req.completion?.kind === 'refactor'
         ? req.completion.resultRel
         : undefined;
   parts.push('', doneSignalInstruction(req.turnKey, verifyRel, req.doneRelPath));

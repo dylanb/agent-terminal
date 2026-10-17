@@ -1215,3 +1215,33 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
     expect(marker()!.textContent).not.toContain('\u001b');
   });
 });
+
+// §27.12 (v2.201) — a stalled turn is often an agent waiting on the operator. The panel says how to get it
+// going again without restarting anything, one of the ways being to have the agent write its turn-done file.
+describe('docked loop panel — getting a stalled agent going again (§27.12 v2.201)', () => {
+  const stalled = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
+    loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'green', turnKey: 'work-green' }, stalled: true, ...over });
+
+  it('tells the operator to answer the agent, or to prompt it to carry on or write its turn-done file', () => {
+    createLoopPanel(host).render(stalled(), 'green');
+    const help = host.querySelector('[data-stall-help]');
+    expect(help).not.toBeNull();
+    expect(help?.textContent).toMatch(/answer it in the terminal/i);
+    const prompts = [...host.querySelectorAll('[data-stall-prompt]')].map((p) => p.textContent);
+    expect(prompts).toContain('Carry on with your instructions.');
+    expect(prompts).toContain('If you have finished, write the turn-done file now.');
+    expect(help?.textContent).toMatch(/carries on by itself once the agent writes its turn-done file/i);
+  });
+
+  it('says nothing about a stall on an error that is not one', () => {
+    createLoopPanel(host).render(stalled({ stalled: undefined, errorReason: 'done-signal received but the plan is missing' }), 'green');
+    expect(host.querySelector('[data-stall-help]')).toBeNull();
+  });
+
+  it('drops the help in place once the turn is running again', () => {
+    const panel = createLoopPanel(host);
+    panel.render(stalled(), 'green');
+    panel.render(loop({ status: 'working', iteration: undefined, appTurn: { step: 'green', turnKey: 'work-green' } }), 'green');
+    expect(host.querySelector('[data-stall-help]')).toBeNull();
+  });
+});

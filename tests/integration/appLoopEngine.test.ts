@@ -202,8 +202,8 @@ describe('§28.4 D2 — a RED phase entry clears the prior baseline (#123)', () 
 
 describe('§27.4 — a review round runs only when every reviewer is installed carrying this run\'s charter', () => {
   const MISSING = 'review-plan-security';
-  const problemFor = (missing: () => boolean) => (reviewer: { persona: string; agent: string }): string | null =>
-    missing() && reviewer.persona === MISSING ? `no sub-agent ${reviewer.agent} is installed` : null;
+  const problemFor = (missing: () => boolean) => (reviewer: { loop: string; persona: string }): string | null =>
+    missing() && reviewer.persona === MISSING ? `no sub-agent ${reviewer.loop}--${reviewer.persona} is installed` : null;
 
   it('refuses the review round before injecting it, naming the reviewer, while the work turn ran as usual', () => {
     const engine = makeEngine(undefined, undefined, undefined, { reviewerAgentProblem: problemFor(() => true) });

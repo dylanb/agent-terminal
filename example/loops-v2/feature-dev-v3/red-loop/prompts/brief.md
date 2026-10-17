@@ -37,3 +37,36 @@ demonstrably and unambiguously part of that other ticket. These are cross-repo d
 repository's own standards are more restrictive (for example it bans TODO markers outright), the
 repository's rule takes precedence and this allowance never overrides it — record the reference as a plain
 issue link instead.
+
+## Decide, then report
+
+You work as one session without the operator: do the work, review it with the reviewers below, fix or dismiss
+what they find, and repeat until a review pass finds nothing left to fix. Never stop to ask the operator
+anything.
+
+The operator settled the intent before you started: the ticket, the plan they approved, and the `groom-intent`
+input, whose `## Decision boundary` names what may be decided without them. Decide every question inside that
+boundary yourself, and any choice the ticket, the plan and the repository's standards leave open: choose what
+best serves the MVP and the plan, apply it, and log it. Something outside it — a change to an acceptance
+criterion, to the scope, or to a contract the plan names, an edit to a test that is frozen at this point, or
+anything the repository's standards say to escalate — you do not apply: log it under Needs your call with your
+recommendation, and carry on without it. Only when no choice inside the boundary lets you go on at all, stop as
+blocked, as your progress instructions say: the step then stops for the operator.
+
+Reopen one of your own decisions only when a later finding shows it contradicts the ticket, the plan, the
+standards or another of your decisions. Replace its log entry then; never add a second entry for the same
+question.
+
+## The report
+
+The operator reads every step's report once, at the end of the implementation. Add one section for this step to
+`impl-report.md` among this work's flow documents, headed `## red — slice <n>`, and keep it current as you work. Leave
+every other section as it is; when this step runs again, replace its own section. Under it:
+
+- `### Needs your call` — each item outside the decision boundary: what it is, the options, what each costs
+  and gains, and your recommendation. `None.` when there is none.
+- `### Decisions` — one numbered entry per decision: the question, the options you weighed, what you chose,
+  and why. Lead with the one with the most impact on the user.
+- `### Review history` — each review pass: the reviewers it ran, their findings, and for each whether you
+  fixed or dismissed it, and why.
+- `### Test evidence` — the test and build commands you ran last, and their results.

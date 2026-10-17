@@ -6,14 +6,23 @@ import { resolveExampleFlowsDir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, REPO_DIR } from '../helpers/bundledLoops';
 
-// feature-dev-v3 (v2.200) — feature-dev-v2 with grooming split into three steps: an interview that settles the
-// intent and what the groomer may decide alone, a goal session that grooms and reviews until a review pass finds
-// nothing, and a presentation the operator approves as is or fixes in that same session.
+// feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
+// the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
+// pass finds nothing, and a presentation the operator approves as is or fixes in that same session. Each
+// implementation step is then a goal session that reviews its own work and logs its decisions, and one final
+// step presents them all for the operator's approval.
 
 const FLOWS = resolveExampleFlowsDir({ packaged: false, appPath: REPO_DIR });
 const V2 = 'feature-dev-v2';
 const V3 = 'feature-dev-v3';
 const GROOM_STEPS = ['groom-intent', 'groom', 'groom-approve'];
+const CODE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
+
+function loopV2(name: string): LoopDefV2 {
+  const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null }, repoDir: REPO_DIR, flow: V2 });
+  if (!r.ok) throw new Error(r.reason);
+  return r.def;
+}
 
 function flow(id: string) {
   const r = loadUntrustedFlowDefinition(join(FLOWS, id, 'flow.yaml'));
@@ -38,13 +47,22 @@ function files(dir: string): string[] {
   });
 }
 
-describe('feature-dev-v3 grooms in three steps, then runs feature-dev-v2 unchanged', () => {
-  it('replaces v2\'s one groom step with the three, and keeps every other step as v2 has it', () => {
+describe('feature-dev-v3 grooms in three steps, and approves the implementation once at the end', () => {
+  it('replaces v2\'s one groom step with the three, adds the implementation approval before finalize, and keeps v2\'s other steps', () => {
     const v2 = flow(V2).steps;
     const v3 = flow(V3).steps;
     const groomAt = v2.findIndex((s) => s.id === 'groom');
-    expect(v3.map((s) => s.id)).toEqual([...v2.slice(0, groomAt).map((s) => s.id), ...GROOM_STEPS, ...v2.slice(groomAt + 1).map((s) => s.id)]);
-    expect(v3.filter((s) => !GROOM_STEPS.includes(s.id))).toEqual(v2.filter((s) => s.id !== 'groom'));
+    const v2Ids = v2.map((s) => s.id);
+    const expected = [...v2Ids.slice(0, groomAt), ...GROOM_STEPS, ...v2Ids.slice(groomAt + 1)];
+    expected.splice(expected.indexOf('finalize'), 0, 'impl-approve');
+    expect(v3.map((s) => s.id)).toEqual(expected);
+    const asV2 = (s: (typeof v3)[number]) => (s.id === 'integration-slice' ? { ...s, gateAuthority: 'human' } : s);
+    expect(v3.filter((s) => !GROOM_STEPS.includes(s.id) && s.id !== 'impl-approve').map(asV2)).toEqual(v2.filter((s) => s.id !== 'groom'));
+  });
+
+  it('leaves the operator only the groom approval and the implementation approval', () => {
+    const humans = flow(V3).steps.filter((s) => s.kind === 'loop' && s.gateAuthority !== 'auto').map((s) => s.id);
+    expect(humans).toEqual(['groom-approve', 'plan-polish', 'impl-approve']);
   });
 
   it('asks for the ticket at the interview, and leaves only the approval to a human', () => {
@@ -56,8 +74,8 @@ describe('feature-dev-v3 grooms in three steps, then runs feature-dev-v2 unchang
     expect(byId('groom-approve').gateAuthority).toBe('human');
   });
 
-  it('copies every loop v2 binds after grooming, byte for byte', () => {
-    const v2Loops = readdirSync(join(BUNDLED_LOOPS_ROOT, V2)).filter((l) => l !== 'groom-loop');
+  it('copies the planning loops byte for byte', () => {
+    const v2Loops = readdirSync(join(BUNDLED_LOOPS_ROOT, V2)).filter((l) => l !== 'groom-loop' && !CODE_LOOPS.includes(l));
     for (const l of v2Loops) {
       const src = join(BUNDLED_LOOPS_ROOT, V2, l);
       const dst = join(BUNDLED_LOOPS_ROOT, V3, l);
@@ -116,5 +134,55 @@ describe('the three groom loops', () => {
     expect(charter).toContain('## Decision boundary');
     expect(charter).toContain('## Groomer decisions');
     expect(charter).not.toMatch(/never for it to be resolved/);
+  });
+});
+
+describe('each implementation step is a goal session that reviews its own work (v2.201)', () => {
+  it.each(CODE_LOOPS)('%s keeps v2\'s reviewers, charters, completion check and polish policy, and runs as a goal in legs of 3 review passes', (name) => {
+    const v3 = loop(name);
+    const v2 = loopV2(name);
+    expect(v3.rounds).toEqual({ kind: 'none' });
+    expect(v3.work.goal).toMatch(/every reviewer's latest pass found nothing left to fix/);
+    expect(v3.work.checkpoint).toEqual({ passes: 3 });
+    expect(v3.work.completion).toBe(v2.work.completion);
+    expect(v3.report.polish).toBe(v2.report.polish);
+    expect(v3.reviewers.map((r) => r.persona)).toEqual(v2.reviewers.map((r) => r.persona));
+    for (const [i, r] of v3.reviewers.entries()) expect(text(r.charter)).toBe(text(v2.reviewers[i].charter));
+    expect(v3.gate.map((g) => g.option)).not.toContain('request-changes');
+  });
+
+  it.each(CODE_LOOPS)('%s reads the intent the operator settled and writes its part of the implementation report', (name) => {
+    const def = loop(name);
+    expect(def.inputs.map((i) => i.id)).toContain('groom-intent');
+    expect(def.outputs.map((o) => o.id)).toContain('impl-report');
+    if (name !== 'infra-loop') expect(def.inputs.map((i) => i.id)).toContain('impl-report');
+  });
+
+  it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {
+    const p = prompt(loop(name));
+    expect(p).toContain('## Decision boundary');
+    for (const heading of ['### Needs your call', '### Decisions', '### Review history', '### Test evidence']) expect(p).toContain(heading);
+    expect(p).not.toMatch(/interview the operator/i);
+  });
+
+  it('integration-slice no longer publishes the pull request description: the final approval does', () => {
+    const effects = (def: LoopDefV2) => def.gate.find((g) => g.option === 'approve')?.sideEffects ?? [];
+    expect(effects(loop('integration-slice-loop'))).toEqual([{ kind: 'commit', args: { label: 'integration' } }]);
+    expect(effects(loop('impl-approve-loop'))).toEqual([
+      { kind: 'commit', args: { label: 'approve' } },
+      { kind: 'gh', args: { action: 'publish-pr-body', artifact: 'plan' } },
+    ]);
+  });
+
+  it('the final approval presents what every implementation step logged', () => {
+    const approve = loop('impl-approve-loop');
+    expect(approve.rounds).toEqual({ kind: 'none' });
+    expect(approve.inputs.map((i) => i.id)).toEqual(expect.arrayContaining(['groom-intent', 'plan', 'impl-report']));
+    const present = prompt(approve);
+    for (const heading of ['## Needs your call', '## Decisions', '## Review history', '## Test evidence']) expect(present).toContain(heading);
+  });
+
+  it('the groom goal session also runs in legs of 3 review passes', () => {
+    expect(loop('groom-goal-loop').work.checkpoint).toEqual({ passes: 3 });
   });
 });

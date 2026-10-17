@@ -5,6 +5,9 @@ work:
   recipe: prompts/work.md
   artifact: commits
   completion: refactor
+  goal: "the tests still pass, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's refactor section with its decisions, review history and test evidence"
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: impl-review-principal
     charter: charter/principal.md
@@ -14,8 +17,6 @@ reviewers:
     charter: charter/reliability.md
   - persona: impl-review-architecture
     charter: charter/architecture.md
-consolidator:
-  recipe: prompts/consolidate.md
 boundaries:
   - boundary: pre-work
     mode: clear
@@ -27,10 +28,16 @@ gate:
     side_effects:
       - kind: commit
         label: refactor
-  - option: request-changes
   - option: redo
   - option: polish
   - option: back-to-red
 inputs:
   - id: plan
     path: plan.md
+  - id: groom-intent
+    path: groom-intent.md
+  - id: impl-report
+    path: impl-report.md
+outputs:
+  - id: impl-report
+    path: impl-report.md

@@ -35,7 +35,7 @@ const roundLeaf = (round: number): string => `${round}.md`;
 /** A round is a positive integer or it is no round at all. The ONE gate both the writer and the reader of the
  *  persisted `round` field consult, so a value the writer drops can never be one the reader keeps (CLAUDE.md
  *  writer↔reader shared-semantics; §27.5 IPC item 3, CWE-20). */
-function isValidRound(round: unknown): round is number {
+function isPositiveWhole(round: unknown): round is number {
   return typeof round === 'number' && Number.isInteger(round) && round > 0;
 }
 
@@ -72,6 +72,8 @@ export interface AppLoopRunState {
   instruction?: string;
   /** §27.10 */
   chainedInputs?: string[];
+  /** §27.3 */
+  leg?: number;
 }
 
 /** Non-empty text is text; blank or non-string is none. The ONE gate the writer and reader of any human-typed
@@ -122,6 +124,25 @@ export function writeGoalPrompt(repoDir: string, prompt: string): boolean {
   }
 }
 
+const GOAL_PROGRESS_FILE = 'goal-progress.md';
+
+/** §27.3 */
+export function goalProgressRel(): string {
+  return [...APP_LOOP_DIR_SEGMENTS, GOAL_PROGRESS_FILE].join('/');
+}
+
+/** §27.3 */
+export function goalProgressFile(repoDir: string): string | null {
+  return loopAreaFile(repoDir, GOAL_PROGRESS_FILE);
+}
+
+/** §27.3 — best-effort; an absent file is already the cleared state. */
+export function clearGoalProgress(repoDir: string): void {
+  const file = goalProgressFile(repoDir);
+  if (file === null) return;
+  rmSync(file, { force: true });
+}
+
 /** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
 export function appLoopStateFile(repoDir: string): string | null {
   return loopAreaFile(repoDir, RUN_STATE_FILE);
@@ -141,7 +162,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   if (state.status === 'error' && state.errorReason) doc.error_reason = state.errorReason;
   // The round belongs to a review-and-fix / consolidator turn; a work run carries none (absent = no round has
   // run). Written only for a valid round, so a recovered round is never a fabricated identity.
-  if (isValidRound(state.round)) doc.round = state.round;
+  if (isPositiveWhole(state.round)) doc.round = state.round;
   // §27.6 — the consolidator's verdict, and (through the single-sourced gate, mirroring error_reason) its
   // reason ONLY under `stop for a human`. A verdict outside the closed set is never serialized.
   if (state.verdict !== undefined && (CONSOLIDATOR_VERDICTS as readonly string[]).includes(state.verdict)) {
@@ -159,6 +180,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   if (instruction !== undefined) doc.instruction = instruction;
   // §27.10 — absent reads back as "carried nothing", so a recovered carry fails toward NOT carrying.
   if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
+  if (isPositiveWhole(state.leg)) doc.leg = state.leg;
   return yaml.dump(doc);
 }
 
@@ -179,7 +201,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   const errorReason = status === 'error' && typeof doc.error_reason === 'string' ? doc.error_reason : undefined;
   // Field-local validation (CWE-20): a mis-typed or negative value is dropped, so it never surfaces as a
   // fabricated round identity to the view/dedup/resume.
-  const round = isValidRound(doc.round) ? doc.round : undefined;
+  const round = isPositiveWhole(doc.round) ? doc.round : undefined;
   // §27.6 — the verdict is admitted only from the closed set; its reason is kept only under the
   // stop-for-a-human gate (the same gate the writer applies), so a recovered verdict never renders a
   // mismatched reason; the chosen roster is a list of strings (AC8).
@@ -199,6 +221,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     Array.isArray(doc.chained_inputs) && doc.chained_inputs.every((i) => typeof i === 'string') && doc.chained_inputs.length > 0
       ? (doc.chained_inputs as string[])
       : undefined;
+  const leg = isPositiveWhole(doc.leg) ? doc.leg : undefined;
   return {
     loop,
     step,
@@ -212,6 +235,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(feedback !== undefined ? { feedback } : {}),
     ...(instruction !== undefined ? { instruction } : {}),
     ...(chainedInputs !== undefined ? { chainedInputs } : {}),
+    ...(leg !== undefined ? { leg } : {}),
   };
 }
 

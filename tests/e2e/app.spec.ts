@@ -16,8 +16,11 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
+import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
-import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
+import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA, goalProgressRel, refactorResultRel } from '../../src/main/appLoopState';
+import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { flowCatalogDir, flowDefinitionFile, flowHomeDir, loadUntrustedFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
 import { resolveCatalogEntry } from '../../src/main/flowCatalog';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
@@ -7819,23 +7822,31 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
 // ---- §27.3 v2.200 — feature-dev-v3 grooms in three steps: interview, one goal session, then the operator's approval ----
 // The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
 // one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
+/** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
+const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf 'Leg: %s\\nStatus: ${status}\\n' "$leg" > ${goalProgressRel()}`;
+/** The shell that reads the leg a `/goal` line in `$line` names into `$leg`. */
+const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9)`;
+
 function seedGroomV3Agent(binDir: string): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
   const write = (file: string, lines: string[]): string => `mkdir -p ${art}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${art}/${file}`;
+  // Leg 1 of the groom goal checkpoints; the leg after the compact finishes the groom.
+  const finish = `${write('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ${write('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}`;
   const script =
     '#!/usr/bin/env bash\n' +
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
-    `    /goal*) printf '%s\\n' "$line" > .agent-terminal/goal-command-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${write('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ${write('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${done('work-groom')} ;;\n` +
+    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `    /goal*) printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish}; fi; ${done('work-groom')} ;;\n` +
     `    *turn-done:work-groom-intent*) ${write('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')])}; ${done('work-groom-intent')} ;;\n` +
     `    *turn-done:work-groom-approve*) ${write('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')])}; ${done('work-groom-approve')} ;;\n` +
     '  esac\ndone\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-test('§27.3 v2.200 — feature-dev-v3 interviews, grooms in one goal session that runs its own reviewer, and publishes the ticket when the operator approves', { tag: '@ownapp' }, async () => {
+test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and publishes the ticket when the operator approves', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-groomv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7857,8 +7868,13 @@ test('§27.3 v2.200 — feature-dev-v3 interviews, grooms in one goal session th
   await passAutoGate(home, repo, 'groom-intent');
   await passAutoGate(home, repo, 'groom');
 
-  // The groom step was one `/goal` command, and the prompt file it named told the session to run the step's own reviewer.
-  expect(readIf(join(repo, '.agent-terminal', 'goal-command-seen'))).toMatch(/^\/goal .*turn-done:work-groom\)/);
+  // The groom step was a `/goal` command whose prompt file told the session to run the step's own reviewer. Its
+  // first leg checkpointed, so the app compacted the session and started leg 2, which finished the groom.
+  const goals = readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n');
+  expect(goals).toHaveLength(2);
+  expect(goals[0]).toMatch(/^\/goal .*for leg 1 .*turn-done:work-groom\)/);
+  expect(goals[1]).toMatch(/^\/goal .*for leg 2 .*turn-done:work-groom\)/);
+  expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
 
   // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
@@ -7871,6 +7887,204 @@ test('§27.3 v2.200 — feature-dev-v3 interviews, grooms in one goal session th
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+/** A goal-session fake agent for feature-dev-v3. `goal[step]` is the shell a `/goal` for `step` runs, with the
+ *  leg in `$leg`, before it signals done; a step it has no entry for says nothing. `work[step]` answers a plain
+ *  work turn. Every `/goal` and `/compact` line is logged. */
+function seedV3GoalAgent(binDir: string, name: string, goal: Record<string, string>, work: Record<string, string> = {}, extra: string[] = []): void {
+  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
+  const goalCases = Object.entries(goal).map(([step, cmd]) => `${step}) ${cmd}; ${done(`work-${step}`)} ;;`).join(' ');
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
+    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; step=$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z-]*' | sed 's/turn-done:work-//'); case "$step" in ${goalCases} esac ;;\n` +
+    Object.entries(work).map(([step, cmd]) => `    *turn-done:work-${step}*) ${cmd}; ${done(`work-${step}`)} ;;\n`).join('') +
+    extra.join('') +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, name), script, { mode: 0o755 });
+}
+
+const V3_ART = '.agent-terminal/loop/artifacts';
+const writeV3 = (file: string, lines: string[]): string => `mkdir -p ${V3_ART}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${V3_ART}/${file}`;
+const V3_GROOM_INTENT = writeV3('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')]);
+
+test('§27.12 v2.201 — a stalled goal session shows how to get it going, and the session it resumes stops its auto step for a human when it is blocked', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-stallv3-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-stallv3-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stallv3-bin-', { realCommitOps: true });
+  // The groom goal says nothing until the operator tells it to write its turn-done file; it then reports itself blocked.
+  const blocked = `mkdir -p .agent-terminal/loop; printf 'Leg: 1\\nStatus: blocked\\n\\n## Blocked\\nThe ticket asks for two exports.\\n' > ${goalProgressRel()}; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  seedV3GoalAgent(binDir, 'fake-agent', {}, { 'groom-intent': V3_GROOM_INTENT }, [`    *"write the turn-done file now"*) ${blocked} ;;\n`]);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '4000', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+
+  // The goal session goes quiet: the panel says how to get it going again, without restarting anything.
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  const help = loopPanel().locator('[data-stall-help]');
+  await expect(help).toBeVisible({ timeout: 30_000 });
+  await expect(help.locator('[data-stall-prompt]')).toContainText(['Carry on with your instructions.', 'If you have finished, write the turn-done file now.']);
+  expect(readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n')).toHaveLength(1);
+
+  // The operator types one of those to the agent; the session writes its turn-done file and the step goes on.
+  await page.getByRole('alertdialog', { name: 'Loop error' }).getByRole('button', { name: 'Dismiss' }).click();
+  await loopPanel().locator('[data-loop-close]').click();
+  await typeCommand('If you have finished, write the turn-done file now.');
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await expect(help).toBeHidden({ timeout: 30_000 });
+  // It reported itself blocked, so its auto step stops for a human with the reason it gave.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
+  await expect(loopPanel()).toContainText('The ticket asks for two exports.', { timeout: 30_000 });
+  expect(readIf(appFlowState(repo))).toContain('step: groom\n');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§27.4 v2.201 — under Codex, detected from the command the terminal runs, a goal session spawns its reviewers as their Codex agents', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-codexv3-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-codexv3-home-'));
+  const codexHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-codexv3-codex-'));
+  mkdirSync(join(codexHome, 'agents'));
+  for (const agent of planReviewerAgents(join(process.cwd(), 'example', 'loops-v2'), CODEX_REVIEWER_AGENT)) writeFileSync(join(codexHome, 'agents', agent.rel), agent.bytes());
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-codexv3-bin-', { realCommitOps: true });
+  seedV3GoalAgent(binDir, 'codex', {}, { 'groom-intent': V3_GROOM_INTENT });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, CODEX_HOME: codexHome, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('codex');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toContain('agent: groom_goal_loop__review_plan_intent');
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).not.toContain('subagent_type');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(codexHome, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+/** The shared example config with feature-dev-v3's own copy of each loop v3 changed under a name v2 also uses. */
+function seedV3Config(prefix: string): string {
+  const cfg = mkdtempSync(join(tmpdir(), prefix));
+  cpSync(exampleConfigDir, cfg, { recursive: true });
+  for (const l of ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop']) {
+    const dst = join(cfg, 'loops-v2', l);
+    rmSync(dst, { recursive: true, force: true });
+    cpSync(join(process.cwd(), 'example', 'loops-v2', 'feature-dev-v3', l), dst, { recursive: true });
+  }
+  return cfg;
+}
+
+test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review their own work, compacts one between legs, and publishes the PR when the operator approves the whole implementation', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(8));
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-implv3-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: plan-bundle\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
+  });
+  mkdirSync(join(repo, V3_ART), { recursive: true });
+  writeFileSync(join(repo, V3_ART, 'groomed-ticket.md'), '# groomed\n');
+  writeFileSync(join(repo, V3_ART, 'groom-intent.md'), '## MVP\n## Decision boundary\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
+  const cfg = seedV3Config('agent-term-e2e-implv3-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-implv3-bin-', { realCommitOps: true });
+  const report = (step: string): string =>
+    `mkdir -p ${V3_ART}; printf '%s\\n' '## ${step}' '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' >> ${V3_ART}/impl-report.md`;
+  const finish = (step: string, cmd: string): string => `${cmd}; ${report(step)}; ${goalProgressCmd('done')}`;
+  const result = (outcome: Parameters<typeof examplePhaseResult>[0], path: string, build?: 'built'): string =>
+    `mkdir -p "$(dirname ${path})"; printf %s '${b64(examplePhaseResult(outcome, build ? { build } : undefined))}' | base64 -d > ${path}`;
+  seedV3GoalAgent(
+    binDir,
+    'fake-agent',
+    {
+      infra: finish('infra', `printf '%s\\n' 'export const infra = 1;' > infra.ts`),
+      red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; ${result('failed-assertion', `${V3_ART}/red-result.md`)}`),
+      // GREEN's first leg runs out of passes; the leg after the compact finishes it.
+      green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' 'export const feat = 1;' > feature.ts; ${result('passed', `${V3_ART}/green-result.md`, 'built')}`)}; fi`,
+      refactor: finish('refactor', `printf '%s\\n' 'export const rf = 1;' > refactor.ts; ${result('passed', refactorResultRel(1))}`),
+      'integration-slice': finish('integration-slice', `printf '%s\\n' 'export const integ = 1;' > integration.ts`),
+    },
+    {
+      'plan-bundle': writeV3('plan.md', ['# plan', completionMarker('plan-bundle')]),
+      'plan-polish': `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${V3_ART}/plan.md`,
+      'impl-approve': writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')]),
+    },
+    ['plan-bundle', 'plan-polish'].flatMap((step) => [
+      `    *turn-done:review-${step}*) mkdir -p .agent-terminal/loop/reports; printf %s '${b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }))}' | base64 -d > .agent-terminal/loop/reports/1.md; mkdir -p .agent-terminal/loop; printf '%s' 'review-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
+      `    *turn-done:consolidate-${step}*) mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}' | base64 -d > .agent-terminal/loop/consolidate/1.md; printf '%s' 'consolidate-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
+    ]),
+  );
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const before = gitCount(repo);
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'plan-bundle');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: plan-polish[\s\S]*verdict: clean/);
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).not.toContain('step: plan-polish\n');
+  for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step);
+
+  // Every implementation step was a goal session; GREEN's took two legs with a compact between them.
+  const goals = readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n');
+  expect(goals.filter((g) => g.includes('turn-done:work-green)')).map((g) => /for leg (\d+)/.exec(g)?.[1])).toEqual(['1', '2']);
+  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes(goalProgressRel()))).toHaveLength(1);
+  for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) {
+    expect(goals.some((g) => g.includes(`turn-done:work-${step})`)), step).toBe(true);
+    expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);
+  }
+
+  // The one human gate presents it all; approve publishes the PR description.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: impl-approve[\s\S]*verdict: clean/);
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');
+  expect(gitIn(repo, 'log', '--format=%s', `-${gitCount(repo) - before}`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'infra']);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
 });
 

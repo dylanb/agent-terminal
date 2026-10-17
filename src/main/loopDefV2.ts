@@ -101,6 +101,8 @@ export interface WorkRecipe {
   completion?: WorkCompletion;
   /** §27.3 */
   goal?: string;
+  /** §27.3 */
+  checkpoint?: { passes: number };
 }
 
 /** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
@@ -404,6 +406,13 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     if (/[\r\n]/.test(workGoal)) fail('work goal must be one line');
     if (workGoal.length > GOAL_CONDITION_MAX_CHARS) fail(`work goal must be at most ${GOAL_CONDITION_MAX_CHARS} characters`);
   }
+  let workCheckpoint: { passes: number } | undefined;
+  if (work.checkpoint !== undefined) {
+    if (workGoal === undefined) fail('a work checkpoint needs a work goal: only a goal session runs in legs');
+    const passes = requireRecord(work.checkpoint, 'work checkpoint').passes;
+    if (typeof passes !== 'number' || !Number.isInteger(passes) || passes < 1) fail('work checkpoint passes must be a positive whole number');
+    workCheckpoint = { passes };
+  }
 
   const reviewers = toReviewers(rec.reviewers, tierRoot, defDir);
   let rounds: ReviewRounds;
@@ -454,6 +463,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       artifact: workArtifact,
       ...(workCompletion !== undefined ? { completion: workCompletion } : {}),
       ...(workGoal !== undefined ? { goal: workGoal } : {}),
+      ...(workCheckpoint !== undefined ? { checkpoint: workCheckpoint } : {}),
     },
     reviewers,
     rounds,

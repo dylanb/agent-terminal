@@ -14,6 +14,9 @@ export const FIXED_DISPOSITION: Disposition = 'fixed';
 /** The disposition a deferred polish finding takes (§27.8 `polish: defer`). */
 export const OUT_OF_SCOPE_DISPOSITION: Disposition = 'dismissed — out of scope';
 
+/** The disposition a finding that is not a defect takes (§27.6). */
+export const INVALID_DISPOSITION: Disposition = 'dismissed — invalid';
+
 /** The disposition a fix the loop is not entitled to make takes (§27.3 document-subject overreach). */
 export const NEEDS_HUMAN_DISPOSITION: Disposition = 'needs a human';
 

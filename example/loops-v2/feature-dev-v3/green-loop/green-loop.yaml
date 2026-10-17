@@ -5,6 +5,9 @@ work:
   recipe: prompts/work.md
   artifact: green-result
   completion: green
+  goal: "the tests and the build pass with the RED tests unchanged, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's green section with its decisions, review history and test evidence"
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: impl-review-principal
     charter: charter/principal.md
@@ -26,8 +29,6 @@ reviewers:
     charter: charter/accessibility.md
   - persona: impl-review-regression-guard
     charter: charter/regression-guard.md
-consolidator:
-  recipe: prompts/consolidate.md
 boundaries:
   - boundary: pre-work
     mode: clear
@@ -39,13 +40,18 @@ gate:
     side_effects:
       - kind: commit
         label: GREEN
-  - option: request-changes
   - option: redo
   - option: polish
   - option: back-to-red
 inputs:
   - id: plan
     path: plan.md
+  - id: groom-intent
+    path: groom-intent.md
+  - id: impl-report
+    path: impl-report.md
 outputs:
   - id: green-result
     path: green-result.md
+  - id: impl-report
+    path: impl-report.md
