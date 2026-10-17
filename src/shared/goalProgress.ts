@@ -61,32 +61,58 @@ function isStatus(v: string): v is GoalProgressStatus {
   return (GOAL_PROGRESS_STATUSES as readonly string[]).includes(v);
 }
 
-const MAX_HEADING_INDENT = 3;
+const MAX_BLOCK_INDENT = 3;
+const TAB_STOP = 4;
 
-function indentOf(line: string): number {
-  let n = 0;
-  while (line[n] === ' ') n++;
-  return n;
+/** Leading indent in CommonMark columns (a tab runs to the next tab stop), and where the line's text starts. */
+function indentOf(line: string): { columns: number; at: number } {
+  let columns = 0;
+  let at = 0;
+  for (; at < line.length; at++) {
+    if (line[at] === ' ') columns += 1;
+    else if (line[at] === '\t') columns += TAB_STOP - (columns % TAB_STOP);
+    else break;
+  }
+  return { columns, at };
 }
 
-/** A CommonMark ATX heading: at most three spaces of indent, one to six `#`, then a space or the end of line. */
+/** The text of a line that can start a block — at most three columns of indent — or null when it is code. */
+function blockText(line: string): string | null {
+  const { columns, at } = indentOf(line);
+  return columns > MAX_BLOCK_INDENT ? null : line.slice(at);
+}
+
+/** A CommonMark ATX heading: one to six `#`, then a space or the end of the line. */
 function isHeading(line: string): boolean {
-  if (indentOf(line) > MAX_HEADING_INDENT) return false;
-  const t = line.trimStart();
+  const t = blockText(line);
+  if (t === null) return false;
   let n = 0;
   while (t[n] === '#') n++;
-  return n >= 1 && n <= 6 && (n === t.length || t[n] === ' ');
+  return n >= 1 && n <= 6 && (n === t.length || t[n] === ' ' || t[n] === '\t');
 }
 
-/** A CommonMark code fence line: at most three spaces of indent, then three or more backticks or tildes. */
-function fenceOf(line: string): string | null {
-  if (indentOf(line) > MAX_HEADING_INDENT) return null;
-  const t = line.trimStart();
+/** The run of three or more backticks or tildes a line opens with, and the text after it. */
+function fenceRun(line: string): { run: string; rest: string } | null {
+  const t = blockText(line);
+  if (t === null) return null;
   const c = t[0];
   if (c !== '`' && c !== '~') return null;
   let n = 0;
   while (t[n] === c) n++;
-  return n >= 3 ? c.repeat(n) : null;
+  return n >= 3 ? { run: t.slice(0, n), rest: t.slice(n) } : null;
+}
+
+/** A CommonMark opening code fence; a backtick fence's info string holds no backtick. */
+function opensFence(line: string): string | null {
+  const f = fenceRun(line);
+  if (f === null || (f.run[0] === '`' && f.rest.includes('`'))) return null;
+  return f.run;
+}
+
+/** A CommonMark closing fence for `open`: the same character, at least as long, and nothing after it. */
+function closesFence(line: string, open: string): boolean {
+  const f = fenceRun(line);
+  return f !== null && f.run[0] === open[0] && f.run.length >= open.length && f.rest.trim() === '';
 }
 
 /** The heading's section: what follows the heading on its own line, then the lines up to the next heading. */
@@ -104,10 +130,12 @@ function sectionBody(lines: readonly string[], heading: string): string | null {
   const body: string[] = tail.length > 0 ? [tail] : [];
   let fence: string | null = null;
   for (let i = at + 1; i < lines.length; i++) {
-    const f = fenceOf(lines[i]);
-    if (fence === null && f !== null) fence = f;
-    else if (fence !== null && f !== null && f[0] === fence[0] && f.length >= fence.length) fence = null;
-    else if (fence === null && isHeading(lines[i])) break;
+    if (fence !== null) {
+      if (closesFence(lines[i], fence)) fence = null;
+    } else {
+      fence = opensFence(lines[i]);
+      if (fence === null && isHeading(lines[i])) break;
+    }
     body.push(lines[i]);
   }
   const text = body.join('\n').trim();

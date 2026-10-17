@@ -44,9 +44,16 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     ['a fenced code block', '```sh\n# wipes local data\npnpm db:reset\n```'],
     ['a tilde-fenced code block', '~~~\n# wipes local data\n~~~'],
     ['an indented code block', '    # wipes local data'],
+    ['a tab-indented code block', '\t# wipes local data\n\tmake db-reset'],
+    ['a fence holding a line that only looks like a fence', '```\n```ts\n# wipes local data\n```'],
   ])('keeps a # line inside %s in the blocked reason', (_what, code) => {
     const text = `Leg: 1\nStatus: blocked\n\n## Blocked\nRun this?\n${code}\nOr mock the store?\n\n## Next\n- wait\n`;
     expect(parseGoalProgress(text)?.blocked).toBe(`Run this?\n${code}\nOr mock the store?`);
+  });
+
+  it('ends the blocked reason at the next heading after a line that opens with an inline code span', () => {
+    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n```pnpm db:reset``` wipes local data. Run it?\n\n## Next\n- wait\n';
+    expect(parseGoalProgress(text)?.blocked).toBe('```pnpm db:reset``` wipes local data. Run it?');
   });
 
   it('reads a blocked reason that opens with an issue reference', () => {
