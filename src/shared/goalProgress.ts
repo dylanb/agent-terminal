@@ -63,6 +63,7 @@ function isStatus(v: string): v is GoalProgressStatus {
 
 const MAX_BLOCK_INDENT = 3;
 const TAB_STOP = 4;
+const MAX_HEADING_LEVEL = 6;
 
 /** Leading indent in CommonMark columns (a tab runs to the next tab stop), and where the line's text starts. */
 function indentOf(line: string): { columns: number; at: number } {
@@ -82,18 +83,32 @@ function blockText(line: string): string | null {
   return columns > MAX_BLOCK_INDENT ? null : line.slice(at);
 }
 
-/** A CommonMark ATX heading: one to six `#`, then a space or the end of the line. */
-function isHeading(line: string): boolean {
+const isBlank = (c: string | undefined): boolean => c === undefined || c === ' ' || c === '\t';
+
+/** A CommonMark ATX heading's level and text, its optional closing run of `#` set aside; null when not one. */
+function atxHeading(line: string): { level: number; text: string } | null {
   const t = blockText(line);
-  if (t === null) return false;
-  let n = 0;
-  while (t[n] === '#') n++;
-  return n >= 1 && n <= 6 && (n === t.length || t[n] === ' ' || t[n] === '\t');
+  if (t === null) return null;
+  let level = 0;
+  while (t[level] === '#') level++;
+  if (level < 1 || level > MAX_HEADING_LEVEL || !isBlank(t[level])) return null;
+  let text = t.slice(level).trim();
+  let close = text.length;
+  while (close > 0 && text[close - 1] === '#') close--;
+  if (close < text.length && (close === 0 || isBlank(text[close - 1]))) text = text.slice(0, close).trim();
+  return { level, text };
+}
+
+/** A line's text with up to three columns of indent and one list-item marker set aside, so a fence opened
+ *  inside a list item is still seen. */
+function containerText(line: string): string | null {
+  const t = blockText(line);
+  return t === null ? null : stripLeadingBullet(t);
 }
 
 /** The run of three or more backticks or tildes a line opens with, and the text after it. */
 function fenceRun(line: string): { run: string; rest: string } | null {
-  const t = blockText(line);
+  const t = containerText(line);
   if (t === null) return null;
   const c = t[0];
   if (c !== '`' && c !== '~') return null;
@@ -115,29 +130,36 @@ function closesFence(line: string, open: string): boolean {
   return f !== null && f.run[0] === open[0] && f.run.length >= open.length && f.rest.trim() === '';
 }
 
-/** The heading's section: what follows the heading on its own line, then the lines up to the next heading. */
+/** Each line's ATX heading, or null for a line that is not one — including every line inside a code fence. */
+function headingsOf(lines: readonly string[]): ({ level: number; text: string } | null)[] {
+  let fence: string | null = null;
+  return lines.map((line) => {
+    if (fence !== null) {
+      if (closesFence(line, fence)) fence = null;
+      return null;
+    }
+    fence = opensFence(line);
+    return fence === null ? atxHeading(line) : null;
+  });
+}
+
+/** The section under the `## <name>` heading: what follows the name on the heading line, then the lines up to
+ *  the next heading. */
 function sectionBody(lines: readonly string[], heading: string): string | null {
+  const want = atxHeading(heading);
+  if (want === null) return null;
+  const headings = headingsOf(lines);
   let tail = '';
-  const at = lines.findIndex((l) => {
-    const t = l.trim();
-    if (!t.startsWith(heading)) return false;
-    const rest = t.slice(heading.length);
-    if (rest !== '' && rest[0] !== ':' && rest[0] !== ' ') return false;
+  const at = headings.findIndex((h) => {
+    if (h === null || h.level !== want.level || !h.text.startsWith(want.text)) return false;
+    const rest = h.text.slice(want.text.length);
+    if (rest !== '' && rest[0] !== ':' && !isBlank(rest[0])) return false;
     tail = (rest[0] === ':' ? rest.slice(1) : rest).trim();
     return true;
   });
   if (at < 0) return null;
   const body: string[] = tail.length > 0 ? [tail] : [];
-  let fence: string | null = null;
-  for (let i = at + 1; i < lines.length; i++) {
-    if (fence !== null) {
-      if (closesFence(lines[i], fence)) fence = null;
-    } else {
-      fence = opensFence(lines[i]);
-      if (fence === null && isHeading(lines[i])) break;
-    }
-    body.push(lines[i]);
-  }
+  for (let i = at + 1; i < lines.length && headings[i] === null; i++) body.push(lines[i]);
   const text = body.join('\n').trim();
   return text.length > 0 ? text : null;
 }

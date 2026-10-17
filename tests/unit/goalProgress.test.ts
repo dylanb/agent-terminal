@@ -51,6 +51,25 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     expect(parseGoalProgress(text)?.blocked).toBe(`Run this?\n${code}\nOr mock the store?`);
   });
 
+  it.each([
+    ['inside a fence', '## Notes\n```\n## Blocked\nfake\n```\n\n'],
+    ['indented as code', '    ## Blocked\n    fake\n\n'],
+  ])('finds the Blocked heading only outside code, not %s', (_where, before) => {
+    expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${before}## Blocked\nreal reason\n`)?.blocked).toBe('real reason');
+  });
+
+  it('reads a Blocked heading with a closing sequence or a tab after it', () => {
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked ##\nWhich one?\n')?.blocked).toBe('Which one?');
+    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\tNeed a decision\n')?.blocked).toBe('Need a decision');
+  });
+
+  it('keeps a # line inside a fence opened on a list item', () => {
+    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n- Run:\n  ```sh\n  # wipes data\n  ```\nOk?\n';
+    expect(parseGoalProgress(text)?.blocked).toBe('- Run:\n  ```sh\n  # wipes data\n  ```\nOk?');
+    const bullet = 'Leg: 1\nStatus: blocked\n\n## Blocked\n- ```sh\n  # wipes data\n  ```\nOk?\n';
+    expect(parseGoalProgress(bullet)?.blocked).toBe('- ```sh\n  # wipes data\n  ```\nOk?');
+  });
+
   it('ends the blocked reason at the next heading after a line that opens with an inline code span', () => {
     const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n```pnpm db:reset``` wipes local data. Run it?\n\n## Next\n- wait\n';
     expect(parseGoalProgress(text)?.blocked).toBe('```pnpm db:reset``` wipes local data. Run it?');
@@ -80,6 +99,7 @@ describe('the goal progress file (§27.3 v2.201)', () => {
     ['a status that is not the first word', 'Leg: 1\nStatus: not done\n'],
     ['blocked with nothing under Blocked', 'Leg: 1\nStatus: blocked\n\n## Blocked\n\n## Next\n'],
     ['blocked with no Blocked section', 'Leg: 1\nStatus: blocked\n'],
+    ['blocked with only a closing sequence under Blocked', 'Leg: 1\nStatus: blocked\n\n## Blocked ##\n\n## Next\n- wait\n'],
   ])('is not well-formed with %s', (_what, text) => {
     expect(parseGoalProgress(text)).toBeNull();
   });
