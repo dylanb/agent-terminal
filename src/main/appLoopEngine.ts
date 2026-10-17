@@ -666,9 +666,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  persisting a fabricated `complete`. Used by the unresolved-accept guards and the failed-write guards. */
   const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
     if (!active) return;
-    // §27.12 — a refused route-out leaves a stalled turn resumable by its own done-signal.
-    const stillStalled = liveError?.stalled === true && liveError.turnKey === active.turnKey && runner.state() === 'error';
-    setLiveError(kind, reason, round, stillStalled);
+    setLiveError(kind, reason, round, kind === 'turn-error' && runner.stalled());
     deps.emitError(reason);
     deps.onViewChanged();
   };
@@ -1001,7 +999,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         turnKey: active.turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         checkCommand: deps.artifactCheckCommand(check),
-        agentKind: deps.hostedAgentKind(),
+        agentKind: hostedKind(),
       });
     }
     if (active.phase === 'consolidate' && active.completion.kind !== 'unresolved') {
@@ -1044,8 +1042,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return `the worktree is on ${current.branch ?? 'a detached HEAD'}, not ${expected}, the branch pickup created for this run; check out ${expected} and retry`;
   };
 
+  // §27.4 — read once per turn, so the reviewer check and the prompts it composes name the same agent.
+  let kindRead: { turn: ActiveAppTurn | null; kind: AgentKind } | null = null;
+  const hostedKind = (): AgentKind => {
+    if (kindRead === null || kindRead.turn !== active) kindRead = { turn: active, kind: deps.hostedAgentKind() };
+    return kindRead.kind;
+  };
+
   const reviewerAgentsRefusal = (reviewers: RosterEntry[]): string | null => {
-    const kind = deps.hostedAgentKind();
+    if (reviewers.length === 0) return null;
+    const kind = hostedKind();
     const problems = reviewers.map((r) => deps.reviewerAgentProblem(r, kind)).filter((p): p is string => p !== null);
     if (problems.length === 0) return null;
     const installed = kind === 'codex' ? 'the Codex agents' : 'the Claude Code sub-agents';
@@ -1064,7 +1070,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         carried: (turn.inputs ?? []).filter((i) => i.rel !== subjectRel),
       },
       run.polish,
-      deps.hostedAgentKind(),
+      hostedKind(),
     );
   };
 
@@ -1108,7 +1114,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         const loopBrief = readBrief(active);
         if (loopBrief === null) return null;
         return composeReviewAndFixPrompt({
-          agentKind: deps.hostedAgentKind(),
+          agentKind: hostedKind(),
           roster: active.reviewers,
           sections: active.sections,
           polish: active.polish,

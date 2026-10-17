@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
+import { goalProgressRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
@@ -321,6 +321,46 @@ describe('Accept on a stalled goal session follows what its progress file record
 
     expect(readAppLoopState(h.repo)?.status).toBe('error');
     expect(engine.liveErrorFor(h.repo)?.reason).toContain('missing');
+  });
+});
+
+describe('the stall help shows only while the turn can still finish by itself (§27.12 v2.201)', () => {
+  const failingComplete = (repoDir: string, state: Parameters<typeof writeAppLoopState>[1]): void => {
+    if (state.status === 'complete') throw new Error('ENOSPC: no space left on device');
+    writeAppLoopState(repoDir, state);
+  };
+
+  it('an Accept whose save fails leaves a stalled turn shown as stalled, and its done-signal still finishes it', () => {
+    const engine = makeEngine(failingComplete);
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeArtifact(true);
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(engine.liveErrorFor(h.repo)?.stalled).toBe(true);
+  });
+
+  it('an Accept on a blocked session whose save fails no longer shows a stall the done-signal cannot finish', () => {
+    const engine = makeEngine(failingComplete);
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress('Leg: 1\nStatus: blocked\n\n## Blocked\nModal or page?\n');
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(engine.liveErrorFor(h.repo)?.stalled).toBeUndefined();
+  });
+
+  it('a Retry refused because the def no longer resolves does not show the stall help', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    engine.onStall();
+    h.defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+
+    expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable');
+    expect(engine.liveErrorFor(h.repo)?.stalled).toBeUndefined();
   });
 });
 

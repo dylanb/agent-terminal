@@ -106,6 +106,8 @@ export interface TurnRunner {
    *  it must not complete it a second time. */
   release(): void;
   state(): TurnState;
+  /** A turn that went quiet after its prompt went in, which its own done-signal still finishes (§27.12). */
+  stalled(): boolean;
 }
 
 // Total injections per turn before the run errors: the initial attempt plus one retry on a missing
@@ -291,6 +293,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     },
     state() {
       return state;
+    },
+    stalled() {
+      return state === 'error' && stalled;
     },
   };
 }

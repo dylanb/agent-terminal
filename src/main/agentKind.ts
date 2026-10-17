@@ -6,6 +6,10 @@ export type AgentKind = 'claude-code' | 'codex';
 
 const LAUNCHERS: ReadonlySet<string> = new Set(['env', 'exec', 'command', 'npx', 'bunx', 'pnpx', 'nice', 'nohup', 'node', 'bun', 'deno']);
 
+// A package manager runs a package through one of these subcommands, e.g. `pnpm dlx @openai/codex`.
+const PACKAGE_MANAGERS: ReadonlySet<string> = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const RUN_SUBCOMMANDS: ReadonlySet<string> = new Set(['exec', 'dlx', 'x']);
+
 // The npm package's entry script, which `node` runs for an npm or pnpm install of Codex.
 const CODEX_PACKAGE_SEGMENT = '/@openai/codex/';
 
@@ -20,6 +24,7 @@ const isCodex = (token: string, name: string): boolean => name === 'codex' || na
 export function agentKindOfCommand(command: string): AgentKind {
   let launched = false;
   let afterFlag = false;
+  let afterManager = false;
   for (const token of command.trim().split(/\s+/)) {
     if (token === '' || token.includes('=')) continue;
     if (token.startsWith('-')) {
@@ -27,6 +32,13 @@ export function agentKindOfCommand(command: string): AgentKind {
       continue;
     }
     const name = programName(token);
+    const subcommand = afterManager && RUN_SUBCOMMANDS.has(name);
+    afterManager = PACKAGE_MANAGERS.has(name) && !launched;
+    if (subcommand || afterManager) {
+      launched = true;
+      afterFlag = false;
+      continue;
+    }
     const optionValue = launched && afterFlag && !isCodex(token, name);
     afterFlag = false;
     if (optionValue) continue;

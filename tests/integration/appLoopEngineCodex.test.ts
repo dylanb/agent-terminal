@@ -64,6 +64,33 @@ describe('under Codex the turns name each reviewer as its Codex agent (§27.4 v2
     expect(reviewPrompt()).toContain('subagent_type: plan-loop--review-plan-principal');
   });
 
+  it('names the reviewers for the same agent it checked them against, within one turn', () => {
+    const kinds: AgentKind[] = ['claude-code', 'codex', 'codex', 'codex'];
+    const engine = makeEngine(undefined, undefined, undefined, {
+      hostedAgentKind: () => kinds.shift() ?? 'codex',
+      reviewerAgentProblem: (r, k) => (k === 'codex' ? `no Codex agent for ${r.persona} is installed` : null),
+    });
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    expect(goalPrompt()).toContain('subagent_type');
+  });
+
+  it('a turn with no reviewers never asks which agent is hosted', () => {
+    let asked = 0;
+    const engine = makeEngine(undefined, undefined, undefined, {
+      hostedAgentKind: () => {
+        asked += 1;
+        return 'claude-code';
+      },
+    });
+    h.defResult = resolved({ ...fileDef(), reviewers: [], rounds: { kind: 'none' } });
+    enterAndInjectWork(engine);
+
+    expect(h.injected.some((p) => p.includes('turn-done:'))).toBe(true);
+    expect(asked).toBe(0);
+  });
+
   it('refuses the turn when the Codex agent of a reviewer is not installed, and says how to install it', () => {
     const engine = engineFor('codex', (persona) => (persona === 'review-plan-security' ? 'no Codex agent plan_loop__review_plan_security is installed' : null));
     h.defResult = resolved(goalDef());
