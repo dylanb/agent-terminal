@@ -714,14 +714,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return { kind: 'progress', progress };
   };
 
-  /** §27.3 — why Accept may not finish this goal turn now, or null when it records the goal done. */
-  const goalNotDone = (a: ActiveAppTurn): string | null => {
-    if (a.phase !== 'work' || a.run.kind !== 'goal') return null;
-    const end = goalEnd(a, a.run);
-    if (end.kind === 'shortfall') return `${end.reason} — retry or terminate`;
-    return end.progress.status === 'done' ? null : `the goal session now records ${end.progress.status}, not done — retry or terminate`;
-  };
-
   /** §27.3 */
   const goalStopsShort = (a: ActiveAppTurn | null): boolean => {
     if (a?.phase !== 'work' || a.run.kind !== 'goal') return false;
@@ -1496,6 +1488,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return false;
   };
 
+  /** §27.3/§27.12c — Accept on a goal turn that does not record the goal done acts on what it records instead:
+   *  a shortfall is refused, a checkpoint starts the next leg, a block stops for a human. True when it did. */
+  const acceptActsOnGoalProgress = (a: ActiveAppTurn): boolean => {
+    if (a.phase !== 'work' || a.run.kind !== 'goal') return false;
+    const end = goalEnd(a, a.run);
+    if (end.kind === 'shortfall') {
+      refuseRouteOut('turn-error', `${end.reason} — retry or terminate`);
+      return true;
+    }
+    if (end.progress.status === 'done') return false;
+    runner.release();
+    endGoalLegShort(a, a.run, end.progress);
+    return true;
+  };
+
   /** §27.3 */
   const nextLeg = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>): void => {
     deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} leg ${run.leg} checkpointed`, 0);
@@ -1814,16 +1821,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         }
         // §27.3/§27.12c — Accept takes a goal session at its word only once it records the goal done.
         if (active.phase === 'work' && active.run.kind === 'goal') {
-          const end = goalEnd(active, active.run);
-          if (end.kind === 'shortfall') {
-            refuseRouteOut('turn-error', `${end.reason} — retry or terminate`);
-            return;
-          }
-          if (end.progress.status !== 'done') {
-            runner.release();
-            endGoalLegShort(active, active.run, end.progress);
-            return;
-          }
+          if (acceptActsOnGoalProgress(active)) return;
           const shortfall = completionShortfall();
           if (shortfall !== null) {
             refuseRouteOut('turn-error', `${shortfall} — retry or terminate`);
@@ -1840,11 +1838,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void redAsyncGate(a).then((gate) => {
             if (active !== a) return; // a retry/terminate changed the turn under the await
-            const late = goalNotDone(a);
-            if (late !== null) {
-              refuseRouteOut('turn-error', late);
-              return;
-            }
+            if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed result) — Retry re-runs
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);
@@ -1863,11 +1857,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void greenAsyncGate(a).then(({ gate, changedTests }) => {
             if (active !== a) return; // a retry/terminate changed the turn under the await
-            const late = goalNotDone(a);
-            if (late !== null) {
-              refuseRouteOut('turn-error', late);
-              return;
-            }
+            if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed/not passed+built)
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);
@@ -1883,11 +1873,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
             if (active !== a) return;
-            const late = goalNotDone(a);
-            if (late !== null) {
-              refuseRouteOut('turn-error', late);
-              return;
-            }
+            if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return;
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);

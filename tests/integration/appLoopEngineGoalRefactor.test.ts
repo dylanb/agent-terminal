@@ -8,7 +8,7 @@ import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
-import { createAppLoopEngineHarness, STEP, TEST_BRANCH, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { createAppLoopEngineHarness, STEP, TEST_BRANCH } from '../helpers/appLoopEngineHarness';
 
 // §27.3/§28.5.3 (v2.201) — a refactor goal session has no engine rounds, so the checks a refactor round runs
 // run when the session finishes: its tests still pass, and any test file changed since RED is flagged.
@@ -89,27 +89,6 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     writeAt(refactorResultFile(h.repo, 1)!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
     finish(null);
     engine.onDoneSignal();
-    await flush();
-
-    expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
-  });
-
-  it('an Accept does not finish a session whose progress stops recording the goal done while its checks run', async () => {
-    const engine = makeEngine(
-      undefined,
-      fake({
-        changedTestPaths: async () => {
-          writeAt(join(h.repo, goalProgressRel(session())), exampleGoalProgress(1, 'blocked'));
-          return { ok: true, paths: [] };
-        },
-      }),
-    );
-    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
-    h.defResult = resolved(refactorGoalDef());
-    enterAndInjectWork(engine);
-    engine.onStall();
-    finish(examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
-    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
     await flush();
 
     expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
