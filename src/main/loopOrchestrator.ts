@@ -108,6 +108,9 @@ export interface TurnRunner {
   state(): TurnState;
   /** A turn that went quiet after its prompt went in, which its own done-signal still finishes (§27.12). */
   stalled(): boolean;
+  /** How many state changes the runner has made; one value never repeats, so a round trip back to the same
+   *  state still reads as a change. */
+  transitions(): number;
 }
 
 // Total injections per turn before the run errors: the initial attempt plus one retry on a missing
@@ -116,6 +119,11 @@ const MAX_ATTEMPTS = 2;
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let state: TurnState = 'idle';
+  let transitions = 0;
+  const setState = (next: TurnState): void => {
+    state = next;
+    transitions += 1;
+  };
   let turnKey: string | null = null;
   let attempts = 0;
   let awaitingInjectable = false;
@@ -132,7 +140,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     if (refusal !== null) {
       awaitingInjectable = false;
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       deps.writeError(refusal);
       return;
     }
@@ -143,7 +151,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       // there: stop in `error` (human-needed) so the operator is told to start Claude and retry.
       awaitingInjectable = false;
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       deps.writeError('no hosted agent at the prompt');
       return;
     }
@@ -171,7 +179,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     const prompt = retryCause !== null ? deps.compose(turnKey, retryCause) : deps.compose(turnKey);
     if (prompt === null) {
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       deps.writeError(`could not compose prompt for ${turnKey}`);
       return;
     }
@@ -184,7 +192,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     if (state !== 'in-flight') return;
     deps.cancelTimer();
     if (attempts >= MAX_ATTEMPTS) {
-      state = 'error';
+      setState('error');
       deps.writeError(reason);
       return;
     }
@@ -195,14 +203,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   const succeed = (): void => {
     deps.cancelTimer();
     const k = turnKey;
-    state = 'complete';
+    setState('complete');
     if (k !== null) deps.onComplete(k);
   };
 
   const resolveCompletion = (gate?: PrecomputedGate): void => {
     if (state === 'error' && stalled) {
       stalled = false;
-      state = 'in-flight';
+      setState('in-flight');
       deps.resumeStalled();
     }
     if (state !== 'in-flight') return;
@@ -215,7 +223,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     const unretryable = deps.unretryableShortfall?.() ?? null;
     if (unretryable !== null) {
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       deps.writeError(unretryable);
       return;
     }
@@ -232,7 +240,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       // injects immediately against the already-at-rest agent — UNLESS the caller forces the chained arm
       // because it just submitted an injection this turn must not race (§B.5 item 4b).
       const chained = state === 'complete' || state === 'error' || opts?.forceChained === true;
-      state = 'in-flight';
+      setState('in-flight');
       turnKey = key;
       attempts = 0;
       retryCause = null;
@@ -265,7 +273,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       // own done-signal.
       if (state !== 'in-flight') return;
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       stalled = !awaitingInjectable;
       deps.writeError(
         awaitingInjectable
@@ -285,7 +293,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         return;
       }
       deps.cancelTimer();
-      state = 'error';
+      setState('error');
       deps.writeError(`marked complete but ${shortfall}`);
     },
     release() {
@@ -296,6 +304,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     },
     stalled() {
       return state === 'error' && stalled;
+    },
+    transitions() {
+      return transitions;
     },
   };
 }

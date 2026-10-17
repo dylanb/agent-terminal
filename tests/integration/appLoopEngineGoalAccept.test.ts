@@ -235,6 +235,39 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     expect(blocks).toHaveLength(1);
   });
 
+  it('an Accept does not finish a turn its own done-signal resumed and failed again while the check ran', async () => {
+    const phase = PHASES[2];
+    let call = 0;
+    let releaseAccept!: () => void;
+    const engine = makeEngine(
+      undefined,
+      makeFakeCompletionPredicates({
+        recoverExitCode: () => {
+          call += 1;
+          if (call === 2) return new Promise((r) => (releaseAccept = () => r(null)));
+          return Promise.resolve(call === 1 ? null : 1);
+        },
+      }),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    await flush();
+    engine.onInjectable();
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.onDoneSignal();
+    await flush();
+    releaseAccept();
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(h.audit.mock.calls.map((c) => String(c[1])).some((l) => l.includes('accepted'))).toBe(false);
+  });
+
   it.each(PHASES)('$name: a session still done after the check is accepted', async (phase) => {
     const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => {})));
     recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));

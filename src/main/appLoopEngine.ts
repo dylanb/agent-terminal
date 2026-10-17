@@ -1840,10 +1840,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.completion.kind === 'red') {
           const a = active;
           acceptPendingFor = a;
-          const runnerAtAccept = runner.state();
+          const runnerAtAccept = runner.transitions();
           void redAsyncGate(a).then((gate) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
-            if (active !== a || runner.state() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
+            if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed result) — Retry re-runs
             if (!gate.ok) {
@@ -1862,10 +1862,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.completion.kind === 'green') {
           const a = active;
           acceptPendingFor = a;
-          const runnerAtAccept = runner.state();
+          const runnerAtAccept = runner.transitions();
           void greenAsyncGate(a).then(({ gate, changedTests }) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
-            if (active !== a || runner.state() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
+            if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed/not passed+built)
             if (!gate.ok) {
@@ -1881,10 +1881,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (active.completion.kind === 'refactor') {
           const a = active;
           acceptPendingFor = a;
-          const runnerAtAccept = runner.state();
+          const runnerAtAccept = runner.transitions();
           void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
-            if (active !== a || runner.state() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
+            if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return;
             if (!gate.ok) {
