@@ -5,7 +5,7 @@
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
 import type { LoopDefV2, PolishPolicy, ReviewerTools } from './loopDefV2';
-import { boundaryCommand, flowDocumentLines, formatDesignCheckLines, sliceBriefLines } from './appWorkTurn';
+import { boundaryCommand, flowDocumentLines, designCheckLines, sliceBriefLines } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
@@ -335,7 +335,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     );
   }
   lines.push(...flowDocumentLines());
-  lines.push(...fixCriterionLines(), ...formatDesignCheckLines());
+  lines.push(...fixCriterionLines(), ...designCheckLines());
   if (req.polish === 'defer') lines.push(...polishDeferLines());
   lines.push(...rosterLines(req.roster, req.agentKind));
   if (req.sliceBrief !== undefined) lines.push(...sliceBriefLines(req.sliceBrief, 'fixer'));

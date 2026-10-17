@@ -521,8 +521,9 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
 
 // §27.3/§27.6 (v2.202) — a fixer that patches one more special case into a parser for a format the repository
 // itself defines is how #208 spent rounds on a Markdown grammar: every finding was new, so §27.6's spinning
-// check never fired. The fixer and the work agent are both told to question the format first.
-describe('the format design check, before patching a parser (§27.3/§27.6 v2.202)', () => {
+// check never fired. The fixer and the work agent are both told to question the design before adding complexity,
+// bounded to the fix at hand and the ticket's scope so it cannot become a licence to redesign.
+describe('the design check, before a fix adds complexity (§27.3/§27.6 v2.202)', () => {
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
@@ -533,20 +534,31 @@ describe('the format design check, before patching a parser (§27.3/§27.6 v2.20
     agentKind: 'claude-code' as const,
   });
   const work = { recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion: null };
-  const asks = /special case[\s\S]*format this repository defines[\s\S]*changing the format would remove/i;
+  const asks = /before you add complexity[\s\S]*whether the design itself is the problem/i;
+  const block = (p: string): string => {
+    const m = asks.exec(p);
+    if (m === null) throw new Error('no design check');
+    return p.slice(p.lastIndexOf('\n\n', m.index), p.indexOf('\n\n', m.index + m[0].length));
+  };
 
-  it('asks the fixer whether changing the format would remove the case, and to say why when it patches', () => {
-    const p = composeReviewAndFixPrompt(req());
-    expect(p).toMatch(asks);
-    expect(p).toMatch(/say why/i);
+  it('fires on any added special case, flag, workaround, guard or copied logic, not only a parser', () => {
+    const b = block(composeReviewAndFixPrompt(req()));
+    for (const kind of [/special case/i, /flag/i, /workaround/i, /guard/i, /second copy/i]) expect(b).toMatch(kind);
+    expect(b).toMatch(/format[\s\S]*structured data/i);
+  });
+
+  it('keeps a simpler design inside the ticket, sends one that reaches beyond it to a human, and asks why when it patches', () => {
+    const b = block(composeReviewAndFixPrompt(req()));
+    expect(b).toMatch(/inside this ticket/i);
+    expect(b).toMatch(/beyond this ticket[\s\S]*human/i);
+    expect(b).toMatch(/say why/i);
+  });
+
+  it('never invites redesigning code no fix touches', () => {
+    expect(block(composeReviewAndFixPrompt(req()))).toMatch(/never redesign code that no fix touches/i);
   });
 
   it('asks the work agent the same, in the same words', () => {
-    const block = (p: string): string => {
-      const m = asks.exec(p);
-      if (m === null) throw new Error('no design check');
-      return p.slice(p.lastIndexOf('\n\n', m.index), p.indexOf('\n\n', m.index + m[0].length));
-    };
     expect(block(composeAppWorkPrompt(work))).toBe(block(composeReviewAndFixPrompt(req())));
   });
 });

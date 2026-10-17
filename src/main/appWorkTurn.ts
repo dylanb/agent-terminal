@@ -212,13 +212,16 @@ export function flowDocumentLines(code: 'working-tree' | 'described-elsewhere' =
 }
 
 /** §27.3/§27.6 */
-export function formatDesignCheckLines(): string[] {
+export function designCheckLines(): string[] {
   return [
     '',
-    'BEFORE YOU PATCH A PARSER — when a fix would add one more special case to code that reads a format this repository defines',
-    '(a file an agent is prompted to write, a config or report grammar), first ask whether changing the format would remove',
-    'the case. If it would, change the format instead: structured data checked by one shared predicate, with free text the',
-    'code does not judge kept outside the parsed part. If a patch is still right, say why where you record the fix.',
+    'BEFORE YOU ADD COMPLEXITY TO FIX SOMETHING — when a fix would add a special case, a flag, a workaround, a guard, or a',
+    'second copy of logic, first ask whether the design itself is the problem: a format parsed by hand that could be',
+    'structured data checked by one shared predicate, branches one rule would replace, a guard against a state the design',
+    'could make impossible, a mechanism bigger than the ticket needs. If a simpler design removes the problem and stays',
+    'inside this ticket, make that change instead. If it reaches beyond this ticket, do not widen the change: put it to a',
+    'human the way this turn raises a decision for one. If the patch is still right, say why where you record the fix.',
+    'Never redesign code that no fix touches.',
   ];
 }
 
@@ -237,7 +240,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   // receiver never re-derives its target from ambient state). Above the redo block so a redo's "the ticket and
   // the plan above" reference covers it.
   if (req.ticket !== undefined) parts.push(...ticketPromptLines(req.ticket));
-  parts.push(...flowDocumentLines(), ...formatDesignCheckLines());
+  parts.push(...flowDocumentLines(), ...designCheckLines());
   // §27.10 — above the redo block so a redo's "the ticket and the plan above" reference covers the
   // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
