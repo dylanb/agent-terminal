@@ -666,6 +666,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  persisting a fabricated `complete`. Used by the unresolved-accept guards and the failed-write guards. */
   const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
     if (!active) return;
+    if (kind !== 'turn-error') runner.release();
     setLiveError(kind, reason, round, kind === 'turn-error' && runner.stalled());
     deps.emitError(reason);
     deps.onViewChanged();

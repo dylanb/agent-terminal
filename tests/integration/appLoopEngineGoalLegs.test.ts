@@ -362,6 +362,19 @@ describe('the stall help shows only while the turn can still finish by itself (�
     expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable');
     expect(engine.liveErrorFor(h.repo)?.stalled).toBeUndefined();
   });
+
+  it('a late done-signal does not resume a turn whose Retry was refused because the def no longer resolves', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    engine.onStall();
+    h.defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'retry');
+    engine.onDoneSignal();
+
+    expect(engine.liveErrorFor(h.repo)?.kind).toBe('def-unresolvable');
+    expect(h.audit.mock.calls.map((c) => String(c[1])).some((l) => l.includes('resumed after a stall'))).toBe(false);
+  });
 });
 
 describe('a blocked goal session stops its step for a human (§27.3 v2.201)', () => {

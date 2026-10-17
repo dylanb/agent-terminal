@@ -32,10 +32,14 @@ export function agentKindOfCommand(command: string): AgentKind {
       continue;
     }
     const name = programName(token);
-    const subcommand = afterManager && RUN_SUBCOMMANDS.has(name);
-    afterManager = PACKAGE_MANAGERS.has(name) && !launched;
-    if (subcommand || afterManager) {
+    if (afterManager && RUN_SUBCOMMANDS.has(name)) {
+      afterManager = false;
+      afterFlag = false;
+      continue;
+    }
+    if (PACKAGE_MANAGERS.has(name)) {
       launched = true;
+      afterManager = true;
       afterFlag = false;
       continue;
     }
