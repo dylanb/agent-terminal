@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
+import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { APP_LOOP_DIR_SEGMENTS } from '../../src/main/appLoopPaths';
 import { createAppLoopEngineHarness, flushRedGate, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
 // §27.3 (v2.201) — a goal session keeps its progress in a file the engine reads at its done-signal. A leg
@@ -213,6 +215,80 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
     relaunched.onInjectable();
 
     expect(lastGoal()).toMatch(/leg 2/i);
+  });
+});
+
+describe('the leg change itself (§27.3 v2.201)', () => {
+  const doneFile = (): string => join(h.repo, ...APP_LOOP_DIR_SEGMENTS, TURN_DONE_FILENAME);
+
+  it('the finished leg done-signal no longer reads as this turn once the next leg is requested', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(exampleGoalProgress(1, 'checkpoint'));
+    mkdirSync(dirname(doneFile()), { recursive: true });
+    writeFileSync(doneFile(), `${TURN_KEY}\n`);
+    engine.onDoneSignal();
+
+    expect(existsSync(doneFile())).toBe(false);
+  });
+
+  it('records the compact it sent between legs, never the clear it did not', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    const before = h.audit.mock.calls.length;
+    writeProgress(exampleGoalProgress(1, 'checkpoint'));
+    signalAndDrain(engine);
+
+    const boundaries = h.audit.mock.calls.slice(before).map((c) => String(c[1])).filter((l) => l.includes('boundary'));
+    expect(boundaries.some((l) => l.includes('/compact'))).toBe(true);
+    expect(boundaries.some((l) => l.includes('/clear'))).toBe(false);
+  });
+});
+
+describe('Accept on a stalled goal session follows what its progress file records (§27.3/§27.12c v2.201)', () => {
+  const stalledWith = (progress: string | null): ReturnType<typeof makeEngine> => {
+    const gateReaching = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    engine.onStall();
+    if (progress !== null) writeProgress(progress);
+    return engine;
+  };
+
+  it('a checkpoint is not accepted as finished: Accept starts the next leg', () => {
+    const engine = stalledWith(exampleGoalProgress(1, 'checkpoint'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.onInjectable();
+    engine.onInjectable();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'working', leg: 2 });
+    expect(lastGoal()).toMatch(/leg 2/i);
+  });
+
+  it('a blocked session reaches the gate as stop for a human, with its question', () => {
+    const engine = stalledWith('Leg: 1\nStatus: blocked\n\n## Blocked\nModal or page?\n');
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human', verdictReason: 'Modal or page?' });
+  });
+
+  it('a session still working is refused with the reason, and the turn stays open', () => {
+    const engine = stalledWith(exampleGoalProgress(1, 'working'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain('still working');
+  });
+
+  it('a done session with no artifact is still refused', () => {
+    const engine = stalledWith(exampleGoalProgress(1, 'done'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+
+    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(engine.liveErrorFor(h.repo)?.reason).toContain('missing');
   });
 });
 

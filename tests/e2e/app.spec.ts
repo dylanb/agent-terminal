@@ -7960,7 +7960,8 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('§27.4 v2.201 — under Codex, detected from the command the terminal runs, a goal session spawns its reviewers as their Codex agents', { tag: '@ownapp' }, async () => {
+// Without shell integration there is no command span, so the agent is read from the terminal's foreground process.
+for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detected from what the terminal runs (shell integration ${integration === '1' ? 'on' : 'off'}), a goal session spawns its reviewers as their Codex agents`, { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-codexv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7970,10 +7971,11 @@ test('§27.4 v2.201 — under Codex, detected from the command the terminal runs
   mkdirSync(join(codexHome, 'agents'));
   for (const agent of planReviewerAgents(join(process.cwd(), 'example', 'loops-v2'), CODEX_REVIEWER_AGENT)) writeFileSync(join(codexHome, 'agents', agent.rel), agent.bytes());
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-codexv3-bin-', { realCommitOps: true });
-  seedV3GoalAgent(binDir, 'codex', {}, { 'groom-intent': V3_GROOM_INTENT });
+  seedV3GoalAgent(binDir, 'codex-impl', {}, { 'groom-intent': V3_GROOM_INTENT });
+  writeFileSync(join(binDir, 'codex'), '#!/usr/bin/env bash\nexec -a codex bash "$(dirname "$0")/codex-impl"\n', { mode: 0o755 });
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, CODEX_HOME: codexHome, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    env: { ...process.env, APP_SHELL: 'bash', APP_SHELL_INTEGRATION: integration, APP_LAUNCH_DIR: repo, HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, CODEX_HOME: codexHome, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });

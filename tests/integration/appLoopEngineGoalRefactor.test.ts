@@ -61,6 +61,19 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
   });
 
+  it('a passing result an earlier run left does not finish a session that records none', async () => {
+    writeAt(refactorResultFile(h.repo, 1)!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
+    const engine = makeEngine(undefined, fake());
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(refactorGoalDef());
+    enterAndInjectWork(engine);
+    finish(null);
+    engine.onDoneSignal();
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
+  });
+
   it('does not finish when the session records no test result', async () => {
     const engine = makeEngine(undefined, fake());
     h.defResult = resolved(refactorGoalDef());

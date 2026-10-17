@@ -305,6 +305,13 @@ export function refactorResultFile(repoDir: string, round: number): string | nul
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }
 
+/** §27.3 — best-effort; an absent file is already the cleared state. */
+export function clearRefactorResult(repoDir: string, round: number): void {
+  const file = refactorResultFile(repoDir, round);
+  if (file === null) return;
+  rmSync(file, { force: true });
+}
+
 const BOOTSTRAP_FILE = 'bootstrap.yaml';
 
 /** §27.10 */

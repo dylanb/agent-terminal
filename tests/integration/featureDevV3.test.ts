@@ -165,6 +165,12 @@ describe('each implementation step is a goal session that reviews its own work (
     expect(p).not.toMatch(/interview the operator/i);
   });
 
+  it('the refactor step records the test result its goal session is graded on', () => {
+    const p = prompt(loop('refactor-loop'));
+    expect(p).not.toMatch(/not a\s+result\s+file/);
+    expect(p).toMatch(/records its test result/);
+  });
+
   it('integration-slice no longer publishes the pull request description: the final approval does', () => {
     const effects = (def: LoopDefV2) => def.gate.find((g) => g.option === 'approve')?.sideEffects ?? [];
     expect(effects(loop('integration-slice-loop'))).toEqual([{ kind: 'commit', args: { label: 'integration' } }]);

@@ -12,17 +12,31 @@ function programName(token: string): string {
   return at > 0 ? base.slice(0, at) : base;
 }
 
+const isCodex = (name: string): boolean => name === 'codex' || name === '@openai/codex';
+
 export function agentKindOfCommand(command: string): AgentKind {
+  let launched = false;
+  let afterFlag = false;
   for (const token of command.trim().split(/\s+/)) {
-    if (token === '' || token.includes('=') || token.startsWith('-')) continue;
+    if (token === '' || token.includes('=')) continue;
+    if (token.startsWith('-')) {
+      afterFlag = true;
+      continue;
+    }
     const name = programName(token);
-    if (LAUNCHERS.has(name)) continue;
-    return name === 'codex' || name === '@openai/codex' ? 'codex' : 'claude-code';
+    const optionValue = launched && afterFlag && !isCodex(name);
+    afterFlag = false;
+    if (optionValue) continue;
+    if (LAUNCHERS.has(name)) {
+      launched = true;
+      continue;
+    }
+    return isCodex(name) ? 'codex' : 'claude-code';
   }
   return 'claude-code';
 }
 
-export function hostedAgentKind(spans: readonly { command: string; running: boolean }[], terminalProgram: string): AgentKind {
+export function hostedAgentKind(spans: readonly { command: string; running: boolean }[], foregroundProgram: string): AgentKind {
   const running = spans.filter((s) => s.running);
-  return agentKindOfCommand(running.length > 0 ? running[running.length - 1].command : terminalProgram);
+  return agentKindOfCommand(running.length > 0 ? running[running.length - 1].command : foregroundProgram);
 }

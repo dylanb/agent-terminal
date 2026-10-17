@@ -13,6 +13,11 @@ describe('which agent a terminal command runs (§27.4 v2.201)', () => {
     ['env RUST_LOG=info codex', 'codex'],
     ['npx @openai/codex', 'codex'],
     ['npx -y @openai/codex@0.50.0', 'codex'],
+    ['nice -n 10 codex', 'codex'],
+    ['env -u OPENAI_BASE_URL codex', 'codex'],
+    ['npx --package @openai/codex codex', 'codex'],
+    ['nice -n 10 claude', 'claude-code'],
+    ['claude --model codex', 'claude-code'],
     ['claude', 'claude-code'],
     ['claude --resume abc', 'claude-code'],
     ['/Users/me/.local/bin/claude', 'claude-code'],
@@ -30,7 +35,7 @@ describe('which agent the terminal is hosting (§27.4 v2.201)', () => {
     expect(hostedAgentKind([span('ls', false), span('codex', true)], '/bin/bash')).toBe('codex');
   });
 
-  it('is the terminal program when no command is running in a shell', () => {
+  it("is the terminal's foreground program when no command span is known", () => {
     expect(hostedAgentKind([], '/usr/local/bin/codex')).toBe('codex');
   });
 

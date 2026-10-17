@@ -411,7 +411,15 @@ async function createWindow(): Promise<void> {
       const home = codexHome();
       return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
     },
-    hostedAgentKind: () => hostedAgentKind(tracker.summaries(), resolveShellPath(process.env)),
+    hostedAgentKind: () => {
+      let foreground: string;
+      try {
+        foreground = ptyProcess.process;
+      } catch {
+        foreground = resolveShellPath(process.env);
+      }
+      return hostedAgentKind(tracker.summaries(), foreground);
+    },
     pickupBranch: (repoDir) =>
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),

@@ -34,7 +34,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearGoalProgress, clearInterrupt, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalProgress, clearInterrupt, clearRefactorResult, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -1011,12 +1011,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return null;
   };
 
-  const boundaryAuditCmd = (a: ActiveAppTurn): string =>
+  const boundaryAuditCmd = (a: ActiveAppTurn, cmd: string): string =>
     a.phase === 'review'
-      ? reviewRoundAuditCmd('boundary', a.round, a.boundaryCmd)
+      ? reviewRoundAuditCmd('boundary', a.round, cmd)
       : a.phase === 'consolidate'
-        ? consolidateAuditCmd('boundary', a.round, a.boundaryCmd)
-        : `§27 work turn ${a.turnKey} boundary: ${a.boundaryCmd}`;
+        ? consolidateAuditCmd('boundary', a.round, cmd)
+        : `§27 work turn ${a.turnKey} boundary: ${cmd}`;
 
   const offPickupBranch = (repoDir: string): string | null => {
     const pickup = deps.pickupBranch(repoDir);
@@ -1171,7 +1171,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // completion arriving during the boundary drain would be dropped (§27.12/D46 parallel).
       if (!opts?.preamble && active) clearTurnDone(active.repoDir, APP_TURN_DONE_SUBDIR);
       deps.inject(prompt);
-      if (opts?.preamble && active) deps.audit(active.repoDir, boundaryAuditCmd(active), null);
+      if (opts?.preamble && active) deps.audit(active.repoDir, boundaryAuditCmd(active, prompt), null);
     },
     hostedAgent: () => deps.hostedAgent(),
     injectionRefusal: () => {
@@ -1211,15 +1211,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!active) return;
       if (active.phase === 'work' && active.run.kind === 'goal') {
         const end = goalEnd(active, active.run);
-        if (end.kind === 'progress' && end.progress.status === 'checkpoint') {
-          nextLeg(active, active.run);
-          return;
-        }
-        if (end.kind === 'progress' && end.progress.status === 'blocked') {
-          deps.audit(active.repoDir, `§27 goal turn ${turnKey} blocked on the operator`, 0);
-          routeWorkToGate(active, 'stop for a human', end.progress.blocked ?? undefined);
-          return;
-        }
+        if (end.kind === 'progress' && endGoalLegShort(active, active.run, end.progress)) return;
       }
       if (active.phase === 'work') {
         // §28.5.3/§28.8.3 — a completed GREEN work turn records its (non-blocking) changed-test flag from the
@@ -1257,8 +1249,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (turn.phase === 'work' && turn.run.kind === 'goal') {
       try {
         clearGoalProgress(turn.repoDir);
+        if (turn.completion.kind === 'refactor') clearRefactorResult(turn.repoDir, FIRST_ROUND);
       } catch (e) {
-        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress: ${e instanceof Error ? e.message : String(e)}`, 1);
+        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress or result: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
     }
     persist('working');
@@ -1444,11 +1437,30 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', () => {});
   };
 
+  /** §27.3 — a leg that checkpointed starts the next one; a blocked session stops for a human. */
+  const endGoalLegShort = (
+    turn: Extract<ActiveAppTurn, { phase: 'work' }>,
+    run: Extract<WorkRun, { kind: 'goal' }>,
+    progress: GoalProgress,
+  ): boolean => {
+    if (progress.status === 'checkpoint') {
+      nextLeg(turn, run);
+      return true;
+    }
+    if (progress.status === 'blocked') {
+      deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} blocked on the operator`, 0);
+      routeWorkToGate(turn, 'stop for a human', progress.blocked ?? undefined);
+      return true;
+    }
+    return false;
+  };
+
   /** §27.3 */
   const nextLeg = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>): void => {
     deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} leg ${run.leg} checkpointed after ${run.passes} review passes`, 0);
     active = { ...turn, run: { ...run, leg: run.leg + 1 } };
     persist('working');
+    clearTurnDone(turn.repoDir, APP_TURN_DONE_SUBDIR);
     runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel()) });
   };
 
@@ -1753,6 +1765,24 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
           acceptFinalize('the consolidator turn was accepted but could not be saved — retry or terminate', consolidateAuditCmd('accept', active.round), active.round);
           return;
+        }
+        // §27.3/§27.12c — Accept takes a goal session at its word only once it records the goal done.
+        if (active.phase === 'work' && active.run.kind === 'goal') {
+          const end = goalEnd(active, active.run);
+          if (end.kind === 'shortfall') {
+            refuseRouteOut('turn-error', `${end.reason} — retry or terminate`);
+            return;
+          }
+          if (end.progress.status !== 'done') {
+            runner.release();
+            endGoalLegShort(active, active.run, end.progress);
+            return;
+          }
+          const shortfall = completionShortfall();
+          if (shortfall !== null) {
+            refuseRouteOut('turn-error', `${shortfall} — retry or terminate`);
+            return;
+          }
         }
         // §28.5.3 / AC2 — a RED work turn's accept must satisfy BOTH the sync clause (result present +
         // failed-assertion) AND the async machine gate (a test was added, exit ≠ 0 where recoverable). §28.5.6
