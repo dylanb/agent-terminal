@@ -7823,9 +7823,11 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
 // The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
 // one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
 /** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
-const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf 'Leg: %s\\nStatus: ${status}\\n' "$leg" > "$gp"`;
+const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "${status}"}\\n' "$leg" > "$gp"`;
+/** The shell that runs the progress check the goal prompt in `$p` hands the session, logging what it printed. */
+const GOAL_CHECK_CMD = `chk=$(grep -m1 'ELECTRON_RUN_AS_NODE=1 ' "$p" | sed 's/^ *//'); { eval "$chk"; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1`;
 /** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
-const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.md' | head -1)`;
+const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.json' | head -1)`;
 
 function seedGroomV3Agent(binDir: string): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
@@ -7839,7 +7841,7 @@ function seedGroomV3Agent(binDir: string): void {
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
-    `    /goal*) printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish}; fi; ${done('work-groom')} ;;\n` +
+    `    /goal*) printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish}; fi; ${GOAL_CHECK_CMD}; ${done('work-groom')} ;;\n` +
     `    *turn-done:work-groom-intent*) ${write('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')])}; ${done('work-groom-intent')} ;;\n` +
     `    *turn-done:work-groom-approve*) ${write('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')])}; ${done('work-groom-approve')} ;;\n` +
     '  esac\ndone\n';
@@ -7874,6 +7876,10 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   expect(goals).toHaveLength(2);
   expect(goals[0]).toMatch(/^\/goal .*for leg 1 .*turn-done:work-groom\)/);
   expect(goals[1]).toMatch(/^\/goal .*for leg 2 .*turn-done:work-groom\)/);
+  // Both legs ran the progress check their prompt handed them (the real bundled checker), and it passed.
+  const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
+  expect(checks.match(/OK: \.agent-terminal\/loop\/goal-progress\.[0-9a-f]{8}\.json/g)).toHaveLength(2);
+  expect(checks).not.toContain('exit=1');
   expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
 
@@ -7921,7 +7927,7 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-stallv3-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stallv3-bin-', { realCommitOps: true });
   // The groom goal says nothing until the operator tells it to write its turn-done file; it then reports itself blocked.
-  const blocked = `mkdir -p .agent-terminal/loop; printf 'Leg: 1\\nStatus: blocked\\n\\n## Blocked\\nThe ticket asks for two exports.\\n' > "$gp"; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const blocked = `mkdir -p .agent-terminal/loop; printf '{"leg": 1, "status": "blocked", "blocked": "The ticket asks for two exports."}\\n' > "$gp"; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
   seedV3GoalAgent(binDir, 'fake-agent', {}, { 'groom-intent': V3_GROOM_INTENT }, [`    *"write the turn-done file now"*) ${blocked} ;;\n`]);
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -8039,7 +8045,7 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
       red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.md`)}`),
       // GREEN's first leg runs out of passes; the leg after the compact finishes it.
       green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${result('passed', `${V3_ART}/green-result.md`, 'built')}`)}; fi`,
-      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/'); ${result('passed', '"$rr"')}`),
+      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/; s/\\.json$/.md/'); ${result('passed', '"$rr"')}`),
       'integration-slice': finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`),
     },
     {

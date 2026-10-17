@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { goalProgressRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { goalNotesRel, goalProgressRel, readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
@@ -73,7 +73,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
 
     const prompt = promptOf(lastGoal());
     expect(prompt).toContain(progressRel());
-    expect(prompt).toContain('Leg: 1');
+    expect(prompt).toContain('"leg": 1');
   });
 
   it('the prompt holds only a done leg to the completion check, so a checkpoint or a block may write the done-signal without it', () => {
@@ -84,6 +84,41 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     const prompt = promptOf(lastGoal());
     expect(prompt).toMatch(/only `done` is held to the completion check/i);
     expect(prompt).toMatch(/on `checkpoint` or `blocked`, write the done-signal once the progress file is written/i);
+  });
+
+  it('the prompt keeps the notes the next leg resumes from apart from the JSON the app reads', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+
+    const prompt = promptOf(lastGoal());
+    const session = readAppLoopState(h.repo)!.goalSession!;
+    expect(prompt).toContain(goalNotesRel(session));
+    expect(progressRel()).toMatch(/\.json$/);
+  });
+
+  it('hands the session the check that decides whether its progress file ends this leg, and tells it to pass it first', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(exampleGoalProgress(1, 'checkpoint'));
+    signalAndDrain(engine);
+
+    const prompt = promptOf(lastGoal());
+    expect(prompt).toContain(`check-artifact progress ${progressRel()} 2 legs`);
+    expect(prompt).toMatch(/fix .*until it prints `OK`/i);
+  });
+
+  it('a progress file that is not JSON falls short and says so', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    writeProgress('- Leg: 1\n- Status: done\n');
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+
+    expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/is not well-formed: it is not valid JSON/);
   });
 
   it('the command ends a leg after the declared passes when the goal does not yet hold', () => {
@@ -171,7 +206,7 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
     expect(after[0]).toMatch(/^\/compact /);
     expect(after[0]).toContain(progressRel());
     expect(after[1]).toMatch(/^\/goal .*leg 2/i);
-    expect(promptOf(after[1])).toContain('Leg: 2');
+    expect(promptOf(after[1])).toContain('"leg": 2');
     expect(readAppLoopState(h.repo)).toMatchObject({ turnKey: TURN_KEY, status: 'working', leg: 2 });
   });
 
@@ -359,7 +394,7 @@ describe('Accept on a stalled goal session follows what its progress file record
   });
 
   it('a blocked session reaches the gate as stop for a human, with its question', () => {
-    const engine = stalledWith('Leg: 1\nStatus: blocked\n\n## Blocked\nModal or page?\n');
+    const engine = stalledWith(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Modal or page?' }));
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
 
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human', verdictReason: 'Modal or page?' });
@@ -423,7 +458,7 @@ describe('the stall help shows only while the turn can still finish by itself (�
     h.defResult = resolved(goalDef(3));
     enterAndInjectWork(engine);
     engine.onStall();
-    writeProgress('Leg: 1\nStatus: blocked\n\n## Blocked\nModal or page?\n');
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Modal or page?' }));
     engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
 
     expect(engine.liveErrorFor(h.repo)?.stalled).toBeUndefined();
@@ -456,7 +491,7 @@ describe('the stall help shows only while the turn can still finish by itself (�
 });
 
 describe('a blocked goal session stops its step for a human (§27.3 v2.201)', () => {
-  const BLOCKED = 'Leg: 1\nStatus: blocked\n\n## Blocked\nThe plan asks for both a modal and a page.\n';
+  const BLOCKED = JSON.stringify({ leg: 1, status: 'blocked', blocked: 'The plan asks for both a modal and a page.' });
 
   it('reaches the gate with the verdict stop for a human and the reason it gave', () => {
     const gateReaching = vi.fn();

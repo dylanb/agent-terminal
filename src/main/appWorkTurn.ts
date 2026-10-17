@@ -14,7 +14,8 @@ import { ticketPromptLines } from '../shared/currentTicket';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
-import { GOAL_PROGRESS_GRAMMAR, exampleGoalProgress } from '../shared/goalProgress';
+import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
+import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -130,42 +131,52 @@ export function composeGoalCommand(req: { condition: string; promptRel: string; 
 }
 
 /** §27.3 */
-export function checkpointCompactCommand(progressRel: string): string {
-  return `/compact Keep the goal, the decision boundary, and the progress in ${progressRel}: the next leg resumes from that file.`;
+export function checkpointCompactCommand(progressRel: string, notesRel: string): string {
+  return `/compact Keep the goal, the decision boundary, and the progress in ${progressRel} and ${notesRel}: the next leg resumes from those files.`;
 }
 
 /** §27.3 */
-export function goalProgressLines(req: { progressRel: string } & GoalLeg): string[] {
-  const g = GOAL_PROGRESS_GRAMMAR;
+export function goalProgressLines(req: { progressRel: string; notesRel: string; checkCommand: string } & GoalLeg): string[] {
+  const f = GOAL_PROGRESS_FIELDS;
   const lines = [
     '',
-    `PROGRESS — keep your progress in ${req.progressRel}, so the goal survives a compaction or a restart.`,
+    'PROGRESS — keep two files, so the goal survives a compaction or a restart.',
+    `- ${req.progressRel} is JSON the app reads: \`${f.leg}\`, \`${f.status}\`, \`${f.passes}\` and, when blocked, \`${f.blocked}\`.`,
+    `- ${req.notesRel} is your own notes: what is done, the open findings, and what comes next. The app never reads it.`,
     `This is leg ${req.leg} of the goal.`,
     req.leg > 1
-      ? 'An earlier leg saved its progress in that file: read it first, carry on from its next steps, and do not redo finished work.'
-      : 'If that file already records this leg, an earlier attempt at it was interrupted: carry on from it.',
-    `After every review pass, rewrite the file with \`${g.legLabel}: ${req.leg}\`, \`${g.statusLabel}: working\`, and`,
-    `\`${g.passesLabel}: <n>\`, then what is done, the open findings, and what comes next.`,
-    `Before you write the done-signal, set its \`${g.statusLabel}:\` to one of:`,
-    '- `done` when the goal holds.',
+      ? 'An earlier leg saved its progress in those files: read them first, carry on from the next steps, and do not redo finished work.'
+      : 'If those files already record this leg, an earlier attempt at it was interrupted: carry on from them.',
+    `After every review pass, rewrite both: the JSON with \`"${f.leg}": ${req.leg}\`, \`"${f.status}": "working"\` and the passes run so far,`,
+    'and the notes.',
+    `Before you write the done-signal, set \`${f.status}\` to one of:`,
+    '- `"done"` when the goal holds.',
   ];
   if (req.passes !== undefined) {
     lines.push(
-      `- \`checkpoint\` when ${req.passes} review passes have run in this leg and the goal does not hold yet. The app then`,
-      `  compacts this session and starts leg ${req.leg + 1}, which resumes from this file.`,
+      `- \`"checkpoint"\` when ${req.passes} review passes have run in this leg and the goal does not hold yet. The app then`,
+      `  compacts this session and starts leg ${req.leg + 1}, which resumes from these files.`,
     );
   }
   lines.push(
-    `- \`blocked\` when you cannot go on without the operator. Put what you need from them, with your recommendation,`,
-    `  under a \`${g.blockedHeading}\` heading. The step then stops for the operator, so use it only when no choice inside`,
-    '  your decision boundary lets you go on.',
+    `- \`"blocked"\` when you cannot go on without the operator. Put what you need from them, with your recommendation, in`,
+    `  \`${f.blocked}\` as one JSON string. The step then stops for the operator, so use it only when no choice inside your`,
+    '  decision boundary lets you go on.',
     'Only `done` is held to the completion check and the verification the instructions below ask for before the',
     'done-signal. On `checkpoint` or `blocked`, write the done-signal once the progress file is written, whether or not',
     'that check holds yet.',
+    `Before writing the done-signal, run this check from the repo root and fix ${req.progressRel} until it prints \`${ARTIFACT_CHECK_PASSED}\`.`,
+    'It is the check the app ends this leg by, so a file it rejects does not end the leg:',
     '',
-    'A well-formed example:',
+    `    ${req.checkCommand}`,
+    '',
+    `A well-formed ${req.progressRel}:`,
     '',
     exampleGoalProgress(req.leg, 'working').trimEnd(),
+    '',
+    `A ${req.notesRel}:`,
+    '',
+    exampleGoalNotes().trimEnd(),
   );
   return lines;
 }

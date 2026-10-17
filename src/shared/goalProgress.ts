@@ -1,16 +1,15 @@
 // §27.3 — the progress file a goal session keeps. The goal prompt that tells the session how to write it and
 // the engine that reads it at the done-signal both take the vocabulary from here, so the two cannot drift.
 
-import { stripLeadingBullet } from './markdownFields';
-
 export const GOAL_PROGRESS_STATUSES = ['working', 'checkpoint', 'done', 'blocked'] as const;
 export type GoalProgressStatus = (typeof GOAL_PROGRESS_STATUSES)[number];
 
-export const GOAL_PROGRESS_GRAMMAR = {
-  legLabel: 'Leg',
-  statusLabel: 'Status',
-  passesLabel: 'Review passes this leg',
-  blockedHeading: '## Blocked',
+/** The JSON keys of the progress file. */
+export const GOAL_PROGRESS_FIELDS = {
+  leg: 'leg',
+  status: 'status',
+  passes: 'reviewPassesThisLeg',
+  blocked: 'blocked',
 } as const;
 
 export interface GoalProgress {
@@ -20,189 +19,77 @@ export interface GoalProgress {
   blocked: string | null;
 }
 
-const MARKUP = '`*_';
+export type GoalProgressRead = { ok: true; progress: GoalProgress } | { ok: false; problem: string };
 
-function unmarked(v: string): string {
-  let a = 0;
-  let b = v.length;
-  while (a < b && (MARKUP.includes(v[a]) || v[a] === ' ')) a++;
-  while (b > a && (MARKUP.includes(v[b - 1]) || v[b - 1] === ' ')) b--;
-  return v.slice(a, b);
+const MAX_LEG = 1_000_000_000;
+const BYTE_ORDER_MARK = '﻿';
+
+function isStatus(v: unknown): v is GoalProgressStatus {
+  return (GOAL_PROGRESS_STATUSES as readonly unknown[]).includes(v);
 }
 
-/** The value's first word in lower case, with what follows it (punctuation, a note) set aside. */
-function firstWord(v: string): string {
-  let end = 0;
-  while (end < v.length && ((v[end] >= 'a' && v[end] <= 'z') || (v[end] >= 'A' && v[end] <= 'Z'))) end++;
-  return v.slice(0, end).toLowerCase();
-}
-
-const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
-
-/** The value's leading whole number, with what follows it (markup, punctuation, a note) set aside; null when
- *  the value does not open with one, or opens with a fraction. */
-function leadingWhole(v: string): number | null {
-  let end = 0;
-  while (isDigit(v[end])) end++;
-  if (end === 0 || end > 9 || (v[end] === '.' && isDigit(v[end + 1]))) return null;
-  const n = Number(v.slice(0, end));
-  return n >= 1 ? n : null;
-}
-
-/** A `label: value` field with any code-span or emphasis markup around the label or the value set aside. */
-function plainField(line: string, label: string): string | null {
-  const t = stripLeadingBullet(line.trim());
-  const idx = t.indexOf(':');
-  if (idx < 0 || unmarked(t.slice(0, idx)) !== label) return null;
-  return unmarked(t.slice(idx + 1));
-}
-
-function isStatus(v: string): v is GoalProgressStatus {
-  return (GOAL_PROGRESS_STATUSES as readonly string[]).includes(v);
-}
-
-const MAX_BLOCK_INDENT = 3;
-const TAB_STOP = 4;
-const MAX_HEADING_LEVEL = 6;
-
-/** Leading indent in CommonMark columns (a tab runs to the next tab stop), and where the line's text starts. */
-function indentOf(line: string): { columns: number; at: number } {
-  let columns = 0;
-  let at = 0;
-  for (; at < line.length; at++) {
-    if (line[at] === ' ') columns += 1;
-    else if (line[at] === '\t') columns += TAB_STOP - (columns % TAB_STOP);
-    else break;
+/** The progress file read, or what is wrong with it. The problem is fixed text, never the file's own. */
+export function readGoalProgress(text: string): GoalProgressRead {
+  const f = GOAL_PROGRESS_FIELDS;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text);
+  } catch {
+    return { ok: false, problem: 'it is not valid JSON' };
   }
-  return { columns, at };
-}
-
-/** The text of a line that can start a block — at most three columns of indent — or null when it is code. */
-function blockText(line: string): string | null {
-  const { columns, at } = indentOf(line);
-  return columns > MAX_BLOCK_INDENT ? null : line.slice(at);
-}
-
-const isBlank = (c: string | undefined): boolean => c === undefined || c === ' ' || c === '\t';
-
-/** A CommonMark ATX heading's level and text, its optional closing run of `#` set aside; null when not one. */
-function atxHeading(line: string): { level: number; text: string } | null {
-  const t = blockText(line);
-  if (t === null) return null;
-  let level = 0;
-  while (t[level] === '#') level++;
-  if (level < 1 || level > MAX_HEADING_LEVEL || !isBlank(t[level])) return null;
-  let text = t.slice(level).trim();
-  let close = text.length;
-  while (close > 0 && text[close - 1] === '#') close--;
-  if (close < text.length && (close === 0 || isBlank(text[close - 1]))) text = text.slice(0, close).trim();
-  return { level, text };
-}
-
-/** A line's text with up to three columns of indent and one list-item marker set aside, so a fence opened
- *  inside a list item is still seen. */
-function containerText(line: string): string | null {
-  const t = blockText(line);
-  return t === null ? null : stripLeadingBullet(t);
-}
-
-/** The run of three or more backticks or tildes a line opens with, and the text after it. */
-function fenceRun(line: string): { run: string; rest: string } | null {
-  const t = containerText(line);
-  if (t === null) return null;
-  const c = t[0];
-  if (c !== '`' && c !== '~') return null;
-  let n = 0;
-  while (t[n] === c) n++;
-  return n >= 3 ? { run: t.slice(0, n), rest: t.slice(n) } : null;
-}
-
-/** A CommonMark opening code fence; a backtick fence's info string holds no backtick. */
-function opensFence(line: string): string | null {
-  const f = fenceRun(line);
-  if (f === null || (f.run[0] === '`' && f.rest.includes('`'))) return null;
-  return f.run;
-}
-
-/** A CommonMark closing fence for `open`: the same character, at least as long, and nothing after it. */
-function closesFence(line: string, open: string): boolean {
-  const f = fenceRun(line);
-  return f !== null && f.run[0] === open[0] && f.run.length >= open.length && f.rest.trim() === '';
-}
-
-/** Each line's ATX heading, or null for a line that is not one — including every line inside a code fence. */
-function headingsOf(lines: readonly string[]): ({ level: number; text: string } | null)[] {
-  let fence: string | null = null;
-  return lines.map((line) => {
-    if (fence !== null) {
-      if (closesFence(line, fence)) fence = null;
-      return null;
-    }
-    fence = opensFence(line);
-    return fence === null ? atxHeading(line) : null;
-  });
-}
-
-/** The section under the `## <name>` heading: what follows the name on the heading line, then the lines up to
- *  the next heading of its level or higher. */
-function sectionBody(lines: readonly string[], heading: string): string | null {
-  const want = atxHeading(heading);
-  if (want === null) return null;
-  const headings = headingsOf(lines);
-  let tail = '';
-  const at = headings.findIndex((h) => {
-    const text = h === null ? '' : unmarked(h.text);
-    if (h === null || h.level !== want.level || !text.startsWith(want.text)) return false;
-    const rest = text.slice(want.text.length);
-    if (rest !== '' && rest[0] !== ':' && !isBlank(rest[0])) return false;
-    tail = (rest[0] === ':' ? rest.slice(1) : rest).trim();
-    return true;
-  });
-  if (at < 0) return null;
-  const body: string[] = tail.length > 0 ? [tail] : [];
-  for (let i = at + 1; i < lines.length; i++) {
-    const h = headings[i];
-    if (h !== null && h.level <= want.level) break;
-    body.push(lines[i]);
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return { ok: false, problem: 'it is not a JSON object' };
+  const record = doc as Record<string, unknown>;
+  const leg = record[f.leg];
+  if (typeof leg !== 'number' || !Number.isInteger(leg) || leg < 1 || leg > MAX_LEG) {
+    return { ok: false, problem: `its "${f.leg}" is not a positive whole number` };
   }
-  const text = body.join('\n').trim();
-  return text.length > 0 ? text : null;
+  const status = record[f.status];
+  if (!isStatus(status)) return { ok: false, problem: `its "${f.status}" is not one of ${GOAL_PROGRESS_STATUSES.join(', ')}` };
+  if (status !== 'blocked') return { ok: true, progress: { leg, status, blocked: null } };
+  const blocked = record[f.blocked];
+  if (typeof blocked !== 'string' || blocked.trim().length === 0) {
+    return { ok: false, problem: `it is blocked but its "${f.blocked}" does not say what the session needs` };
+  }
+  return { ok: true, progress: { leg, status, blocked: blocked.trim() } };
+}
+
+/** Whether the progress file ends the leg the session is on: well-formed, on this leg, and past `working`
+ *  (a checkpoint only where the goal runs in legs). The engine at the done-signal and the agent's own check
+ *  both decide by this. */
+export function goalLegEnd(text: string, at: { leg: number; legs: boolean }): GoalProgressRead {
+  const read = readGoalProgress(text);
+  if (!read.ok) return { ok: false, problem: `it is not well-formed: ${read.problem}` };
+  const { leg, status } = read.progress;
+  if (leg !== at.leg) return { ok: false, problem: `it records leg ${leg}, not this leg (${at.leg})` };
+  if (status === 'working') return { ok: false, problem: 'it records the goal as still working' };
+  if (status === 'checkpoint' && !at.legs) return { ok: false, problem: 'it records a checkpoint, but this goal runs in one leg' };
+  return read;
 }
 
 export function parseGoalProgress(text: string): GoalProgress | null {
-  const lines = text.split('\n');
-  let leg: number | null = null;
-  let status: string | null = null;
-  for (const line of lines) {
-    if (leg === null) {
-      const v = plainField(line, GOAL_PROGRESS_GRAMMAR.legLabel);
-      if (v !== null) {
-        leg = leadingWhole(v);
-        if (leg === null) return null;
-        continue;
-      }
-    }
-    if (status === null) {
-      const v = plainField(line, GOAL_PROGRESS_GRAMMAR.statusLabel);
-      if (v !== null) status = firstWord(v);
-    }
-  }
-  if (leg === null || status === null || !isStatus(status)) return null;
-  if (status !== 'blocked') return { leg, status, blocked: null };
-  const blocked = sectionBody(lines, GOAL_PROGRESS_GRAMMAR.blockedHeading);
-  return blocked === null ? null : { leg, status, blocked };
+  const read = readGoalProgress(text);
+  return read.ok ? read.progress : null;
 }
 
 export function exampleGoalProgress(leg: number, status: GoalProgressStatus): string {
-  const g = GOAL_PROGRESS_GRAMMAR;
+  const f = GOAL_PROGRESS_FIELDS;
+  return `${JSON.stringify(
+    {
+      [f.leg]: leg,
+      [f.status]: status,
+      [f.passes]: 2,
+      ...(status === 'blocked' ? { [f.blocked]: 'The plan asks for both a modal and a page, and they cannot both ship. Which one?' } : {}),
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** The session's own notes, which the engine never reads: only the next leg does, to resume. */
+export function exampleGoalNotes(): string {
   return [
-    '# Goal progress',
+    '# Goal notes',
     '',
-    `- ${g.legLabel}: ${leg}`,
-    `- ${g.statusLabel}: ${status}`,
-    `- ${g.passesLabel}: 2`,
-    '',
-    ...(status === 'blocked' ? [g.blockedHeading, 'The plan asks for both a modal and a page, and they cannot both ship. Which one?', ''] : []),
     '## Done so far',
     '- The slice is wired and its tests pass.',
     '',

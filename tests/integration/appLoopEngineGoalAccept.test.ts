@@ -18,7 +18,7 @@ const h = createAppLoopEngineHarness();
 const { resolved, makeEngine, fileDef, enterAndInjectWork } = h;
 
 const GOAL = 'every reviewer found nothing to fix';
-const BLOCKED = 'Leg: 1\nStatus: blocked\n\n## Blocked\nModal or page?\n';
+const BLOCKED = JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Modal or page?' });
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 const writeAt = (abs: string, text: string): void => {

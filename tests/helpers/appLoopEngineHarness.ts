@@ -248,7 +248,9 @@ export class AppLoopEngineHarness {
       artifactCheckCommand: (check) =>
         check.kind === 'report'
           ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
-          : `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`,
+          : check.kind === 'verdict'
+            ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
+            : `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);

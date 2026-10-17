@@ -21,7 +21,7 @@ import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type Tur
 import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact } from './appWorkTurn';
-import { parseGoalProgress, type GoalProgress } from '../shared/goalProgress';
+import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
@@ -35,7 +35,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearGoalSessionFiles, clearInterrupt, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalSessionFiles, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -706,14 +706,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const file = goalProgressFile(a.repoDir, run.session);
     const text = file === null ? null : deps.readArtifact(file);
     if (text === null) return { kind: 'shortfall', reason: `the goal progress file ${rel} is missing` };
-    const progress = parseGoalProgress(text);
-    if (progress === null) return { kind: 'shortfall', reason: `the goal progress file ${rel} is not well-formed` };
-    if (progress.leg !== run.leg) return { kind: 'shortfall', reason: `the goal progress file ${rel} records leg ${progress.leg}, not this leg (${run.leg})` };
-    if (progress.status === 'working') return { kind: 'shortfall', reason: `the goal progress file ${rel} records the goal as still working` };
-    if (progress.status === 'checkpoint' && run.passes === undefined) {
-      return { kind: 'shortfall', reason: `the goal progress file ${rel} records a checkpoint, but this loop runs its goal in one leg` };
-    }
-    return { kind: 'progress', progress };
+    const end = goalLegEnd(text, { leg: run.leg, legs: run.passes !== undefined });
+    if (!end.ok) return { kind: 'shortfall', reason: `the goal progress file ${rel}: ${end.problem}` };
+    return { kind: 'progress', progress: end.progress };
   };
 
   /** §27.3 */
@@ -1185,7 +1180,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(active.run.kind === 'goal'
           ? {
               goalReview: goalReviewFor(active, active.run, ticket),
-              goalProgress: goalProgressLines({ progressRel: goalProgressRel(active.run.session), ...goalLegOf(active.run) }),
+              goalProgress: goalProgressLines({
+                progressRel: goalProgressRel(active.run.session),
+                notesRel: goalNotesRel(active.run.session),
+                checkCommand: deps.artifactCheckCommand({
+                  kind: 'progress',
+                  rel: goalProgressRel(active.run.session),
+                  leg: active.run.leg,
+                  legs: active.run.passes !== undefined,
+                }),
+                ...goalLegOf(active.run),
+              }),
             }
           : {}),
       });
@@ -1515,7 +1520,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     persist('working');
     clearTurnDone(turn.repoDir, APP_TURN_DONE_SUBDIR);
     legPromptPending = true;
-    runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel(run.session)) });
+    runner.requestTurn(turn.turnKey, { preamble: checkpointCompactCommand(goalProgressRel(run.session), goalNotesRel(run.session)) });
   };
 
   /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued

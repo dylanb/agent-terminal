@@ -7,11 +7,17 @@ import path from 'node:path';
 import { shellQuote } from '../shared/shellQuote';
 import { roundReportProblems } from '../shared/roundReport';
 import { consolidatorOutputProblems } from '../shared/consolidatorOutput';
+import { goalLegEnd } from '../shared/goalProgress';
 
-/** What to check: a round report against its sections + roster, or a consolidator verdict against its catalog. */
+/** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, or
+ *  a goal session's progress file against the leg it is on (§27.3). */
 export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
-  | { kind: 'verdict'; rel: string; catalog: string[] };
+  | { kind: 'verdict'; rel: string; catalog: string[] }
+  | { kind: 'progress'; rel: string; leg: number; legs: boolean };
+
+const IN_LEGS = 'legs';
+const ONE_LEG = 'one-leg';
 
 /** The rollup entry name the build emits the checker under, and the basename the runtime resolves it by. */
 export const ARTIFACT_CHECK_ENTRY = 'artifactCheck';
@@ -38,9 +44,21 @@ const fromCsv = (value: string): string[] =>
     .filter((s) => s.length > 0);
 
 function checkArgv(check: ArtifactCheck): string[] {
-  return check.kind === 'report'
-    ? ['report', check.rel, csv(check.sections), csv(check.roster)]
-    : ['verdict', check.rel, csv(check.catalog)];
+  switch (check.kind) {
+    case 'report':
+      return ['report', check.rel, csv(check.sections), csv(check.roster)];
+    case 'verdict':
+      return ['verdict', check.rel, csv(check.catalog)];
+    case 'progress':
+      return ['progress', check.rel, String(check.leg), check.legs ? IN_LEGS : ONE_LEG];
+  }
+}
+
+function progressProblems(content: string, leg: string, legs: string): string[] | null {
+  const n = Number(leg);
+  if (!Number.isInteger(n) || n < 1 || (legs !== IN_LEGS && legs !== ONE_LEG)) return null;
+  const end = goalLegEnd(content, { leg: n, legs: legs === IN_LEGS });
+  return end.ok ? [] : [end.problem];
 }
 
 /** The shell command line the agent runs from the repo root to check `check`'s file (CWE-78: every operand
@@ -48,6 +66,8 @@ function checkArgv(check: ArtifactCheck): string[] {
 export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: ArtifactCheck): string {
   return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
 }
+
+const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}>\n`;
 
 /** Run the check `argv` describes against the file `read` returns (null = missing). Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
@@ -60,8 +80,13 @@ export function runArtifactCheck(argv: string[], read: (rel: string) => string |
   } else if (kind === 'verdict' && rel !== undefined && rest.length === 1) {
     const content = read(rel);
     problems = content === null ? [`${rel} does not exist`] : consolidatorOutputProblems(content, fromCsv(rest[0]));
+  } else if (kind === 'progress' && rel !== undefined && rest.length === 2) {
+    const content = read(rel);
+    const found = content === null ? [`${rel} does not exist`] : progressProblems(content, rest[0], rest[1]);
+    if (found === null) return { exitCode: 2, output: USAGE };
+    problems = found;
   } else {
-    return { exitCode: 2, output: 'usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...>\n' };
+    return { exitCode: 2, output: USAGE };
   }
   if (problems.length === 0) return { exitCode: 0, output: `${ARTIFACT_CHECK_PASSED}: ${rel} passes the loop's format check\n` };
   return { exitCode: 1, output: `${rel} fails the loop's format check:\n${problems.map((p) => `- ${p}`).join('\n')}\n` };

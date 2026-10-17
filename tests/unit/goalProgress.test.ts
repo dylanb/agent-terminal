@@ -1,115 +1,72 @@
 import { describe, expect, it } from 'vitest';
-import { exampleGoalProgress, parseGoalProgress } from '../../src/shared/goalProgress';
+import { exampleGoalProgress, GOAL_PROGRESS_STATUSES, goalLegEnd, parseGoalProgress, readGoalProgress } from '../../src/shared/goalProgress';
 
-// §27.3 (v2.201) — the progress file a goal session keeps: the engine reads its leg and status to decide
-// whether the session finished, checkpointed, or is blocked on the operator.
+// §27.3 (v2.201) — a goal session records the state the engine acts on as JSON, and keeps its own notes apart.
+// The engine reads the leg, the status and, when blocked, what the session needs from the operator.
 
-describe('the goal progress file (§27.3 v2.201)', () => {
-  it.each([['working'], ['checkpoint'], ['done']] as const)('the example for %s parses to its leg and status', (status) => {
-    expect(parseGoalProgress(exampleGoalProgress(2, status))).toEqual({ leg: 2, status, blocked: null });
+describe('the goal progress the engine reads (§27.3 v2.201)', () => {
+  it.each(GOAL_PROGRESS_STATUSES)('the %s example is well-formed and reads back as itself', (status) => {
+    expect(parseGoalProgress(exampleGoalProgress(3, status))).toMatchObject({ leg: 3, status });
   });
 
   it('the blocked example carries what the session needs from the operator', () => {
-    const p = parseGoalProgress(exampleGoalProgress(1, 'blocked'));
-    expect(p?.status).toBe('blocked');
-    expect(p?.blocked).toMatch(/\S/);
+    expect(parseGoalProgress(exampleGoalProgress(1, 'blocked'))?.blocked).toMatch(/\S/);
   });
 
-  it('reads the fields under any list bullet and among other notes', () => {
-    const text = '# Goal progress\n\nSome notes first.\n\n* Leg: 3\n1. Status: checkpoint\n\n## Done so far\n- slice wired\n';
-    expect(parseGoalProgress(text)).toEqual({ leg: 3, status: 'checkpoint', blocked: null });
+  it('reads the blocked reason as written, whatever Markdown it holds', () => {
+    const blocked = '## Question\nModal or page?\n```sh\n# wipes local data\n```\n#208 asks for both.';
+    expect(parseGoalProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked }))?.blocked).toBe(blocked);
   });
 
-  it.each([
-    ['in code spans', '- Leg: `2`\n- Status: `checkpoint`\n', { leg: 2, status: 'checkpoint' }],
-    ['with bold labels', '**Leg:** 1\n**Status:** done\n', { leg: 1, status: 'done' }],
-    ['in bold values and capitals', 'Leg: **1**\nStatus: **Done**\n', { leg: 1, status: 'done' }],
-    ['with a full stop', 'Leg: 2.\nStatus: done.\n', { leg: 2, status: 'done' }],
-    ['with a note after the status', 'Leg: 1\nStatus: checkpoint (3 passes run)\n', { leg: 1, status: 'checkpoint' }],
-    ['with punctuation outside the markup', 'Leg: `2`.\nStatus: `done`.\n', { leg: 2, status: 'done' }],
-    ['in bold with a full stop', 'Leg: **2**.\nStatus: done\n', { leg: 2, status: 'done' }],
-    ['with a note after the leg', 'Leg: 2 (of 3)\nStatus: done\n', { leg: 2, status: 'done' }],
-  ])('reads the fields written %s', (_how, text, want) => {
-    expect(parseGoalProgress(text)).toEqual({ ...want, blocked: null });
+  it('ignores the blocked reason unless the session is blocked, and fields it does not know', () => {
+    expect(parseGoalProgress(JSON.stringify({ leg: 2, status: 'done', blocked: 'old', notes: 'x' }))).toEqual({ leg: 2, status: 'done', blocked: null });
+  });
+
+  it('reads a file with a byte order mark or surrounding whitespace', () => {
+    expect(parseGoalProgress(`﻿\n  ${JSON.stringify({ leg: 1, status: 'working' })}\n\n`)).toEqual({ leg: 1, status: 'working', blocked: null });
   });
 
   it.each([
-    ['## Blocked:', 'Modal or page?'],
-    ['## Blocked on the operator', 'on the operator\nModal or page?'],
-  ])('reads the blocked section under %j', (heading, want) => {
-    expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${heading}\nModal or page?\n`)?.blocked).toBe(want);
-  });
-
-  it.each([
-    ['a fenced code block', '```sh\n# wipes local data\npnpm db:reset\n```'],
-    ['a tilde-fenced code block', '~~~\n# wipes local data\n~~~'],
-    ['an indented code block', '    # wipes local data'],
-    ['a tab-indented code block', '\t# wipes local data\n\tmake db-reset'],
-    ['a fence holding a line that only looks like a fence', '```\n```ts\n# wipes local data\n```'],
-  ])('keeps a # line inside %s in the blocked reason', (_what, code) => {
-    const text = `Leg: 1\nStatus: blocked\n\n## Blocked\nRun this?\n${code}\nOr mock the store?\n\n## Next\n- wait\n`;
-    expect(parseGoalProgress(text)?.blocked).toBe(`Run this?\n${code}\nOr mock the store?`);
-  });
-
-  it.each([
-    ['inside a fence', '## Notes\n```\n## Blocked\nfake\n```\n\n'],
-    ['indented as code', '    ## Blocked\n    fake\n\n'],
-  ])('finds the Blocked heading only outside code, not %s', (_where, before) => {
-    expect(parseGoalProgress(`Leg: 1\nStatus: blocked\n\n${before}## Blocked\nreal reason\n`)?.blocked).toBe('real reason');
-  });
-
-  it('keeps sub-headings under Blocked in the reason, and ends it at the next heading of its level', () => {
-    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n### Question\nModal or page?\n### Recommendation\nShip the modal.\n## Next\n- wait\n';
-    expect(parseGoalProgress(text)?.blocked).toBe('### Question\nModal or page?\n### Recommendation\nShip the modal.');
-  });
-
-  it('reads a Blocked heading written with emphasis', () => {
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## **Blocked**\nWhich one?\n')?.blocked).toBe('Which one?');
-  });
-
-  it('reads a Blocked heading with a closing sequence or a tab after it', () => {
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked ##\nWhich one?\n')?.blocked).toBe('Which one?');
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\tNeed a decision\n')?.blocked).toBe('Need a decision');
-  });
-
-  it('keeps a # line inside a fence opened on a list item', () => {
-    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n- Run:\n  ```sh\n  # wipes data\n  ```\nOk?\n';
-    expect(parseGoalProgress(text)?.blocked).toBe('- Run:\n  ```sh\n  # wipes data\n  ```\nOk?');
-    const bullet = 'Leg: 1\nStatus: blocked\n\n## Blocked\n- ```sh\n  # wipes data\n  ```\nOk?\n';
-    expect(parseGoalProgress(bullet)?.blocked).toBe('- ```sh\n  # wipes data\n  ```\nOk?');
-  });
-
-  it('ends the blocked reason at the next heading after a line that opens with an inline code span', () => {
-    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\n```pnpm db:reset``` wipes local data. Run it?\n\n## Next\n- wait\n';
-    expect(parseGoalProgress(text)?.blocked).toBe('```pnpm db:reset``` wipes local data. Run it?');
-  });
-
-  it('reads a blocked reason that opens with an issue reference', () => {
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked\n#208 asks for a modal and a page. Which?\n')?.blocked).toBe('#208 asks for a modal and a page. Which?');
-  });
-
-  it('reads a blocked reason written on the heading line, and keeps it ahead of the lines below', () => {
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked: Modal or page?\n')?.blocked).toBe('Modal or page?');
-    expect(parseGoalProgress('Leg: 1\nStatus: blocked\n\n## Blocked on the API contract\nWhich version?\n')?.blocked).toBe('on the API contract\nWhich version?');
-  });
-
-  it('returns the blocked section text as the reason', () => {
-    const text = 'Leg: 1\nStatus: blocked\n\n## Blocked\nThe plan says both A and B.\nPick one.\n\n## Next\n- wait\n';
-    expect(parseGoalProgress(text)?.blocked).toBe('The plan says both A and B.\nPick one.');
-  });
-
-  it.each([
-    ['no leg', 'Status: done\n'],
-    ['no status', 'Leg: 1\n'],
-    ['a leg that is not a positive whole number', 'Leg: 0\nStatus: done\n'],
-    ['a fractional leg', 'Leg: 1.5\nStatus: done\n'],
-    ['an unknown status', 'Leg: 1\nStatus: finished\n'],
-    ['an unknown status in a code span', 'Leg: 1\nStatus: `finished`\n'],
-    ['a status that is not the first word', 'Leg: 1\nStatus: not done\n'],
-    ['blocked with nothing under Blocked', 'Leg: 1\nStatus: blocked\n\n## Blocked\n\n## Next\n'],
-    ['blocked with no Blocked section', 'Leg: 1\nStatus: blocked\n'],
-    ['blocked with only a closing sequence under Blocked', 'Leg: 1\nStatus: blocked\n\n## Blocked ##\n\n## Next\n- wait\n'],
-  ])('is not well-formed with %s', (_what, text) => {
+    ['not JSON', '- Leg: 1\n- Status: done\n', /not valid JSON/],
+    ['not an object', '[1, "done"]', /not a JSON object/],
+    ['no leg', '{"status":"done"}', /leg/],
+    ['a leg that is not a positive whole number', '{"leg":0,"status":"done"}', /leg/],
+    ['a fractional leg', '{"leg":1.5,"status":"done"}', /leg/],
+    ['a leg written as text', '{"leg":"1","status":"done"}', /leg/],
+    ['an unknown status', '{"leg":1,"status":"finished"}', /status/],
+    ['blocked with no reason', '{"leg":1,"status":"blocked"}', /blocked/],
+    ['blocked with a blank reason', '{"leg":1,"status":"blocked","blocked":"  "}', /blocked/],
+  ])('is not well-formed with %s, and says what is wrong', (_what, text, problem) => {
     expect(parseGoalProgress(text)).toBeNull();
+    const read = readGoalProgress(text);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.problem).toMatch(problem);
+  });
+
+  it('never repeats the file text in what it says is wrong', () => {
+    const read = readGoalProgress('{"leg": 1, "status": "do\u001b[31mne <script>"');
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.problem).not.toContain('script');
+  });
+});
+
+describe('whether a progress file ends this leg (§27.3 v2.201)', () => {
+  it.each([
+    ['done', 2, true],
+    ['checkpoint', 2, true],
+    ['blocked', 2, false],
+  ] as const)('a %s file on this leg ends it', (status, leg, legs) => {
+    expect(goalLegEnd(exampleGoalProgress(leg, status), { leg, legs })).toMatchObject({ ok: true, progress: { status } });
+  });
+
+  it.each([
+    ['another leg', exampleGoalProgress(1, 'done'), { leg: 2, legs: true }, /records leg 1, not this leg \(2\)/],
+    ['still working', exampleGoalProgress(2, 'working'), { leg: 2, legs: true }, /still working/],
+    ['a checkpoint in a one-leg goal', exampleGoalProgress(1, 'checkpoint'), { leg: 1, legs: false }, /one leg/],
+    ['a file that is not JSON', '- Leg: 1', { leg: 1, legs: true }, /not valid JSON/],
+  ])('does not end it with %s, and says why', (_what, text, at, why) => {
+    const end = goalLegEnd(text, at);
+    expect(end.ok).toBe(false);
+    if (!end.ok) expect(end.problem).toMatch(why);
   });
 });

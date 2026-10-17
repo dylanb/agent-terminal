@@ -143,34 +143,45 @@ export function isGoalSession(v: unknown): v is string {
   return true;
 }
 
-const GOAL_PROGRESS_PREFIX = 'goal-progress.';
-const GOAL_REFACTOR_RESULT_PREFIX = 'refactor-result.';
-const GOAL_SESSION_PREFIXES = [GOAL_PROGRESS_PREFIX, GOAL_REFACTOR_RESULT_PREFIX];
-const GOAL_FILE_SUFFIX = '.md';
+/** §27.3 — each file a goal session keeps, as the prefix and suffix around its session id. */
+const GOAL_SESSION_FILES = {
+  progress: { prefix: 'goal-progress.', suffix: '.json' },
+  notes: { prefix: 'goal-notes.', suffix: '.md' },
+  refactorResult: { prefix: 'refactor-result.', suffix: '.md' },
+} as const;
+type GoalSessionFile = keyof typeof GOAL_SESSION_FILES;
 
-function goalSessionLeaf(prefix: string, session: string): string {
+function goalSessionLeaf(kind: GoalSessionFile, session: string): string {
   if (!isGoalSession(session)) throw new Error(`not a goal session id: ${JSON.stringify(session)}`);
-  return `${prefix}${session}${GOAL_FILE_SUFFIX}`;
+  const { prefix, suffix } = GOAL_SESSION_FILES[kind];
+  return `${prefix}${session}${suffix}`;
 }
 
-/** §27.3 */
+const goalSessionRel = (kind: GoalSessionFile, session: string): string => [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(kind, session)].join('/');
+
+/** §27.3 — the state the engine reads at the done-signal. */
 export function goalProgressRel(session: string): string {
-  return [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(GOAL_PROGRESS_PREFIX, session)].join('/');
+  return goalSessionRel('progress', session);
 }
 
 /** §27.3 */
 export function goalProgressFile(repoDir: string, session: string): string | null {
-  return loopAreaFile(repoDir, goalSessionLeaf(GOAL_PROGRESS_PREFIX, session));
+  return loopAreaFile(repoDir, goalSessionLeaf('progress', session));
+}
+
+/** §27.3 — the session's own notes for the next leg, which the engine never reads. */
+export function goalNotesRel(session: string): string {
+  return goalSessionRel('notes', session);
 }
 
 /** §27.3/§28.5.3 — where a refactor goal session records its test result. */
 export function goalRefactorResultRel(session: string): string {
-  return [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(GOAL_REFACTOR_RESULT_PREFIX, session)].join('/');
+  return goalSessionRel('refactorResult', session);
 }
 
 /** §27.3/§28.5.3 */
 export function goalRefactorResultFile(repoDir: string, session: string): string | null {
-  return loopAreaFile(repoDir, goalSessionLeaf(GOAL_REFACTOR_RESULT_PREFIX, session));
+  return loopAreaFile(repoDir, goalSessionLeaf('refactorResult', session));
 }
 
 /** §27.3 — removes every goal session's files; an absent loop area is already the cleared state. */
@@ -178,9 +189,9 @@ export function clearGoalSessionFiles(repoDir: string): void {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
   if (jail === null) return;
   for (const e of readDirEntries(jail)) {
-    if (!e.isFile || !e.name.endsWith(GOAL_FILE_SUFFIX)) continue;
-    const prefix = GOAL_SESSION_PREFIXES.find((p) => e.name.startsWith(p));
-    if (prefix === undefined || !isGoalSession(e.name.slice(prefix.length, -GOAL_FILE_SUFFIX.length))) continue;
+    if (!e.isFile) continue;
+    const kind = Object.values(GOAL_SESSION_FILES).find((k) => e.name.startsWith(k.prefix) && e.name.endsWith(k.suffix));
+    if (kind === undefined || !isGoalSession(e.name.slice(kind.prefix.length, -kind.suffix.length))) continue;
     const file = loopAreaFile(repoDir, e.name);
     if (file !== null) rmSync(file, { force: true });
   }
