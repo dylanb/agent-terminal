@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
@@ -127,41 +128,60 @@ export function writeGoalPrompt(repoDir: string, prompt: string): boolean {
   }
 }
 
-const GOAL_PROGRESS_PREFIX = 'goal-progress.';
-const GOAL_PROGRESS_SUFFIX = '.md';
-const GOAL_SESSION_LENGTH = 8;
+const GOAL_SESSION_BYTES = 4;
+const GOAL_SESSION_LENGTH = GOAL_SESSION_BYTES * 2;
 
-/** §27.3 — the id a fresh goal turn keeps its progress under: eight lowercase hex digits. */
+/** §27.3 — the id a fresh goal turn keeps its own files under, so no earlier turn's can be read as its own. */
+export function newGoalSession(): string {
+  return randomBytes(GOAL_SESSION_BYTES).toString('hex');
+}
+
+/** §27.3 */
 export function isGoalSession(v: unknown): v is string {
   if (typeof v !== 'string' || v.length !== GOAL_SESSION_LENGTH) return false;
   for (const c of v) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
   return true;
 }
 
-function goalProgressLeaf(session: string): string {
+const GOAL_PROGRESS_PREFIX = 'goal-progress.';
+const GOAL_REFACTOR_RESULT_PREFIX = 'refactor-result.';
+const GOAL_SESSION_PREFIXES = [GOAL_PROGRESS_PREFIX, GOAL_REFACTOR_RESULT_PREFIX];
+const GOAL_FILE_SUFFIX = '.md';
+
+function goalSessionLeaf(prefix: string, session: string): string {
   if (!isGoalSession(session)) throw new Error(`not a goal session id: ${JSON.stringify(session)}`);
-  return `${GOAL_PROGRESS_PREFIX}${session}${GOAL_PROGRESS_SUFFIX}`;
+  return `${prefix}${session}${GOAL_FILE_SUFFIX}`;
 }
 
 /** §27.3 */
 export function goalProgressRel(session: string): string {
-  return [...APP_LOOP_DIR_SEGMENTS, goalProgressLeaf(session)].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(GOAL_PROGRESS_PREFIX, session)].join('/');
 }
 
 /** §27.3 */
 export function goalProgressFile(repoDir: string, session: string): string | null {
-  return loopAreaFile(repoDir, goalProgressLeaf(session));
+  return loopAreaFile(repoDir, goalSessionLeaf(GOAL_PROGRESS_PREFIX, session));
 }
 
-/** §27.3 — removes every goal session's progress file; an absent loop area is already the cleared state. */
-export function clearGoalProgress(repoDir: string): void {
+/** §27.3/§28.5.3 — where a refactor goal session records its test result. */
+export function goalRefactorResultRel(session: string): string {
+  return [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(GOAL_REFACTOR_RESULT_PREFIX, session)].join('/');
+}
+
+/** §27.3/§28.5.3 */
+export function goalRefactorResultFile(repoDir: string, session: string): string | null {
+  return loopAreaFile(repoDir, goalSessionLeaf(GOAL_REFACTOR_RESULT_PREFIX, session));
+}
+
+/** §27.3 — removes every goal session's files; an absent loop area is already the cleared state. */
+export function clearGoalSessionFiles(repoDir: string): void {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
   if (jail === null) return;
   for (const e of readDirEntries(jail)) {
-    if (!e.isFile || !e.name.startsWith(GOAL_PROGRESS_PREFIX) || !e.name.endsWith(GOAL_PROGRESS_SUFFIX)) continue;
-    const session = e.name.slice(GOAL_PROGRESS_PREFIX.length, -GOAL_PROGRESS_SUFFIX.length);
-    if (!isGoalSession(session)) continue;
-    const file = goalProgressFile(repoDir, session);
+    if (!e.isFile || !e.name.endsWith(GOAL_FILE_SUFFIX)) continue;
+    const prefix = GOAL_SESSION_PREFIXES.find((p) => e.name.startsWith(p));
+    if (prefix === undefined || !isGoalSession(e.name.slice(prefix.length, -GOAL_FILE_SUFFIX.length))) continue;
+    const file = loopAreaFile(repoDir, e.name);
     if (file !== null) rmSync(file, { force: true });
   }
 }

@@ -18,7 +18,7 @@ import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/rev
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
-import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA, refactorResultRel } from '../../src/main/appLoopState';
+import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { flowCatalogDir, flowDefinitionFile, flowHomeDir, loadUntrustedFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
@@ -8039,7 +8039,7 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
       red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.md`)}`),
       // GREEN's first leg runs out of passes; the leg after the compact finishes it.
       green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${result('passed', `${V3_ART}/green-result.md`, 'built')}`)}; fi`,
-      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; ${result('passed', refactorResultRel(1))}`),
+      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/'); ${result('passed', '"$rr"')}`),
       'integration-slice': finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`),
     },
     {

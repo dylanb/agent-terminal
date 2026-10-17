@@ -1041,3 +1041,21 @@ describe('§28.4.2 slice brief — persisted independently of the run-state docu
     }
   });
 });
+
+describe('a goal session id (§27.3 v2.201)', () => {
+  it('a new one is always one the run state keeps and reads back', async () => {
+    const { newGoalSession, isGoalSession, serializeAppLoopState, parseAppLoopState } = await import('../../src/main/appLoopState');
+    for (let i = 0; i < 20; i++) {
+      const goalSession = newGoalSession();
+      expect(isGoalSession(goalSession)).toBe(true);
+      const state = { loop: 'l', step: 's', turnKey: 'k', status: 'working' as const, goalSession };
+      expect(parseAppLoopState(serializeAppLoopState(state, () => new Date(0)))?.goalSession).toBe(goalSession);
+    }
+  });
+
+  it('a malformed one read back is dropped', async () => {
+    const { parseAppLoopState, serializeAppLoopState } = await import('../../src/main/appLoopState');
+    const text = serializeAppLoopState({ loop: "l", step: "s", turnKey: "k", status: "working" }, () => new Date(0)).replace('status: working', 'status: working\ngoal_session: ../../x');
+    expect(parseAppLoopState(text)?.goalSession).toBeUndefined();
+  });
+});

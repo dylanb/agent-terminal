@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { goalProgressRel, readAppLoopState, readChangedTests, recordBaselineCommit, refactorResultFile, refactorResultRel } from '../../src/main/appLoopState';
+import { goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, readAppLoopState, readChangedTests, recordBaselineCommit, refactorResultFile } from '../../src/main/appLoopState';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import { REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
-import { createAppLoopEngineHarness, STEP, TEST_BRANCH } from '../helpers/appLoopEngineHarness';
+import { createAppLoopEngineHarness, STEP, TEST_BRANCH, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
 // §27.3/§28.5.3 (v2.201) — a refactor goal session has no engine rounds, so the checks a refactor round runs
 // run when the session finishes: its tests still pass, and any test file changed since RED is flagged.
@@ -28,9 +28,14 @@ const writeAt = (abs: string, text: string): void => {
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, text);
 };
+const session = (): string => {
+  const s = readAppLoopState(h.repo)?.goalSession;
+  if (s === undefined) throw new Error('no goal session is persisted');
+  return s;
+};
 const finish = (result: string | null): void => {
-  writeAt(join(h.repo, goalProgressRel(readAppLoopState(h.repo)!.goalSession!)), exampleGoalProgress(1, 'done'));
-  if (result !== null) writeAt(refactorResultFile(h.repo, 1)!, result);
+  writeAt(join(h.repo, goalProgressRel(session())), exampleGoalProgress(1, 'done'));
+  if (result !== null) writeAt(goalRefactorResultFile(h.repo, session())!, result);
 };
 const promptFile = (): string => {
   const cmd = h.injected.find((p) => p.startsWith('/goal '))!;
@@ -46,7 +51,7 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     h.defResult = resolved(refactorGoalDef());
     enterAndInjectWork(engine);
 
-    expect(promptFile()).toContain(refactorResultRel(1));
+    expect(promptFile()).toContain(goalRefactorResultRel(session()));
   });
 
   it('reaches the gate once the result records the tests passing', async () => {
@@ -63,6 +68,7 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
 
   it('a passing result an earlier run left does not finish a session that records none', async () => {
     writeAt(refactorResultFile(h.repo, 1)!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
+    writeAt(goalRefactorResultFile(h.repo, '0badc0de')!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
     const engine = makeEngine(undefined, fake());
     recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
     h.defResult = resolved(refactorGoalDef());
@@ -74,17 +80,36 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
   });
 
-  it('clears the earlier result where the check reads it, wherever that is', async () => {
-    const elsewhere = join(h.repo, 'elsewhere', 'refactor-result.md');
-    writeAt(elsewhere, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
-    const engine = makeEngine(undefined, fake(), undefined, {
-      resolveRefactorResultLocation: () => ({ abs: elsewhere, rel: 'elsewhere/refactor-result.md' }),
-    });
+  it('reads only its own session\'s result, never one an earlier session left in place', async () => {
+    const engine = makeEngine(undefined, fake());
     recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
     h.defResult = resolved(refactorGoalDef());
     enterAndInjectWork(engine);
+    writeAt(goalRefactorResultFile(h.repo, '0badc0de')!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
+    writeAt(refactorResultFile(h.repo, 1)!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
     finish(null);
     engine.onDoneSignal();
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
+  });
+
+  it('an Accept does not finish a session whose progress stops recording the goal done while its checks run', async () => {
+    const engine = makeEngine(
+      undefined,
+      fake({
+        changedTestPaths: async () => {
+          writeAt(join(h.repo, goalProgressRel(session())), exampleGoalProgress(1, 'blocked'));
+          return { ok: true, paths: [] };
+        },
+      }),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(refactorGoalDef());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    finish(examplePhaseResult(REFACTOR_COMPLETING_OUTCOME));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
     await flush();
 
     expect(readAppLoopState(h.repo)?.status).not.toBe('complete');

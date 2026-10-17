@@ -29,15 +29,13 @@ import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from 
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
-import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, roundReportWellFormed, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { baselineForBranch, clearGoalProgress, clearInterrupt, goalProgressFile, goalProgressRel, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
+import { baselineForBranch, clearGoalSessionFiles, clearInterrupt, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
@@ -355,10 +353,6 @@ type WorkRun =
 interface GoalPlace {
   leg: number;
   session: string;
-}
-
-function newGoalSession(): string {
-  return randomBytes(4).toString('hex');
 }
 
 /** §27.3 */
@@ -720,6 +714,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return { kind: 'progress', progress };
   };
 
+  /** §27.3 — why Accept may not finish this goal turn now, or null when it records the goal done. */
+  const goalNotDone = (a: ActiveAppTurn): string | null => {
+    if (a.phase !== 'work' || a.run.kind !== 'goal') return null;
+    const end = goalEnd(a, a.run);
+    if (end.kind === 'shortfall') return `${end.reason} — retry or terminate`;
+    return end.progress.status === 'done' ? null : `the goal session now records ${end.progress.status}, not done — retry or terminate`;
+  };
+
   /** §27.3 */
   const goalStopsShort = (a: ActiveAppTurn | null): boolean => {
     if (a?.phase !== 'work' || a.run.kind !== 'goal') return false;
@@ -765,9 +767,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       case 'commits':
         return null; // the done-signal alone completes it
       case 'refactor': {
-        const loc = deps.resolveRefactorResultLocation(active.repoDir, FIRST_ROUND);
-        if (loc === null) return 'the refactor result location cannot be resolved';
-        return resultShortfall(loc.rel, deps.readArtifact(loc.abs), REFACTOR_COMPLETING_OUTCOME);
+        if (active.run.kind !== 'goal') return 'a refactor work turn runs only as a goal session';
+        const abs = goalRefactorResultFile(active.repoDir, active.run.session);
+        if (abs === null) return 'the refactor result location cannot be resolved';
+        return resultShortfall(goalRefactorResultRel(active.run.session), deps.readArtifact(abs), REFACTOR_COMPLETING_OUTCOME);
       }
       case 'unresolved':
         return UNRESOLVED_SHORTFALL; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
@@ -1093,10 +1096,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     );
   };
 
-  const refactorPromptCompletion = (repoDir: string): { kind: 'refactor'; resultRel: string } | null => {
-    const loc = deps.resolveRefactorResultLocation(repoDir, FIRST_ROUND);
-    return loc === null ? null : { kind: 'refactor', resultRel: loc.rel };
-  };
+  const refactorPromptCompletion = (session: string): { kind: 'refactor'; resultRel: string } => ({
+    kind: 'refactor',
+    resultRel: goalRefactorResultRel(session),
+  });
 
   const readBrief = (a: { briefPath?: string }): string | undefined | null =>
     a.briefPath === undefined ? undefined : deps.readRecipe(a.briefPath);
@@ -1176,8 +1179,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               ? { kind: 'red', resultRel: active.completion.resultRel, redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir) }
               : active.completion.kind === 'green'
                 ? { kind: 'green', resultRel: active.completion.resultRel }
-                : active.completion.kind === 'refactor'
-                  ? refactorPromptCompletion(active.repoDir)
+                : active.completion.kind === 'refactor' && active.run.kind === 'goal'
+                  ? refactorPromptCompletion(active.run.session)
                   : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
@@ -1285,15 +1288,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     active = turn;
     legPromptPending = false;
     if (turn.phase === 'work' && turn.run.kind === 'goal') {
-      // §27.3 — housekeeping only: the fresh session's own progress file is one no earlier turn wrote.
+      // §27.3 — housekeeping only: the fresh session's own files are ones no earlier turn wrote.
       try {
-        clearGoalProgress(turn.repoDir);
-        if (turn.completion.kind === 'refactor') {
-          const loc = deps.resolveRefactorResultLocation(turn.repoDir, FIRST_ROUND);
-          if (loc !== null) rmSync(loc.abs, { force: true });
-        }
+        clearGoalSessionFiles(turn.repoDir);
       } catch (e) {
-        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's progress or result: ${errMsg(e)}`, 1);
+        deps.audit(turn.repoDir, `§27 goal turn ${turn.turnKey} could not clear an earlier turn's goal files: ${errMsg(e)}`, 1);
       }
     }
     persist('working');
@@ -1841,6 +1840,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void redAsyncGate(a).then((gate) => {
             if (active !== a) return; // a retry/terminate changed the turn under the await
+            const late = goalNotDone(a);
+            if (late !== null) {
+              refuseRouteOut('turn-error', late);
+              return;
+            }
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed result) — Retry re-runs
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);
@@ -1859,6 +1863,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void greenAsyncGate(a).then(({ gate, changedTests }) => {
             if (active !== a) return; // a retry/terminate changed the turn under the await
+            const late = goalNotDone(a);
+            if (late !== null) {
+              refuseRouteOut('turn-error', late);
+              return;
+            }
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed/not passed+built)
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);
@@ -1874,6 +1883,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
             if (active !== a) return;
+            const late = goalNotDone(a);
+            if (late !== null) {
+              refuseRouteOut('turn-error', late);
+              return;
+            }
             if (!completionSatisfied()) return;
             if (!gate.ok) {
               refuseRouteOut('turn-error', gate.reason);
