@@ -1,0 +1,32 @@
+version: v2
+name: plan-approve-loop
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: plan-summary
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: mark-ready
+      - kind: promote
+        artifact: plan
+  - option: redo
+inputs:
+  - id: groom-intent
+    path: groom-intent.md
+  - id: groomed-ticket
+    path: groomed-ticket.md
+  - id: plan-report
+    path: plan-report.md
+outputs:
+  - id: plan-summary
+    path: plan-summary.md
+  - id: plan
+    path: plan.md

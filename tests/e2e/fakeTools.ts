@@ -488,13 +488,16 @@ export const CHAIN_ROSTERS: Record<string, string[]> = Object.fromEntries(CHAIN_
 // consolidate is impl-slice n's. Per-step turn counts live under `binDir`, outside the worktree.
 export function seedFullTddChainAgent(
   binDir: string,
-  opts: { implSlices?: number; polishedSlices?: number; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>> } = {},
+  opts: { implSlices?: number; polishedSlices?: number; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>>; runChecksFor?: string[] } = {},
 ): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
   const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
   const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  // The check a round's prompt last handed the agent (kept in `$chk`), run for the steps in `runChecksFor`.
+  const check = (step: string): string =>
+    opts.runChecksFor?.includes(step) ? `{ eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; ` : '';
   // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
   // sources the `slices` count from; otherwise the plan carries no block and the run stays a single slice.
   const planB64 = b64(
@@ -521,13 +524,13 @@ export function seedFullTddChainAgent(
     // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
     return step === 'refactor'
       ? `${base}; ${writePhaseResultSh('.agent-terminal/loop/refactor-results/$r.json', examplePhaseResult('passed'))}; n=$(turn_count review-refactor); printf '%s\\n' "export const rf = $n;" > refactor.ts; ${done('review-refactor')}`
-      : `${base}; ${done(`review-${step}`)}`;
+      : `${base}; ${check(step)}${done(`review-${step}`)}`;
   };
   const consolidateArm = (step: string): string => {
     const scripted = (opts.verdicts?.[step] ?? []).map((v, i) => `${i + 1}) OUTB='${b64(exampleConsolidatorOutput(v, CHAIN_ROSTERS[step]))}' ;;`).join(' ');
     return (
       `n=$(turn_count consolidate-${step}); OUTB='${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}'; case "$n" in ${scripted} esac; ` +
-      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${done(`consolidate-${step}`)}`
+      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${check(step)}${done(`consolidate-${step}`)}`
     );
   };
 
@@ -553,6 +556,7 @@ export function seedFullTddChainAgent(
     // re-entry), so a real agent writing where told is modeled rather than a hardcoded slice-1 filename.
     '    *"Write the classification to "*) t=${line#*Write the classification to }; RES=${t%% as a JSON object*} ;;\n' +
     `${cases}\n` +
+    '    *"ELECTRON_RUN_AS_NODE=1 "*) chk="ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }" ;;\n' +
     '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
