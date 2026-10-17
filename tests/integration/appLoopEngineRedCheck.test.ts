@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { basename } from 'node:path';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { createAppLoopEngine } from '../../src/main/appLoopEngine';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
-import { INTENDED_FAILURES_HEADING, RED_CHECK_MISSING_WARNING } from '../../src/shared/redCheck';
+import { RED_CHECK_MISSING_WARNING } from '../../src/shared/redCheck';
+import { PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 import { CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, createAppLoopEngineHarness, flushRedGate } from '../helpers/appLoopEngineHarness';
 
@@ -55,7 +57,7 @@ describe('the RED work turn and the red check (§28.5.3)', () => {
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND }));
     enterRed(engine);
     expect(h.injected[1]).toContain(COMMAND);
-    expect(h.injected[1]).toContain(INTENDED_FAILURES_HEADING);
+    expect(h.injected[1]).toContain(`"${PHASE_RESULT_FIELDS.intendedFailures}"`);
   });
 
   it('holds the RED turn when the red check refuses, surfacing its reason', async () => {
@@ -102,6 +104,12 @@ describe('each RED review round and the red check (§28.5.3)', () => {
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(reviewInjected()).toContain(COMMAND);
+  });
+
+  it('hands the fixer the result check for the phase result it edits when one is configured', async () => {
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    await driveToRedReview(engine);
+    expect(reviewInjected()).toMatch(new RegExp(`check-artifact result \\S*${basename(h.resultPath).replace(/\./g, '\\.')} failed-assertion no-build`));
   });
 
   it('tells the fixer to carry the missing-check warning in the round report when none is configured', async () => {
@@ -153,6 +161,6 @@ describe('each RED review round and the red check (§28.5.3)', () => {
     h.currentSliceResult = 2;
     await driveToRedReview(engine);
     await finishRound(engine);
-    expect(seen.at(-1)?.resultPath).toMatch(/red-result\.slice-2\.md$/);
+    expect(seen.at(-1)?.resultPath).toMatch(/red-result\.slice-2\.json$/);
   });
 });

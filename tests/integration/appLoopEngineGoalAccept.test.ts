@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { writePhaseResult } from '../helpers/phaseResults';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { goalProgressRel, goalRefactorResultFile, readAppLoopState, recordBaselineCommit, writeAppLoopState, type AppLoopRunState } from '../../src/main/appLoopState';
@@ -79,7 +80,7 @@ const PHASES: Phase[] = [
         return { ok: true, paths: [] };
       },
     }),
-    writeResult: () => writeAt(goalRefactorResultFile(h.repo, session())!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME)),
+    writeResult: () => writePhaseResult(goalRefactorResultFile(h.repo, session())!, examplePhaseResult(REFACTOR_COMPLETING_OUTCOME)),
   },
 ];
 

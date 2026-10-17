@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { exampleCapturedOutput, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { execFileSync } from 'node:child_process';
 import { ARTIFACT_CHECK_PASSED, artifactCheckCommand, runArtifactCheck, type ArtifactCheck } from '../../src/main/artifactCheck';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 // §27.12 — the agent-runnable checker: the command the prompt hands the agent, parsed back by the checker, runs
 // the same predicates the engine gates on. Asserted end to end through the argv the command line carries.
 
 const SECTIONS = ['summary', 'findings', 'disposition'];
 const ROSTER = ['impl-review-tests', 'impl-review-intent'];
-const REPORT: ArtifactCheck = { kind: 'report', rel: '.agent-terminal/loop/reports/1.md', sections: SECTIONS, roster: ROSTER };
-const VERDICT: ArtifactCheck = { kind: 'verdict', rel: '.agent-terminal/loop/consolidate/1.md', catalog: ROSTER };
+const REPORT: ArtifactCheck = { kind: 'report', rel: '.agent-terminal/loop/reports/1.json', sections: SECTIONS, roster: ROSTER };
+const VERDICT: ArtifactCheck = { kind: 'verdict', rel: '.agent-terminal/loop/consolidate/1.json', catalog: ROSTER };
 
 /** The argv a POSIX shell hands the checker script for `command` (everything after the script operand). */
 function argvOf(check: ArtifactCheck): string[] {
@@ -34,14 +36,15 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
   it('fails a report missing a reviewer record, naming that record', () => {
     const r = runArtifactCheck(argvOf(REPORT), files({ [REPORT.rel]: exampleRoundReport({ sections: SECTIONS, roster: [ROSTER[0]] }) }));
     expect(r.exitCode).toBe(1);
-    expect(r.output).toContain(`### ${ROSTER[1]}`);
+    expect(r.output).toContain(`no record for ${ROSTER[1]}`);
     expect(r.output).not.toContain(ARTIFACT_CHECK_PASSED);
   });
 
-  it('fails a verdict naming a persona outside the catalog', () => {
-    const r = runArtifactCheck(argvOf(VERDICT), files({ [VERDICT.rel]: 'verdict: another round\nroster: ghost\n' }));
+  it('fails a verdict naming a persona outside the catalog, by position', () => {
+    const r = runArtifactCheck(argvOf(VERDICT), files({ [VERDICT.rel]: verdictOutput('another round', { roster: ['ghost'] }) }));
     expect(r.exitCode).toBe(1);
-    expect(r.output).toContain('ghost');
+    expect(r.output).toContain('"roster"[0] is not in this loop\'s reviewer catalog');
+    expect(r.output).not.toContain('ghost');
   });
 
   it('passes a goal progress file that ends this leg, and fails one that does not, saying why', () => {
@@ -57,6 +60,26 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
     expect(broken.output).toContain('not valid JSON');
     const oneLeg = runArtifactCheck(argvOf({ ...PROGRESS, legs: false }), files({ [PROGRESS.rel]: exampleGoalProgress(2, 'checkpoint') }));
     expect(oneLeg.exitCode).toBe(1);
+  });
+
+  it('passes a phase result with the outcome its phase needs and a captured run, and fails one that does not, saying why', () => {
+    const RESULT: ArtifactCheck = { kind: 'result', rel: '.agent-terminal/loop/artifacts/green-result.json', outcome: 'passed', build: 'built' };
+    const run = { [phaseOutputRel(RESULT.rel)]: exampleCapturedOutput('passed') };
+    const ok = runArtifactCheck(argvOf(RESULT), files({ [RESULT.rel]: examplePhaseResult('passed', { build: 'built' }), ...run }));
+    expect(ok.exitCode).toBe(0);
+    expect(ok.output).toContain(ARTIFACT_CHECK_PASSED);
+    const failing = runArtifactCheck(argvOf(RESULT), files({ [RESULT.rel]: examplePhaseResult('failed-assertion', { build: 'built' }), ...run }));
+    expect(failing.exitCode).toBe(1);
+    expect(failing.output).toContain('reports failed-assertion, not passed');
+    const unbuilt = runArtifactCheck(argvOf(RESULT), files({ [RESULT.rel]: examplePhaseResult('passed'), ...run }));
+    expect(unbuilt.output).toContain('reports no build, not built');
+    const noRun = runArtifactCheck(argvOf(RESULT), files({ [RESULT.rel]: examplePhaseResult('passed', { build: 'built' }) }));
+    expect(noRun.exitCode).toBe(1);
+    expect(noRun.output).toContain(`${phaseOutputRel(RESULT.rel)} is missing`);
+    const red: ArtifactCheck = { kind: 'result', rel: '.agent-terminal/loop/artifacts/red-result.json', outcome: 'failed-assertion' };
+    const redRun = { [phaseOutputRel(red.rel)]: exampleCapturedOutput('failed-assertion') };
+    expect(runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('failed-assertion'), ...redRun })).exitCode).toBe(0);
+    expect(runArtifactCheck(argvOf(red), files({ [red.rel]: 'outcome: failed-assertion\n', ...redRun })).output).toContain('not valid JSON');
   });
 
   it('fails a missing file, naming it', () => {

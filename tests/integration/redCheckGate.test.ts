@@ -3,23 +3,18 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkRed } from '../../src/main/redCheckGate';
-import { INTENDED_FAILURES_HEADING } from '../../src/shared/redCheck';
-import { PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { examplePhaseResult, type IntendedFailure } from '../../src/shared/phaseResult';
 
 let repo: string;
 let outside: string;
 const ARTIFACTS = ['.agent-terminal', 'loop', 'artifacts'];
-const resultPath = (): string => join(repo, ...ARTIFACTS, 'red-result.md');
+const resultPath = (): string => join(repo, ...ARTIFACTS, 'red-result.json');
 const reportPath = (): string => join(repo, ...ARTIFACTS, 'red-result.check.json');
 const TEST_FILE = 'tests/a.test.ts';
 
 const capabilities = (extra = ''): void =>
   writeFileSync(join(repo, 'loop-capabilities.yaml'), `test_globs: [tests/**]\ntest_command: t\nbuild_command: b\n${extra}`);
-const result = (intended: string[]): void =>
-  writeFileSync(
-    resultPath(),
-    ['outcome: failed-assertion', '', INTENDED_FAILURES_HEADING, ...intended, '', PHASE_RESULT_GRAMMAR.capturedOutputHeading, 'raw', ''].join('\n'),
-  );
+const result = (intendedFailures: IntendedFailure[]): void => writeFileSync(resultPath(), examplePhaseResult('failed-assertion', { intendedFailures }));
 const report = (failLine: number): void =>
   writeFileSync(
     reportPath(),
@@ -49,7 +44,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
 
   it('verifies a fresh report whose failures are exactly the declared ones', () => {
     capabilities('red_check_command: node check.mjs\n');
-    result(['- tests/a.test.ts:12']);
+    result([{ file: 'tests/a.test.ts', line: 12 }]);
     report(12);
     at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
     expect(check()).toEqual({ kind: 'verified', unchecked: [] });
@@ -57,7 +52,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
 
   it('refuses a test that failed somewhere other than its declared check', () => {
     capabilities('red_check_command: node check.mjs\n');
-    result(['- tests/a.test.ts:12']);
+    result([{ file: 'tests/a.test.ts', line: 12 }]);
     report(9);
     at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
     const r = check();
@@ -65,9 +60,19 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
     if (r.kind === 'refused') expect(r.reason).toContain('tests/a.test.ts:9');
   });
 
+  it('refuses a RED result whose intended failures are malformed, naming that problem', () => {
+    capabilities('red_check_command: node check.mjs\n');
+    writeFileSync(resultPath(), JSON.stringify({ outcome: 'failed-assertion', intendedFailures: 'tests/a.test.ts:12' }));
+    report(12);
+    at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
+    const r = check();
+    expect(r.kind).toBe('refused');
+    if (r.kind === 'refused') expect(r.reason).toContain('"intendedFailures" is not a list');
+  });
+
   it('refuses when the report is missing, naming where it was expected', () => {
     capabilities('red_check_command: node check.mjs\n');
-    result(['- tests/a.test.ts:12']);
+    result([{ file: 'tests/a.test.ts', line: 12 }]);
     const r = check();
     expect(r.kind).toBe('refused');
     if (r.kind === 'refused') expect(r.reason).toContain('red-result.check.json');
@@ -75,7 +80,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
 
   it('refuses a report older than a test file it covers', () => {
     capabilities('red_check_command: node check.mjs\n');
-    result(['- tests/a.test.ts:12']);
+    result([{ file: 'tests/a.test.ts', line: 12 }]);
     report(12);
     at(join(...ARTIFACTS, 'red-result.check.json'), 500);
     const r = check();
@@ -85,7 +90,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
 
   it('refuses a report that is a link out of the loop artifacts area', () => {
     capabilities('red_check_command: node check.mjs\n');
-    result(['- tests/a.test.ts:12']);
+    result([{ file: 'tests/a.test.ts', line: 12 }]);
     const target = join(outside, 'r.json');
     writeFileSync(target, JSON.stringify({ version: 1, tests: [] }));
     symlinkSync(target, reportPath());

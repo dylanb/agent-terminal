@@ -19,5 +19,5 @@ to the operator, so this rule takes precedence over `clean` and `another round`:
 human` when any item there is not recorded as `Operator decision (<date>): …`. Name each undecided item in the
 reason, with the recommendation the list gives it.
 
-Write your verdict in the exact labelled-line format the turn instruction specifies. Do not merge or
+Write your verdict in the exact JSON format the turn instruction specifies. Do not merge or
 re-rank findings — that was the round's job; yours is to judge the round and choose what runs next.

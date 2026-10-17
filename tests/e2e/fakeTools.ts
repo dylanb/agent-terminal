@@ -7,9 +7,9 @@ import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput, type ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
-import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
@@ -17,9 +17,10 @@ import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { roundReportWithDisposition } from '../helpers/roundReports';
+import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 export const exampleConfigDir = seedSharedExampleConfig();
 
@@ -183,17 +184,15 @@ export const PLAN_V2_ROSTER = [
 ];
 export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
+/** Shell that writes a §28.5.5 phase result at `pathExpr` and its raw captured run beside it, where the engine reads
+ *  it. */
+export const writePhaseResultSh = (pathExpr: string, result: string, captured = exampleCapturedOutput('passed')): string =>
+  `rp=${pathExpr}; mkdir -p "$(dirname "$rp")"; printf %s '${b64(result)}' | base64 -d > "$rp"; printf %s '${b64(captured)}' | base64 -d > "\${rp%.*}${PHASE_OUTPUT_SUFFIX}"`;
 // A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
 // consolidator clean-guard keys on.
-const firstMarkedReport = (sections: string[], roster: string[], marker: string): string => {
-  const g = REPORT_GRAMMAR;
-  const parts = sections.flatMap((s) => [`${g.sectionPrefix}${s}`, '']);
-  roster.forEach((persona, idx) => {
-    parts.push(`${g.personaPrefix}${persona}`, '', idx === 0 ? marker : g.emptyMarker, '');
-  });
-  return parts.join('\n') + '\n';
-};
-const failedReport = (sections: string[], roster: string[]): string => firstMarkedReport(sections, roster, REPORT_GRAMMAR.failedMarker);
+const firstMarkedReport = (sections: string[], roster: string[], status: ReviewerStatus): string =>
+  roundReportWithStatuses(sections, roster, roster.length > 0 ? { [roster[0]]: status } : {});
+const failedReport = (sections: string[], roster: string[]): string => firstMarkedReport(sections, roster, 'failed');
 
 export type FakeWorkMode = 'complete' | 'no-marker' | 'file-only' | 'noop' | 'red' | 'green' | 'refactor' | 'ask';
 export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit-then-repair' | 'not-loaded';
@@ -294,13 +293,13 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   // §28.5.5 — the RED work turn: (optionally) author a test-glob file, then write the phase-result file the
   // completion:red gate classifies, from the ONE canonical examplePhaseResult. The test file sits OUTSIDE
   // .agent-terminal (a real test path that rides into the approve commit); the result file sits UNDER it.
-  const writeResult = (outcomeB64: string): string =>
-    `mkdir -p "$(dirname ${opts.artifactRel})"; printf %s '${outcomeB64}' | base64 -d > ${opts.artifactRel}`;
+  const writeResult = (outcome: PhaseOutcome, build?: BuildOutcome): string =>
+    writePhaseResultSh(opts.artifactRel, examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
   const writeRedTest =
     opts.writeTest === false
       ? ''
       : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts`;
-  const redBody = [bump, writeRedTest, writeResult(b64(examplePhaseResult(opts.resultOutcome ?? 'failed-assertion')))];
+  const redBody = [bump, writeRedTest, writeResult(opts.resultOutcome ?? 'failed-assertion')];
   // §28.5.3 — the GREEN work turn: the frozen check diffs the committed baseline against the working tree, so
   // editing the committed tests/frozen.test.ts is what raises the flag.
   const testEdit = `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' >> tests/frozen.test.ts`;
@@ -308,7 +307,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const greenBody = [
     bump,
     opts.touchTest === true ? testEdit : featureEdit,
-    writeResult(b64(examplePhaseResult(opts.resultOutcome ?? 'passed', { build: opts.buildOutcome ?? 'built' }))),
+    writeResult(opts.resultOutcome ?? 'passed', opts.buildOutcome ?? 'built'),
   ];
   const workBody: string[] | null =
     opts.work === 'noop'
@@ -341,23 +340,22 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const omit = b64(exampleRoundReport({ sections, roster: [roster[0]] }));
   const failed = b64(failedReport(sections, roster));
   const needsHuman = b64(roundReportWithDisposition(sections, roster, 'needs a human'));
-  const notLoaded = b64(firstMarkedReport(sections, roster, REPORT_GRAMMAR.notLoadedMarker));
+  const notLoaded = b64(firstMarkedReport(sections, roster, 'not loaded'));
   const r1 = reviewKind === 'failed' ? failed : reviewKind === 'not-loaded' ? notLoaded : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
   const r2 = (opts.review2 ?? 'full') === 'failed' ? failed : full;
   const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${k === 'needs-human' ? needsHuman : full}' ;;`).join(' ');
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
-  // reports/2.md, keeping the last-two-report window real (§27.6/AC2).
+  // reports/2.json, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =
     'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
     `RB='${r1}'; case "$r" in 2) RB='${r2}' ;; esac; ` +
     (roundCases.length > 0 ? `case "$r" in ${roundCases} esac; ` : '') +
     `[ -f .agent-terminal/repairing ] && RB='${full}'; ` +
-    'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
+    'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.json';
   // §28.5.3 — a REFACTOR loop's review ROUND also writes the round-keyed phase-result the gate reads and makes a
   // behavior-preserving change so the approve commit has content.
   const writeRefactorResult =
-    'r=$(rnd); mkdir -p .agent-terminal/loop/refactor-results; ' +
-    `printf %s '${b64(examplePhaseResult(opts.resultOutcome ?? 'passed'))}' | base64 -d > .agent-terminal/loop/refactor-results/$r.md`;
+    `r=$(rnd); ${writePhaseResultSh('.agent-terminal/loop/refactor-results/$r.json', examplePhaseResult(opts.resultOutcome ?? 'passed'))}`;
   const touchFrozenTest = `mkdir -p tests; printf '%s\\n' 'review-round edit' >> tests/frozen.test.ts`;
   const reviewExtra = byTurn('n', opts.extraShell?.review);
   const reviewAct =
@@ -375,8 +373,8 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const attemptCase = (opts.consolidateAttempts ?? []).map((v, i) => `${i + 1}) OUTB='${b64(v)}' ;;`).join(' ');
   const consolidateAction =
     'mkdir -p .agent-terminal; printf x >> .agent-terminal/consolidate-runs; ' +
-    `r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; case "$n" in ${attemptCase} esac; ` +
-    'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
+    `r=$(rnd); OUTB='${b64(verdictOutput('clean'))}'; case "$r" in ${verdictCase} esac; case "$n" in ${attemptCase} esac; ` +
+    'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ' +
     `${byTurn('n', opts.extraShell?.consolidate)}; ${doneSignal(consolidateKey)}`;
   const consolidateAct = opts.holdConsolidate
     ? `${count(consolidateKey, 'n')}; ${heldAction(opts.holdConsolidate.sentinel, consolidateAction)}`
@@ -403,7 +401,7 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
   const repairing = scripts.find(([, s]) => s.review === 'omit-then-repair')?.[1];
   const repairArm = repairing
     ? `    *"This is a REPAIR of the round-"*) mkdir -p .agent-terminal; : > .agent-terminal/repairing; r=$(rnd); mkdir -p .agent-terminal/loop/reports; ` +
-      `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.md ;;\n`
+      `printf %s '${b64(exampleRoundReport({ sections: repairing.sections ?? PLAN_V2_SECTIONS, roster: repairing.roster ?? PLAN_V2_ROSTER }))}' | base64 -d > .agent-terminal/loop/reports/$r.json ;;\n`
     : '';
   const logInjected = scripts.some(([, s]) => s.logInjected === true)
     ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n'
@@ -512,24 +510,24 @@ export function seedFullTddChainAgent(
       : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
-    red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; mkdir -p ${art}; ${decode(b64(examplePhaseResult('failed-assertion')), '"${RES:-' + art + '/red-result.md}"')}; ${done('work-red')}`,
+    red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; ${writePhaseResultSh('"${RES:-' + art + '/red-result.json}"', examplePhaseResult('failed-assertion'), exampleCapturedOutput('failed-assertion'))}; ${done('work-red')}`,
     // GREEN and refactor write content that differs per turn, so slice 2's approve has something to commit.
-    green: `n=$(turn_count work-green); printf '%s\\n' "export const feat = $n;" > feature.ts; mkdir -p ${art}; ${decode(b64(examplePhaseResult('passed', { build: 'built' })), '"${RES:-' + art + '/green-result.md}"')}; ${done('work-green')}`,
+    green: `n=$(turn_count work-green); printf '%s\\n' "export const feat = $n;" > feature.ts; ${writePhaseResultSh('"${RES:-' + art + '/green-result.json}"', examplePhaseResult('passed', { build: 'built' }))}; ${done('work-green')}`,
     refactor: done('work-refactor'),
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
   };
   const reviewArm = (step: string): string => {
-    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.md')}`;
+    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}`;
     // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
     return step === 'refactor'
-      ? `${base}; mkdir -p .agent-terminal/loop/refactor-results; ${decode(b64(examplePhaseResult('passed')), '.agent-terminal/loop/refactor-results/$r.md')}; n=$(turn_count review-refactor); printf '%s\\n' "export const rf = $n;" > refactor.ts; ${done('review-refactor')}`
+      ? `${base}; ${writePhaseResultSh('.agent-terminal/loop/refactor-results/$r.json', examplePhaseResult('passed'))}; n=$(turn_count review-refactor); printf '%s\\n' "export const rf = $n;" > refactor.ts; ${done('review-refactor')}`
       : `${base}; ${done(`review-${step}`)}`;
   };
   const consolidateArm = (step: string): string => {
     const scripted = (opts.verdicts?.[step] ?? []).map((v, i) => `${i + 1}) OUTB='${b64(exampleConsolidatorOutput(v, CHAIN_ROSTERS[step]))}' ;;`).join(' ');
     return (
       `n=$(turn_count consolidate-${step}); OUTB='${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}'; case "$n" in ${scripted} esac; ` +
-      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ${done(`consolidate-${step}`)}`
+      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${done(`consolidate-${step}`)}`
     );
   };
 
@@ -551,9 +549,9 @@ export function seedFullTddChainAgent(
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
-    // §28.4 D1 — honor the phase-result path the prompt names (`red-result.slice-N.md` on a loop-back
+    // §28.4 D1 — honor the phase-result path the prompt names (`red-result.slice-N.json` on a loop-back
     // re-entry), so a real agent writing where told is modeled rather than a hardcoded slice-1 filename.
-    '    *"Write the result to "*) t=${line#*Write the result to }; RES=${t%% in this exact shape*} ;;\n' +
+    '    *"Write the classification to "*) t=${line#*Write the classification to }; RES=${t%% as a JSON object*} ;;\n' +
     `${cases}\n` +
     '  esac\n' +
     'done\n';

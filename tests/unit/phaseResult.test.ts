@@ -2,248 +2,156 @@ import { describe, it, expect } from 'vitest';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import {
-  PHASE_RESULT_GRAMMAR,
-  parsePhaseResult,
-  phaseResultWellFormed,
-  examplePhaseResult,
+  PHASE_RESULT_FIELDS,
   composePhaseResultInstruction,
+  exampleCapturedOutput,
+  examplePhaseResult,
+  phaseOutputRel,
+  phaseResultEnd,
+  readPhaseResult,
 } from '../../src/shared/phaseResult';
 
-// §28.5.5 — the result-file grammar: one writer (the RED recipe/prompt), one predicate (the engine), one
-// canonical example. These tests pin the OBSERVABLE contract (what parsePhaseResult returns, what
-// phaseResultWellFormed judges) — never the internal scan. The vocabulary is phaseOutcome's; the grammar is
-// the structural twin of roundReport's (§28.5.5): minimal contract, exact-string outcome, layout-tolerant.
+// §28.5.5 (v2.202) — the phase result is JSON the engine judges (the outcome, GREEN's build, RED's intended
+// failures), and the raw test run is kept verbatim in a file of its own beside it, which the engine requires to
+// be present and non-empty but never parses.
 
-describe('phaseResult grammar (§28.5.2 / §28.5.5)', () => {
-  // UT-RESULT-1 + UT-RESULT-2 — the ONE canonical example is well-formed against its OWN predicate, for every
-  // outcome (the shared-semantics anchor: writer, predicate, few-shot cannot drift).
-  it('the canonical example is well-formed and round-trips its outcome, for every PHASE_OUTCOMES value', () => {
+const RESULT_REL = '.agent-terminal/loop/artifacts/red-result.json';
+const result = (o: Record<string, unknown>): string => JSON.stringify(o);
+const end = (text: string, want: Parameters<typeof phaseResultEnd>[1], captured: string | null = 'AssertionError: expected 2 to be 3') =>
+  phaseResultEnd({ result: text, captured, capturedRel: phaseOutputRel(RESULT_REL) }, want);
+
+describe('reading a phase result (§28.5.2 / §28.5.5)', () => {
+  it('reads the canonical example back as itself, for every outcome', () => {
     for (const outcome of PHASE_OUTCOMES) {
-      const doc = examplePhaseResult(outcome);
-      expect(phaseResultWellFormed(doc)).toBe(true);
-      expect(parsePhaseResult(doc).outcome).toBe(outcome);
-      expect(parsePhaseResult(doc).capturedOutput).not.toBeNull();
+      expect(readPhaseResult(examplePhaseResult(outcome))).toEqual({ ok: true, result: { outcome, build: null, intendedFailures: null } });
     }
   });
 
-  const wellFormed = (outcome: string, captured = 'AssertionError: expected 2 to be 3'): string =>
-    `# Phase result\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${outcome}\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n${captured}\n`;
-
-  // UT-RESULT-3 — the outcome VALUE is exact-string, trimmed, NEVER normalized (mirrors DISPOSITIONS).
-  it('accepts an outcome from the closed set (surrounding whitespace trimmed) and rejects any other spelling', () => {
-    expect(parsePhaseResult(wellFormed('failed-assertion')).outcome).toBe('failed-assertion');
-    // trimmed:
-    expect(parsePhaseResult(wellFormed('  passed  ')).outcome).toBe('passed');
-    // never normalized:
-    for (const bad of ['Passed', 'PASSED', 'failed_assertion', 'pass', 'failed-assertion-ish']) {
-      expect(parsePhaseResult(wellFormed(bad)).outcome).toBeNull();
-      expect(phaseResultWellFormed(wellFormed(bad))).toBe(false);
-    }
+  it('reads the build and the intended failures when the example carries them', () => {
+    expect(readPhaseResult(examplePhaseResult('passed', { build: 'built' }))).toMatchObject({ ok: true, result: { build: 'built' } });
+    const red = readPhaseResult(examplePhaseResult('failed-assertion', { intendedFailures: [{ file: 'tests/adder.test.ts', line: 5 }] }));
+    expect(red).toMatchObject({ ok: true, result: { intendedFailures: [{ file: 'tests/adder.test.ts', line: 5 }] } });
   });
 
-  // UT-RESULT-4 — the raw captured output is a REQUIRED element (AC3), like `what-changed` for a fixed issue.
-  it('is not well-formed when the captured-output section is absent', () => {
-    const noCaptured = `# Phase result\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: failed-assertion\n`;
-    expect(phaseResultWellFormed(noCaptured)).toBe(false);
-    expect(parsePhaseResult(noCaptured).capturedOutput).toBeNull();
-    // ...but the outcome is still recovered (parse is not all-or-nothing):
-    expect(parsePhaseResult(noCaptured).outcome).toBe('failed-assertion');
+  it('reads a file with a byte order mark, and ignores fields it does not know', () => {
+    expect(readPhaseResult(`﻿${result({ outcome: 'passed', notes: 'x' })}`)).toMatchObject({ ok: true, result: { outcome: 'passed' } });
   });
 
-  // UT-RESULT-5 — a missing / blank outcome is not well-formed.
-  it('is not well-formed when the outcome field is missing or blank', () => {
-    const noOutcome = `# Phase result\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nsome output\n`;
-    expect(phaseResultWellFormed(noOutcome)).toBe(false);
-    expect(parsePhaseResult(noOutcome).outcome).toBeNull();
-    expect(phaseResultWellFormed(wellFormed(''))).toBe(false);
-    expect(phaseResultWellFormed(wellFormed('   '))).toBe(false);
+  it.each([
+    ['not JSON', 'outcome: passed\n\n## captured output\n\nok\n', /not valid JSON/],
+    ['not an object', '["passed"]', /not a JSON object/],
+    ['no outcome', result({ build: 'built' }), /"outcome"/],
+    ['an outcome outside the closed set', result({ outcome: 'Passed' }), /"outcome"/],
+    ['a build outside the closed set', result({ outcome: 'passed', build: 'ok' }), /"build"/],
+    ['intended failures that are not a list', result({ outcome: 'failed-assertion', intendedFailures: 'tests/a.ts:5' }), /"intendedFailures"/],
+    ['an intended failure with no line', result({ outcome: 'failed-assertion', intendedFailures: [{ file: 'tests/a.ts' }] }), /"intendedFailures"/],
+    ['an intended failure with a line that is not a positive whole number', result({ outcome: 'failed-assertion', intendedFailures: [{ file: 'tests/a.ts', line: 0 }] }), /"intendedFailures"/],
+    ['an intended failure whose file has a control character', result({ outcome: 'failed-assertion', intendedFailures: [{ file: 'tests/a\n.ts', line: 5 }] }), /"intendedFailures"/],
+  ])('is not well-formed with %s, and says what is wrong', (_what, text, problem) => {
+    const read = readPhaseResult(text);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.problem).toMatch(problem);
   });
 
-  // UT-RESULT-6 — layout tolerance (§28.5.5): tokens under a different-but-valid arrangement still validate;
-  // an over-constrained template would diverge the fake-agent from the real recipe (mirrors roundReport). The
-  // one minimal structural rule: the classification (`outcome:`) precedes its evidence (`## captured output`),
-  // so the free-form raw output — which may itself contain a line that looks like the field — is never mistaken
-  // for the classification.
-  it('recognizes the tokens under a bullet and amid extra prose, and never reads the field out of the raw body', () => {
-    for (const bullet of ['- ', '* ', '1. ']) {
-      const bulleted = `# Phase result\n\n${bullet}${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-      expect(phaseResultWellFormed(bulleted)).toBe(true);
-      expect(parsePhaseResult(bulleted).outcome).toBe('passed');
-    }
-    // the captured body is returned trimmed (not just present/absent):
-    const paddedBody = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n\n  the raw run  \n\n`;
-    expect(parsePhaseResult(paddedBody).capturedOutput).toBe('the raw run');
-
-    const withProse = `# Phase result\n\nSome preamble the agent wrote.\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: failed-assertion\n\nMore prose.\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nE   assert False\n`;
-    expect(phaseResultWellFormed(withProse)).toBe(true);
-    expect(parsePhaseResult(withProse).outcome).toBe('failed-assertion');
-
-    // the real outcome is the one BEFORE the captured section; a look-alike line inside the raw output is
-    // captured as evidence, never mistaken for the classification.
-    const spoofInBody = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: failed-assertion\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nFAIL some.test.ts\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n`;
-    expect(parsePhaseResult(spoofInBody).outcome).toBe('failed-assertion');
-    expect(parsePhaseResult(spoofInBody).capturedOutput).toContain('passed'); // the look-alike stays in the raw body
+  it('lists the allowed outcomes when the outcome is wrong', () => {
+    const read = readPhaseResult(result({ outcome: 'flaky' }));
+    if (read.ok) throw new Error('expected a problem');
+    for (const o of PHASE_OUTCOMES) expect(read.problem).toContain(o);
   });
 
-  // UT-RESULT-7 — linear-time parse on adversarial input (no catastrophic-backtrack RegExp; a plain char
-  // scan), mirroring roundReport's CWE-1333/400 guarantee. A pathological large input must parse in bounded
-  // time (here: it simply returns rather than hanging).
-  it('parses a large adversarial input without catastrophic backtracking', () => {
-    const pathological = `${'#'.repeat(50_000)}\n${':'.repeat(50_000)}\n${'- '.repeat(50_000)}\n`;
-    const started = performance.now();
-    const parsed = parsePhaseResult(pathological);
-    expect(performance.now() - started).toBeLessThan(1_000); // a plain scan is well under this; a ReDoS would blow it
-    expect(parsed.outcome).toBeNull(); // no valid outcome in the noise
-  });
-
-  // UT-RESULT-8 — the captured-output HEADING recognition rule (trim-then-exact, like roundReport's isHeading),
-  // and a whitespace-only body is NOT "present" (parallel to roundReport's reason==='' reject).
-  it('pins the captured-output heading rule and rejects a whitespace-only body', () => {
-    // wrong level / missing space / wrong case are NOT the captured-output heading:
-    const noSpace = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n##captured output\n\nok\n`;
-    const wrongCase = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n## Captured Output\n\nok\n`;
-    expect(parsePhaseResult(noSpace).capturedOutput).toBeNull();
-    expect(parsePhaseResult(wrongCase).capturedOutput).toBeNull();
-    // surrounding whitespace on a correct heading is tolerated:
-    const padded = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n  ${PHASE_RESULT_GRAMMAR.capturedOutputHeading}  \n\nok\n`;
-    expect(parsePhaseResult(padded).capturedOutput).not.toBeNull();
-    // whitespace-only body → not present:
-    const emptyBody = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n   \n`;
-    expect(parsePhaseResult(emptyBody).capturedOutput).toBeNull();
-    expect(phaseResultWellFormed(emptyBody)).toBe(false);
-  });
-
-  // UT-RESULT-9 (§28.5.3 / S4) — the GREEN turn's result file carries a SECOND classification, `build:`, in the
-  // same grammar. Parsed like `outcome` (before the captured-output heading, exact-string, never normalized,
-  // FIRST-match-wins) but OPTIONAL at the grammar level: a RED file that carries no `build:` stays well-formed
-  // (the grammar is phase-agnostic — the GREEN gate, not the grammar, requires `build: built`).
-  const greenBody = (outcome: string, build: string, captured = '$ pnpm run build\n Build succeeded'): string =>
-    `# Phase result\n\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: ${outcome}\n${PHASE_RESULT_GRAMMAR.buildLabel}: ${build}\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\n${captured}\n`;
-
-  it('parses the build field of a GREEN-shaped result and leaves RED results unaffected', () => {
-    const parsed = parsePhaseResult(greenBody('passed', 'built'));
-    expect(parsed.outcome).toBe('passed');
-    expect(parsed.build).toBe('built');
-    expect(parsed.capturedOutput).not.toBeNull();
-
-    // a RED-shaped file (no build line) → build is null, and it is STILL well-formed (phase-agnostic grammar):
-    const redDoc = examplePhaseResult('failed-assertion');
-    expect(parsePhaseResult(redDoc).build).toBeNull();
-    expect(phaseResultWellFormed(redDoc)).toBe(true);
-  });
-
-  it('parses build and outcome independently of source order (build before outcome)', () => {
-    const buildFirst = `${PHASE_RESULT_GRAMMAR.buildLabel}: built\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-    expect(parsePhaseResult(buildFirst)).toMatchObject({ outcome: 'passed', build: 'built' });
-  });
-
-  it('never normalizes the build value, tolerates a bullet, and never reads it out of the raw captured body', () => {
-    for (const bad of ['Built', 'BUILT', 'build_failed', 'ok', '']) {
-      expect(parsePhaseResult(greenBody('passed', bad)).build).toBeNull();
-    }
-    // layout-tolerant like `outcome`: recognized under a bullet and with surrounding whitespace (shared fieldValue):
-    for (const bullet of ['- ', '* ', '1. ']) {
-      const bulleted = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n${bullet}${PHASE_RESULT_GRAMMAR.buildLabel}:   built  \n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-      expect(parsePhaseResult(bulleted).build).toBe('built');
-    }
-    // a `build:` look-alike line INSIDE the captured output is evidence, never the classification:
-    const spoof = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nsome log\n${PHASE_RESULT_GRAMMAR.buildLabel}: built\n`;
-    expect(parsePhaseResult(spoof).build).toBeNull();
-    expect(parsePhaseResult(spoof).capturedOutput).toContain('built'); // stays in the raw body
-  });
-
-  // UT-RESULT-10 (regression) — both fields are FIRST-match-wins: an invalid first `outcome:`/`build:` line is
-  // terminal for that field (→ null), NEVER overridden by a later valid one. A later valid line silently winning
-  // would turn a malformed result into an accepted one — the RED/GREEN gate reads `resultOutcome`, so this is
-  // gate integrity, not cosmetics.
-  it('keeps outcome and build first-match-wins — a later valid line never overrides an invalid earlier one', () => {
-    const outcomeDup = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: bogus\n${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-    expect(parsePhaseResult(outcomeDup).outcome).toBeNull();
-    expect(phaseResultWellFormed(outcomeDup)).toBe(false);
-
-    const buildDup = `${PHASE_RESULT_GRAMMAR.outcomeLabel}: passed\n${PHASE_RESULT_GRAMMAR.buildLabel}: bogus\n${PHASE_RESULT_GRAMMAR.buildLabel}: built\n\n${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\n\nok\n`;
-    expect(parsePhaseResult(buildDup).build).toBeNull();
-    // outcome is still recovered (independent fields):
-    expect(parsePhaseResult(buildDup).outcome).toBe('passed');
-  });
-
-  // UT-RESULT-11 (§28.5.5 / S4) — the ONE canonical example gains an optional build line: RED callers (no opts)
-  // get the byte-for-byte pre-S4 output; GREEN callers get a well-formed `passed`+`built` few-shot the predicate
-  // round-trips. One generator → prompt few-shot, predicate happy-path, fake-agent output cannot drift.
-  it('emits a build line only when asked, keeping the RED example byte-for-byte unchanged', () => {
-    // byte-for-byte pin of the RED (no-opts) shape — a stray line/reorder would fail this, not just `.not.toContain`:
-    expect(examplePhaseResult('failed-assertion')).toBe(
-      '# Phase result\n\noutcome: failed-assertion\n\n## captured output\n\n' +
-        '$ pnpm test\n × src/adder.test.ts > adds two numbers\n   AssertionError: expected 2 to be 3\n   - Expected\n   + Received\n',
-    );
-    // an empty opts object changes nothing; no outcome's RED shape carries a build line:
-    for (const outcome of PHASE_OUTCOMES) {
-      expect(examplePhaseResult(outcome, {})).toBe(examplePhaseResult(outcome));
-      expect(examplePhaseResult(outcome)).not.toContain('build');
-    }
-    // GREEN opts insert EXACTLY the `build: built` line right after `outcome:` and change nothing else:
-    const red = examplePhaseResult('passed');
-    const green = examplePhaseResult('passed', { build: 'built' });
-    expect(green).toBe(red.replace('outcome: passed\n', 'outcome: passed\nbuild: built\n'));
-    // …and the GREEN few-shot is well-formed + round-trips both classifications:
-    expect(phaseResultWellFormed(green)).toBe(true);
-    expect(parsePhaseResult(green)).toMatchObject({ outcome: 'passed', build: 'built' });
-    expect(green.indexOf('build: built')).toBeLessThan(green.indexOf(PHASE_RESULT_GRAMMAR.capturedOutputHeading));
+  it('never repeats text from the file in what it says is wrong', () => {
+    for (const text of [result({ outcome: '<script>' }), result({ outcome: 'passed', build: '<script>' }), '{"outcome": "<script>'])
+      expect(JSON.stringify(readPhaseResult(text))).not.toContain('script');
   });
 });
 
-// §28.5.5 / §28 §7d — the shared phase-result WRITER block. These pin the OBSERVABLE contract: the composed
-// lines carry the result rel, the grammar tokens and vocabulary (from the shared descriptors), the canonical
-// few-shot, and the caller's `closing` bar prose verbatim; the outcome-only shape omits the build classification.
+describe('whether a phase result completes the turn (§28.5.3)', () => {
+  it('completes when the outcome is the one wanted and the captured run is there', () => {
+    expect(end(examplePhaseResult('failed-assertion'), { outcome: 'failed-assertion' }).ok).toBe(true);
+    expect(end(examplePhaseResult('passed', { build: 'built' }), { outcome: 'passed', build: 'built' }).ok).toBe(true);
+  });
+
+  it.each([
+    ['another outcome', examplePhaseResult('errored'), { outcome: 'failed-assertion' as const }, /reports errored, not failed-assertion/],
+    ['no build where one is wanted', examplePhaseResult('passed'), { outcome: 'passed' as const, build: 'built' as const }, /reports no build, not built/],
+    ['another build', examplePhaseResult('passed', { build: 'build-failed' }), { outcome: 'passed' as const, build: 'built' as const }, /reports build build-failed, not built/],
+    ['a file that is not JSON', 'outcome: passed', { outcome: 'passed' as const }, /not valid JSON/],
+  ])('does not complete with %s, and says why', (_what, text, want, why) => {
+    const e = end(text, want);
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.problem).toMatch(why);
+  });
+
+  it('does not complete when the captured run is missing or empty, naming its file', () => {
+    for (const captured of [null, '', '  \n ']) {
+      const e = end(examplePhaseResult('passed'), { outcome: 'passed' }, captured);
+      expect(e.ok).toBe(false);
+      if (!e.ok) expect(e.problem).toContain(phaseOutputRel(RESULT_REL));
+    }
+  });
+
+  it('never reads the captured run: any text in it is evidence, not a classification', () => {
+    expect(end(examplePhaseResult('passed'), { outcome: 'passed' }, '{"outcome": "errored"}\n## captured output\noutcome: errored').ok).toBe(true);
+  });
+});
+
+describe('the captured run lives beside the result', () => {
+  it.each([
+    ['.agent-terminal/loop/artifacts/red-result.json', '.agent-terminal/loop/artifacts/red-result.output.txt'],
+    ['.agent-terminal/loop/artifacts/red-result.slice-2.json', '.agent-terminal/loop/artifacts/red-result.slice-2.output.txt'],
+    ['.agent-terminal/loop/refactor-results/3.json', '.agent-terminal/loop/refactor-results/3.output.txt'],
+    ['red-result.json', 'red-result.output.txt'],
+  ])('%s keeps its run in %s', (rel, out) => {
+    expect(phaseOutputRel(rel)).toBe(out);
+  });
+
+  it('every outcome has a plausible captured run to show', () => {
+    for (const o of PHASE_OUTCOMES) expect(exampleCapturedOutput(o).trim().length).toBeGreaterThan(0);
+  });
+});
+
 describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)', () => {
-  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
-  const CLOSE = ['This round is done only when the tests still pass.', 'Fix, then re-run and re-classify.'];
+  const lines = (build?: boolean): string =>
+    composePhaseResultInstruction({
+      resultRel: RESULT_REL,
+      completingOutcome: build ? 'passed' : 'failed-assertion',
+      ...(build ? { build: { completingBuildOutcome: 'built' as const } } : {}),
+      closing: ['CLOSING LINE'],
+    }).join('\n');
 
-  const outcomeOnly = composePhaseResultInstruction({
-    resultRel: RESULT_REL,
-    completingOutcome: REFACTOR_COMPLETING_OUTCOME,
-    closing: CLOSE,
-  }).join('\n');
-
-  it('names the result file and interpolates the grammar tokens + full outcome vocabulary from the descriptors', () => {
-    expect(outcomeOnly).toContain(RESULT_REL);
-    expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel);
-    expect(outcomeOnly).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
-    for (const outcome of PHASE_OUTCOMES) expect(outcomeOnly).toContain(outcome);
+  it('names the result file, the captured-run file, every JSON field it asks for, and the full outcome vocabulary', () => {
+    const p = lines();
+    expect(p).toContain(RESULT_REL);
+    expect(p).toContain(phaseOutputRel(RESULT_REL));
+    expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
+    for (const o of PHASE_OUTCOMES) expect(p).toContain(o);
   });
 
-  it('opens by instructing the agent to run the tests and classify the run (the shared opening line)', () => {
-    // Guards the shared opening line so a change to the writer's run→classify directive can't silently regress
-    // (the RED/GREEN branches route through this — normalizing their intros to one phrasing was deliberate).
-    expect(outcomeOnly).toContain('Run the test command for this change and classify');
+  it('tells the agent to save the raw run verbatim in its own file', () => {
+    expect(lines()).toMatch(/raw[\s\S]*verbatim[\s\S]*output\.txt/i);
   });
 
-  it('embeds the ONE canonical example for the completing outcome (single-source with the gate predicate)', () => {
-    const example = examplePhaseResult(REFACTOR_COMPLETING_OUTCOME);
-    expect(phaseResultWellFormed(example)).toBe(true);
-    expect(outcomeOnly).toContain(example.trimEnd());
+  it('embeds the canonical example for the completing outcome, well-formed against the predicate', () => {
+    const p = lines();
+    const json = p.slice(p.indexOf('{'), p.lastIndexOf('}') + 1);
+    expect(readPhaseResult(json)).toMatchObject({ ok: true, result: { outcome: 'failed-assertion' } });
   });
 
   it('threads the phase-specific closing prose verbatim (each caller supplies its own bar)', () => {
-    for (const line of CLOSE) expect(outcomeOnly).toContain(line);
+    expect(lines().endsWith('CLOSING LINE')).toBe(true);
   });
 
-  it('omits the build classification when no build is asked (softer than GREEN — no build: line)', () => {
-    expect(outcomeOnly).not.toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}:`);
-    for (const b of BUILD_OUTCOMES) expect(outcomeOnly).not.toContain(b);
-    // the few-shot for an outcome-only block carries no build line either
-    expect(outcomeOnly).not.toContain('build: built');
+  it('asks for the build only when a completing build outcome is given (GREEN)', () => {
+    expect(lines()).not.toContain(`"${PHASE_RESULT_FIELDS.build}"`);
+    const p = lines(true);
+    expect(p).toContain(`"${PHASE_RESULT_FIELDS.build}"`);
+    for (const b of BUILD_OUTCOMES) expect(p).toContain(b);
+    const json = p.slice(p.indexOf('{'), p.lastIndexOf('}') + 1);
+    expect(readPhaseResult(json)).toMatchObject({ ok: true, result: { outcome: 'passed', build: 'built' } });
   });
 
-  it('includes the build classification + a build few-shot when a completing build outcome is given (GREEN)', () => {
-    const withBuild = composePhaseResultInstruction({
-      resultRel: RESULT_REL,
-      completingOutcome: 'passed',
-      build: { completingBuildOutcome: 'built' },
-      closing: ['This turn is a valid GREEN only when the build succeeds.'],
-    }).join('\n');
-    expect(withBuild).toContain(PHASE_RESULT_GRAMMAR.buildLabel);
-    for (const b of BUILD_OUTCOMES) expect(withBuild).toContain(b);
-    expect(withBuild).toContain(examplePhaseResult('passed', { build: 'built' }).trimEnd());
+  it('works for the refactor bar (tests still pass, no build)', () => {
+    const p = composePhaseResultInstruction({ resultRel: RESULT_REL, completingOutcome: REFACTOR_COMPLETING_OUTCOME, closing: [] }).join('\n');
+    expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}": "${REFACTOR_COMPLETING_OUTCOME}"`);
   });
 });

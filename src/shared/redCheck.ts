@@ -1,9 +1,8 @@
 // §28.5.2/§28.5.3 — the writer (the RED prompts) and the reader (the RED gate) of the red-check report share this
 // module; a second copy of either would let the prompt and the gate disagree (CLAUDE.md shared semantics).
 
-import { PHASE_RESULT_GRAMMAR } from './phaseResult';
+import { PHASE_RESULT_FIELDS, examplePhaseResult, type IntendedFailure } from './phaseResult';
 
-export const INTENDED_FAILURES_HEADING = '## intended failures';
 export const RED_CHECK_REPORT_VERSION = 1;
 export const MAX_RED_CHECK_REPORT_BYTES = 8 * 1024 * 1024;
 const MAX_TESTS = 50_000;
@@ -28,10 +27,7 @@ export interface RedCheckReport {
   tests: RedCheckTest[];
 }
 
-export interface IntendedFailure {
-  file: string;
-  line: number;
-}
+export type { IntendedFailure };
 
 export type RedCheckVerdict = { ok: true; unchecked: string[] } | { ok: false; reason: string };
 
@@ -99,38 +95,12 @@ export function parseRedCheckReport(text: string): { ok: true; report: RedCheckR
   }
 }
 
-export function parseIntendedFailures(text: string): { ok: true; intended: IntendedFailure[] } | { ok: false; reason: string } {
-  const lines = text.split('\n');
-  const intended: IntendedFailure[] = [];
-  let inSection = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (line === PHASE_RESULT_GRAMMAR.capturedOutputHeading) break;
-    if (line.startsWith('#')) {
-      inSection = line === INTENDED_FAILURES_HEADING;
-      continue;
-    }
-    if (!inSection || line === '') continue;
-    if (!line.startsWith('- ')) return { ok: false, reason: `an intended failure must be a \`- file:line\` entry: ${line}` };
-    const entry = line.slice(2).trim();
-    const colon = entry.lastIndexOf(':');
-    const file = colon > 0 ? entry.slice(0, colon) : '';
-    const lineText = colon > 0 ? entry.slice(colon + 1) : '';
-    const n = Number(lineText);
-    if (file === '' || hasControlChar(file) || lineText === '' || !isPositiveInt(n)) {
-      return { ok: false, reason: `an intended failure must be a \`- file:line\` entry: ${line}` };
-    }
-    intended.push({ file, line: n });
-  }
-  return { ok: true, intended };
-}
-
 const loc = (file: string, line: number): string => `${file}:${line}`;
 
 /** §28.5.3 */
 export function redCheckVerdict(q: { report: RedCheckReport; intended: IntendedFailure[]; addedTestPaths: string[] }): RedCheckVerdict {
   if (q.intended.length === 0) {
-    return { ok: false, reason: `the RED result declares no intended failures under \`${INTENDED_FAILURES_HEADING}\`` };
+    return { ok: false, reason: `the RED result declares no intended failures in its "${PHASE_RESULT_FIELDS.intendedFailures}"` };
   }
   const added = new Set(q.addedTestPaths);
   const problems: string[] = [];
@@ -168,8 +138,8 @@ export function exampleRedCheckReport(): string {
   );
 }
 
-export function exampleIntendedFailures(): string[] {
-  return ['- tests/adder.test.ts:5'];
+export function exampleIntendedFailures(): IntendedFailure[] {
+  return [{ file: 'tests/adder.test.ts', line: 5 }];
 }
 
 /** §28.5.3 */
@@ -177,22 +147,18 @@ export function composeRedCheckInstruction(opts: { command: string; reportRel: s
   return [
     `After the test run, run the repository's RED check, \`${opts.command}\`, with the test files you added or`,
     `changed as its arguments, and save what it prints to ${opts.reportRel}. Run it again after any later edit to`,
-    'those tests, so the report is never older than them. Then list every check you intend to fail, one per line',
-    `as \`- file:line\` (repo-relative), under a \`${INTENDED_FAILURES_HEADING}\` heading in ${opts.resultRel},`,
-    `placed before the \`${PHASE_RESULT_GRAMMAR.capturedOutputHeading}\` heading. The engine passes this RED only when,`,
-    'in the files you added tests to, nothing errored and the checks that failed are exactly the ones listed.',
+    'those tests, so the report is never older than them. Then list every check you intend to fail in',
+    `${opts.resultRel}'s \`"${PHASE_RESULT_FIELDS.intendedFailures}"\`, one \`{"file", "line"}\` entry each (the file repo-relative). The engine`,
+    'passes this RED only when, in the files you added tests to, nothing errored and the checks that failed are exactly',
+    'the ones listed.',
     'A test file the check does not run never appears in its report: still declare its intended failures, and the',
     'run log records them as not independently checked.',
     'A test that fails before it reaches the check it exists for is not fixed by listing that earlier line: restructure',
     'it so its own check is the one that fails — split it, or use soft assertions so every check reports.',
-    'An example report and the matching declaration:',
+    'An example report and the matching result:',
     '',
-    '```',
     exampleRedCheckReport(),
-    '```',
     '',
-    INTENDED_FAILURES_HEADING,
-    '',
-    ...exampleIntendedFailures(),
+    examplePhaseResult('failed-assertion', { intendedFailures: exampleIntendedFailures() }).trimEnd(),
   ];
 }

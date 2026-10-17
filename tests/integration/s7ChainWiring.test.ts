@@ -7,7 +7,7 @@ import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { catalogPersonas } from '../../src/main/reviewTurn';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
 import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
-import { PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 import { createGitRepoFixture } from '../helpers/gitRepo';
 
 // §28.10 S7 (§28.2)
@@ -88,13 +88,13 @@ export const CHAIN: readonly LoopRow[] = [
   },
   {
     name: 'red-loop', kind: 'phase', completion: 'red', gate: ['commit'], pickup: false,
-    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.md' },
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'red-result', path: 'red-result.json' },
     polish: 'defer',
     personas: [...['tests', 'intent'].map(impl), authored('impl-review-red-authenticity', 'red-authenticity')],
   },
   {
     name: 'green-loop', kind: 'phase', completion: 'green', gate: ['commit'], pickup: false,
-    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.md' },
+    consolidateSource: 'integration-slice-loop', input: PLAN_INPUT, output: { id: 'green-result', path: 'green-result.json' },
     polish: 'defer',
     personas: [...GREEN_LANES.map(impl), authored('impl-review-regression-guard', 'regression-guard')],
   },
@@ -160,7 +160,7 @@ describe('s7 chain manifest — internally consistent (§28.10 S7)', () => {
       expect(loop.completion !== null, `${loop.name}: phase⇔completion`).toBe(loop.kind === 'phase');
       const wantsBinding = loop.completion === 'red' || loop.completion === 'green';
       expect(loop.output !== null, `${loop.name}: red/green⇔output binding`).toBe(wantsBinding);
-      if (wantsBinding) expect(loop.output).toEqual({ id: `${loop.completion}-result`, path: `${loop.completion}-result.md` });
+      if (wantsBinding) expect(loop.output).toEqual({ id: `${loop.completion}-result`, path: `${loop.completion}-result.json` });
     }
   });
 
@@ -305,7 +305,7 @@ describe('s7 refactor recipe (§28.6 P6c)', () => {
   it('references the capabilities file and embeds no result-file block', () => {
     const body = readFileSync(mustResolve('refactor-loop').work.recipe, 'utf8');
     expect(body).toContain(LOOP_CAPABILITIES_FILENAME);
-    expect(body).not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+    expect(body).not.toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
   });
 });
 

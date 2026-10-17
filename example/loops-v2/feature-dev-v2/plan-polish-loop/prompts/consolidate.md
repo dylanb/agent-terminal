@@ -20,5 +20,5 @@ opens with `Proportion: overbuilt`, or when any item under **Scope escalations**
 is not recorded as `Operator decision (<date>): …`. Name each undecided item in the reason, with the
 size the report gives it.
 
-Write your verdict in the exact labelled-line format the turn instruction specifies. Do not merge or
+Write your verdict in the exact JSON format the turn instruction specifies. Do not merge or
 re-rank findings — that was the round's job; yours is to judge the round and choose what runs next.

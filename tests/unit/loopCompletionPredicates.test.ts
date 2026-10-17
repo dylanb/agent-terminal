@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createLoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
-import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
@@ -10,29 +9,6 @@ describe('loopCompletionPredicates (§28.5.3 engine seam)', () => {
     expect(predicates.classifyOutcome('failed-assertion')).toBe('failed-assertion');
     expect(predicates.classifyOutcome('nope')).toBeNull();
     expect(predicates.classifyOutcome('Passed')).toBeNull(); // never normalized
-  });
-
-  it('resultOutcome returns the outcome of a well-formed result file and null for a malformed one', () => {
-    const predicates = createLoopCompletionPredicates();
-    // a well-formed result (outcome ∈ set AND raw captured output present) yields its outcome:
-    expect(predicates.resultOutcome(examplePhaseResult('failed-assertion'))).toBe('failed-assertion');
-    expect(predicates.resultOutcome(examplePhaseResult('passed'))).toBe('passed');
-    // an outcome with NO captured-output section is not well-formed (AC3) → null, even though the outcome parses:
-    expect(predicates.resultOutcome('outcome: failed-assertion\n')).toBeNull();
-    // an unknown outcome spelling → null:
-    expect(predicates.resultOutcome('outcome: flaky\n\n## captured output\n\nx\n')).toBeNull();
-  });
-
-  it('resultBuildOutcome returns the build classification of a well-formed result and null otherwise', () => {
-    const predicates = createLoopCompletionPredicates();
-    // a well-formed GREEN result → its build classification:
-    expect(predicates.resultBuildOutcome(examplePhaseResult('passed', { build: 'built' }))).toBe('built');
-    expect(predicates.resultBuildOutcome(examplePhaseResult('failed-assertion', { build: 'build-failed' }))).toBe('build-failed');
-    // a well-formed result with NO build line → null (the GREEN gate then refuses it — build not `built`):
-    expect(predicates.resultBuildOutcome(examplePhaseResult('passed'))).toBeNull();
-    // a malformed result (no captured output) → null even if a build line parses:
-    expect(predicates.resultBuildOutcome('outcome: passed\nbuild: built\n')).toBeNull();
-    expect(predicates.resultBuildOutcome('')).toBeNull();
   });
 
   describe('changedTestPaths delegates to the capabilities-sourced detection', () => {

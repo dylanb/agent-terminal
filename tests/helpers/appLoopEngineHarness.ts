@@ -1,4 +1,5 @@
 import { vi, type Mock } from 'vitest';
+import { writePhaseResult } from './phaseResults';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -25,7 +26,9 @@ import { probeChainedInput } from '../../src/main/chainedInputProbe';
 import type { ArtifactBinding, LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
-import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { exampleRoundReport } from '../../src/shared/roundReport';
+import { roundReportWithStatuses } from './roundReports';
+import { verdictOutput } from './consolidatorOutputs';
 
 export const STEP = 'plan';
 // §28.5.1 — the frozen baseline is keyed by the git BRANCH (the slice all phase loops share), not the flow
@@ -44,8 +47,6 @@ export const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
 export const INJECTED_MARKER = 'injected-toolkit-marker';
 const completionPredicatesSentinel: LoopCompletionPredicates = {
   classifyOutcome: (raw) => (raw === INJECTED_MARKER ? 'passed' : null),
-  resultOutcome: () => null,
-  resultBuildOutcome: () => null,
   changedTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   workingTreeTestPaths: async () => ({ ok: false, cause: 'malformed', reason: 'sentinel' }),
   recoverExitCode: async () => null,
@@ -103,7 +104,7 @@ export class AppLoopEngineHarness {
     mkdirSync(join(this.repo, 'recipe'), { recursive: true });
     writeFileSync(join(this.repo, 'recipe', 'work.md'), '# work turn\nProduce the plan.\n');
     this.artifactPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md');
-    this.resultPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'red-result.md');
+    this.resultPath = join(this.repo, '.agent-terminal', 'loop', 'artifacts', 'red-result.json');
     this.hosted = 'idle';
     this.defResult = this.resolved(this.fileDef());
   };
@@ -250,16 +251,15 @@ export class AppLoopEngineHarness {
           ? `check-artifact report ${check.rel} --sections ${check.sections.join(',')} --roster ${check.roster.join(',')}`
           : check.kind === 'verdict'
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
-            : `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`,
+            : check.kind === 'progress'
+              ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
+              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);
   };
 
-  writeResult = (content: string): void => {
-    mkdirSync(join(this.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
-    writeFileSync(this.resultPath, content);
-  };
+  writeResult = (content: string, captured?: string | null): void => writePhaseResult(this.resultPath, content, captured);
 
   writeArtifact = (withMarker: boolean): void => {
     mkdirSync(join(this.repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
@@ -268,14 +268,9 @@ export class AppLoopEngineHarness {
 
   /** Write a well-formed round-N report; `failed` names personas recorded as failed-to-run (§27.5/AC7). */
   writeRoundReport = (round: number, failed: string[] = []): void => {
-    const g = REPORT_GRAMMAR;
-    const parts = ['## summary', ''];
-    for (const persona of ROSTER) {
-      parts.push(`### ${persona}`, '', failed.includes(persona) ? g.failedMarker : g.emptyMarker, '');
-    }
     const p = roundReportFile(this.repo, round)!;
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, `${parts.join('\n')}\n`);
+    writeFileSync(p, roundReportWithStatuses(['summary'], ROSTER, Object.fromEntries(failed.map((persona) => [persona, 'failed' as const]))));
   };
 
   writeConsolidatorOutput = (round: number, content: string): void => {
@@ -332,7 +327,7 @@ export class AppLoopEngineHarness {
     engine.onDoneSignal();
     engine.onInjectable();
     engine.onInjectable();
-    this.completeConsolidate(engine, 1, 'verdict: clean\n');
+    this.completeConsolidate(engine, 1, verdictOutput('clean'));
   };
 
   /** From an in-flight review round `round` (just chained, awaiting injectable): drive the review prompt, land

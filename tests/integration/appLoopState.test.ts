@@ -517,9 +517,9 @@ describe('§27 loop-state — the chained-input carry for a work run', () => {
 // tree (resolveJail). The pin runs first-run: the fixture mkdtemp'd only the repo, so the reports tree is
 // absent — a resolver that only works when the anchor already exists would fail here.
 describe('§27 round-report location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/reports/<N>.md, write-target === read-source', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/reports/<N>.json, write-target === read-source', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
-    expect(roundReportRel(1)).toBe('.agent-terminal/loop/reports/1.md');
+    expect(roundReportRel(1)).toBe('.agent-terminal/loop/reports/1.json');
     expect(roundReportFile(repo, 1)).toBe(join(realpathSync(repo), roundReportRel(1)));
     expect(roundReportFile(repo, 2)).toBe(join(realpathSync(repo), roundReportRel(2)));
   });
@@ -544,8 +544,8 @@ describe('§27 round-report location resolver', () => {
 // read-source (the completion gate, via consolidatorOutputFile) that derive from ONE resolver, round-keyed
 // and disjoint from the round reports (writer↔reader-location).
 describe('§27 consolidator-output location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/consolidate/<N>.md, write-target === read-source', () => {
-    expect(consolidatorOutputRel(2)).toBe('.agent-terminal/loop/consolidate/2.md');
+  it('resolves round N to <repo>/.agent-terminal/loop/consolidate/<N>.json, write-target === read-source', () => {
+    expect(consolidatorOutputRel(2)).toBe('.agent-terminal/loop/consolidate/2.json');
     expect(consolidatorOutputFile(repo, 2)).toBe(join(realpathSync(repo), consolidatorOutputRel(2)));
   });
 
@@ -568,9 +568,9 @@ describe('§27 consolidator-output location resolver', () => {
 // read-source (the round gate, via refactorResultFile) from ONE resolver, round-keyed and disjoint from the
 // round reports and the consolidator output (writer↔reader-location). Confined to the untrusted repo tree.
 describe('§28 refactor-result location resolver', () => {
-  it('resolves round N to <repo>/.agent-terminal/loop/refactor-results/<N>.md, write-target === read-source', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/refactor-results/<N>.json, write-target === read-source', () => {
     expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
-    expect(refactorResultRel(1)).toBe('.agent-terminal/loop/refactor-results/1.md');
+    expect(refactorResultRel(1)).toBe('.agent-terminal/loop/refactor-results/1.json');
     expect(refactorResultFile(repo, 1)).toBe(join(realpathSync(repo), refactorResultRel(1)));
     expect(refactorResultFile(repo, 2)).toBe(join(realpathSync(repo), refactorResultRel(2)));
   });
@@ -585,6 +585,27 @@ describe('§28 refactor-result location resolver', () => {
     try {
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
       expect(refactorResultFile(repo, 1)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a result\'s captured run beside it, named by the same rule the checker reads', async () => {
+    const { phaseOutputFile } = await import('../../src/main/appLoopState');
+    const { phaseOutputRel } = await import('../../src/shared/phaseResult');
+    mkdirSync(join(repo, refactorResultRel(1), '..'), { recursive: true });
+    expect(phaseOutputFile(refactorResultFile(repo, 1)!)).toBe(join(realpathSync(repo), phaseOutputRel(refactorResultRel(1))));
+  });
+
+  it('refuses a captured run that is a symlink out of the loop area (CWE-59)', async () => {
+    const { phaseOutputFile } = await import('../../src/main/appLoopState');
+    const { phaseOutputRel } = await import('../../src/shared/phaseResult');
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-run-'));
+    try {
+      writeFileSync(join(elsewhere, 'run.txt'), 'not this run');
+      mkdirSync(join(repo, refactorResultRel(1), '..'), { recursive: true });
+      symlinkSync(join(elsewhere, 'run.txt'), join(repo, phaseOutputRel(refactorResultRel(1))));
+      expect(phaseOutputFile(refactorResultFile(repo, 1)!)).toBeNull();
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -1051,6 +1072,18 @@ describe('a goal session id (§27.3 v2.201)', () => {
       const state = { loop: 'l', step: 's', turnKey: 'k', status: 'working' as const, goalSession };
       expect(parseAppLoopState(serializeAppLoopState(state, () => new Date(0)))?.goalSession).toBe(goalSession);
     }
+  });
+
+  it('clearing the goal session files removes the captured run the engine reads beside the refactor result', async () => {
+    const { clearGoalSessionFiles, goalRefactorResultFile, newGoalSession, phaseOutputFile } = await import('../../src/main/appLoopState');
+    const session = newGoalSession();
+    const result = goalRefactorResultFile(repo, session)!;
+    mkdirSync(join(result, '..'), { recursive: true });
+    writeFileSync(result, '{}');
+    const run = phaseOutputFile(result)!;
+    writeFileSync(run, 'ok\n');
+    clearGoalSessionFiles(repo);
+    expect(existsSync(run)).toBe(false);
   });
 
   it('a malformed one read back is dropped', async () => {

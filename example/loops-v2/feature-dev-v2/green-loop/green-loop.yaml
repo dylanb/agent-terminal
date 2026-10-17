@@ -48,4 +48,4 @@ inputs:
     path: plan.md
 outputs:
   - id: green-result
-    path: green-result.md
+    path: green-result.json

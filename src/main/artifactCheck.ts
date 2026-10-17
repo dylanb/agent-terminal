@@ -8,16 +8,22 @@ import { shellQuote } from '../shared/shellQuote';
 import { roundReportProblems } from '../shared/roundReport';
 import { consolidatorOutputProblems } from '../shared/consolidatorOutput';
 import { goalLegEnd } from '../shared/goalProgress';
+import { phaseOutputRel, phaseResultEnd } from '../shared/phaseResult';
+import { isPhaseOutcome, type PhaseOutcome } from '../shared/phaseOutcome';
+import { isBuildOutcome, type BuildOutcome } from '../shared/buildOutcome';
 
-/** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, or
- *  a goal session's progress file against the leg it is on (§27.3). */
+/** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, a
+ *  goal session's progress file against the leg it is on (§27.3), or a phase result against the outcome (and, for
+ *  GREEN, the build) its phase needs (§28.5.3). */
 export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
   | { kind: 'verdict'; rel: string; catalog: string[] }
-  | { kind: 'progress'; rel: string; leg: number; legs: boolean };
+  | { kind: 'progress'; rel: string; leg: number; legs: boolean }
+  | { kind: 'result'; rel: string; outcome: PhaseOutcome; build?: BuildOutcome };
 
 const IN_LEGS = 'legs';
 const ONE_LEG = 'one-leg';
+const NO_BUILD = 'no-build';
 
 /** The rollup entry name the build emits the checker under, and the basename the runtime resolves it by. */
 export const ARTIFACT_CHECK_ENTRY = 'artifactCheck';
@@ -51,6 +57,8 @@ function checkArgv(check: ArtifactCheck): string[] {
       return ['verdict', check.rel, csv(check.catalog)];
     case 'progress':
       return ['progress', check.rel, String(check.leg), check.legs ? IN_LEGS : ONE_LEG];
+    case 'result':
+      return ['result', check.rel, check.outcome, check.build ?? NO_BUILD];
   }
 }
 
@@ -61,13 +69,19 @@ function progressProblems(content: string, leg: string, legs: string): string[] 
   return end.ok ? [] : [end.problem];
 }
 
+function resultProblems(rel: string, content: string, captured: string | null, outcome: string, build: string): string[] | null {
+  if (!isPhaseOutcome(outcome) || (build !== NO_BUILD && !isBuildOutcome(build))) return null;
+  const end = phaseResultEnd({ result: content, captured, capturedRel: phaseOutputRel(rel) }, { outcome, ...(build !== NO_BUILD ? { build: build as BuildOutcome } : {}) });
+  return end.ok ? [] : [end.problem];
+}
+
 /** The shell command line the agent runs from the repo root to check `check`'s file (CWE-78: every operand
  *  is quoted through the shared primitive). */
 export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: ArtifactCheck): string {
   return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
 }
 
-const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}>\n`;
+const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}>\n`;
 
 /** Run the check `argv` describes against the file `read` returns (null = missing). Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
@@ -85,9 +99,25 @@ export function runArtifactCheck(argv: string[], read: (rel: string) => string |
     const found = content === null ? [`${rel} does not exist`] : progressProblems(content, rest[0], rest[1]);
     if (found === null) return { exitCode: 2, output: USAGE };
     problems = found;
+  } else if (kind === 'result' && rel !== undefined && rest.length === 2) {
+    const content = read(rel);
+    const found = content === null ? [`${rel} does not exist`] : resultProblems(rel, content, read(phaseOutputRel(rel)), rest[0], rest[1]);
+    if (found === null) return { exitCode: 2, output: USAGE };
+    problems = found;
   } else {
     return { exitCode: 2, output: USAGE };
   }
   if (problems.length === 0) return { exitCode: 0, output: `${ARTIFACT_CHECK_PASSED}: ${rel} passes the loop's format check\n` };
   return { exitCode: 1, output: `${rel} fails the loop's format check:\n${problems.map((p) => `- ${p}`).join('\n')}\n` };
+}
+
+/** §27.12 — tell the agent to run the loop's own checker and fix the file until it passes, before `before`. */
+export function checkerLines(checkCommand: string, what: string, before = 'writing the done-signal'): string[] {
+  return [
+    '',
+    `Before ${before}, run the loop's own format check on the ${what} from the repo root and fix`,
+    `the ${what} until it prints \`${ARTIFACT_CHECK_PASSED}\` — the loop accepts the turn only when this check passes:`,
+    '',
+    `    ${checkCommand}`,
+  ];
 }

@@ -8,7 +8,7 @@ import { exampleSlicePlan, parseSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } 
 import { LOOP_CAPABILITIES_FILENAME } from '../../src/main/loopCapabilities';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, type PhaseOutcome } from '../../src/shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
-import { composePhaseResultInstruction, phaseResultWellFormed, PHASE_RESULT_GRAMMAR } from '../../src/shared/phaseResult';
+import { composePhaseResultInstruction, readPhaseResult, PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 
 // §28.6 (P6b/P6c) — content-parity pins for the five new charters + work recipes S6 authors under
 // feature-dev-v2's folder of example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
@@ -143,10 +143,9 @@ function completingOutcome(completes: 'red' | 'green'): PhaseOutcome {
 }
 
 /** §28.5.5 — the composer embeds exactly one fenced block. */
-function fencedExample(lines: string[]): string {
-  const open = lines.indexOf('```');
-  const close = lines.indexOf('```', open + 1);
-  return open >= 0 && close > open ? lines.slice(open + 1, close).join('\n') : '';
+function embeddedExample(lines: string[]): string {
+  const text = lines.join('\n');
+  return text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
 }
 
 // §28.6 P6c. The work-turn composer owns the result-file embed (§28.5.5), so a phase recipe carries none.
@@ -178,7 +177,7 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
           if (row.completes === 'green') expect(body).toContain(`\`${GREEN_COMPLETING_BUILD_OUTCOME}\``);
         });
         it('embeds no result-file block', () => {
-          expect(read(row.file) ?? '').not.toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading);
+          expect(read(row.file) ?? '').not.toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
         });
       }
     });
@@ -190,7 +189,7 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
         completes === 'green'
           ? composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: GREEN_COMPLETING_OUTCOME, build: { completingBuildOutcome: GREEN_COMPLETING_BUILD_OUTCOME }, closing: [] })
           : composePhaseResultInstruction({ resultRel: 'result.md', completingOutcome: RED_COMPLETING_OUTCOME, closing: [] });
-      expect(phaseResultWellFormed(fencedExample(lines))).toBe(true);
+      expect(readPhaseResult(embeddedExample(lines)).ok).toBe(true);
     });
   }
 });

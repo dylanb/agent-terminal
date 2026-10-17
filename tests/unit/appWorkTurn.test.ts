@@ -9,7 +9,7 @@ import {
 } from '../../src/main/appWorkTurn';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
-import { PHASE_RESULT_GRAMMAR, examplePhaseResult, phaseResultWellFormed } from '../../src/shared/phaseResult';
+import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel, readPhaseResult } from '../../src/shared/phaseResult';
 import { PHASE_OUTCOMES, GREEN_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES, GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 
@@ -348,17 +348,17 @@ describe('composeAppWorkPrompt (ticket binding — the resolved GitHub issue the
 // §28.5.5/§28 §7d — the RED work turn: the agent runs the tests, classifies the run into the phase-outcome
 // vocabulary, and writes the phase-result file the RED gate reads. The prompt is the WRITER half of the shared-
 // semantics contract (CODE-STANDARDS "a composed prompt that instructs an agent to produce a serialized
-// artifact"): every grammar token it names is interpolated from PHASE_RESULT_GRAMMAR / PHASE_OUTCOMES (one
+// artifact"): every JSON key it names is interpolated from PHASE_RESULT_FIELDS / PHASE_OUTCOMES (one
 // descriptor the predicate also derives from), and it embeds the canonical example asserted well-formed against
 // that same predicate — so the instruction and the gate cannot drift.
 describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mode)', () => {
-  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
+  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.json';
   const redPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
     composeAppWorkPrompt({
       recipeBody: '# work turn\nAuthor a failing test for the adder.',
       turnKey: 'work-red-slice1',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { kind: 'red', resultRel: RESULT_REL, redCheckCommand: null },
+      completion: { kind: 'red', resultRel: RESULT_REL, checkCommand: 'check-artifact result red', redCheckCommand: null },
       ...over,
     });
 
@@ -371,10 +371,10 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
     expect(prompt.toLowerCase()).toContain('re-read');
   });
 
-  it('interpolates the grammar tokens and the FULL outcome vocabulary from the shared descriptors (no re-spell)', () => {
+  it('interpolates the JSON key, the captured-run file and the FULL outcome vocabulary from the shared descriptors (no re-spell)', () => {
     const prompt = redPrompt();
-    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel); // `outcome`
-    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // `## captured output`
+    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
+    expect(prompt).toContain(phaseOutputRel(RESULT_REL));
     for (const outcome of PHASE_OUTCOMES) {
       expect(prompt).toContain(outcome); // every category the agent may classify into
     }
@@ -384,8 +384,12 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
     // The contract: the few-shot the prompt shows is validated by the SAME predicate the gate runs, so a change
     // to the grammar that broke the example would fail here before it could mislead the agent.
     const example = examplePhaseResult('failed-assertion');
-    expect(phaseResultWellFormed(example)).toBe(true);
-    expect(redPrompt()).toContain(example);
+    expect(readPhaseResult(example).ok).toBe(true);
+    expect(redPrompt()).toContain(example.trimEnd());
+  });
+
+  it('hands the agent the check the engine applies, to run until it passes before the done-signal', () => {
+    expect(redPrompt()).toMatch(/fix\s+the phase result until it prints `OK`[\s\S]*check-artifact result red/);
   });
 
   it('states the RED completion bar (a newly-added test that fails by assertion), distinguishing it from errored', () => {
@@ -412,13 +416,13 @@ describe('composeAppWorkPrompt (§28.5.5 — the RED phase-result completion mod
 // interpolated from the shared descriptors, and the embedded few-shot is the canonical example asserted
 // well-formed against the gate predicate — so the instruction and the gate cannot drift.
 describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion mode)', () => {
-  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.md';
+  const RESULT_REL = '.agent-terminal/loop/artifacts/phase-result.json';
   const greenPrompt = (over: Partial<Parameters<typeof composeAppWorkPrompt>[0]> = {}) =>
     composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the adder so the failing test passes.',
       turnKey: 'work-green-slice1',
       doneRelPath: '.agent-terminal/loop/turn-done',
-      completion: { kind: 'green', resultRel: RESULT_REL },
+      completion: { kind: 'green', resultRel: RESULT_REL, checkCommand: 'check-artifact result green' },
       ...over,
     });
 
@@ -432,19 +436,20 @@ describe('composeAppWorkPrompt (§28.5.3 — the GREEN phase-result completion m
 
   it('interpolates the grammar tokens and BOTH the test and build vocabularies from the shared descriptors', () => {
     const prompt = greenPrompt();
-    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.outcomeLabel); // `outcome`
-    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.buildLabel); // `build`
-    expect(prompt).toContain(PHASE_RESULT_GRAMMAR.capturedOutputHeading); // `## captured output`
+    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
+    expect(prompt).toContain(`"${PHASE_RESULT_FIELDS.build}"`);
+    expect(prompt).toContain(phaseOutputRel(RESULT_REL));
+    expect(prompt).toContain('check-artifact result green');
     for (const outcome of PHASE_OUTCOMES) expect(prompt).toContain(outcome); // the test-outcome vocabulary
     for (const build of BUILD_OUTCOMES) expect(prompt).toContain(build); // the build-outcome vocabulary
   });
 
   it('embeds the ONE canonical GREEN example, well-formed against the gate predicate (single-source)', () => {
     const example = examplePhaseResult(GREEN_COMPLETING_OUTCOME, { build: GREEN_COMPLETING_BUILD_OUTCOME });
-    expect(phaseResultWellFormed(example)).toBe(true);
-    expect(greenPrompt()).toContain(example);
+    expect(readPhaseResult(example).ok).toBe(true);
+    expect(greenPrompt()).toContain(example.trimEnd());
     // the few-shot carries BOTH the `passed` outcome and the `built` build (not a RED example):
-    expect(greenPrompt()).toContain(`${PHASE_RESULT_GRAMMAR.buildLabel}: ${GREEN_COMPLETING_BUILD_OUTCOME}`);
+    expect(greenPrompt()).toContain(`"${PHASE_RESULT_FIELDS.build}": "${GREEN_COMPLETING_BUILD_OUTCOME}"`);
   });
 
   it('states the GREEN completion bar (tests pass AND build built), distinct from a failing test / broken build', () => {

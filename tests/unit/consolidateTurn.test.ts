@@ -60,8 +60,8 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
   const req = {
     recipeBody: '# plan-loop — consolidator\nJudge the round.',
     catalog,
-    reportRels: ['.agent-terminal/loop/reports/1.md', '.agent-terminal/loop/reports/2.md'],
-    outputRel: '.agent-terminal/loop/consolidate/2.md',
+    reportRels: ['.agent-terminal/loop/reports/1.json', '.agent-terminal/loop/reports/2.json'],
+    outputRel: '.agent-terminal/loop/consolidate/2.json',
     round: 2,
     turnKey: 'consolidate-plan',
     doneRelPath: '.agent-terminal/loop/turn-done',
@@ -95,9 +95,9 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
     const prompt = composeConsolidatePrompt(req);
     // Slice the ACTUAL example the composer embedded and validate THAT — a drift in exampleConsolidatorOutput as
     // embedded (wrong label, a roster persona outside the catalog) must fail here, mirroring reviewTurn's pattern.
-    const example = prompt.slice(prompt.indexOf('# Consolidator verdict'));
-    expect(example).toContain('# Consolidator verdict');
-    expect(consolidatorOutputWellFormed(example, catalog)).toBe(true);
+    const lead = 'A well-formed example:';
+    expect(prompt).toContain(lead);
+    expect(consolidatorOutputWellFormed(prompt.slice(prompt.indexOf(lead) + lead.length), catalog)).toBe(true);
   });
 
   it('ends with the shared done-signal instruction keyed to the consolidate turn, verifying the output first', () => {

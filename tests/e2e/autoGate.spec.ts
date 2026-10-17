@@ -45,8 +45,8 @@ test.afterEach(async () => {
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const RED_RESULT_REL = '.agent-terminal/loop/artifacts/red-result.md';
-const GREEN_RESULT_REL = '.agent-terminal/loop/artifacts/green-result.md';
+const RED_RESULT_REL = '.agent-terminal/loop/artifacts/red-result.json';
+const GREEN_RESULT_REL = '.agent-terminal/loop/artifacts/green-result.json';
 const GROOMED_REL = '.agent-terminal/loop/artifacts/groomed-ticket.md';
 const AUTO_RED_THEN_MANUAL: AutoGateStep[] = [
   { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' },

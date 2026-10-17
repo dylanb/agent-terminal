@@ -1,8 +1,8 @@
-// §27.5 — the round report: a serialized Markdown vocabulary with one writer (the fixer) and multiple
-// readers (this slice's completion validator, N4's consolidator). One definition in the shared layer so the
-// prompt composer (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
+// §27.5 — the round report: JSON with one writer (the fixer) and several readers (the completion validator, the
+// agent's own check, the clean-guard, the auto gate). One definition in the shared layer so the prompt composer
+// (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
 
-import { fieldBlock, fieldValue } from './markdownFields';
+import { isJsonRecord as isRecord, readJsonObject } from './jsonArtifact';
 
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
@@ -20,32 +20,26 @@ export const INVALID_DISPOSITION: Disposition = 'dismissed — invalid';
 /** The disposition a fix the loop is not entitled to make takes (§27.3 document-subject overreach). */
 export const NEEDS_HUMAN_DISPOSITION: Disposition = 'needs a human';
 
-/** The report grammar both sides agree on: heading prefixes, per-issue element labels, and the empty/failed
- *  persona marker. It pins the names/tokens, not a rigid layout — an over-constrained template would diverge
- *  the fake-agent from the real fixer (§27.5 Risks). */
-export interface ReportGrammar {
-  sectionPrefix: string;
-  personaPrefix: string;
-  issueLabel: string;
-  dispositionLabel: string;
-  reasonLabel: string;
-  whatChangedLabel: string;
-  emptyMarker: string;
-  failedMarker: string;
-  notLoadedMarker: string;
-}
+/** Whether a reviewer ran (and raised its issues, possibly none), failed to run, or could not be spawned
+ *  because this agent session started before it was installed (§27.4/§27.5). */
+export const REVIEWER_STATUSES = ['ran', 'failed', 'not loaded'] as const;
+export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
 
-export const REPORT_GRAMMAR: ReportGrammar = {
-  sectionPrefix: '## ',
-  personaPrefix: '### ',
-  issueLabel: 'issue',
-  dispositionLabel: 'disposition',
-  reasonLabel: 'reason',
-  whatChangedLabel: 'what-changed',
-  emptyMarker: '_no findings_',
-  failedMarker: '_failed to run_',
-  notLoadedMarker: '_not loaded in this agent session_',
-};
+export const RAN_STATUS: ReviewerStatus = 'ran';
+export const FAILED_STATUS: ReviewerStatus = 'failed';
+export const NOT_LOADED_STATUS: ReviewerStatus = 'not loaded';
+
+export const REPORT_FIELDS = {
+  sections: 'sections',
+  reviewers: 'reviewers',
+  persona: 'persona',
+  status: 'status',
+  issues: 'issues',
+  issue: 'issue',
+  disposition: 'disposition',
+  reason: 'reason',
+  whatChanged: 'whatChanged',
+} as const;
 
 /** The def-declared sections and the round's roster, as primitive string vocabulary — never the parsed-def
  *  types that live in main (the injection seam names the domain concept, not the shape behind it). */
@@ -54,174 +48,158 @@ export interface RoundReportSpec {
   roster: string[];
 }
 
+interface ReviewerRecord {
+  persona: string;
+  status: ReviewerStatus;
+  dispositions: Disposition[];
+}
+
+/** `unreadable`: some reviewer record or issue disposition could not be read, so a reading of the report as a
+ *  whole (whether it needs a human) cannot be trusted. */
+type Read = { ok: true; doc: Record<string, unknown>; reviewers: ReviewerRecord[]; problems: string[]; unreadable: boolean } | { ok: false; problem: string };
+
 const DISPOSITION_SET: ReadonlySet<string> = new Set(DISPOSITIONS);
+const STATUS_SET: ReadonlySet<string> = new Set(REVIEWER_STATUSES);
+const quoted = (items: readonly string[]): string => items.map((d) => `"${d}"`).join(' / ');
 
-function isHeading(line: string, prefix: string): string | null {
-  const t = line.trim();
-  return t.startsWith(prefix) ? t.slice(prefix.length).trim() : null;
+const hasText = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+
+function issueProblems(v: unknown, at: string): { problems: string[]; disposition: Disposition | null } {
+  const f = REPORT_FIELDS;
+  if (!isRecord(v)) return { problems: [`${at} is not a JSON object`], disposition: null };
+  const problems: string[] = [];
+  if (!hasText(v[f.issue])) problems.push(`${at} has no "${f.issue}" text`);
+  const d = v[f.disposition];
+  const disposition = typeof d === 'string' && DISPOSITION_SET.has(d) ? (d as Disposition) : null;
+  if (disposition === null) problems.push(`${at}'s "${f.disposition}" is not exactly one of ${quoted(DISPOSITIONS)}`);
+  if (!hasText(v[f.reason])) problems.push(`${at} has no "${f.reason}" text`);
+  if (disposition === FIXED_DISPOSITION && !hasText(v[f.whatChanged])) problems.push(`${at} is "${FIXED_DISPOSITION}" but has no "${f.whatChanged}" text`);
+  return { problems, disposition };
 }
 
-interface IssueBlock {
-  hasPersona: boolean;
-  issue: string;
-  disposition: string | null;
-  reason: string | null;
-  whatChanged: string | null;
+/** The report read, with each defect in it named by position (and by persona only when the roster names it), so
+ *  nothing the file says is ever repeated back. */
+function readReport(text: string, roster: readonly string[]): Read {
+  const f = REPORT_FIELDS;
+  const json = readJsonObject(text);
+  if (!json.ok) return json;
+  const { doc } = json;
+  const list = doc[f.reviewers];
+  if (!Array.isArray(list)) return { ok: false, problem: `its "${f.reviewers}" is not a list` };
+  const known = new Set(roster);
+  const problems: string[] = [];
+  const reviewers: ReviewerRecord[] = [];
+  let unreadable = false;
+  list.forEach((v: unknown, i) => {
+    const name = isRecord(v) ? v[f.persona] : undefined;
+    const persona = typeof name === 'string' ? name : null;
+    const at = `${f.reviewers}[${i}]${persona !== null && known.has(persona) ? ` (${persona})` : ''}`;
+    if (!isRecord(v) || persona === null) {
+      problems.push(`${at} has no "${f.persona}" name`);
+      unreadable = true;
+      return;
+    }
+    const s = v[f.status];
+    if (typeof s !== 'string' || !STATUS_SET.has(s)) {
+      problems.push(`${at}'s "${f.status}" is not exactly one of ${quoted(REVIEWER_STATUSES)}`);
+      unreadable = true;
+      return;
+    }
+    const issues = v[f.issues];
+    if (!Array.isArray(issues)) {
+      problems.push(`${at}'s "${f.issues}" is not a list`);
+      unreadable = true;
+      return;
+    }
+    const dispositions: Disposition[] = [];
+    issues.forEach((issue: unknown, j) => {
+      const read = issueProblems(issue, `${at} ${f.issues}[${j}]`);
+      problems.push(...read.problems);
+      if (read.disposition === null) unreadable = true;
+      else dispositions.push(read.disposition);
+    });
+    reviewers.push({ persona, status: s as ReviewerStatus, dispositions });
+  });
+  return { ok: true, doc, reviewers, problems, unreadable };
 }
 
-function issueProblems(block: IssueBlock, line: number): string[] {
-  const g = REPORT_GRAMMAR;
-  const at = `line ${line} (\`${g.issueLabel}: ${block.issue.slice(0, 60)}\`)`;
-  const out: string[] = [];
-  if (!block.hasPersona) out.push(`${at}: the issue is recorded outside any \`${g.personaPrefix.trim()} <persona>\` reviewer record`);
-  if (block.issue === '') out.push(`line ${line}: \`${g.issueLabel}:\` has no text`);
-  if (block.disposition === null) out.push(`${at}: no \`${g.dispositionLabel}:\` line`);
-  else if (!DISPOSITION_SET.has(block.disposition)) {
-    out.push(`${at}: \`${g.dispositionLabel}: ${block.disposition}\` is not exactly one of ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')}`);
-  }
-  if (block.reason === null || block.reason === '') out.push(`${at}: no \`${g.reasonLabel}:\` text`);
-  if (block.disposition === FIXED_DISPOSITION && (block.whatChanged === null || block.whatChanged === '')) {
-    out.push(`${at}: a \`${FIXED_DISPOSITION}\` issue needs \`${g.whatChangedLabel}:\` text`);
-  }
-  return out;
-}
-
-/** Every defect that keeps the report from being well-formed (§27.5/§27.12), each naming the element it
- *  concerns: a def-declared section missing, a roster persona with no record, and each recorded issue missing
- *  a required element or carrying a disposition outside the closed set (exact match, trimmed — never
- *  normalized). Empty ⟺ well-formed. Disposition CORRECTNESS is out of scope. */
+/** Every defect that keeps the report from being well-formed (§27.5/§27.12): a def-declared section missing, a
+ *  roster persona with no record or more than one, and each record or issue missing a required field or carrying
+ *  a value outside its closed set (exact match, never normalized). Empty ⟺ well-formed. Disposition CORRECTNESS
+ *  is out of scope. The problems are fixed text that never repeats the file's own. */
 export function roundReportProblems(report: string, spec: RoundReportSpec): string[] {
-  const g = REPORT_GRAMMAR;
-  const parsed = parseReport(report);
-  const problems: string[] = parsed.issues.flatMap(({ block, line }) => issueProblems(block, line));
-  for (const s of spec.sections) if (!parsed.sections.has(s)) problems.push(`missing the \`${g.sectionPrefix}${s}\` section heading`);
+  const f = REPORT_FIELDS;
+  const read = readReport(report, spec.roster);
+  if (!read.ok) return [read.problem];
+  const sections = read.doc[f.sections];
+  const problems = [...read.problems];
+  if (!isRecord(sections)) problems.push(`its "${f.sections}" is not a JSON object`);
+  else for (const s of spec.sections) if (typeof sections[s] !== 'string') problems.push(`its "${f.sections}" has no "${s}" text`);
   for (const p of spec.roster) {
-    if (!parsed.personas.has(p)) problems.push(`missing the \`${g.personaPrefix}${p}\` reviewer record (write \`${g.emptyMarker}\` or \`${g.failedMarker}\` if it raised nothing)`);
+    const n = read.reviewers.filter((r) => r.persona === p).length;
+    if (n === 0) problems.push(`its "${f.reviewers}" has no record for ${p}`);
+    if (n > 1) problems.push(`its "${f.reviewers}" records ${p} more than once`);
   }
   return problems;
 }
-
-function parseReport(report: string): { sections: Set<string>; personas: Set<string>; issues: { block: IssueBlock; line: number }[] } {
-  const lines = report.split('\n');
-  const sections = new Set<string>();
-  const personas = new Set<string>();
-  const issues: { block: IssueBlock; line: number }[] = [];
-  const g = REPORT_GRAMMAR;
-
-  let currentPersona: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const persona = isHeading(lines[i], g.personaPrefix);
-    if (persona !== null) {
-      personas.add(persona);
-      currentPersona = persona;
-      continue;
-    }
-    const section = isHeading(lines[i], g.sectionPrefix);
-    if (section !== null) {
-      sections.add(section);
-      currentPersona = null;
-      continue;
-    }
-    const issue = fieldBlock(lines, i, g.issueLabel);
-    if (issue !== null) {
-      const block: IssueBlock = { hasPersona: currentPersona !== null, issue: issue.value, disposition: null, reason: null, whatChanged: null };
-      let j = issue.end;
-      while (j < lines.length) {
-        if (fieldValue(lines[j], g.issueLabel) !== null) break;
-        if (isHeading(lines[j], g.personaPrefix) !== null || isHeading(lines[j], g.sectionPrefix) !== null) break;
-        const d = fieldBlock(lines, j, g.dispositionLabel);
-        const r = fieldBlock(lines, j, g.reasonLabel);
-        const w = fieldBlock(lines, j, g.whatChangedLabel);
-        if (d !== null) block.disposition = d.value;
-        if (r !== null) block.reason = r.value;
-        if (w !== null) block.whatChanged = w.value;
-        j = (d ?? r ?? w)?.end ?? j + 1;
-      }
-      issues.push({ block, line: i + 1 });
-      i = j - 1;
-    }
-  }
-  return { sections, personas, issues };
-}
-
-/** §27.9.1 N9b.6(a) — whether the report records any issue with the `needs a human` disposition; `null` when an
- *  issue's disposition cannot be read as one of the closed set. */
-export function reportNeedsAHuman(report: string): boolean | null {
-  const dispositions = parseReport(report).issues.map(({ block }) => block.disposition);
-  if (dispositions.some((d) => d === null || !DISPOSITION_SET.has(d))) return null;
-  return dispositions.includes(NEEDS_A_HUMAN);
-}
-
-const NEEDS_A_HUMAN: Disposition = 'needs a human';
 
 /** Whether the report is well-formed (§27.5/§27.12) — exactly when `roundReportProblems` finds nothing. */
 export function roundReportWellFormed(report: string, spec: RoundReportSpec): boolean {
   return roundReportProblems(report, spec).length === 0;
 }
 
-/** The personas a round report records as having FAILED TO RUN (§27.5/AC7): each persona whose record
- *  carries the single-sourced failed marker as a line of its own. Distinct from a persona that RAN and found
- *  nothing (the empty marker) or one that RAN and raised issues (a `needs a human` disposition is a raised
- *  issue, never a failed lens). The marker is only recognized inside a persona record — prose outside one is
- *  never mistaken for it — so the engine's clean-guard reads the same grammar the validator single-sources. */
-export function failedReviewers(report: string): string[] {
-  return reviewersMarked(report, REPORT_GRAMMAR.failedMarker);
+/** §27.9.1 N9b.6(a) — whether the report records any issue with the `needs a human` disposition; `null` when the
+ *  report's reviewers or any issue's disposition cannot be read. */
+export function reportNeedsAHuman(report: string): boolean | null {
+  const read = readReport(report, []);
+  if (!read.ok || read.unreadable) return null;
+  return read.reviewers.some((r) => r.dispositions.includes(NEEDS_HUMAN_DISPOSITION));
 }
 
-/** §27.4 — the personas whose sub-agent type this agent session could not spawn, recorded with the not-loaded
- *  marker inside their own record. */
-export function unloadedReviewers(report: string): string[] {
-  return reviewersMarked(report, REPORT_GRAMMAR.notLoadedMarker);
+/** Only `roster` personas are returned, so the names a caller repeats or spawns come from the def, never the file. */
+function reviewersWith(report: string, status: ReviewerStatus, roster: readonly string[]): string[] {
+  const read = readReport(report, roster);
+  if (!read.ok) return [];
+  const recorded = new Set(read.reviewers.filter((r) => r.status === status).map((r) => r.persona));
+  return roster.filter((p) => recorded.has(p));
 }
 
-function reviewersMarked(report: string, marker: string): string[] {
-  const g = REPORT_GRAMMAR;
-  const failed: string[] = [];
-  let currentPersona: string | null = null;
-  for (const line of report.split('\n')) {
-    const persona = isHeading(line, g.personaPrefix);
-    if (persona !== null) {
-      currentPersona = persona;
-      continue;
-    }
-    if (isHeading(line, g.sectionPrefix) !== null) {
-      currentPersona = null;
-      continue;
-    }
-    if (currentPersona !== null && line.trim() === marker && !failed.includes(currentPersona)) {
-      failed.push(currentPersona);
-    }
-  }
-  return failed;
+/** The personas a round report records as having FAILED TO RUN (§27.5/AC7) — distinct from a persona that ran and
+ *  found nothing or ran and raised issues (a `needs a human` disposition is a raised issue, never a failed lens). */
+export function failedReviewers(report: string, roster: readonly string[]): string[] {
+  return reviewersWith(report, FAILED_STATUS, roster);
 }
 
-/** Whether the round report records ANY reviewer as failed to run (§27.5/AC7) — the boolean the engine's
- *  clean-guard keys on. A round with a failed lens is never presented clean, even if the consolidator emits
- *  `clean`; a raised `needs a human` issue is the consolidator's territory, not a failed lens. */
-export function reportHasFailedReviewer(report: string): boolean {
-  return failedReviewers(report).length > 0;
+/** §27.4 — the personas whose sub-agent type this agent session could not spawn. */
+export function unloadedReviewers(report: string, roster: readonly string[]): string[] {
+  return reviewersWith(report, NOT_LOADED_STATUS, roster);
 }
 
-/** The single canonical example the predicate happy-path test, the fake-agent e2e output, and the prompt
- *  few-shot all reference — one artifact so the four consumers cannot drift (§27.5). The first roster
- *  persona demonstrates a fixed issue with every element; the rest carry the explicit empty marker. */
+/** The single canonical example the predicate test, the fake-agent e2e output and the prompt few-shot all
+ *  reference (§27.5). The first roster persona demonstrates a fixed issue with every field; the rest ran and
+ *  found nothing. */
 export function exampleRoundReport(spec: RoundReportSpec): string {
-  const g = REPORT_GRAMMAR;
-  const parts: string[] = ['# Round report', ''];
-  for (const s of spec.sections) parts.push(`${g.sectionPrefix}${s}`, '', `(${s})`, '');
-  spec.roster.forEach((persona, idx) => {
-    parts.push(`${g.personaPrefix}${persona}`, '');
-    if (idx === 0) {
-      parts.push(
-        `- ${g.issueLabel}: a sample issue raised by ${persona}`,
-        `  ${g.dispositionLabel}: ${FIXED_DISPOSITION}`,
-        `  ${g.reasonLabel}: it was a real in-scope defect`,
-        `  ${g.whatChangedLabel}: corrected the defect`,
-        '',
-      );
-    } else {
-      parts.push(g.emptyMarker, '');
-    }
-  });
-  return `${parts.join('\n')}\n`;
+  const f = REPORT_FIELDS;
+  return `${JSON.stringify(
+    {
+      [f.sections]: Object.fromEntries(spec.sections.map((s) => [s, `(${s})`])),
+      [f.reviewers]: spec.roster.map((persona, idx) => ({
+        [f.persona]: persona,
+        [f.status]: RAN_STATUS,
+        [f.issues]:
+          idx === 0
+            ? [
+                {
+                  [f.issue]: `a sample issue raised by ${persona}`,
+                  [f.disposition]: FIXED_DISPOSITION,
+                  [f.reason]: 'it was a real in-scope defect',
+                  [f.whatChanged]: 'corrected the defect',
+                },
+              ]
+            : [],
+      })),
+    },
+    null,
+    2,
+  )}\n`;
 }

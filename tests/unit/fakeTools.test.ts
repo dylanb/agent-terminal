@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
-import { roundReportWellFormed } from '../../src/shared/roundReport';
+import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/roundReport';
 import { parseConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 const dirs: string[] = [];
 const procs: ChildProcessWithoutNullStreams[] = [];
@@ -142,7 +143,7 @@ describe('the per-step fake agent', () => {
         sections,
         reviews: ['needs-human'],
         verdicts: ['a round-keyed output the attempt script must override\n'],
-        consolidateAttempts: ['no verdict here\n', 'verdict: clean\n'],
+        consolidateAttempts: ['no verdict here\n', verdictOutput('clean')],
         extraShell: { work: ['printf one > extra-a-1', 'printf two > extra-a-2'], review: ['printf r > extra-review-1'], consolidate: ['printf c > extra-consolidate-1'] },
       },
       'a-2': { artifactRel: '.agent-terminal/loop/artifacts/a2.md', work: 'complete', roster, sections },
@@ -159,16 +160,16 @@ describe('the per-step fake agent', () => {
     expect(existsSync(join(repo, 'extra-review-1'))).toBe(false);
     await turn(send, repo, 'review-a');
     expect(readIf(join(repo, 'extra-review-1'))).toBe('r');
-    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.md'));
+    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.json'));
     expect(roundReportWellFormed(report, { sections, roster })).toBe(true);
-    expect(report).toMatch(/^\s*disposition: needs a human$/m);
+    expect(reportNeedsAHuman(report)).toBe(true);
 
     expect(existsSync(join(repo, 'extra-consolidate-1'))).toBe(false);
     await turn(send, repo, 'consolidate-a');
     expect(readIf(join(repo, 'extra-consolidate-1'))).toBe('c');
-    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe('no verdict here\n');
+    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.json'))).toBe('no verdict here\n');
     await turn(send, repo, 'consolidate-a');
-    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe('verdict: clean\n');
+    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.json'))).toBe(verdictOutput('clean'));
 
     await turn(send, repo, 'work-a-2');
     expect(existsSync(join(repo, '.agent-terminal/loop/artifacts/a2.md'))).toBe(true);
@@ -209,10 +210,10 @@ describe('the per-step fake agent', () => {
     send('/clear');
     await vi.waitFor(() => expect(existsSync(join(repo, '.agent-terminal/clear-seen'))).toBe(true), { timeout: 5000 });
     expect(existsSync(doneFile(repo))).toBe(false);
-    expect(existsSync(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe(false);
+    expect(existsSync(join(repo, '.agent-terminal/loop/consolidate/1.json'))).toBe(false);
     rmSync(sentinel);
     await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe('consolidate-h'), { timeout: 5000 });
-    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.md'))).toBe('verdict: clean\n');
+    expect(readIf(join(repo, '.agent-terminal/loop/consolidate/1.json'))).toBe(verdictOutput('clean'));
   }, 15_000);
 
   it('an abandoned hold exits with no action even when the sentinel is then deleted', async () => {
@@ -242,7 +243,7 @@ describe('the full-TDD chain agent', () => {
       p.stdin.write(`turn-done:${key}\n`);
       await vi.waitFor(() => expect(readIf(done)).toBe(key), { timeout: 5000 });
     };
-    const verdict = () => parseConsolidatorOutput(readIf(join(repo, '.agent-terminal/loop/consolidate/1.md')))?.verdict;
+    const verdict = () => parseConsolidatorOutput(readIf(join(repo, '.agent-terminal/loop/consolidate/1.json')))?.verdict;
 
     await turn('work-green');
     const green1 = readIf(join(repo, 'feature.ts'));

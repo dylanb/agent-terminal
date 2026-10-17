@@ -605,7 +605,7 @@ async function createWindow(): Promise<void> {
       const resolved = observedResolveDef(t.repoKey, step.loop);
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
       // §28.4 D1 — which impl-slice this entry is for; the engine keys the result artifact off it so a
-      // loop-back re-entered RED writes `red-result.slice-N.md` fresh instead of resuming slice 1's product.
+      // loop-back re-entered RED writes `red-result.slice-N.json` fresh instead of resuming slice 1's product.
       const slice = flow.currentSlice(t.repoKey);
       if (!resolved.ok || appBootstrapCoordinator === null) {
         appEngine.enter(t.repoKey, step.loop, step.id, t.entry, { slice });
