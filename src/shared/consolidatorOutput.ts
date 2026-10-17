@@ -5,12 +5,13 @@
 // drift — the §93 writer↔reader / composed-prompt-is-a-writer pattern. It grades the CLOSED verdict set and
 // the roster⊆catalog relationship, never the quality of the judgment (§27.6 Non-goals).
 
+import { readJsonObject } from './jsonArtifact';
+
 /** The closed set of verdicts the consolidator may emit (§27.6). Spelled once — the type, the parser, and
  *  the well-formedness predicate all derive from this one array so no side can admit a fourth value. */
 export const CONSOLIDATOR_VERDICTS = ['clean', 'another round', 'stop for a human'] as const;
 export type ConsolidatorVerdict = (typeof CONSOLIDATOR_VERDICTS)[number];
 
-/** The JSON keys of the output. */
 export const CONSOLIDATOR_FIELDS = {
   verdict: 'verdict',
   roster: 'roster',
@@ -28,23 +29,13 @@ export function verdictCarriesReason(verdict: ConsolidatorVerdict): boolean {
   return verdict === STOP_FOR_A_HUMAN;
 }
 
-const BYTE_ORDER_MARK = '\uFEFF';
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 type Read = { ok: true; doc: Record<string, unknown>; verdict: ConsolidatorVerdict } | { ok: false; problem: string };
 
 function readOutput(text: string): Read {
   const f = CONSOLIDATOR_FIELDS;
-  let doc: unknown;
-  try {
-    doc = JSON.parse(text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text);
-  } catch {
-    return { ok: false, problem: 'it is not valid JSON' };
-  }
-  if (!isRecord(doc)) return { ok: false, problem: 'it is not a JSON object' };
+  const read = readJsonObject(text);
+  if (!read.ok) return read;
+  const { doc } = read;
   const v = doc[f.verdict];
   if (typeof v !== 'string' || !VERDICT_SET.has(v)) {
     return { ok: false, problem: `its "${f.verdict}" is not exactly one of ${CONSOLIDATOR_VERDICTS.map((x) => `"${x}"`).join(' / ')}` };

@@ -1,6 +1,8 @@
 // §27.3 — the progress file a goal session keeps. The goal prompt that tells the session how to write it and
 // the engine that reads it at the done-signal both take the vocabulary from here, so the two cannot drift.
 
+import { readJsonObject } from './jsonArtifact';
+
 export const GOAL_PROGRESS_STATUSES = ['working', 'checkpoint', 'done', 'blocked'] as const;
 export type GoalProgressStatus = (typeof GOAL_PROGRESS_STATUSES)[number];
 
@@ -22,7 +24,6 @@ export interface GoalProgress {
 export type GoalProgressRead = { ok: true; progress: GoalProgress } | { ok: false; problem: string };
 
 const MAX_LEG = 1_000_000_000;
-const BYTE_ORDER_MARK = '﻿';
 
 function isStatus(v: unknown): v is GoalProgressStatus {
   return (GOAL_PROGRESS_STATUSES as readonly unknown[]).includes(v);
@@ -31,14 +32,9 @@ function isStatus(v: unknown): v is GoalProgressStatus {
 /** The progress file read, or what is wrong with it. The problem is fixed text, never the file's own. */
 export function readGoalProgress(text: string): GoalProgressRead {
   const f = GOAL_PROGRESS_FIELDS;
-  let doc: unknown;
-  try {
-    doc = JSON.parse(text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text);
-  } catch {
-    return { ok: false, problem: 'it is not valid JSON' };
-  }
-  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return { ok: false, problem: 'it is not a JSON object' };
-  const record = doc as Record<string, unknown>;
+  const read = readJsonObject(text);
+  if (!read.ok) return read;
+  const record = read.doc;
   const leg = record[f.leg];
   if (typeof leg !== 'number' || !Number.isInteger(leg) || leg < 1 || leg > MAX_LEG) {
     return { ok: false, problem: `its "${f.leg}" is not a positive whole number` };

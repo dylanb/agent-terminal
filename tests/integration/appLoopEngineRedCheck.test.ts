@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { basename } from 'node:path';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { createAppLoopEngine } from '../../src/main/appLoopEngine';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
@@ -103,6 +104,12 @@ describe('each RED review round and the red check (§28.5.3)', () => {
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(reviewInjected()).toContain(COMMAND);
+  });
+
+  it('hands the fixer the result check for the phase result it edits when one is configured', async () => {
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    await driveToRedReview(engine);
+    expect(reviewInjected()).toMatch(new RegExp(`check-artifact result \\S*${basename(h.resultPath).replace(/\./g, '\\.')} failed-assertion no-build`));
   });
 
   it('tells the fixer to carry the missing-check warning in the round report when none is configured', async () => {

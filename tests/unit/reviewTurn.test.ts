@@ -519,6 +519,24 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
   });
 });
 
+// §27.5 (v2.202) — each status is told to the fixer with the meaning the engine reads it with.
+describe('the reviewer statuses the round report records', () => {
+  it('pairs each status with its meaning', () => {
+    const p = composeReviewAndFixPrompt({
+      roster: reviewRoster(def()),
+      sections: def().report.sections,
+      reportRel: '.agent-terminal/loop/reports/1.json',
+      round: 1,
+      turnKey: 'review-plan',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      agentKind: 'claude-code',
+    });
+    expect(p).toContain('`"ran"` for a reviewer that ran');
+    expect(p).toContain('`"failed"` for one\n  that FAILED to run');
+    expect(p).toMatch(/`"not loaded"` for one whose\n\s+subagent_type the Task tool cannot find/);
+  });
+});
+
 // §27.3/§27.6 (v2.202) — a fixer that patches one more special case into a parser for a format the repository
 // itself defines is how #208 spent rounds on a Markdown grammar: every finding was new, so §27.6's spinning
 // check never fired. The fixer and the work agent are both told to question the design before adding complexity,

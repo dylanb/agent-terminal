@@ -1,13 +1,13 @@
 // §28.5.5 — the phase result: JSON with ONE writer (the RED/GREEN/refactor prompt) and the readers that gate on
 // it (the completion gate, the agent's own check, the RED check). Single-sourced here so the prompt that tells the
-// agent what to write and the predicate that judges it cannot drift. The outcome vocabulary is phaseOutcome's,
-// imported, never re-spelled. The raw test run is evidence, not data: it is kept verbatim in a file of its own
-// beside the result, which the predicate requires to be present and non-empty but never reads.
+// agent what to write and the predicate that judges it cannot drift. The raw test run is evidence, not data: it
+// is kept verbatim in a file of its own beside the result, which the predicate requires to be present and
+// non-empty but never reads.
 
 import { PHASE_OUTCOMES, type PhaseOutcome } from './phaseOutcome';
 import { BUILD_OUTCOMES, type BuildOutcome } from './buildOutcome';
+import { isJsonRecord, readJsonObject } from './jsonArtifact';
 
-/** The JSON keys of the result. */
 export const PHASE_RESULT_FIELDS = {
   outcome: 'outcome',
   build: 'build',
@@ -30,13 +30,8 @@ export interface PhaseResult {
 
 export type PhaseResultRead = { ok: true; result: PhaseResult } | { ok: false; problem: string };
 
-const BYTE_ORDER_MARK = '﻿';
 const OUTCOME_SET: ReadonlySet<string> = new Set(PHASE_OUTCOMES);
 const BUILD_SET: ReadonlySet<string> = new Set(BUILD_OUTCOMES);
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 function hasControlChar(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
@@ -47,7 +42,7 @@ function hasControlChar(s: string): boolean {
 }
 
 function intendedFailure(v: unknown): IntendedFailure | null {
-  if (!isRecord(v)) return null;
+  if (!isJsonRecord(v)) return null;
   const { file, line } = v;
   if (typeof file !== 'string' || file === '' || hasControlChar(file)) return null;
   if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) return null;
@@ -57,13 +52,9 @@ function intendedFailure(v: unknown): IntendedFailure | null {
 /** The phase result read, or what is wrong with it. The problem is fixed text, never the file's own. */
 export function readPhaseResult(text: string): PhaseResultRead {
   const f = PHASE_RESULT_FIELDS;
-  let doc: unknown;
-  try {
-    doc = JSON.parse(text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text);
-  } catch {
-    return { ok: false, problem: 'it is not valid JSON' };
-  }
-  if (!isRecord(doc)) return { ok: false, problem: 'it is not a JSON object' };
+  const read = readJsonObject(text);
+  if (!read.ok) return read;
+  const { doc } = read;
   const outcome = doc[f.outcome];
   if (typeof outcome !== 'string' || !OUTCOME_SET.has(outcome)) {
     return { ok: false, problem: `its "${f.outcome}" is not one of ${PHASE_OUTCOMES.join(', ')}` };
@@ -84,12 +75,15 @@ export function readPhaseResult(text: string): PhaseResultRead {
   return { ok: true, result: { outcome: outcome as PhaseOutcome, build: build as BuildOutcome | null, intendedFailures } };
 }
 
-/** Where a phase result's raw captured run is kept: beside it, its extension replaced by `.output.txt`. */
+/** §28.5.5 */
+export const PHASE_OUTPUT_SUFFIX = '.output.txt';
+
+/** §28.5.5 */
 export function phaseOutputRel(resultRel: string): string {
   const cut = resultRel.lastIndexOf('/');
   const dot = resultRel.lastIndexOf('.');
   const stem = dot > cut + 1 ? resultRel.slice(0, dot) : resultRel;
-  return `${stem}.output.txt`;
+  return `${stem}${PHASE_OUTPUT_SUFFIX}`;
 }
 
 /** Whether a phase result completes its turn (§28.5.3): well-formed, the outcome the phase wants (and, for GREEN,

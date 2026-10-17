@@ -1330,6 +1330,18 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(state?.errorReason).toMatch(/restart your agent session/i);
   });
 
+  it('a not-loaded record for a persona outside the roster neither stops the round nor reaches its reason (§27.4)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const doc = JSON.parse(roundReportWithStatuses(['summary'], ROSTER, {})) as { reviewers: unknown[] };
+    doc.reviewers.push({ persona: 'ghost-persona', status: 'not loaded', issues: [] });
+    writeReport(JSON.stringify(doc));
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.errorReason ?? '').not.toContain('ghost-persona');
+    expect(h.emitError).not.toHaveBeenCalledWith(expect.stringContaining('ghost-persona'));
+  });
+
   // §27.12 — the agent can run the same checker the engine gates on before it signals done.
   it('the review prompt hands the agent the checker command for this round\'s report', () => {
     const engine = makeEngine();
@@ -1415,7 +1427,7 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     engine.onDoneSignal();
     const reason = readAppLoopState(h.repo)?.errorReason ?? '';
     expect(reason).toContain(roundReportRel(1));
-    expect(reason).toContain('not well-formed');
+    expect(reason).toContain(`not well-formed: its "reviewers" has no record for ${ROSTER[1]}`);
     expect(reason).not.toContain('missing');
     expect(h.emitError).toHaveBeenCalledWith(reason);
   });
@@ -1676,7 +1688,8 @@ describe('§27 engine — the consolidator completion gate (AC3)', () => {
     driveToConsolidateInjected(engine);
     completeConsolidate(engine, 1, verdictOutput('another round', { roster: ['ghost-persona'] }));
     completeConsolidate(engine, 1, verdictOutput('another round', { roster: ['ghost-persona'] }));
-    expect(readAppLoopState(h.repo)?.status).toBe('error');
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'error', errorReason: expect.stringContaining('not well-formed: "roster"[0] is not in this loop\'s reviewer catalog') });
+    expect(readAppLoopState(h.repo)?.errorReason).not.toContain('ghost-persona');
   });
 
   it('an `another round` with an empty roster is malformed → error (a round must run someone)', () => {
@@ -2437,15 +2450,15 @@ describe('§28.5.3 — the RED completion gate (Option C, engine-async)', () => 
     expect(h.emitError).not.toHaveBeenCalledWith(expect.stringContaining('done-signal received but'));
   });
 
-  it('IT-ENGINE-5: a malformed result file drives retry-then-error', async () => {
+  it('IT-ENGINE-5: a result with no captured run drives retry-then-error', async () => {
     const engine = makeEngine(undefined, redFake());
     enterRed(engine);
-    writeResult('outcome: failed-assertion\n'); // no captured-output section -> not well-formed (AC3)
+    writeResult(examplePhaseResult('failed-assertion'), null);
     engine.onDoneSignal();
     await flushRedGate();
     engine.onDoneSignal();
     await flushRedGate();
-    expect(h.emitError).toHaveBeenCalled();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining(`${phaseOutputRel(basename(h.resultPath))} is missing`));
     expect(reviewChained()).toBe(false);
   });
 
@@ -2927,7 +2940,8 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     makeFakeCompletionPredicates({ changedTestPaths: async () => ({ ok: true, paths: [] }), ...overrides });
   const flushGate = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
   const passed = (): string => examplePhaseResult(REFACTOR_COMPLETING_OUTCOME); // `outcome: passed`, no build
-  const writeRefactorResult = (content: string, round = 1): void => writePhaseResult(refactorResultFile(h.repo, round)!, content);
+  const writeRefactorResult = (content: string, round = 1, captured?: string | null): void =>
+    writePhaseResult(refactorResultFile(h.repo, round)!, content, captured);
   const writeMalformedReport = (round = 1): void => {
     const p = roundReportFile(h.repo, round)!;
     mkdirSync(dirname(p), { recursive: true });
@@ -2989,12 +3003,12 @@ describe('§28.5.3 — the refactor round completion gate + non-blocking frozen 
     seedBaseline();
     driveToRefactorReview(engine);
     writeRoundReport(1, []);
-    writeRefactorResult('outcome: passed\n'); // no captured-output section → not shape-valid
+    writeRefactorResult(examplePhaseResult('passed'), 1, null);
     engine.onDoneSignal();
     await flushGate();
     engine.onDoneSignal();
     await flushGate();
-    expect(h.emitError).toHaveBeenCalled();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining(`${phaseOutputRel(refactorResultRel(1))} is missing`));
     expect(completed(engine)).toBe(false);
   });
 

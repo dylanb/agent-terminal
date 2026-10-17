@@ -17,7 +17,7 @@ describe('roundReportWithStatuses', () => {
   it.each(REVIEWER_STATUSES)('builds a well-formed round report recording one reviewer as `%s`', (status) => {
     const report = roundReportWithStatuses(spec.sections, spec.roster, { tests: status });
     expect(roundReportProblems(report, spec)).toEqual([]);
-    expect(failedReviewers(report)).toEqual(status === 'failed' ? ['tests'] : []);
-    expect(unloadedReviewers(report)).toEqual(status === 'not loaded' ? ['tests'] : []);
+    expect(failedReviewers(report, spec.roster)).toEqual(status === 'failed' ? ['tests'] : []);
+    expect(unloadedReviewers(report, spec.roster)).toEqual(status === 'not loaded' ? ['tests'] : []);
   });
 });

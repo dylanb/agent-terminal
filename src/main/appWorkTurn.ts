@@ -274,9 +274,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       req.completion.marker,
     );
   } else if (req.completion?.kind === 'red') {
-    // §28.5.5 §7d — the RED phase-result instruction, composed by the shared writer (composePhaseResultInstruction:
-    // grammar tokens + outcome vocabulary from the descriptors, the canonical few-shot embedded fence-free). Only
-    // the phase-specific bar prose (NOT derivable from the outcome) is spelled here and threaded as `closing`.
+    // §28.5.5 §7d — only the phase-specific bar prose (NOT derivable from the outcome) is spelled here.
     parts.push(
       '',
       ...composePhaseResultInstruction({

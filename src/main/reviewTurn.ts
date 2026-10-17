@@ -10,7 +10,7 @@ import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, exampleRoundReport } from '../shared/roundReport';
+import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, FAILED_STATUS, NOT_LOADED_STATUS, RAN_STATUS, REPORT_FIELDS, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
 import { checkerLines } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -85,7 +85,8 @@ export interface ReviewAndFixPromptReq {
    *  additionally runs the targeted tests and writes the result the round gate reads (softer than GREEN —
    *  {passed}, no build). Absent for RED/GREEN loops' review rounds (no phase-result block emitted). */
   resultRel?: string;
-  /** §27.12 — the command that runs the loop's own check on the refactor round's phase result; absent omits it. */
+  /** §27.12 — the command that runs the loop's own check on the phase result a refactor or RED round edits; absent
+   *  omits it. */
   resultCheckCommand?: string;
   /** §28.5.3 */
   redCheck?: { command: string | null; resultRel: string };
@@ -112,14 +113,13 @@ export interface ReviewAndFixPromptReq {
  *  `whichReviewers` names the roster the reviewer records must cover. */
 function reportFormatLines(sections: string[], whichReviewers: string, kind: AgentKind): string[] {
   const f = REPORT_FIELDS;
-  const [ran, failed, notLoaded] = REVIEWER_STATUSES;
   return [
     `- \`"${f.sections}"\`: an object with a text value for each of these sections: ${sections.join(', ')}`,
     `- \`"${f.reviewers}"\`: a list with one record for ${whichReviewers} — including any that failed to run or`,
     `  found nothing. Dropping a reviewer makes the report malformed. Each record has \`"${f.persona}"\`, \`"${f.status}"\` and`,
-    `  \`"${f.issues}"\`. The status is \`"${ran}"\` for a reviewer that ran (its issues list may be empty), \`"${failed}"\` for one`,
+    `  \`"${f.issues}"\`. The status is \`"${RAN_STATUS}"\` for a reviewer that ran (its issues list may be empty), \`"${FAILED_STATUS}"\` for one`,
     '  that FAILED to run (crashed, timed out, produced nothing usable) — a round with a failed reviewer can never be',
-    `  judged clean (§27.5/§27.6) — and \`"${notLoaded}"\` for one whose`,
+    `  judged clean (§27.5/§27.6) — and \`"${NOT_LOADED_STATUS}"\` for one whose`,
     kind === 'codex' ? '  Codex agent cannot be found: this agent session started' : '  subagent_type the Task tool cannot find: this agent session started',
     '  before it was installed, so record it and spawn nothing in its place.',
     `- each issue: \`"${f.issue}"\`, \`"${f.disposition}"\`, \`"${f.reason}"\`, and (when fixed) \`"${f.whatChanged}"\`, each as text.`,
@@ -377,7 +377,10 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     lines.push(
       '',
       ...(command !== null
-        ? composeRedCheckInstruction({ command, reportRel: redCheckReportRel(resultRel), resultRel })
+        ? [
+            ...composeRedCheckInstruction({ command, reportRel: redCheckReportRel(resultRel), resultRel }),
+            ...(req.resultCheckCommand !== undefined ? checkerLines(req.resultCheckCommand, 'phase result') : []),
+          ]
         : ['Put this warning line, verbatim, in the round report\'s summary:', '', RED_CHECK_MISSING_WARNING]),
     );
   }

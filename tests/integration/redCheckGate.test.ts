@@ -60,6 +60,16 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
     if (r.kind === 'refused') expect(r.reason).toContain('tests/a.test.ts:9');
   });
 
+  it('refuses a RED result whose intended failures are malformed, naming that problem', () => {
+    capabilities('red_check_command: node check.mjs\n');
+    writeFileSync(resultPath(), JSON.stringify({ outcome: 'failed-assertion', intendedFailures: 'tests/a.test.ts:12' }));
+    report(12);
+    at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
+    const r = check();
+    expect(r.kind).toBe('refused');
+    if (r.kind === 'refused') expect(r.reason).toContain('"intendedFailures" is not a list');
+  });
+
   it('refuses when the report is missing, naming where it was expected', () => {
     capabilities('red_check_command: node check.mjs\n');
     result([{ file: 'tests/a.test.ts', line: 12 }]);

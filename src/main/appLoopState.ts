@@ -10,7 +10,7 @@ import { errMsg, isErrno } from './errno';
 import { readDirEntries } from './dirEntries';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
-import { phaseOutputRel } from '../shared/phaseResult';
+import { PHASE_OUTPUT_SUFFIX, phaseOutputRel } from '../shared/phaseResult';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
  *  def parsing); this keys resume-file compatibility. A file declaring any other value fails to parse. */
@@ -149,7 +149,7 @@ const GOAL_SESSION_FILES = {
   progress: { prefix: 'goal-progress.', suffix: '.json' },
   notes: { prefix: 'goal-notes.', suffix: '.md' },
   refactorResult: { prefix: 'refactor-result.', suffix: '.json' },
-  refactorOutput: { prefix: 'refactor-result.', suffix: '.output.txt' },
+  refactorOutput: { prefix: 'refactor-result.', suffix: PHASE_OUTPUT_SUFFIX },
 } as const;
 type GoalSessionFile = keyof typeof GOAL_SESSION_FILES;
 

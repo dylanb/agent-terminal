@@ -2,6 +2,8 @@
 // agent's own check, the clean-guard, the auto gate). One definition in the shared layer so the prompt composer
 // (which tells the fixer what to write) and the predicate (which validates it) cannot drift.
 
+import { isJsonRecord as isRecord, readJsonObject } from './jsonArtifact';
+
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
@@ -23,11 +25,10 @@ export const NEEDS_HUMAN_DISPOSITION: Disposition = 'needs a human';
 export const REVIEWER_STATUSES = ['ran', 'failed', 'not loaded'] as const;
 export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
 
-const RAN: ReviewerStatus = 'ran';
-const FAILED: ReviewerStatus = 'failed';
-const NOT_LOADED: ReviewerStatus = 'not loaded';
+export const RAN_STATUS: ReviewerStatus = 'ran';
+export const FAILED_STATUS: ReviewerStatus = 'failed';
+export const NOT_LOADED_STATUS: ReviewerStatus = 'not loaded';
 
-/** The JSON keys of the report. */
 export const REPORT_FIELDS = {
   sections: 'sections',
   reviewers: 'reviewers',
@@ -57,14 +58,9 @@ interface ReviewerRecord {
  *  whole (whether it needs a human) cannot be trusted. */
 type Read = { ok: true; doc: Record<string, unknown>; reviewers: ReviewerRecord[]; problems: string[]; unreadable: boolean } | { ok: false; problem: string };
 
-const BYTE_ORDER_MARK = '﻿';
 const DISPOSITION_SET: ReadonlySet<string> = new Set(DISPOSITIONS);
 const STATUS_SET: ReadonlySet<string> = new Set(REVIEWER_STATUSES);
 const quoted = (items: readonly string[]): string => items.map((d) => `"${d}"`).join(' / ');
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 const hasText = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
@@ -85,13 +81,9 @@ function issueProblems(v: unknown, at: string): { problems: string[]; dispositio
  *  nothing the file says is ever repeated back. */
 function readReport(text: string, roster: readonly string[]): Read {
   const f = REPORT_FIELDS;
-  let doc: unknown;
-  try {
-    doc = JSON.parse(text.startsWith(BYTE_ORDER_MARK) ? text.slice(BYTE_ORDER_MARK.length) : text);
-  } catch {
-    return { ok: false, problem: 'it is not valid JSON' };
-  }
-  if (!isRecord(doc)) return { ok: false, problem: 'it is not a JSON object' };
+  const json = readJsonObject(text);
+  if (!json.ok) return json;
+  const { doc } = json;
   const list = doc[f.reviewers];
   if (!Array.isArray(list)) return { ok: false, problem: `its "${f.reviewers}" is not a list` };
   const known = new Set(roster);
@@ -113,7 +105,7 @@ function readReport(text: string, roster: readonly string[]): Read {
       unreadable = true;
       return;
     }
-    const issues = v[f.issues] ?? [];
+    const issues = v[f.issues];
     if (!Array.isArray(issues)) {
       problems.push(`${at}'s "${f.issues}" is not a list`);
       unreadable = true;
@@ -164,27 +156,23 @@ export function reportNeedsAHuman(report: string): boolean | null {
   return read.reviewers.some((r) => r.dispositions.includes(NEEDS_HUMAN_DISPOSITION));
 }
 
-function reviewersWith(report: string, status: ReviewerStatus): string[] {
-  const read = readReport(report, []);
+/** Only `roster` personas are returned, so the names a caller repeats or spawns come from the def, never the file. */
+function reviewersWith(report: string, status: ReviewerStatus, roster: readonly string[]): string[] {
+  const read = readReport(report, roster);
   if (!read.ok) return [];
-  return [...new Set(read.reviewers.filter((r) => r.status === status).map((r) => r.persona))];
+  const recorded = new Set(read.reviewers.filter((r) => r.status === status).map((r) => r.persona));
+  return roster.filter((p) => recorded.has(p));
 }
 
 /** The personas a round report records as having FAILED TO RUN (§27.5/AC7) — distinct from a persona that ran and
  *  found nothing or ran and raised issues (a `needs a human` disposition is a raised issue, never a failed lens). */
-export function failedReviewers(report: string): string[] {
-  return reviewersWith(report, FAILED);
+export function failedReviewers(report: string, roster: readonly string[]): string[] {
+  return reviewersWith(report, FAILED_STATUS, roster);
 }
 
 /** §27.4 — the personas whose sub-agent type this agent session could not spawn. */
-export function unloadedReviewers(report: string): string[] {
-  return reviewersWith(report, NOT_LOADED);
-}
-
-/** Whether the round report records ANY reviewer as failed to run (§27.5/AC7) — the boolean the engine's
- *  clean-guard keys on. */
-export function reportHasFailedReviewer(report: string): boolean {
-  return failedReviewers(report).length > 0;
+export function unloadedReviewers(report: string, roster: readonly string[]): string[] {
+  return reviewersWith(report, NOT_LOADED_STATUS, roster);
 }
 
 /** The single canonical example the predicate test, the fake-agent e2e output and the prompt few-shot all
@@ -197,7 +185,7 @@ export function exampleRoundReport(spec: RoundReportSpec): string {
       [f.sections]: Object.fromEntries(spec.sections.map((s) => [s, `(${s})`])),
       [f.reviewers]: spec.roster.map((persona, idx) => ({
         [f.persona]: persona,
-        [f.status]: RAN,
+        [f.status]: RAN_STATUS,
         [f.issues]:
           idx === 0
             ? [

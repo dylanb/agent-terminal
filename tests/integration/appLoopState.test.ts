@@ -589,6 +589,27 @@ describe('§28 refactor-result location resolver', () => {
       rmSync(elsewhere, { recursive: true, force: true });
     }
   });
+
+  it('keeps a result\'s captured run beside it, named by the same rule the checker reads', async () => {
+    const { phaseOutputFile } = await import('../../src/main/appLoopState');
+    const { phaseOutputRel } = await import('../../src/shared/phaseResult');
+    mkdirSync(join(repo, refactorResultRel(1), '..'), { recursive: true });
+    expect(phaseOutputFile(refactorResultFile(repo, 1)!)).toBe(join(realpathSync(repo), phaseOutputRel(refactorResultRel(1))));
+  });
+
+  it('refuses a captured run that is a symlink out of the loop area (CWE-59)', async () => {
+    const { phaseOutputFile } = await import('../../src/main/appLoopState');
+    const { phaseOutputRel } = await import('../../src/shared/phaseResult');
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-run-'));
+    try {
+      writeFileSync(join(elsewhere, 'run.txt'), 'not this run');
+      mkdirSync(join(repo, refactorResultRel(1), '..'), { recursive: true });
+      symlinkSync(join(elsewhere, 'run.txt'), join(repo, phaseOutputRel(refactorResultRel(1))));
+      expect(phaseOutputFile(refactorResultFile(repo, 1)!)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
 });
 
 // §27.6/AC5 — a consolidator run persists its verdict, and (through the single-sourced gate) its reason
@@ -1051,6 +1072,18 @@ describe('a goal session id (§27.3 v2.201)', () => {
       const state = { loop: 'l', step: 's', turnKey: 'k', status: 'working' as const, goalSession };
       expect(parseAppLoopState(serializeAppLoopState(state, () => new Date(0)))?.goalSession).toBe(goalSession);
     }
+  });
+
+  it('clearing the goal session files removes the captured run the engine reads beside the refactor result', async () => {
+    const { clearGoalSessionFiles, goalRefactorResultFile, newGoalSession, phaseOutputFile } = await import('../../src/main/appLoopState');
+    const session = newGoalSession();
+    const result = goalRefactorResultFile(repo, session)!;
+    mkdirSync(join(result, '..'), { recursive: true });
+    writeFileSync(result, '{}');
+    const run = phaseOutputFile(result)!;
+    writeFileSync(run, 'ok\n');
+    clearGoalSessionFiles(repo);
+    expect(existsSync(run)).toBe(false);
   });
 
   it('a malformed one read back is dropped', async () => {

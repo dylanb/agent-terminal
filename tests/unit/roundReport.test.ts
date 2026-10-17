@@ -6,7 +6,6 @@ import {
   exampleRoundReport,
   failedReviewers,
   unloadedReviewers,
-  reportHasFailedReviewer,
   reportNeedsAHuman,
   roundReportProblems,
   roundReportWellFormed,
@@ -84,7 +83,7 @@ describe('full-roster accounting (AC4, AC5)', () => {
 
   it('accounts for a reviewer that ran and found nothing, failed, or was not loaded', () => {
     for (const status of REVIEWER_STATUSES) {
-      expect(roundReportWellFormed(report([ran('review-principal'), { persona: 'review-security', status }]), SPEC)).toBe(true);
+      expect(roundReportWellFormed(report([ran('review-principal'), { persona: 'review-security', status, issues: [] }]), SPEC)).toBe(true);
     }
   });
 
@@ -124,6 +123,11 @@ describe('per-issue fields (AC6)', () => {
   it('is malformed when an issues entry is not an object, or issues is not a list', () => {
     expect(roundReportWellFormed(report([ran('review-principal', ['a defect' as unknown as Issue]), ran('review-security')]), SPEC)).toBe(false);
     expect(roundReportWellFormed(report([{ persona: 'review-principal', status: 'ran', issues: 'none' }, ran('review-security')]), SPEC)).toBe(false);
+  });
+
+  it('is malformed when a reviewer record has no issues list, even an empty one', () => {
+    const problems = roundReportProblems(report([{ persona: 'review-principal', status: 'ran' }, ran('review-security')]), SPEC);
+    expect(problems).toContain('reviewers[0] (review-principal)\'s "issues" is not a list');
   });
 });
 
@@ -165,31 +169,38 @@ describe('failed reviewers (§27.5/AC7 — the signal the clean-guard keys on)',
     report([{ persona: 'review-principal', status: principal, issues: [] }, { persona: 'review-security', status: security, issues: [] }]);
 
   it('names each reviewer recorded as failed', () => {
-    expect(failedReviewers(withStatuses('failed', 'ran'))).toEqual(['review-principal']);
-    expect(reportHasFailedReviewer(withStatuses('failed', 'ran'))).toBe(true);
-    expect(new Set(failedReviewers(withStatuses('failed', 'failed')))).toEqual(new Set(['review-principal', 'review-security']));
+    expect(failedReviewers(withStatuses('failed', 'ran'), SPEC.roster)).toEqual(['review-principal']);
+    expect(new Set(failedReviewers(withStatuses('failed', 'failed'), SPEC.roster))).toEqual(new Set(['review-principal', 'review-security']));
   });
 
   it('a reviewer that ran, even one that raised `needs a human`, is not failed', () => {
     const r = report([ran('review-principal', [issue({ disposition: 'needs a human' })]), ran('review-security')]);
-    expect(failedReviewers(r)).toEqual([]);
-    expect(reportHasFailedReviewer(r)).toBe(false);
+    expect(failedReviewers(r, SPEC.roster)).toEqual([]);
   });
 
   it('names no one in a report that is not JSON', () => {
-    expect(failedReviewers('### review-principal\n\n_failed to run_\n')).toEqual([]);
+    expect(failedReviewers('### review-principal\n\n_failed to run_\n', SPEC.roster)).toEqual([]);
+  });
+
+  it('names only reviewers the roster names, so no persona text from the file is passed on', () => {
+    const r = report([{ persona: 'review-principal', status: 'failed', issues: [] }, { persona: 'ghost\nfake', status: 'failed', issues: [] }]);
+    expect(failedReviewers(r, SPEC.roster)).toEqual(['review-principal']);
   });
 });
 
 describe('not-loaded reviewers (§27.4 — a reviewer the agent session cannot spawn)', () => {
   it('names each reviewer recorded as not loaded, and keeps the report well-formed', () => {
-    const r = report([{ persona: 'review-principal', status: 'not loaded' }, ran('review-security')]);
-    expect(unloadedReviewers(r)).toEqual(['review-principal']);
+    const r = report([{ persona: 'review-principal', status: 'not loaded', issues: [] }, ran('review-security')]);
+    expect(unloadedReviewers(r, SPEC.roster)).toEqual(['review-principal']);
     expect(roundReportWellFormed(r, SPEC)).toBe(true);
   });
 
   it('names no reviewer when every record ran or failed', () => {
-    expect(unloadedReviewers(report([ran('review-principal'), { persona: 'review-security', status: 'failed' }]))).toEqual([]);
+    expect(unloadedReviewers(report([ran('review-principal'), { persona: 'review-security', status: 'failed', issues: [] }]), SPEC.roster)).toEqual([]);
+  });
+
+  it('names only reviewers the roster names', () => {
+    expect(unloadedReviewers(report([ran('review-principal'), ran('review-security'), { persona: 'ghost', status: 'not loaded', issues: [] }]), SPEC.roster)).toEqual([]);
   });
 });
 
@@ -214,6 +225,10 @@ describe('reportNeedsAHuman — whether a round report records a `needs a human`
     ['an issue disposition outside the closed set', withIssue(issue({ disposition: 'maybe later' }))],
     ['a report that is not JSON', '- issue: x\n  disposition: needs a human\n'],
     ['a reviewer list that is not a list', JSON.stringify({ sections: {}, reviewers: {} })],
+    ['a reviewer with a status outside the closed set', report([{ persona: 'x', status: 'skipped', issues: [issue({ disposition: 'needs a human' })] }])],
+    ['a reviewer with no persona', report([{ status: 'ran', issues: [issue({ disposition: 'needs a human' })] }])],
+    ['a reviewer whose issues is not a list', report([{ persona: 'x', status: 'ran', issues: 'needs a human' }])],
+    ['a reviewer with no issues list', report([{ persona: 'x', status: 'ran', findings: [issue({ disposition: 'needs a human' })] }])],
   ])('is null for %s, so the caller fails toward (a)', (_what, r) => {
     expect(reportNeedsAHuman(r)).toBeNull();
   });
