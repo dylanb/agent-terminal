@@ -532,6 +532,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let legPromptPending = false;
   // §27.12c — the turn an Accept is checking, so a second Accept during the check does not act twice.
   let acceptPendingFor: ActiveAppTurn | null = null;
+  let acceptPendingAt = 0;
   // §28.5.3/§28.8.3 — the changed-test paths AWAITING their record (a distinct sense from `asyncGatePendingFor`,
   // which tracks an in-flight gate): resolved by greenAsyncGate on a GREEN work turn or reviewRoundFrozenProbe on a
   // GREEN/refactor review round, drained by that turn's onComplete. Identity-carrying (`turn`) so a stale gate/probe
@@ -915,6 +916,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   /** §28.5.3/§28.8.3 — a GREEN or REFACTOR review round's frozen check as a NON-blocking side probe (unlike the
    *  GREEN work gate it never blocks the round; an inability records no flag and is AUDITED, never silently
    *  swallowed — CLAUDE.md). */
+  const probeSubject = (a: ActiveAppTurn): string => (a.phase === 'work' ? `work turn ${a.turnKey}` : 'review round');
+
   const reviewRoundFrozenProbe = async (a: ActiveAppTurn): Promise<string[] | null> => {
     try {
       const changed = await changedTestPathsSinceBaseline(a);
@@ -923,10 +926,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         changed.kind === 'no-baseline'
           ? 'no RED baseline is recorded for this branch (recorded on a different branch, or detached HEAD)'
           : baselineCapabilitiesCauseReason(changed.cause);
-      deps.audit(a.repoDir, `§28 review round frozen probe could not run — ${why}`, 1);
+      deps.audit(a.repoDir, `§28 ${probeSubject(a)} frozen probe could not run — ${why}`, 1);
       return null;
     } catch (e) {
-      deps.audit(a.repoDir, `§28 review round frozen probe error: ${e instanceof Error ? e.message : String(e)}`, 1);
+      deps.audit(a.repoDir, `§28 ${probeSubject(a)} frozen probe error: ${e instanceof Error ? e.message : String(e)}`, 1);
       return null;
     }
   };
@@ -1723,7 +1726,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       if (action === 'accept') {
-        if (acceptPendingFor === active) return;
+        if (acceptPendingFor === active && acceptPendingAt === runner.transitions()) return;
         // §27.12c/CWE-703 — every Accept branch finalizes with `persist('complete')`; a failed finalize write
         // (ENOSPC/EPERM/a planted symlink) leaves the disk on `error`, so re-surface the live error and record
         // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
@@ -1841,6 +1844,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           acceptPendingFor = a;
           const runnerAtAccept = runner.transitions();
+          acceptPendingAt = runnerAtAccept;
           void redAsyncGate(a).then((gate) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
             if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
@@ -1863,6 +1867,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           acceptPendingFor = a;
           const runnerAtAccept = runner.transitions();
+          acceptPendingAt = runnerAtAccept;
           void greenAsyncGate(a).then(({ gate, changedTests }) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
             if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
@@ -1882,6 +1887,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           const a = active;
           acceptPendingFor = a;
           const runnerAtAccept = runner.transitions();
+          acceptPendingAt = runnerAtAccept;
           void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
             if (acceptPendingFor === a) acceptPendingFor = null;
             if (active !== a || runner.transitions() !== runnerAtAccept) return; // a retry/terminate, a done-signal or a leg changed the turn under the await

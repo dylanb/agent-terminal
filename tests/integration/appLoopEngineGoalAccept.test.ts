@@ -268,6 +268,55 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     expect(h.audit.mock.calls.map((c) => String(c[1])).some((l) => l.includes('accepted'))).toBe(false);
   });
 
+  it('an Accept pressed on the newer error while an earlier Accept waits is acted on', async () => {
+    const phase = PHASES[2];
+    let call = 0;
+    let releaseFirst!: () => void;
+    const engine = makeEngine(
+      undefined,
+      makeFakeCompletionPredicates({
+        recoverExitCode: () => {
+          call += 1;
+          if (call === 2) return new Promise((r) => (releaseFirst = () => r(null)));
+          return Promise.resolve(call === 3 ? 1 : null);
+        },
+      }),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onDoneSignal();
+    await flush();
+    engine.onInjectable();
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.onDoneSignal();
+    await flush();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+    releaseFirst();
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).toBe('complete');
+  });
+
+  it('a refactor goal session\'s frozen check names the work turn in the run log, not a review round', async () => {
+    const phase = PHASES[2];
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates());
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.onDoneSignal();
+    await flush();
+
+    const logged = h.audit.mock.calls.map((c) => String(c[1]));
+    expect(logged.some((l) => l.includes(`work turn ${TURN_KEY} frozen probe could not run`))).toBe(true);
+    expect(logged.some((l) => l.includes('review round frozen probe'))).toBe(false);
+  });
+
   it.each(PHASES)('$name: a session still done after the check is accepted', async (phase) => {
     const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => {})));
     recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
