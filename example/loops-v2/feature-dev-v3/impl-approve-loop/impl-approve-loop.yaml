@@ -19,6 +19,7 @@ gate:
         action: publish-pr-body
         artifact: plan
   - option: redo
+  - option: back-to-red
 inputs:
   - id: groom-intent
     path: groom-intent.md

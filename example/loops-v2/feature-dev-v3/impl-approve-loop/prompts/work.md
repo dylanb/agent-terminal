@@ -16,8 +16,9 @@ operator in this terminal, with these parts in this order:
    dismissed.
 5. `## Test evidence` — the last test and build results each step recorded.
 
-End by telling the operator they can approve as is at the gate, which commits and publishes the pull request
-description, or ask you for changes here first.
+End by telling the operator their choices at the gate: approve as is, which commits and publishes the pull
+request description; ask you for changes here first; or send the slice back to RED with a brief, when its tests
+missed something, so the slice's steps run again before it comes back to them.
 
 Once you have written the done-signal, stay in this session. When the operator asks for a change, make it
 test-first as the repository's standards require, run the tests the repository requires before a pull request,

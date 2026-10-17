@@ -174,6 +174,10 @@ describe('each implementation step is a goal session that reviews its own work (
     ]);
   });
 
+  it('the final approval can send the slice back to RED, as the implementation steps can', () => {
+    expect(loop('impl-approve-loop').gate.map((g) => g.option)).toContain('back-to-red');
+  });
+
   it('the final approval presents what every implementation step logged', () => {
     const approve = loop('impl-approve-loop');
     expect(approve.rounds).toEqual({ kind: 'none' });

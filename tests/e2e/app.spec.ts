@@ -7902,7 +7902,7 @@ function seedV3GoalAgent(binDir: string, name: string, goal: Record<string, stri
     'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
-    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; step=$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z-]*' | sed 's/turn-done:work-//'); case "$step" in ${goalCases} esac ;;\n` +
+    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; cat "$p" >> .agent-terminal/goal-prompts-seen; ${GOAL_LEG_CMD}; step=$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z-]*' | sed 's/turn-done:work-//'); case "$step" in ${goalCases} esac ;;\n` +
     Object.entries(work).map(([step, cmd]) => `    *turn-done:work-${step}*) ${cmd}; ${done(`work-${step}`)} ;;\n`).join('') +
     extra.join('') +
     '  esac\ndone\n';
@@ -8006,8 +8006,8 @@ function seedV3Config(prefix: string): string {
   return cfg;
 }
 
-test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review their own work, compacts one between legs, and publishes the PR when the operator approves the whole implementation', { tag: '@ownapp' }, async () => {
-  test.setTimeout(chainBudget(8));
+test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review their own work, compacts one between legs, lets the operator send the slice back to RED from the final approval, and publishes the PR on approve', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(12));
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-implv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: plan-bundle\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -8029,11 +8029,12 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
     'fake-agent',
     {
       infra: finish('infra', `printf '%s\\n' 'export const infra = 1;' > infra.ts`),
-      red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts; ${result('failed-assertion', `${V3_ART}/red-result.md`)}`),
+      // A slice sent back to RED runs again, so each run adds its own test and changes the code anew.
+      red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.md`)}`),
       // GREEN's first leg runs out of passes; the leg after the compact finishes it.
-      green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' 'export const feat = 1;' > feature.ts; ${result('passed', `${V3_ART}/green-result.md`, 'built')}`)}; fi`,
-      refactor: finish('refactor', `printf '%s\\n' 'export const rf = 1;' > refactor.ts; ${result('passed', refactorResultRel(1))}`),
-      'integration-slice': finish('integration-slice', `printf '%s\\n' 'export const integ = 1;' > integration.ts`),
+      green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${result('passed', `${V3_ART}/green-result.md`, 'built')}`)}; fi`,
+      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; ${result('passed', refactorResultRel(1))}`),
+      'integration-slice': finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`),
     },
     {
       'plan-bundle': writeV3('plan.md', ['# plan', completionMarker('plan-bundle')]),
@@ -8073,13 +8074,28 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
     expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);
   }
 
-  // The one human gate presents it all; approve publishes the PR description.
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: impl-approve[\s\S]*verdict: clean/);
-  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  // The one human gate presents it all. The operator first sends the slice back to RED with a brief: the
+  // slice's steps run again, each session told the brief, and the implementation comes back for approval.
+  const atImplApprove = async (): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: impl-approve[\s\S]*verdict: clean/);
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  };
+  await atImplApprove();
+  const BRIEF = 'Cover the empty-input case the tests missed';
+  const promptsAtReopen = readIf(join(repo, '.agent-terminal', 'goal-prompts-seen')).length;
+  await loopPanel().locator('[data-gate-option="back-to-red"]').click();
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('textarea').fill(BRIEF);
+  await composer.locator('.confirm').click();
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: red\n');
+  for (const step of ['red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step);
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen')).slice(promptsAtReopen)).toContain(BRIEF);
+  await atImplApprove();
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');
-  expect(gitIn(repo, 'log', '--format=%s', `-${gitCount(repo) - before}`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'infra']);
+  expect(gitIn(repo, 'log', '--format=%s', `-${gitCount(repo) - before}`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'integration', 'refactor', 'GREEN', 'RED', 'infra']);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
