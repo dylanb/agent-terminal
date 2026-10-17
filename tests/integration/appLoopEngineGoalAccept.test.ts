@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { goalProgressRel, goalRefactorResultFile, readAppLoopState, recordBaselineCommit } from '../../src/main/appLoopState';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
@@ -40,7 +40,7 @@ interface Phase {
   writeResult: () => void;
 }
 
-const goal = (def: LoopDefV2): LoopDefV2 => ({ ...def, work: { ...def.work, goal: GOAL }, rounds: { kind: 'none' } });
+const goal = (def: LoopDefV2): LoopDefV2 => ({ ...def, work: { ...def.work, goal: GOAL, checkpoint: { passes: 3 } }, rounds: { kind: 'none' } });
 
 const PHASES: Phase[] = [
   {
@@ -99,6 +99,85 @@ describe('an Accept reads the goal progress again after its machine check (§27.
     await flush();
 
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human', verdictReason: 'Modal or page?' });
+  });
+
+  it.each(PHASES)('$name: a session that checkpointed while the check ran starts its next leg', async (phase) => {
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => writeProgress(exampleGoalProgress(1, 'checkpoint')))));
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+    engine.onInjectable();
+    engine.onInjectable();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'working', leg: 2 });
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+    expect(h.injected.some((p) => p.startsWith('/compact '))).toBe(true);
+  });
+
+  it.each(PHASES)('$name: a session whose progress went missing while the check ran is refused with the reason', async (phase) => {
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => rmSync(join(h.repo, goalProgressRel(session()))))));
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+
+    expect(readAppLoopState(h.repo)?.status).not.toBe('complete');
+    expect(engine.liveErrorFor(h.repo)?.reason).toMatch(/goal progress file \S+ is missing/);
+  });
+
+  it.each(PHASES)('$name: a session the done-signal already sent to the gate while the check ran is not sent again', async (phase) => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const engine = makeEngine(
+      undefined,
+      makeFakeCompletionPredicates(
+        phase.predicates(() => {
+          writeProgress(BLOCKED);
+          engine.onDoneSignal();
+        }),
+      ),
+    );
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    release();
+    await held;
+    await flush();
+    await flush();
+
+    const blocks = h.audit.mock.calls.map((c) => String(c[1])).filter((l) => l.includes('blocked on the operator'));
+    expect(blocks).toHaveLength(1);
+  });
+
+  it.each(PHASES)('$name: a second Accept while the first waits on its check does not act twice', async (phase) => {
+    const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => writeProgress(BLOCKED))));
+    recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));
+    h.defResult = resolved(phase.def());
+    enterAndInjectWork(engine);
+    engine.onStall();
+    writeProgress(exampleGoalProgress(1, 'done'));
+    phase.writeResult();
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flush();
+
+    const blocks = h.audit.mock.calls.map((c) => String(c[1])).filter((l) => l.includes('blocked on the operator'));
+    expect(blocks).toHaveLength(1);
   });
 
   it.each(PHASES)('$name: a session still done after the check is accepted', async (phase) => {

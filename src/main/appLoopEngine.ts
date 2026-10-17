@@ -530,6 +530,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let asyncGatePendingFor: ActiveAppTurn | null = null;
   // §27.3 — every leg shares the turn key, so a done-signal before the next leg's prompt went in is the last leg's.
   let legPromptPending = false;
+  // §27.12c — the turn an Accept is checking, so a second Accept during the check does not act twice.
+  let acceptPendingFor: ActiveAppTurn | null = null;
+  const acceptMovedOn = (): boolean => runner.state() === 'complete' || runner.state() === 'in-flight';
   // §28.5.3/§28.8.3 — the changed-test paths AWAITING their record (a distinct sense from `asyncGatePendingFor`,
   // which tracks an in-flight gate): resolved by greenAsyncGate on a GREEN work turn or reviewRoundFrozenProbe on a
   // GREEN/refactor review round, drained by that turn's onComplete. Identity-carrying (`turn`) so a stale gate/probe
@@ -1721,6 +1724,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       if (action === 'accept') {
+        if (acceptPendingFor === active) return;
         // §27.12c/CWE-703 — every Accept branch finalizes with `persist('complete')`; a failed finalize write
         // (ENOSPC/EPERM/a planted symlink) leaves the disk on `error`, so re-surface the live error and record
         // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
@@ -1836,8 +1840,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // concurrent retry/terminate rebuilds `active` and the identity guard skips the stale finalize.
         if (active.completion.kind === 'red') {
           const a = active;
+          acceptPendingFor = a;
           void redAsyncGate(a).then((gate) => {
-            if (active !== a) return; // a retry/terminate changed the turn under the await
+            acceptPendingFor = null;
+            if (active !== a || acceptMovedOn()) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed result) — Retry re-runs
             if (!gate.ok) {
@@ -1855,8 +1861,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // GREEN turn with a changed test would complete with the flag never written).
         if (active.completion.kind === 'green') {
           const a = active;
+          acceptPendingFor = a;
           void greenAsyncGate(a).then(({ gate, changedTests }) => {
-            if (active !== a) return; // a retry/terminate changed the turn under the await
+            acceptPendingFor = null;
+            if (active !== a || acceptMovedOn()) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return; // the sync clause fails (missing/malformed/not passed+built)
             if (!gate.ok) {
@@ -1871,8 +1879,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.3/§28.5.3
         if (active.completion.kind === 'refactor') {
           const a = active;
+          acceptPendingFor = a;
           void Promise.all([refactorAsyncGate(a), reviewRoundFrozenProbe(a)]).then(([gate, changedTests]) => {
-            if (active !== a) return;
+            acceptPendingFor = null;
+            if (active !== a || acceptMovedOn()) return; // a retry/terminate, a done-signal or a leg changed the turn under the await
             if (acceptActsOnGoalProgress(a)) return;
             if (!completionSatisfied()) return;
             if (!gate.ok) {
