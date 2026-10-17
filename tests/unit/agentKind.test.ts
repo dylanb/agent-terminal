@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest';
+import { agentKindOfCommand, hostedAgentKind } from '../../src/main/agentKind';
+
+// §27.4 (v2.201) — the engine names each reviewer the way the agent in the terminal installs it, so it reads
+// which agent is running from the command the terminal is running.
+
+describe('which agent a terminal command runs (§27.4 v2.201)', () => {
+  it.each([
+    ['codex', 'codex'],
+    ['codex --yolo', 'codex'],
+    ['/opt/homebrew/bin/codex resume', 'codex'],
+    ['OPENAI_API_KEY=x codex', 'codex'],
+    ['env RUST_LOG=info codex', 'codex'],
+    ['npx @openai/codex', 'codex'],
+    ['npx -y @openai/codex@0.50.0', 'codex'],
+    ['nice -n 10 codex', 'codex'],
+    ['env -u OPENAI_BASE_URL codex', 'codex'],
+    ['npx --package @openai/codex codex', 'codex'],
+    ['node /usr/local/lib/node_modules/@openai/codex/bin/codex.js', 'codex'],
+    ['node /Users/me/Library/pnpm/global/5/node_modules/@openai/codex/bin/codex.js --yolo', 'codex'],
+    ['node /Users/me/.local/share/claude/cli.js', 'claude-code'],
+    ['npm exec @openai/codex', 'codex'],
+    ['npm exec -- codex', 'codex'],
+    ['pnpm dlx @openai/codex', 'codex'],
+    ['yarn dlx @openai/codex', 'codex'],
+    ['bun x @openai/codex', 'codex'],
+    ['pnpm test', 'claude-code'],
+    ['node /opt/homebrew/bin/pnpm dlx @openai/codex', 'codex'],
+    ['node /usr/local/bin/npm exec @openai/codex', 'codex'],
+    ['env FOO=1 pnpm dlx @openai/codex', 'codex'],
+    ['nohup yarn dlx @openai/codex', 'codex'],
+    ['pnpm --filter app dlx @openai/codex', 'codex'],
+    ['node /usr/local/bin/npm test', 'claude-code'],
+    ['yarn run codex', 'codex'],
+    ['bun run codex', 'codex'],
+    ['node /usr/local/bin/yarn run codex', 'codex'],
+    ['deno run -A npm:@openai/codex', 'codex'],
+    ['npx -y @anthropic-ai/claude-code --model codex', 'claude-code'],
+    ['npx --yes claude -c codex', 'claude-code'],
+    ['node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js port the codex adapter', 'claude-code'],
+    ['nice -n 10 claude', 'claude-code'],
+    ['claude --model codex', 'claude-code'],
+    ['claude', 'claude-code'],
+    ['claude --resume abc', 'claude-code'],
+    ['/Users/me/.local/bin/claude', 'claude-code'],
+    ['codexify', 'claude-code'],
+    ['', 'claude-code'],
+  ])('%j runs %s', (command, kind) => {
+    expect(agentKindOfCommand(command)).toBe(kind);
+  });
+});
+
+describe('which agent the terminal is hosting (§27.4 v2.201)', () => {
+  const span = (command: string, running: boolean) => ({ command, running });
+
+  it('is the agent of the command that is running', () => {
+    expect(hostedAgentKind([span('ls', false), span('codex', true)], '/bin/bash')).toBe('codex');
+  });
+
+  it("is the terminal's foreground program when no command span is known", () => {
+    expect(hostedAgentKind([], '/usr/local/bin/codex')).toBe('codex');
+  });
+
+  it('is Codex when the terminal runs Codex under a name the typed command does not show', () => {
+    expect(hostedAgentKind([span('cx', true)], 'node /usr/local/lib/node_modules/@openai/codex/bin/codex.js')).toBe('codex');
+  });
+
+  it('is the terminal program when the only commands have finished', () => {
+    expect(hostedAgentKind([span('codex', false)], '/bin/bash')).toBe('claude-code');
+  });
+});

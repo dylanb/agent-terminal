@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
@@ -6,6 +7,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
+import { readDirEntries } from './dirEntries';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
@@ -35,7 +37,7 @@ const roundLeaf = (round: number): string => `${round}.md`;
 /** A round is a positive integer or it is no round at all. The ONE gate both the writer and the reader of the
  *  persisted `round` field consult, so a value the writer drops can never be one the reader keeps (CLAUDE.md
  *  writer↔reader shared-semantics; §27.5 IPC item 3, CWE-20). */
-function isValidRound(round: unknown): round is number {
+function isPositiveWhole(round: unknown): round is number {
   return typeof round === 'number' && Number.isInteger(round) && round > 0;
 }
 
@@ -72,6 +74,10 @@ export interface AppLoopRunState {
   instruction?: string;
   /** §27.10 */
   chainedInputs?: string[];
+  /** §27.3 */
+  leg?: number;
+  /** §27.3 */
+  goalSession?: string;
 }
 
 /** Non-empty text is text; blank or non-string is none. The ONE gate the writer and reader of any human-typed
@@ -122,6 +128,75 @@ export function writeGoalPrompt(repoDir: string, prompt: string): boolean {
   }
 }
 
+const GOAL_SESSION_BYTES = 4;
+const GOAL_SESSION_LENGTH = GOAL_SESSION_BYTES * 2;
+
+/** §27.3 — the id a fresh goal turn keeps its own files under, so no earlier turn's can be read as its own. */
+export function newGoalSession(): string {
+  return randomBytes(GOAL_SESSION_BYTES).toString('hex');
+}
+
+/** §27.3 */
+export function isGoalSession(v: unknown): v is string {
+  if (typeof v !== 'string' || v.length !== GOAL_SESSION_LENGTH) return false;
+  for (const c of v) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  return true;
+}
+
+/** §27.3 — each file a goal session keeps, as the prefix and suffix around its session id. */
+const GOAL_SESSION_FILES = {
+  progress: { prefix: 'goal-progress.', suffix: '.json' },
+  notes: { prefix: 'goal-notes.', suffix: '.md' },
+  refactorResult: { prefix: 'refactor-result.', suffix: '.md' },
+} as const;
+type GoalSessionFile = keyof typeof GOAL_SESSION_FILES;
+
+function goalSessionLeaf(kind: GoalSessionFile, session: string): string {
+  if (!isGoalSession(session)) throw new Error(`not a goal session id: ${JSON.stringify(session)}`);
+  const { prefix, suffix } = GOAL_SESSION_FILES[kind];
+  return `${prefix}${session}${suffix}`;
+}
+
+const goalSessionRel = (kind: GoalSessionFile, session: string): string => [...APP_LOOP_DIR_SEGMENTS, goalSessionLeaf(kind, session)].join('/');
+
+/** §27.3 — the state the engine reads at the done-signal. */
+export function goalProgressRel(session: string): string {
+  return goalSessionRel('progress', session);
+}
+
+/** §27.3 */
+export function goalProgressFile(repoDir: string, session: string): string | null {
+  return loopAreaFile(repoDir, goalSessionLeaf('progress', session));
+}
+
+/** §27.3 — the session's own notes for the next leg, which the engine never reads. */
+export function goalNotesRel(session: string): string {
+  return goalSessionRel('notes', session);
+}
+
+/** §27.3/§28.5.3 — where a refactor goal session records its test result. */
+export function goalRefactorResultRel(session: string): string {
+  return goalSessionRel('refactorResult', session);
+}
+
+/** §27.3/§28.5.3 */
+export function goalRefactorResultFile(repoDir: string, session: string): string | null {
+  return loopAreaFile(repoDir, goalSessionLeaf('refactorResult', session));
+}
+
+/** §27.3 — removes every goal session's files; an absent loop area is already the cleared state. */
+export function clearGoalSessionFiles(repoDir: string): void {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null) return;
+  for (const e of readDirEntries(jail)) {
+    if (!e.isFile) continue;
+    const kind = Object.values(GOAL_SESSION_FILES).find((k) => e.name.startsWith(k.prefix) && e.name.endsWith(k.suffix));
+    if (kind === undefined || !isGoalSession(e.name.slice(kind.prefix.length, -kind.suffix.length))) continue;
+    const file = loopAreaFile(repoDir, e.name);
+    if (file !== null) rmSync(file, { force: true });
+  }
+}
+
 /** The confined absolute run-state file path inside the §27 loop area, or null (CWE-22/59). */
 export function appLoopStateFile(repoDir: string): string | null {
   return loopAreaFile(repoDir, RUN_STATE_FILE);
@@ -141,7 +216,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   if (state.status === 'error' && state.errorReason) doc.error_reason = state.errorReason;
   // The round belongs to a review-and-fix / consolidator turn; a work run carries none (absent = no round has
   // run). Written only for a valid round, so a recovered round is never a fabricated identity.
-  if (isValidRound(state.round)) doc.round = state.round;
+  if (isPositiveWhole(state.round)) doc.round = state.round;
   // §27.6 — the consolidator's verdict, and (through the single-sourced gate, mirroring error_reason) its
   // reason ONLY under `stop for a human`. A verdict outside the closed set is never serialized.
   if (state.verdict !== undefined && (CONSOLIDATOR_VERDICTS as readonly string[]).includes(state.verdict)) {
@@ -159,6 +234,8 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   if (instruction !== undefined) doc.instruction = instruction;
   // §27.10 — absent reads back as "carried nothing", so a recovered carry fails toward NOT carrying.
   if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
+  if (isPositiveWhole(state.leg)) doc.leg = state.leg;
+  if (isGoalSession(state.goalSession)) doc.goal_session = state.goalSession;
   return yaml.dump(doc);
 }
 
@@ -179,7 +256,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   const errorReason = status === 'error' && typeof doc.error_reason === 'string' ? doc.error_reason : undefined;
   // Field-local validation (CWE-20): a mis-typed or negative value is dropped, so it never surfaces as a
   // fabricated round identity to the view/dedup/resume.
-  const round = isValidRound(doc.round) ? doc.round : undefined;
+  const round = isPositiveWhole(doc.round) ? doc.round : undefined;
   // §27.6 — the verdict is admitted only from the closed set; its reason is kept only under the
   // stop-for-a-human gate (the same gate the writer applies), so a recovered verdict never renders a
   // mismatched reason; the chosen roster is a list of strings (AC8).
@@ -199,6 +276,8 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     Array.isArray(doc.chained_inputs) && doc.chained_inputs.every((i) => typeof i === 'string') && doc.chained_inputs.length > 0
       ? (doc.chained_inputs as string[])
       : undefined;
+  const leg = isPositiveWhole(doc.leg) ? doc.leg : undefined;
+  const goalSession = isGoalSession(doc.goal_session) ? doc.goal_session : undefined;
   return {
     loop,
     step,
@@ -212,6 +291,8 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(feedback !== undefined ? { feedback } : {}),
     ...(instruction !== undefined ? { instruction } : {}),
     ...(chainedInputs !== undefined ? { chainedInputs } : {}),
+    ...(leg !== undefined ? { leg } : {}),
+    ...(goalSession !== undefined ? { goalSession } : {}),
   };
 }
 

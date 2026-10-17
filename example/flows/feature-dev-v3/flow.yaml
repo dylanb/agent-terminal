@@ -68,10 +68,15 @@ steps:
       count_input: slices
   - id: integration-slice
     kind: loop
-    gate_authority: human
+    gate_authority: auto
     loop: integration-slice-loop
     loop_namespace: app
     todo_template: impl-loop-review
+  - id: impl-approve
+    kind: loop
+    gate_authority: human
+    loop: impl-approve-loop
+    loop_namespace: app
   - id: finalize
     kind: manual
     todo_template: polish

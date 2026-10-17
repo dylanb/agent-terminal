@@ -120,9 +120,11 @@ import {
 import { provideAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
-import { installedReviewerProblem } from './reviewerAgents';
+import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
+import { hostedAgentKind } from './agentKind';
+import { foregroundCommand } from './foregroundCommand';
 import { userConfigAgentsDir } from './userConfig';
-import { codexHome } from './codexConfig';
+import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
@@ -405,7 +407,22 @@ async function createWindow(): Promise<void> {
     readBaseline: readBaselineCommit,
     clearBaseline: clearBaselineCommit,
     currentBranch: currentGitBranch,
-    reviewerAgentProblem: (reviewer) => installedReviewerProblem(userConfigAgentsDir(), reviewer),
+    reviewerAgentProblem: (reviewer, kind) => {
+      if (kind !== 'codex') return installedReviewerProblem(userConfigAgentsDir(), reviewer);
+      const home = codexHome();
+      return installedCodexReviewerProblem(home === null ? null : codexAgentsDir(home), reviewer);
+    },
+    hostedAgentKind: () => {
+      let foreground = foregroundCommand(ptyProcess.pid);
+      if (foreground === null) {
+        try {
+          foreground = ptyProcess.process;
+        } catch {
+          foreground = resolveShellPath(process.env);
+        }
+      }
+      return hostedAgentKind(tracker.summaries(), foreground);
+    },
     pickupBranch: (repoDir) =>
       resolvePickupBranch(
         pickupRecordPredatesRun.has(repoDir) ? { kind: 'none' } : readPickupRecord(repoDir),

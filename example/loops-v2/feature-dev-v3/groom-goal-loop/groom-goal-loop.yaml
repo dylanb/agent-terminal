@@ -5,6 +5,8 @@ work:
   recipe: prompts/work.md
   artifact: groomed-ticket
   goal: the latest review-plan-intent pass on the groomed ticket returned no findings, and groom-report.md logs every decision the groomer made and every finding it fixed or dismissed
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: review-plan-intent
     charter: charter/intent.md

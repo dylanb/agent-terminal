@@ -52,6 +52,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       humanNeeded: isHumanNeededStatus(APP_LOOP_STATUS_ERROR),
       appTurn: { step: liveError.step, turnKey: liveError.turnKey },
       errorReason: liveError.reason,
+      ...(liveError.stalled ? { stalled: true } : {}),
       ...(liveError.round !== undefined ? { iteration: liveError.round } : {}),
       ...(catalog ? { catalog } : {}),
     };

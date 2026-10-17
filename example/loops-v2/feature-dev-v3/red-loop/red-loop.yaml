@@ -5,6 +5,9 @@ work:
   recipe: prompts/work.md
   artifact: red-result
   completion: red
+  goal: "the slice's new tests fail by assertion while every other test passes, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's red section with its decisions, review history and test evidence"
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: impl-review-tests
     charter: charter/tests.md
@@ -12,8 +15,6 @@ reviewers:
     charter: charter/intent.md
   - persona: impl-review-red-authenticity
     charter: charter/red-authenticity.md
-consolidator:
-  recipe: prompts/consolidate.md
 boundaries:
   - boundary: pre-work
     mode: clear
@@ -25,13 +26,18 @@ gate:
     side_effects:
       - kind: commit
         label: RED
-  - option: request-changes
   - option: redo
   - option: polish
   - option: back-to-red
 inputs:
   - id: plan
     path: plan.md
+  - id: groom-intent
+    path: groom-intent.md
+  - id: impl-report
+    path: impl-report.md
 outputs:
   - id: red-result
     path: red-result.md
+  - id: impl-report
+    path: impl-report.md

@@ -10,13 +10,14 @@ import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-import { DISPOSITIONS, FIXED_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
+import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 import { PHASE_RESULT_GRAMMAR, composePhaseResultInstruction } from '../shared/phaseResult';
 import { ARTIFACT_CHECK_PASSED } from './artifactCheck';
 import { REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
-import { reviewerAgentName } from './reviewerAgents';
+import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
+import type { AgentKind } from './agentKind';
 
 /** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
  *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
@@ -32,16 +33,21 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
 /** A reviewer persona and the confined path of its charter (§27.4). The one shape the roster source, the
  *  prompt request, and the engine's in-flight review turn all share, so the three cannot drift. */
 export interface RosterEntry {
+  loop: string;
   persona: string;
   charter: string;
   tools: ReviewerTools;
-  agent: string;
 }
 
 /** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
  *  subset selection is the consolidator's job (N4). */
 export function reviewRoster(def: LoopDefV2): RosterEntry[] {
-  return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter, tools: r.tools, agent: reviewerAgentName(def.name, r.persona) }));
+  return def.reviewers.map((r) => ({ loop: def.name, persona: r.persona, charter: r.charter, tools: r.tools }));
+}
+
+/** §27.4 */
+export function reviewerAgentFor(kind: AgentKind, r: Pick<RosterEntry, 'loop' | 'persona'>): string {
+  return kind === 'codex' ? codexReviewerAgentName(r.loop, r.persona) : reviewerAgentName(r.loop, r.persona);
 }
 
 /** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
@@ -96,11 +102,13 @@ export interface ReviewAndFixPromptReq {
   loopBrief?: string;
   /** §28.4 */
   slice?: number;
+  /** §27.4 */
+  agentKind: AgentKind;
 }
 
 /** The round-report format rules (§27.5), from the ONE shared descriptor the completion predicate reads.
  *  `whichReviewers` names the roster the per-persona records must cover. */
-function reportFormatLines(sections: string[], whichReviewers: string): string[] {
+function reportFormatLines(sections: string[], whichReviewers: string, kind: AgentKind): string[] {
   const g = REPORT_GRAMMAR;
   return [
     `- one \`${g.sectionPrefix.trim()} <section>\` heading for each of these sections: ${sections.join(', ')}`,
@@ -109,7 +117,9 @@ function reportFormatLines(sections: string[], whichReviewers: string): string[]
     `  a reviewer that RAN and raised no issues carries the line \`${g.emptyMarker}\`; a reviewer that FAILED to`,
     `  run (crashed, timed out, produced nothing usable) carries the line \`${g.failedMarker}\` instead — the two`,
     '  are distinct, and a round with a failed reviewer can never be judged clean (§27.5/§27.6). A reviewer whose',
-    `  subagent_type the Task tool cannot find carries the line \`${g.notLoadedMarker}\`: this agent session started`,
+    kind === 'codex'
+      ? `  Codex agent cannot be found carries the line \`${g.notLoadedMarker}\`: this agent session started`
+      : `  subagent_type the Task tool cannot find carries the line \`${g.notLoadedMarker}\`: this agent session started`,
     '  before it was installed, so record it and spawn nothing in its place.',
     `- for every issue you record under a reviewer, the labelled lines \`${g.issueLabel}:\`, \`${g.dispositionLabel}:\`,`,
     `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
@@ -139,6 +149,8 @@ export interface ReportRepairPromptReq {
   turnKey: string;
   doneRelPath: string;
   checkCommand?: string;
+  /** §27.4 */
+  agentKind: AgentKind;
 }
 
 /** §27.12 — the retry for a round whose report is on disk but malformed: repair the report alone, naming each
@@ -155,7 +167,7 @@ export function composeReportRepairPrompt(req: ReportRepairPromptReq): string {
     ...req.problems.map((p) => `- ${p}`),
     '',
     'The report must have:',
-    ...reportFormatLines(req.sections, `EVERY reviewer of this round (${req.roster.join(', ')})`),
+    ...reportFormatLines(req.sections, `EVERY reviewer of this round (${req.roster.join(', ')})`, req.agentKind),
   ];
   if (req.checkCommand !== undefined) lines.push(...checkerLines(req.checkCommand, 'report'));
   lines.push(
@@ -231,12 +243,23 @@ export function fixCriterionLines(): string[] {
 }
 
 /** §27.4 */
-export function reviewerSpawnLines(handoff: ReviewerHandoffReq, fixedHow: string): string[] {
+export function reviewerSpawnLines(handoff: ReviewerHandoffReq, fixedHow: string, kind: AgentKind): string[] {
+  const spawn =
+    kind === 'codex'
+      ? [
+          'Spawn each reviewer below in parallel as its installed Codex agent, by exactly the name given, and give each',
+          'the reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
+          'Its charter is its own instructions, so never hand it one, and never spawn a default or general agent in',
+          'its place.',
+        ]
+      : [
+          'Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, and give each the',
+          'reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
+          'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
+          'other type for it.',
+        ];
   return [
-    'Spawn each reviewer below as a PARALLEL Task subagent with exactly that subagent_type, and give each the',
-    'reviewer hand-off below word for word, adding nothing: no diff, no prior review, no findings.',
-    'Its charter is its own instructions, so never hand it one, and never substitute a general-purpose agent or any',
-    'other type for it.',
+    ...spawn,
     `Receive their findings into your own context, then fix or dismiss each ${fixedHow}.`,
     '',
     REVIEWER_HANDOFF_BEGIN,
@@ -246,18 +269,38 @@ export function reviewerSpawnLines(handoff: ReviewerHandoffReq, fixedHow: string
 }
 
 /** §27.4 */
-export function rosterLines(roster: RosterEntry[]): string[] {
-  return ['', 'Reviewers (persona — subagent_type):', ...roster.map((r) => `- ${r.persona} — subagent_type: ${r.agent}`)];
+export function rosterLines(roster: RosterEntry[], kind: AgentKind): string[] {
+  return kind === 'codex'
+    ? ['', 'Reviewers (persona — Codex agent):', ...roster.map((r) => `- ${r.persona} — agent: ${reviewerAgentFor(kind, r)}`)]
+    : ['', 'Reviewers (persona — subagent_type):', ...roster.map((r) => `- ${r.persona} — subagent_type: ${reviewerAgentFor(kind, r)}`)];
 }
 
-/** §27.3/§27.4 */
-export function composeGoalReviewLines(roster: RosterEntry[], handoff: ReviewerHandoffReq): string[] {
+/** §27.8 */
+function polishDeferLines(): string[] {
+  return [
+    '',
+    'This loop DEFERS POLISH to a later loop in its flow, which re-reviews this work with a catalog that fixes',
+    'polish. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
+    'contract another surface reads: a rename, comment wording or trimming, de-duplicating logic that already',
+    `behaves identically, style or convention conformance — is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
+    '`polish — deferred to a later loop`, NEVER `fixed` in this loop. A round whose only',
+    'findings are polish therefore changes nothing.',
+  ];
+}
+
+/** §27.3/§27.4/§27.8 */
+export function composeGoalReviewLines(roster: RosterEntry[], handoff: ReviewerHandoffReq, polish: PolishPolicy | undefined, kind: AgentKind): string[] {
   return [
     '',
     'REVIEWS — this turn reviews its own work with the reviewers below, as often as your instructions say.',
-    ...reviewerSpawnLines(handoff, 'per the criterion below'),
+    ...reviewerSpawnLines(handoff, 'per the criterion below', kind),
     ...fixCriterionLines(),
-    ...rosterLines(roster),
+    '',
+    'A finding that only disagrees with a decision you made and logged, inside your decision boundary, is',
+    `\`${INVALID_DISPOSITION}\`: a reviewer choosing differently is not a defect. Fix it only when the decision breaks the`,
+    'ticket, the plan, or a standard the repository writes down.',
+    ...(polish === 'defer' ? polishDeferLines() : []),
+    ...rosterLines(roster, kind),
   ];
 }
 
@@ -268,7 +311,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   lines.push(
     `This is the review-and-fix turn for round ${req.round}.`,
     '',
-    ...reviewerSpawnLines({ ...req, carried }, 'per the criterion below'),
+    ...reviewerSpawnLines({ ...req, carried }, 'per the criterion below', req.agentKind),
   );
   if (req.loopBrief !== undefined) {
     lines.push(
@@ -304,18 +347,8 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
   }
   lines.push(...flowDocumentLines());
   lines.push(...fixCriterionLines());
-  if (req.polish === 'defer') {
-    lines.push(
-      '',
-      'This loop DEFERS POLISH to a later loop in its flow, which re-reviews this work with a catalog that fixes',
-      'polish. A polish finding — one whose fix changes no runtime behavior, no test\'s ability to fail, and no',
-      'contract another surface reads: a rename, comment wording or trimming, de-duplicating logic that already',
-      `behaves identically, style or convention conformance — is \`${OUT_OF_SCOPE_DISPOSITION}\` with the reason`,
-      '`polish — deferred to a later loop`, NEVER `fixed` in this loop. A round whose only',
-      'findings are polish therefore changes nothing.',
-    );
-  }
-  lines.push(...rosterLines(req.roster));
+  if (req.polish === 'defer') lines.push(...polishDeferLines());
+  lines.push(...rosterLines(req.roster, req.agentKind));
   if (req.sliceBrief !== undefined) lines.push(...sliceBriefLines(req.sliceBrief, 'fixer'));
   // This block is the OUTER framing every request-changes feedback carries ("weigh this / record how you
   // addressed it"). The compose-with-agent mode adds its own inner "Synthesize…" prefix upstream in the
@@ -330,7 +363,7 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
       feedback,
     );
   }
-  lines.push('', `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`, ...reportFormatLines(req.sections, 'EVERY reviewer above'));
+  lines.push('', `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`, ...reportFormatLines(req.sections, 'EVERY reviewer above', req.agentKind));
   // §28.5.3 — a refactor round writes a phase-result file the round gate reads (softer than GREEN: {passed},
   // no build), via the shared writer so this instruction stays single-sourced with the parse predicate. The
   // done-signal verifies the RESULT, not the report — it is the artifact the fixer is least habituated to (the
