@@ -3,8 +3,11 @@
 Read the last two round reports — this round's report and the previous round's, if there is one — and
 judge the round against the ticket. Emit a verdict and, for `another round`, the next round's roster:
 
-- `clean` — the round changed nothing: every issue was dismissed and nothing was fixed. A round that
-  fixed something is `another round`, not `clean`.
+- `clean` — the round changed nothing except documentation, by this rule. A round whose issues are all
+  dismissed or `fixed — documentation` is `clean`: it changed nothing except documentation, and
+  `dismissed — nit` counts as a dismissal. A round with any `fixed` issue is `another round`, however many
+  NIT dismissals and documentation fixes it also records. A round that records a `needs a human` issue is
+  judged by the `stop for a human` rule.
 - `another round` — more work remains. Choose the next round's roster from this loop's reviewer catalog:
   prefer the SMALLEST roster that covers the open work — the lenses that raised an unresolved issue this
   round plus any whose subject the round's fixes actually touched. Do not re-summon a lens that returned

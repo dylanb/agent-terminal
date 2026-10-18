@@ -4,18 +4,31 @@
 
 import { isJsonRecord as isRecord, readJsonObject } from './jsonArtifact';
 
-export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
+export const DISPOSITIONS = ['fixed', 'fixed — documentation', 'dismissed — out of scope', 'dismissed — invalid', 'dismissed — nit', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
-/** The one disposition that carries extra validation semantics (a `fixed` issue must record what changed) and
- *  anchors the canonical example — spelled once so it cannot desync from DISPOSITIONS. */
+/** Anchors the canonical example — spelled once so it cannot desync from DISPOSITIONS. */
 export const FIXED_DISPOSITION: Disposition = 'fixed';
+
+/** A fix whose every change is documentation (§27.6, #207). */
+export const DOCUMENTATION_DISPOSITION: Disposition = 'fixed — documentation';
+
+/** The dispositions whose issue must record what changed — the validator, the format prompt and the test fixtures
+ *  all read this one list. */
+export const CHANGE_RECORDING_DISPOSITIONS: readonly Disposition[] = [FIXED_DISPOSITION, DOCUMENTATION_DISPOSITION];
+
+export function recordsChange(disposition: string): boolean {
+  return (CHANGE_RECORDING_DISPOSITIONS as readonly string[]).includes(disposition);
+}
 
 /** The disposition a deferred polish finding takes (§27.8 `polish: defer`). */
 export const OUT_OF_SCOPE_DISPOSITION: Disposition = 'dismissed — out of scope';
 
 /** The disposition a finding that is not a defect takes (§27.6). */
 export const INVALID_DISPOSITION: Disposition = 'dismissed — invalid';
+
+/** The disposition a finding that meets the shared NIT definition takes — never implemented (§27.6, #207). */
+export const NIT_DISPOSITION: Disposition = 'dismissed — nit';
 
 /** The disposition a fix the loop is not entitled to make takes (§27.3 document-subject overreach). */
 export const NEEDS_HUMAN_DISPOSITION: Disposition = 'needs a human';
@@ -73,7 +86,7 @@ function issueProblems(v: unknown, at: string): { problems: string[]; dispositio
   const disposition = typeof d === 'string' && DISPOSITION_SET.has(d) ? (d as Disposition) : null;
   if (disposition === null) problems.push(`${at}'s "${f.disposition}" is not exactly one of ${quoted(DISPOSITIONS)}`);
   if (!hasText(v[f.reason])) problems.push(`${at} has no "${f.reason}" text`);
-  if (disposition === FIXED_DISPOSITION && !hasText(v[f.whatChanged])) problems.push(`${at} is "${FIXED_DISPOSITION}" but has no "${f.whatChanged}" text`);
+  if (disposition !== null && recordsChange(disposition) && !hasText(v[f.whatChanged])) problems.push(`${at} is "${disposition}" but has no "${f.whatChanged}" text`);
   return { problems, disposition };
 }
 

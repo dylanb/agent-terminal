@@ -86,6 +86,25 @@ starts. Do not stand in for a missing piece with something else.
    it as one; it is still work when the ticket names it as something to change.
    The repository's standards and configuration are read where they live.
    Do not change any file: report your findings, and the fixer makes every change.
+   Judge each finding against this definition of a NIT, the one the fixer applies too:
+
+   A change is a NIT if it meets ALL of the following criteria:
+
+   1. **Behavioral Equivalence:** It produces identical runtime output, side effects, and control flow across all valid, invalid, and edge-case inputs.
+   2. **Zero Performance Impact:** It has no material impact on execution speed, memory footprint, I/O, concurrency, or resource consumption.
+   3. **Zero Future Debt:**
+      - It does not prevent future extensibility, refactoring, or API evolution.
+      - It does not violate any enforceable project-wide linting, formatting, typing, or CI/CD rules (if CI passes without it, it qualifies).
+      - It does not conceal logic in a way that makes bug diagnosis significantly harder.
+   4. **Preference-Driven:** It is rooted entirely in personal preference, alternative idiomatic phrasing, or subjective aesthetics where the existing implementation is already clear and standard.
+
+   **Classification Test (the "Safe-to-Ignore" Rule).** Evaluate the change against this question: "If this pull request is merged without this change, could any test fail, bug arise, security vulnerability open, system resource degrade, or future contributor be materially misled or blocked?"
+
+   - If the answer is "No" to all: the change is a NIT → Status: OPTIONAL / DO NOT IMPLEMENT.
+   - If the answer is "Yes" or "Maybe" to any: the change is NOT A NIT.
+
+   You may label a finding a NIT; the fixer weighs that label and makes the call.
+   The PR description is not under review: raise no finding about it.
    Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.
    If you find nothing, return exactly: no findings
    ```

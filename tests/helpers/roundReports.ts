@@ -1,4 +1,4 @@
-import { FIXED_DISPOSITION, type Disposition, type ReviewerStatus } from '../../src/shared/roundReport';
+import { recordsChange, type Disposition, type ReviewerStatus } from '../../src/shared/roundReport';
 
 /** One issue a scripted round records, exactly as the round report carries it: the disposition is whatever text
  *  the agent wrote, so a script can record one outside the closed set. */
@@ -31,7 +31,7 @@ export function roundReportWithDisposition(sections: string[], roster: string[],
       issue: `a sample issue raised by ${persona}`,
       disposition,
       reason: 'the scripted disposition for this round',
-      ...(disposition === FIXED_DISPOSITION ? { whatChanged: 'corrected the defect' } : {}),
+      ...(recordsChange(disposition) ? { whatChanged: 'corrected the defect' } : {}),
     },
   ]);
 }
