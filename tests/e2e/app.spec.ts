@@ -16,8 +16,8 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
-import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
+import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { exampleCapturedOutput, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
@@ -7375,7 +7375,7 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-fulltdd-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-fulltdd-bin-', { realCommitOps: true });
-  seedFullTddChainAgent(binDir);
+  seedFullTddChainAgent(binDir, { runChecksFor: ['plan-bundle', 'plan-polish'] });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7418,6 +7418,11 @@ test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → pla
   // §28.10 AC1 — end-to-end chaining: the integration gate published plan-bundle's '# plan' artifact as the PR body.
   await expect.poll(() => readIf(`${logFile}.pr-body`)).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: finalize');
+  // §27.12 v2.202 — each planning round ran the real bundled check its prompt handed it, after writing its file,
+  // and every check passed: the round report and the consolidator verdict.
+  const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
+  for (const file of [/reports\/1\.json/, /consolidate\/1\.json/]) expect(checks, checks).toMatch(new RegExp(`OK: \\S*${file.source}`));
+  expect(checks).not.toContain('exit=1');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -7829,8 +7834,6 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
 const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "${status}"}\\n' "$leg" > "$gp"`;
 /** The shell that runs every check the goal prompt in `$p` hands the session, logging what each printed. */
 const GOAL_CHECK_CMD = `grep 'ELECTRON_RUN_AS_NODE=1 ' "$p" | sed 's/^ *//' > .agent-terminal/checks-seen; while IFS= read -r chk <&3; do { eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; done 3< .agent-terminal/checks-seen`;
-/** The shell that runs the check last seen in an injected prompt (kept in `$chk`), logging what it printed. */
-const RUN_SEEN_CHECK = `{ eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1`;
 /** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
 const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.json' | head -1)`;
 
@@ -7893,7 +7896,7 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect.poll(() => readIf(`${logFile}.issue-body.176`), { timeout: 30_000 }).toContain('# Groomed ticket 176');
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan-bundle');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan\n');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -8023,11 +8026,11 @@ function seedV3Config(prefix: string): string {
   return cfg;
 }
 
-test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review their own work, compacts one between legs, lets the operator send the slice back to RED from the final approval, and publishes the PR on approve', { tag: '@ownapp' }, async () => {
-  test.setTimeout(chainBudget(12));
+test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal sessions that review their own work, compacts them between legs, approves the plan once, lets the operator send the slice back to RED from the final approval, and publishes the PR on approve', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(13));
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-implv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
-    flowState: 'step: plan-bundle\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+    flowState: 'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
     capabilities: 'test_globs:\n  - tests/**\ntest_command: pnpm test\nbuild_command: pnpm run build\n',
   });
   mkdirSync(join(repo, V3_ART), { recursive: true });
@@ -8045,6 +8048,8 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
     binDir,
     'fake-agent',
     {
+      // The plan session's first leg runs out of passes; the leg after the compact writes a plan of 2 impl-slices.
+      plan: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else printf %s '${b64(`# plan\n\n${exampleSlicePlan(2)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-report.md', ['## Needs your call', 'None.', '## Planner decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}; fi`,
       infra: finish('infra', `printf '%s\\n' 'export const infra = 1;' > infra.ts`),
       // A slice sent back to RED runs again, so each run adds its own test and changes the code anew.
       red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.json`)}`),
@@ -8054,14 +8059,10 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
       'integration-slice': finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`),
     },
     {
-      'plan-bundle': writeV3('plan.md', ['# plan', completionMarker('plan-bundle')]),
-      'plan-polish': `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${V3_ART}/plan.md`,
+      // The operator narrows the plan to 1 impl-slice in the approval session, so approving it re-sources the count.
+      'plan-approve': `printf %s '${b64(`# plan\n\n${exampleSlicePlan(1)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')])}`,
       'impl-approve': writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')]),
     },
-    ['    *"ELECTRON_RUN_AS_NODE=1 "*) chk="ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }" ;;\n'].concat(['plan-bundle', 'plan-polish'].flatMap((step) => [
-      `    *turn-done:review-${step}*) mkdir -p .agent-terminal/loop/reports; printf %s '${b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }))}' | base64 -d > .agent-terminal/loop/reports/1.json; ${RUN_SEEN_CHECK}; mkdir -p .agent-terminal/loop; printf '%s' 'review-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
-      `    *turn-done:consolidate-${step}*) mkdir -p .agent-terminal/loop/consolidate; printf %s '${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}' | base64 -d > .agent-terminal/loop/consolidate/1.json; ${RUN_SEEN_CHECK}; printf '%s' 'consolidate-${step}' > .agent-terminal/loop/${TURN_DONE_FILENAME} ;;\n`,
-    ])),
   );
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -8075,27 +8076,30 @@ test('§27.3 v2.201 — feature-dev-v3 implements in goal sessions that review t
   await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
   await typeCommand('fake-agent');
   await flowControl().click();
-  await passAutoGate(home, repo, 'plan-bundle');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: plan-polish[\s\S]*verdict: clean/);
+  // Planning reaches its one human gate without stopping, the session told to run its plan-polish reviewers.
+  await passAutoGate(home, repo, 'plan');
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toContain('subagent_type: plan-goal-loop--review-plan-determinism');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: plan-approve[\s\S]*verdict: clean/);
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click();
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).not.toContain('step: plan-polish\n');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).not.toContain('step: plan-approve\n');
+  await expect.poll(() => readGhLog(logFile)).toContain('pr ready');
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
   for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step);
 
-  // Every implementation step was a goal session; GREEN's took two legs with a compact between them.
+  // Planning and every implementation step were goal sessions; the plan's and GREEN's each took two legs with a compact between them.
   const goals = readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n');
-  expect(goals.filter((g) => g.includes('turn-done:work-green)')).map((g) => /for leg (\d+)/.exec(g)?.[1])).toEqual(['1', '2']);
-  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes('.agent-terminal/loop/goal-progress.'))).toHaveLength(1);
+  for (const step of ['plan', 'green']) expect(goals.filter((g) => g.includes(`turn-done:work-${step})`)).map((g) => /for leg (\d+)/.exec(g)?.[1]), step).toEqual(['1', '2']);
+  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes('.agent-terminal/loop/goal-progress.'))).toHaveLength(2);
   for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) {
     expect(goals.some((g) => g.includes(`turn-done:work-${step})`)), step).toBe(true);
     expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);
   }
-  // §27.12 v2.202 — each session and round ran the real bundled check its prompt handed it, after writing its
-  // file, and every check passed: the review round's report and verdict, and each goal session's progress and result.
+  // §27.12 v2.202 — each session ran the real bundled check its prompt handed it, after writing its file, and
+  // every check passed: each goal session's progress and result.
   const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
   for (const file of [
-    /reports\/1\.json/,
-    /consolidate\/1\.json/,
     /goal-progress\.[0-9a-f]{8}\.json/,
     /artifacts\/red-result\.json/,
     /artifacts\/green-result\.json/,

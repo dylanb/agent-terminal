@@ -1,18 +1,81 @@
-# plan-polish-loop — work turn
+# plan-goal-loop — work turn
 
-Polish the plan artifact produced by the previous planning step, editing it in place, using the
-plan-polish method below. The method is included verbatim. Inside this loop, these rules take precedence
-over anything the method says:
+Plan the linked ticket into the `plan` artifact, polish it, review it, and fix it until every reviewer's latest
+pass finds nothing left to fix, deciding every question yourself as the brief says.
 
-- **Bindings.** The plan artifact is this step's `plan` input; the ticket is the linked ticket and this
-  step's `groomed-ticket` input. Ignore the method's default paths, branch patterns and marker strings —
-  the turn instruction gives this step's completion marker, and any marker already in the plan stays.
-- **Report in the plan.** Write the method's five-part report (Proportion / Polished autonomously / Scope
-  escalations / Needs your call / Re-review?) as a `## Polish report` section at the end of the plan, above
-  the completion marker. Replace any earlier polish report rather than adding a second one, but carry over
-  every recorded operator decision. Never stop to ask a question.
-- **Re-review is automatic.** The review rounds that follow this turn re-check the polished plan, so
-  "Re-review?" informs the reviewers; it does not need to request anything.
+1. Read the `groom-intent` and `groomed-ticket` inputs, then the issue with its comments, and the code, spec and
+   standards it touches. Read `loop-capabilities.yaml` for the repo's `test_command`, `build_command` and
+   `test_globs`, and target those in the test, infrastructure and slice plans.
+2. Draft the plan with the sections under **The plan** below.
+3. Polish the draft with the plan-polish method under **Polishing the plan** below.
+4. Review the plan with the reviewers below, then fix or dismiss every finding, logging each in
+   `## Review history` and each decision a fix needs in `## Planner decisions`. When a fix changes the plan's
+   approach, run the method's passes again over what it changed.
+5. Repeat step 4 until every reviewer's latest pass finds nothing left to fix.
+
+# The plan
+
+## Test plan
+
+Map every acceptance criterion to an observable-behavior test at the right layer (unit / integration /
+e2e), in RED-first order, with injection seams named for the domain concept the unit needs.
+
+## Technical plan
+
+The smallest correct design that satisfies the ticket — the files, seams, and contracts it touches, and
+the shared definitions it single-sources.
+
+Under an `Assumptions` heading, list each behaviour the plan relies on that
+no test environment in the repository exercises — the developer's host OS when the tests run elsewhere, a
+real external tool the tests replace with a stand-in — and the real-run check that verifies it.
+
+## Infrastructure plan
+
+The deterministic test infrastructure the slices need — the harness, fakes, and fixtures — hermetic and
+scriptable per turn.
+
+## Slice plan
+
+Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.
+Size the slices before enumerating them (see **Slice sizing** above), then enumerate the impl-slices in the
+`## Impl-slices` block under **Machine-read plan blocks** above.
+
+## Complexity drivers
+
+Once the plan is drafted, find the acceptance criteria that drive most of its cost: a criterion that takes a
+disproportionate share of the design, the tests or the slices; that brings in a new external system,
+component or state; or whose failure paths need decisions the ticket does not settle. Under a
+`## Complexity drivers` heading, name each such criterion, what it costs the plan, and one or more simpler
+alternatives — a narrower criterion, a different mechanism, or a split into a follow-up ticket — with what
+each alternative saves and loses, and your recommendation. Keep the list short and lead with the biggest
+saving. Propose only: never apply an alternative yourself, so the plan still meets every criterion as the
+ticket states it until the operator decides; the report's `## Needs your call` lists each driver (see "The report").
+When no criterion stands out, write `None.` under the heading.
+
+## Epic classification (§28.7)
+
+Judge whether the ticket is an **epic** — work that decomposes into more than one self-contained,
+independently-shippable sub-ticket at ticket granularity. When it is, add a `Classification: epic` line and a
+`## Sub-tickets` block that partitions the acceptance criteria across the slices with no gaps or overlap
+(reviewed by `tracer-slicer`), in the shape under **Machine-read plan blocks** above.
+
+A single-ticket plan omits the classification line. Approving an epic plan fans it out, confirm-first, into the
+stacked sub-ticket chain and turns the epic into a tracking issue (§27.10 / §28.7).
+
+# Polishing the plan
+
+Polish your draft in place with the plan-polish method below, included verbatim. Inside this step, these rules
+take precedence over anything the method says:
+
+- **Bindings.** The plan artifact is this step's `plan` output; the ticket is the linked ticket and this step's
+  `groomed-ticket` input. Ignore the method's default paths, branch patterns and marker strings — the turn
+  instruction gives this step's completion marker.
+- **Report in the plan and in the report.** Write the method's five-part report as a `## Polish report` section
+  at the end of the plan, above the completion marker, replacing any earlier one but carrying over every
+  recorded operator decision. What it leaves for the operator also goes in `plan-report.md` (see "The report").
+  Never stop to ask a question.
+- **Re-review is yours.** Your own review passes re-check the polished plan, so "Re-review?" informs them; it
+  does not need to request anything.
 
 ---
 

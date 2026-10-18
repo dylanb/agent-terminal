@@ -23,18 +23,17 @@ steps:
     gate_authority: human
     loop: groom-approve-loop
     loop_namespace: app
-  - id: plan-bundle
+  - id: plan
     kind: loop
     gate_authority: auto
-    loop: plan-bundle-loop
+    loop: plan-goal-loop
     loop_namespace: app
     todo_template: plan-loop-review
-  - id: plan-polish
+  - id: plan-approve
     kind: loop
     gate_authority: human
-    loop: plan-polish-loop
+    loop: plan-approve-loop
     loop_namespace: app
-    todo_template: plan-loop-review
   - id: infra
     kind: loop
     gate_authority: auto

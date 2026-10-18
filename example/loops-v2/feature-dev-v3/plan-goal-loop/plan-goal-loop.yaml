@@ -1,32 +1,39 @@
 version: v2
-name: plan-bundle-loop
+name: plan-goal-loop
 brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: plan
+  goal: every reviewer's latest pass found nothing left to fix in the plan, and plan-report.md logs every decision the planner made, every item left for the operator, and every finding it fixed or dismissed
+  checkpoint:
+    passes: 3
 reviewers:
   - persona: review-plan-principal
     charter: charter/principal.md
+  - persona: review-plan-security
+    charter: charter/security.md
+  - persona: review-plan-architecture
+    charter: charter/architecture.md
   - persona: review-plan-intent
     charter: charter/intent.md
+  - persona: review-plan-maintainability
+    charter: charter/maintainability.md
+  - persona: review-plan-contracts
+    charter: charter/contracts.md
+  - persona: review-plan-test-architect
+    charter: charter/test-architect.md
+  - persona: review-plan-determinism
+    charter: charter/determinism.md
   - persona: review-plan-tracer-slicer
     charter: charter/tracer-slicer.md
-consolidator:
-  recipe: prompts/consolidate.md
 boundaries:
   - boundary: pre-work
     mode: clear
-  - boundary: pre-review
-    mode: compact
-    message: Keep the plan and the ticket.
 report:
-  sections: [summary, findings, disposition]
-  polish: defer
+  sections: [summary]
 gate:
   - option: approve
-  - option: request-changes
   - option: redo
-  - option: polish
 pickup:
   initial_status: planning
   branch_template: plan-loop/issue-{issue}
@@ -44,6 +51,10 @@ pickup:
 inputs:
   - id: groomed-ticket
     path: groomed-ticket.md
+  - id: groom-intent
+    path: groom-intent.md
 outputs:
   - id: plan
     path: plan.md
+  - id: plan-report
+    path: plan-report.md
