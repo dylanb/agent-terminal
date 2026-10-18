@@ -5,6 +5,7 @@ const EMPHASIS_STARS = /\*+/g;
 const EMPHASIS_UNDERSCORES = /(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu;
 const QUALIFIER_SEPARATOR = /^[\s,:—–-]*/;
 const CONTEXT_CHARS = 40;
+const SENTENCE_END = /(?<=[.!?])\s+/;
 
 export function normaliseText(text: string): string {
   return text.replace(EMPHASIS_STARS, '').replace(EMPHASIS_UNDERSCORES, '').replace(/\s+/g, ' ').trim();
@@ -18,6 +19,15 @@ function nonEmpty(text: string, what: string): string {
 
 export function statesText(doc: string, shared: string | readonly string[]): boolean {
   return normaliseText(doc).includes(nonEmpty(typeof shared === 'string' ? shared : shared.join('\n'), 'shared text'));
+}
+
+/** Whether one sentence of `doc` contains every needle, case-sensitively, once both are normalised. */
+export function sentenceStates(doc: string, needles: readonly string[]): boolean {
+  if (needles.length === 0) throw new Error('no needles, so every sentence would match');
+  const wanted = needles.map((n) => nonEmpty(n, 'needle'));
+  return normaliseText(doc)
+    .split(SENTENCE_END)
+    .some((sentence) => wanted.every((n) => sentence.includes(n)));
 }
 
 /** Each case-insensitive occurrence of `phrase` in `doc` that the `qualifier` does not follow (a separating

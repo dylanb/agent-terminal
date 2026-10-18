@@ -18,6 +18,10 @@ export const CONSOLIDATOR_FIELDS = {
   reason: 'reason',
 } as const;
 
+/** §27.6 (#207) — when a round is `clean`: the one rule the engine's consolidator instruction and every bundled
+ *  consolidator recipe state. */
+export const CLEAN_RULE_LINES: readonly string[] = ['(the clean rule)'];
+
 const VERDICT_SET: ReadonlySet<string> = new Set(CONSOLIDATOR_VERDICTS);
 const ANOTHER_ROUND: ConsolidatorVerdict = 'another round';
 const STOP_FOR_A_HUMAN: ConsolidatorVerdict = 'stop for a human';

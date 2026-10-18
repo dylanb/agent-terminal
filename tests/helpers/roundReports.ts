@@ -1,9 +1,10 @@
 import { FIXED_DISPOSITION, type Disposition, type ReviewerStatus } from '../../src/shared/roundReport';
 
-/** One issue a scripted round records, exactly as the round report carries it. */
+/** One issue a scripted round records, exactly as the round report carries it: the disposition is whatever text
+ *  the agent wrote, so a script can record one outside the closed set. */
 export interface ScriptedIssue {
   issue: string;
-  disposition: Disposition;
+  disposition: string;
   reason: string;
   whatChanged?: string;
 }

@@ -142,6 +142,35 @@ describe('disposition membership is exact, never normalized (AC6)', () => {
   });
 });
 
+// #207 AC 2 — the two dispositions the NIT rule adds, spelled with the same em dash, matched exactly.
+describe('the NIT and documentation dispositions', () => {
+  const NIT = 'dismissed — nit';
+  const DOCUMENTATION = 'fixed — documentation';
+
+  it('accepts a `dismissed — nit` issue with a reason and no whatChanged', () => {
+    expect(roundReportProblems(withIssue(issue({ disposition: NIT, whatChanged: undefined })), SPEC)).toEqual([]);
+  });
+
+  it('accepts a `fixed — documentation` issue that records what changed', () => {
+    expect(roundReportProblems(withIssue(issue({ disposition: DOCUMENTATION, whatChanged: 'corrected the comment' })), SPEC)).toEqual([]);
+  });
+
+  it.each(['dismissed - nit', 'Dismissed — nit', 'dismissed — NIT', 'nit', 'fixed - documentation'])(
+    'names %j as outside the closed set, listing both new dispositions among the allowed ones',
+    (d) => {
+      const problems = roundReportProblems(withIssue(issue({ disposition: d })), SPEC).join('\n');
+      expect(problems).toMatch(/"disposition" is not exactly one of/);
+      expect.soft(problems).toContain(`"${NIT}"`);
+      expect.soft(problems).toContain(`"${DOCUMENTATION}"`);
+    },
+  );
+
+  it('fails a `fixed — documentation` issue that records no change, as it fails a `fixed` one', () => {
+    const problems = roundReportProblems(withIssue(issue({ disposition: DOCUMENTATION, whatChanged: undefined })), SPEC);
+    expect(problems).toEqual([`reviewers[0] (review-principal) issues[0] is "${DOCUMENTATION}" but has no "${REPORT_FIELDS.whatChanged}" text`]);
+  });
+});
+
 describe('disposition CORRECTNESS is out of scope (Non-goals)', () => {
   it('completes a report of all `needs a human` exactly as a report of all `fixed`', () => {
     const r = report([ran('review-principal', [issue({ disposition: 'needs a human' })]), ran('review-security', [issue({ disposition: 'needs a human' })])]);
@@ -205,8 +234,8 @@ describe('not-loaded reviewers (§27.4 — a reviewer the agent session cannot s
 });
 
 describe('the closed sets are spec-fixed', () => {
-  it('the dispositions are exactly the §27.5 four', () => {
-    expect(DISPOSITIONS).toEqual(['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human']);
+  it('the dispositions are exactly the §27.5 six', () => {
+    expect(DISPOSITIONS).toEqual(['fixed', 'fixed — documentation', 'dismissed — out of scope', 'dismissed — invalid', 'dismissed — nit', 'needs a human']);
   });
 });
 

@@ -14,6 +14,9 @@ import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { b64, exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, seedFullTddChainAgent, type StepScript } from './fakeTools';
+import type { ScriptedIssue } from '../helpers/roundReports';
+import { sentenceStates, statesText } from '../helpers/statesText';
+import { NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -1292,3 +1295,129 @@ test('auto gate concurrency, held frozen check: an interrupt armed during the he
   await expectSteady(() => [gitIn(repo, 'rev-parse', 'HEAD'), /^step: green$/m.test(flowState(repo))], [baseline, true]);
   expect(heldNaming(logFile, baseline)).toBe(true);
 });
+
+// #207 — a round whose only findings are NITs, or whose only fixes are documentation, changed nothing the
+// termination rule counts: the report passes the format check and the consolidator's `clean` reaches the gate
+// like any other. Each case waits for the gate or a loop error, so a rejected report fails on a named check.
+const ROUND_REPORT_1 = '.agent-terminal/loop/reports/1.json';
+const REPAIR_LINE = /This is a REPAIR of the round-/;
+const ONLY_NITS: ScriptedIssue[] = [
+  {
+    issue: 'rename the local `n` to `count`',
+    disposition: 'dismissed — nit',
+    reason: 'passes the Safe-to-Ignore test: same behaviour and performance, no lint rule asks for it, nobody is misled',
+  },
+  {
+    issue: 'reorder two independent imports',
+    disposition: 'dismissed — nit',
+    reason: 'passes the Safe-to-Ignore test: a preference with no effect on any test, resource or reader',
+  },
+];
+const ONLY_DOCUMENTATION: ScriptedIssue[] = [
+  {
+    issue: 'the comment above the retry loop says three attempts; the code makes two',
+    disposition: 'fixed — documentation',
+    reason: 'a comment that misleads the next reader',
+    whatChanged: 'corrected the code comment to say two attempts',
+  },
+  {
+    issue: 'the README lists the setup steps out of order',
+    disposition: 'fixed — documentation',
+    reason: 'a reader following the README fails at step two',
+    whatChanged: 'reordered the setup steps in README.md',
+  },
+];
+const SCRIPTED_ROUNDS = [
+  { what: 'NIT dismissals', ac: 'AC1', issues: ONLY_NITS },
+  { what: 'documentation fixes', ac: 'AC11', issues: ONLY_DOCUMENTATION },
+];
+const HUMAN_RED_THEN_MANUAL: AutoGateStep[] = [
+  { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'human' },
+  { id: 'done', kind: 'manual' },
+];
+const injectedLines = (repo: string): string[] => readIf(join(repo, '.agent-terminal', 'injected-log')).split('\n');
+const reviewAndFixPrompt = (repo: string): string => {
+  const lines = injectedLines(repo);
+  const start = lines.findIndex((l) => l.startsWith('This is the review-and-fix turn for round 1.'));
+  if (start === -1) return '';
+  const end = lines.findIndex((l, i) => i > start && l.startsWith('This is the consolidator turn'));
+  return lines.slice(start, end === -1 ? undefined : end).join('\n');
+};
+const firstPersonaIssues = (repo: string): unknown => {
+  const report = JSON.parse(readIf(join(repo, ROUND_REPORT_1)) || '{"reviewers":[]}') as { reviewers: { issues: unknown }[] };
+  return report.reviewers[0]?.issues;
+};
+
+for (const round of SCRIPTED_ROUNDS) {
+  test(`a round recording only ${round.what} reaches the human gate as clean, with no report repair or loop error (#207 ${round.ac})`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(loopTestBudget(4, 0));
+    const prefix = `agent-term-e2e-207-human-${round.ac}-`;
+    const home = tmp(`${prefix}home-`);
+    const repo = seedAutoGateRepo(prefix, 'red');
+    cleanup.push(repo);
+    seedTrustedFlow(home, repo, 'human-red', autoGateFlowYaml(HUMAN_RED_THEN_MANUAL));
+    await launchInto(prefix, repo, home, { ...redAgent(), reviews: [{ issues: round.issues }], logInjected: true });
+    await recordLoopErrors();
+
+    await flowControl().click();
+
+    const atGateOrError = (): boolean => /^status: error$/m.test(runState(repo)) || /^step: red$[\s\S]*verdict: clean/m.test(runState(repo));
+    await expect.poll(atGateOrError, { timeout: LOOP_ROUND_MS }).toBe(true);
+    expect.soft(injectedLines(repo).filter((l) => REPAIR_LINE.test(l))).toEqual([]);
+    expect.soft(runState(repo)).not.toMatch(/^status: error$/m);
+    expect.soft(await loopErrors()).toEqual([]);
+    await dismissLoopErrors();
+    await openLoopPanel();
+    await expect.soft(loopPanel().locator('[data-loop-verdict] .lv')).toHaveText('clean', { timeout: UI_MS });
+    await expect.soft(approveOption()).toBeVisible();
+    expect.soft(firstPersonaIssues(repo)).toEqual(round.issues);
+    expect(flowState(repo)).toMatch(/^step: red$/m);
+  });
+}
+
+test('the review-and-fix prompt a NIT-only round receives states the NIT definition and sends PR-description findings out of scope (#207 AC1, AC3)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(1, 0));
+  const prefix = 'agent-term-e2e-207-prompt-';
+  const home = tmp(`${prefix}home-`);
+  const repo = seedAutoGateRepo(prefix, 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'human-red', autoGateFlowYaml(HUMAN_RED_THEN_MANUAL));
+  await launchInto(prefix, repo, home, { ...redAgent(), reviews: [{ issues: ONLY_NITS }], logInjected: true });
+
+  await flowControl().click();
+
+  await expect.poll(() => readIf(join(repo, ROUND_REPORT_1)), { timeout: LOOP_ROUND_MS }).not.toBe('');
+  const prompt = reviewAndFixPrompt(repo);
+  expect(prompt).toContain('Spawn each reviewer');
+  expect.soft(statesText(prompt, NIT_DEFINITION_LINES)).toBe(true);
+  expect.soft(sentenceStates(prompt, ['PR description', '`dismissed — out of scope`'])).toBe(true);
+});
+
+for (const round of SCRIPTED_ROUNDS) {
+  test(`an auto step whose round records only ${round.what} advances with no click, the engine deciding (#207 AC7, ${round.ac})`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(loopTestBudget(1, 1));
+    const prefix = `agent-term-e2e-207-auto-${round.ac}-`;
+    const home = tmp(`${prefix}home-`);
+    const repo = seedAutoGateRepo(prefix, 'red');
+    cleanup.push(repo);
+    seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+    await launchInto(prefix, repo, home, { ...redAgent(), reviews: [{ issues: round.issues }], logInjected: true });
+    await recordLoopErrors();
+
+    await flowControl().click();
+
+    const advancedOrError = (): boolean => /^step: done$/m.test(flowState(repo)) || /^status: error$/m.test(runState(repo));
+    await expect.poll(advancedOrError, { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS }).toBe(true);
+    expect.soft(injectedLines(repo).filter((l) => REPAIR_LINE.test(l))).toEqual([]);
+    expect.soft(runState(repo)).not.toMatch(/^status: error$/m);
+    expect.soft(await loopErrors()).toEqual([]);
+    expect.soft(flowState(repo)).toMatch(/^step: done$/m);
+    const entries = auditGateEntries(home, repo);
+    expect.soft(entries.map((e) => ({ kind: gateDecisionKind(e.cmd), decider: gateDecisionDecider(e.cmd) }))).toContainEqual({
+      kind: { family: 'gate', kind: 'decision', option: 'approve' },
+      decider: 'engine',
+    });
+    expect.soft(entries.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toEqual([]);
+    expect.soft(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
+  });
+}

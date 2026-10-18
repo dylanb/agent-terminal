@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normaliseText, statesText, unqualifiedOccurrences } from '../helpers/statesText';
+import { normaliseText, sentenceStates, statesText, unqualifiedOccurrences } from '../helpers/statesText';
 
 const SHARED = ['1. **Behavioral Equivalence:** It produces identical runtime output,', '   side effects, and control flow.'];
 
@@ -70,5 +70,24 @@ describe('unqualifiedOccurrences — a phrase not followed by its qualifier', ()
 
   it('does not count a qualifier that appears later in the sentence but not right after the phrase', () => {
     expect(unqualifiedOccurrences('returned no findings and nothing other than NITs', phrase, qualifier)).toHaveLength(1);
+  });
+});
+
+describe('sentenceStates — every needle inside one sentence', () => {
+  it('matches needles in one sentence across line breaks and emphasis', () => {
+    expect(sentenceStates('Record a NIT as\n**`dismissed — nit`** with a reason. Then stop.', ['NIT', '`dismissed — nit`', 'reason'])).toBe(true);
+  });
+
+  it('does not match needles split across two sentences', () => {
+    expect(sentenceStates('Record a NIT. It is `dismissed — nit` with a reason.', ['NIT', '`dismissed — nit`'])).toBe(false);
+  });
+
+  it('is case-sensitive, so `NIT` is not found inside "unit"', () => {
+    expect(sentenceStates('Run the unit tests.', ['NIT'])).toBe(false);
+  });
+
+  it('throws on no needles or a needle that normalises to nothing', () => {
+    expect(() => sentenceStates('any sentence.', [])).toThrow(/needles/);
+    expect(() => sentenceStates('any sentence.', ['**'])).toThrow(/empty/);
   });
 });
