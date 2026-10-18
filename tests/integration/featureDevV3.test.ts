@@ -5,8 +5,8 @@ import { loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveExampleFlowsDir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, REPO_DIR } from '../helpers/bundledLoops';
-import { EPIC_GRAMMAR } from '../../src/shared/epicPlan';
-import { SLICE_GRAMMAR } from '../../src/shared/slicePlan';
+import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan } from '../../src/shared/epicPlan';
+import { exampleSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 
 // feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
@@ -228,6 +228,16 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(p, token).toContain(token);
   });
 
+  it('the plan step embeds the canonical epic and impl-slices examples the gates accept', () => {
+    const fences = [...brief(loop('plan-goal-loop')).matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1]);
+    const epic = fences.find((f) => f.includes(EPIC_GRAMMAR.subTicketsHeading)) ?? '';
+    const slices = fences.find((f) => f.includes(SLICE_GRAMMAR.implSlicesHeading)) ?? '';
+    expect(epicPlanWellFormed(epic)).toBe(true);
+    expect(epic.trim()).toBe(exampleEpicPlan(2).trim());
+    expect(slicePlanWellFormed(slices)).toBe(true);
+    expect(slices.trim()).toBe(exampleSlicePlan(2).trim());
+  });
+
   it('the plan step polishes its own draft with the plan-polish method, carried verbatim', () => {
     const v2Recipe = text(v2Polish().work.recipe);
     const method = v2Recipe.slice(v2Recipe.indexOf('# Plan Polish'));
@@ -240,14 +250,24 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     for (const heading of ['## Decision boundary', '## Needs your call', '## Planner decisions', '## Review history']) expect(p, heading).toContain(heading);
     expect(p).not.toMatch(/interview the operator/i);
     expect(p).not.toMatch(/stops the loop for the operator/);
+    expect(p).not.toMatch(/When\s+the\s+operator\s+decides/);
+  });
+
+  it('the plan step may write the report the approval step reads, and names only steps v3 has', () => {
+    const p = prompt(loop('plan-goal-loop'));
+    expect(p).not.toMatch(/outside\s+the\s+plan\s+artifact/);
+    expect(p).toMatch(/outside\s+the\s+plan\s+and\s+`plan-report\.md`/);
+    expect(p).not.toContain('plan-bundle');
   });
 
   it('the approval step presents what the plan step logged', () => {
     const approve = loop('plan-approve-loop');
     expect(approve.rounds).toEqual({ kind: 'none' });
     expect(approve.reviewers).toEqual([]);
-    expect(approve.inputs.map((i) => i.id)).toEqual(expect.arrayContaining(['groom-intent', 'groomed-ticket', 'plan-report']));
+    expect(approve.inputs.map((i) => i.id).sort()).toEqual(['groom-intent', 'groomed-ticket', 'plan', 'plan-report']);
     const present = prompt(approve);
+    expect(present).toContain('Operator decision (<date>)');
+    for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(present, token).toContain(token);
     for (const heading of ['## Needs your call', '## Planner decisions', '## Review history']) {
       expect(prompt(loop('plan-goal-loop'))).toContain(heading);
       expect(present, heading).toContain(heading);

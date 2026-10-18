@@ -49,8 +49,7 @@ component or state; or whose failure paths need decisions the ticket does not se
 alternatives — a narrower criterion, a different mechanism, or a split into a follow-up ticket — with what
 each alternative saves and loses, and your recommendation. Keep the list short and lead with the biggest
 saving. Propose only: never apply an alternative yourself, so the plan still meets every criterion as the
-ticket states it until the operator decides, and list each driver under `## Needs your call` in the report. When
-the operator decides, record it under the item as `Operator decision (<date>): …` and revise the plan to match.
+ticket states it until the operator decides, and list each driver under `## Needs your call` in the report.
 When no criterion stands out, write `None.` under the heading.
 
 ## Epic classification (§28.7)

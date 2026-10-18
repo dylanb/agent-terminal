@@ -59,9 +59,9 @@ This is planning guidance for you alone; reviewers do not grade slice count or s
 
 ## Machine-read plan blocks
 
-The plan-bundle gate reads these blocks out of the plan, so every edit keeps each exactly in its shape.
+The plan and plan-approve gates read these blocks out of the plan, so every edit keeps each exactly in its shape.
 
-Enumerate the impl-slices in a `## Impl-slices` block so the plan-bundle gate can source their COUNT into the
+Enumerate the impl-slices in a `## Impl-slices` block so each plan gate can source their COUNT into the
 `slices` flow input that drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
 `Acceptance criteria:` line, with DISTINCT indices. The final integration slice runs once after the loop and
 is NOT an `### Impl-slice` entry. Emit the block in this shape:
@@ -117,8 +117,8 @@ criteria and the repo's stated standards do not call for.
 
 These rules bind every edit to the plan, and take precedence over anything the plan-polish method says:
 
-- **Do not edit the ticket**, comment on it, or change anything outside the plan artifact — no `gh`
-  write, no commit, no edit to another file. Where the method would backdate a ticket driftable, list
+- **Do not edit the ticket**, comment on it, or change anything outside the plan and `plan-report.md` —
+  no `gh` write, no commit, no edit to another file. Where the method would backdate a ticket driftable, list
   the driftable under "Needs your call" instead.
 - **Operator decisions are settled.** A scope escalation or "Needs your call" item the operator has ruled on
   is recorded in the report as `Operator decision (<date>): <the ruling>`. Apply the ruling to the plan, keep
@@ -128,8 +128,8 @@ These rules bind every edit to the plan, and take precedence over anything the p
   illustrative: `Classification:`, `## Sub-tickets`, `### Sub-ticket`, `Depends on:`, `## Impl-slices`,
   `### Impl-slice`, and `Acceptance criteria:`. Keep the `## Polish report` section after these blocks,
   never inside one.
-- **Acceptance criteria stay whole.** No acceptance criterion may be deferred, narrowed, or dropped by the
-  polish; a change that would do so is a "Needs your call" item, never an edit.
+- **Acceptance criteria stay whole** (see "Acceptance criteria are non-negotiable"): a polish change that would
+  defer, narrow or drop one is a "Needs your call" item, never an edit.
 
 ## Decide, then report
 

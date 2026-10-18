@@ -23,6 +23,8 @@ inputs:
     path: groom-intent.md
   - id: groomed-ticket
     path: groomed-ticket.md
+  - id: plan
+    path: plan.md
   - id: plan-report
     path: plan-report.md
 outputs:

@@ -495,7 +495,6 @@ export function seedFullTddChainAgent(
   const art = '.agent-terminal/loop/artifacts';
   const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
   const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
-  // The check a round's prompt last handed the agent (kept in `$chk`), run for the steps in `runChecksFor`.
   const check = (step: string): string =>
     opts.runChecksFor?.includes(step) ? `{ eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; ` : '';
   // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
