@@ -8,6 +8,7 @@ import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/round
 import { parseConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import type { ScriptedIssue } from '../helpers/roundReports';
 
 const dirs: string[] = [];
 const procs: ChildProcessWithoutNullStreams[] = [];
@@ -174,6 +175,28 @@ describe('the per-step fake agent', () => {
     await turn(send, repo, 'work-a-2');
     expect(existsSync(join(repo, '.agent-terminal/loop/artifacts/a2.md'))).toBe(true);
     expect(existsSync(join(repo, 'extra-a-1'))).toBe(true);
+  });
+
+  it('writes a round report whose first persona raises exactly the issues scripted for that round', async () => {
+    const binDir = tmp('fake-agent-bin-');
+    const repo = tmp('fake-agent-repo-');
+    const roster = ['p-one', 'p-two'];
+    const sections = ['summary'];
+    const issues: ScriptedIssue[] = [
+      { issue: 'a wording preference', disposition: 'dismissed — invalid', reason: 'not a defect' },
+      { issue: 'a stale comment', disposition: 'fixed', reason: 'it misled the reader', whatChanged: 'rewrote the comment' },
+    ];
+    seedFakeAgentSteps(binDir, { s: { artifactRel: '.agent-terminal/loop/artifacts/s.md', work: 'complete', roster, sections, reviews: [{ issues }] } });
+    const send = agent(binDir, repo);
+
+    await turn(send, repo, 'review-s');
+    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.json'));
+    expect(roundReportWellFormed(report, { sections, roster })).toBe(true);
+    const reviewers = (JSON.parse(report) as { reviewers: { persona: string; issues: unknown[] }[] }).reviewers;
+    expect(reviewers.map((r) => [r.persona, r.issues])).toEqual([
+      ['p-one', issues],
+      ['p-two', []],
+    ]);
   });
 
   const holdAgent = (sentinel: string) => {
