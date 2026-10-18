@@ -243,7 +243,7 @@ export function fixCriterionLines(): string[] {
     'exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it',
     'has no test of its own, changes an observable outcome only when a test the ticket needs relies on that',
     'behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is',
-    '`dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never',
+    `\`${INVALID_DISPOSITION}\`, never \`${FIXED_DISPOSITION}\`: a double can always be made more faithful, so fixing such gaps never`,
     'runs out. A test written later that relies on the behaviour is reviewed in its own round.',
   ];
 }
