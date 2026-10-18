@@ -49,7 +49,7 @@ component or state; or whose failure paths need decisions the ticket does not se
 alternatives — a narrower criterion, a different mechanism, or a split into a follow-up ticket — with what
 each alternative saves and loses, and your recommendation. Keep the list short and lead with the biggest
 saving. Propose only: never apply an alternative yourself, so the plan still meets every criterion as the
-ticket states it until the operator decides, and list each driver under `## Needs your call` in the report.
+ticket states it until the operator decides; the report's `## Needs your call` lists each driver (see "The report").
 When no criterion stands out, write `None.` under the heading.
 
 ## Epic classification (§28.7)
@@ -72,8 +72,8 @@ take precedence over anything the method says:
   instruction gives this step's completion marker.
 - **Report in the plan and in the report.** Write the method's five-part report as a `## Polish report` section
   at the end of the plan, above the completion marker, replacing any earlier one but carrying over every
-  recorded operator decision. List every scope escalation and every item it leaves for the operator under
-  `## Needs your call` in `plan-report.md` as well. Never stop to ask a question.
+  recorded operator decision. What it leaves for the operator also goes in `plan-report.md` (see "The report").
+  Never stop to ask a question.
 - **Re-review is yours.** Your own review passes re-check the polished plan, so "Re-review?" informs them; it
   does not need to request anything.
 

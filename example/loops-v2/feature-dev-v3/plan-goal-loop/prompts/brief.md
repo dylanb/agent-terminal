@@ -59,7 +59,7 @@ This is planning guidance for you alone; reviewers do not grade slice count or s
 
 ## Machine-read plan blocks
 
-The plan and plan-approve gates read these blocks out of the plan, so every edit keeps each exactly in its shape.
+The plan and plan-approve gates read these blocks out of the plan (see "Machine-read plan tokens are binding").
 
 Enumerate the impl-slices in a `## Impl-slices` block so each plan gate can source their COUNT into the
 `slices` flow input that drives the impl-slice×N loop (§28.4.1): each `### Impl-slice N — <title>` carries that slice's
