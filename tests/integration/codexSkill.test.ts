@@ -4,7 +4,7 @@ import path from 'node:path';
 import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
-import { reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
+import { fixCriterionLines, reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
 
 // §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
 // agent name and loop path it gives as an example is checked against the bundle, so a renamed convention breaks
@@ -35,6 +35,17 @@ const engineHandoffLines = (): Set<string> =>
   );
 const skillHandoffLines = (): Set<string> =>
   new Set([...skill().matchAll(/^ *```text\n([\s\S]*?)^ *```$/gm)].flatMap((m) => m[1].split('\n')).map((l) => l.replace(/^ {3}/, '')).filter((l) => l.trim() !== ''));
+
+// #207 — the skill's fix step is the engine's fixer criterion, in its own labelled block so the hand-off reader
+// above never takes it for hand-off text.
+const FIX_CRITERION_FENCE = 'fix-criterion';
+const nonBlank = (lines: string[]): Set<string> => new Set(lines.filter((l) => l.trim() !== ''));
+const skillFixCriterionLines = (): Set<string> =>
+  nonBlank(
+    [...skill().matchAll(new RegExp(`^ *\`\`\`${FIX_CRITERION_FENCE}\n([\\s\\S]*?)^ *\`\`\`$`, 'gm'))]
+      .flatMap((m) => m[1].split('\n'))
+      .map((l) => l.replace(/^ {3}/, '')),
+  );
 
 const bundledCodexAgentNames = (): Set<string> =>
   new Set(planReviewerAgents(BUNDLE_LOOPS, CODEX_REVIEWER_AGENT).map((a) => path.basename(a.rel, CODEX_REVIEWER_AGENT.extension)));
@@ -67,6 +78,13 @@ describe('the bundled Codex skill', () => {
     const skilled = skillHandoffLines();
     for (const line of engine) expect(skilled.has(line), line).toBe(true);
     for (const line of skilled) expect(engine.has(line), line).toBe(true);
+  });
+
+  it("states the engine's own fixer criterion in its fix step, and no line of its own (#207 AC 9, AC 12)", () => {
+    const engine = nonBlank(fixCriterionLines());
+    const skilled = skillFixCriterionLines();
+    expect.soft([...engine].filter((line) => !skilled.has(line)), 'engine lines missing from the skill').toEqual([]);
+    expect.soft([...skilled].filter((line) => !engine.has(line)), 'skill lines the engine does not have').toEqual([]);
   });
 
   it('names the Codex home directories the installer writes the loops and the reviewer agents to', () => {

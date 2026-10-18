@@ -12,6 +12,7 @@ import {
 } from '../../src/main/reviewTurn';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
 import { normaliseText, sentenceStates, statesText } from '../helpers/statesText';
+import { FLOOR_EXAMPLES, FLOOR_GATE, sendsToInvalid } from '../helpers/materialityFloor';
 import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
@@ -223,18 +224,8 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
 
 // #207 — the fixer applies one rule: the shared NIT definition replaces the §27.6 materiality floor. Each check
 // reads the composed prompt with the reviewer hand-off removed, so the hand-off's own copy cannot satisfy it.
-const FLOOR_GATE = /\bfix\b[^.]*?\bonly when\b[^.]*?\bchanges an observable outcome/i;
-const FLOOR_EXAMPLES: [string, RegExp][] = [
-  ['equal-quality rewording', /equal-quality reword/i],
-  ['already-correct citation', /already[- ]correct/i],
-  ['defensible authoring choice', /defensible authoring choice/i],
-];
 const TODAYS_FLOOR_SENTENCE =
   'An in-scope finding that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`.';
-const sendsToInvalid = (text: string, example: RegExp): boolean =>
-  normaliseText(text)
-    .split(/(?<=[.!?])\s+/)
-    .some((sentence) => example.test(sentence) && sentence.includes('`dismissed — invalid`'));
 const KEPT_TEST_SUPPORT_RULE =
   'A finding that it differs from the real tool, or that a branch of it has no test of its own, changes an observable outcome only when a test the ticket needs relies on that behaviour, so the gap would let that test pass over broken code or fail over correct code.';
 const doubleFidelityClause =
