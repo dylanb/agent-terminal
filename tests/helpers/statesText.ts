@@ -21,13 +21,16 @@ export function statesText(doc: string, shared: string | readonly string[]): boo
   return normaliseText(doc).includes(nonEmpty(typeof shared === 'string' ? shared : shared.join('\n'), 'shared text'));
 }
 
+/** `doc`'s sentences, once normalised. */
+export function sentencesOf(doc: string): string[] {
+  return normaliseText(doc).split(SENTENCE_END);
+}
+
 /** Whether one sentence of `doc` contains every needle, case-sensitively, once both are normalised. */
 export function sentenceStates(doc: string, needles: readonly string[]): boolean {
   if (needles.length === 0) throw new Error('no needles, so every sentence would match');
   const wanted = needles.map((n) => nonEmpty(n, 'needle'));
-  return normaliseText(doc)
-    .split(SENTENCE_END)
-    .some((sentence) => wanted.every((n) => sentence.includes(n)));
+  return sentencesOf(doc).some((sentence) => wanted.every((n) => sentence.includes(n)));
 }
 
 /** Each case-insensitive occurrence of `phrase` in `doc` that the `qualifier` does not follow (a separating

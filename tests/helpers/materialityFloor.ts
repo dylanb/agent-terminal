@@ -2,7 +2,8 @@
 // finding is fixed only when acting on it changes an observable outcome) and its three examples sent to
 // `dismissed — invalid`. The self-checks live in `tests/unit/reviewTurn.test.ts`.
 
-import { normaliseText } from './statesText';
+import { INVALID_DISPOSITION } from '../../src/shared/roundReport';
+import { sentencesOf } from './statesText';
 
 export const FLOOR_GATE = /\bfix\b[^.]*?\bonly when\b[^.]*?\bchanges an observable outcome/i;
 export const FLOOR_EXAMPLES: [string, RegExp][] = [
@@ -12,6 +13,4 @@ export const FLOOR_EXAMPLES: [string, RegExp][] = [
 ];
 
 export const sendsToInvalid = (text: string, example: RegExp): boolean =>
-  normaliseText(text)
-    .split(/(?<=[.!?])\s+/)
-    .some((sentence) => example.test(sentence) && sentence.includes('`dismissed — invalid`'));
+  sentencesOf(text).some((sentence) => example.test(sentence) && sentence.includes(`\`${INVALID_DISPOSITION}\``));

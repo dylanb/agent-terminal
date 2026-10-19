@@ -11,9 +11,9 @@ import {
   reviewRoster,
 } from '../../src/main/reviewTurn';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
-import { normaliseText, sentenceStates, statesText } from '../helpers/statesText';
+import { normaliseText, sentenceStates, sentencesOf, statesText } from '../helpers/statesText';
 import { FLOOR_EXAMPLES, FLOOR_GATE, sendsToInvalid } from '../helpers/materialityFloor';
-import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
+import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
@@ -225,7 +225,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
 // #207 — the fixer applies one rule: the shared NIT definition replaces the §27.6 materiality floor. Each check
 // reads the composed prompt with the reviewer hand-off removed, so the hand-off's own copy cannot satisfy it.
 const TODAYS_FLOOR_SENTENCE =
-  'An in-scope finding that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not require — is `dismissed — invalid` (it is not a defect), NEVER `fixed`.';
+  `An in-scope finding that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not require — is \`${INVALID_DISPOSITION}\` (it is not a defect), NEVER \`${FIXED_DISPOSITION}\`.`;
 const KEPT_TEST_SUPPORT_RULE =
   'A finding that it differs from the real tool, or that a branch of it has no test of its own, changes an observable outcome only when a test the ticket needs relies on that behaviour, so the gap would let that test pass over broken code or fail over correct code.';
 const doubleFidelityClause =
@@ -326,8 +326,8 @@ describe.each([
 describe('composeReviewAndFixPrompt — the round report records what changed for both fixed dispositions (#207 AC 3)', () => {
   it('asks for whatChanged on a `fixed — documentation` issue as on a `fixed` one', () => {
     const p = reviewPrompt();
-    const unquoted = normaliseText(p.slice(p.indexOf('Then write the round report')).replace(/[`"]/g, ''));
-    const sentence = unquoted.split(/(?<=[.!?])\s+/).find((s) => s.includes(REPORT_FIELDS.whatChanged)) ?? '';
+    const unquoted = p.slice(p.indexOf('Then write the round report')).replace(/[`"]/g, '');
+    const sentence = sentencesOf(unquoted).find((s) => s.includes(REPORT_FIELDS.whatChanged)) ?? '';
     expect.soft(sentence).toMatch(/fixed — documentation/);
     expect.soft(sentence).toMatch(/\bfixed\b(?! — documentation)/);
   });

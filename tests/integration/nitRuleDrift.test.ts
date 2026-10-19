@@ -13,7 +13,7 @@ import {
 } from '../helpers/bundledLoops';
 import { FLOOR_EXAMPLES, FLOOR_GATE, sendsToInvalid } from '../helpers/materialityFloor';
 import { specSection } from '../helpers/specSection';
-import { normaliseText, sentenceStates, statesText, unqualifiedOccurrences } from '../helpers/statesText';
+import { normaliseText, sentenceStates, sentencesOf, statesText, unqualifiedOccurrences } from '../helpers/statesText';
 
 // #207 AC 9 — every surface that no unit test pins states the one shared text, so a later edit to one copy fails
 // here. The bundle is discovered, never listed; `bundledLoopsDiscovery.test.ts` counts each discovery against the
@@ -170,7 +170,7 @@ describe('the charter materiality check itself', () => {
     ...['principal', 'intent', 'tracer-slicer'].map((p) => [`the plan-bundle-loop ${p} charter`, join('feature-dev-v2', 'plan-bundle-loop', 'charter', `${p}.md`)]),
   ])('passes the kept text in %s', (_name, rel) => {
     const charter = readFileSync(join(BUNDLED_LOOPS_ROOT, rel), 'utf8');
-    const sentences = normaliseText(charter).split(/(?<=[.!?])\s+/);
+    const sentences = sentencesOf(charter);
     const keptSentences = sentences.filter((s) => KEPT_NOT_A_FINDING.some((k) => s.toLowerCase().includes(k)));
     expect(keptSentences.length).toBeGreaterThan(0);
     expect(materialityRules(keptSentences.join(' '))).toEqual([]);
