@@ -24,8 +24,7 @@ const CLEAN: ConsolidatorVerdict = 'clean';
 const ANOTHER_ROUND: ConsolidatorVerdict = 'another round';
 const STOP_FOR_A_HUMAN: ConsolidatorVerdict = 'stop for a human';
 
-/** §27.6 (#207) — when a round is `clean`: the one rule the engine's consolidator instruction and every bundled
- *  consolidator recipe state. */
+/** §27.6 */
 export const CLEAN_RULE_LINES: readonly string[] = [
   `A round whose issues are all dismissed or \`${DOCUMENTATION_DISPOSITION}\` is \`${CLEAN}\`: it changed nothing except`,
   `documentation, and \`${NIT_DISPOSITION}\` counts as a dismissal. A round with any \`${FIXED_DISPOSITION}\` issue is`,

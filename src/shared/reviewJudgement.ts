@@ -1,6 +1,3 @@
-// #207 — the operator's NIT definition and the definition of documentation: one text each, which the fixer
-// criterion, the reviewer hand-off, the spec and the bundled recipes state and the drift tests compare against.
-
 import { FIXED_DISPOSITION } from './roundReport';
 
 /** The operator's text, word for word (§27.6); the ticket forbids editing it. */

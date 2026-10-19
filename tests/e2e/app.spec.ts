@@ -17,7 +17,7 @@ import { completionMarker } from '../../src/main/appWorkTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleRoundReport, NIT_DISPOSITION } from '../../src/shared/roundReport';
 import { NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
-import { normaliseText, sentenceStates, statesText } from '../helpers/statesText';
+import { sentenceStates, statesText } from '../helpers/statesText';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
@@ -7895,9 +7895,9 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   // #207 AC 8 — the goal stops on a pass whose only findings are NITs, and the session is told what a NIT is and
   // where each NIT dismissal is logged.
   const groomPrompt = readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'));
-  for (const goal of goals) expect.soft(normaliseText(goal)).toContain('no findings other than NITs');
+  for (const goal of goals) expect.soft(statesText(goal, 'no findings other than NITs'), goal).toBe(true);
   expect.soft(statesText(groomPrompt, NIT_DEFINITION_LINES)).toBe(true);
-  expect.soft(sentenceStates(groomPrompt.toLowerCase(), [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'])).toBe(true);
+  expect.soft(sentenceStates(groomPrompt, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
 
   // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: groom-approve[\s\S]*verdict: clean/);

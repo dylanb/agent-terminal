@@ -1,5 +1,5 @@
 // #207 — "states the shared text": the same words in the same order, ignoring line breaks, indentation and
-// Markdown emphasis. Every drift and composer assertion of a shared definition goes through this one comparison.
+// Markdown emphasis.
 
 const EMPHASIS_STARS = /\*+/g;
 const EMPHASIS_UNDERSCORES = /(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu;
@@ -7,18 +7,39 @@ const QUALIFIER_SEPARATOR = /^[\s,:—–-]*/;
 const CONTEXT_CHARS = 40;
 const SENTENCE_END = /(?<=[.!?])\s+/;
 
-export function normaliseText(text: string): string {
+export interface TextMatch {
+  ignoreCase?: boolean;
+}
+
+function normaliseText(text: string): string {
   return text.replace(EMPHASIS_STARS, '').replace(EMPHASIS_UNDERSCORES, '').replace(/\s+/g, ' ').trim();
 }
 
-function nonEmpty(text: string, what: string): string {
+function folded(text: string, match: TextMatch): string {
   const normalised = normaliseText(text);
+  return match.ignoreCase === true ? normalised.toLowerCase() : normalised;
+}
+
+function nonEmpty(text: string, what: string, match: TextMatch = {}): string {
+  const normalised = folded(text, match);
   if (normalised.length === 0) throw new Error(`the ${what} is empty once normalised, so every document would match it`);
   return normalised;
 }
 
-export function statesText(doc: string, shared: string | readonly string[]): boolean {
-  return normaliseText(doc).includes(nonEmpty(typeof shared === 'string' ? shared : shared.join('\n'), 'shared text'));
+const joined = (shared: string | readonly string[]): string => (typeof shared === 'string' ? shared : shared.join('\n'));
+
+export function statesText(doc: string, shared: string | readonly string[], match: TextMatch = {}): boolean {
+  return folded(doc, match).includes(nonEmpty(joined(shared), 'shared text', match));
+}
+
+/** How many times `doc` states `shared`, counting non-overlapping copies. */
+export function timesStated(doc: string, shared: string | readonly string[], match: TextMatch = {}): number {
+  return folded(doc, match).split(nonEmpty(joined(shared), 'shared text', match)).length - 1;
+}
+
+/** Whether two texts are the same words in the same order. */
+export function sameText(a: string | readonly string[], b: string | readonly string[]): boolean {
+  return nonEmpty(joined(a), 'text') === nonEmpty(joined(b), 'text');
 }
 
 /** `doc`'s sentences, once normalised. */
@@ -26,11 +47,11 @@ export function sentencesOf(doc: string): string[] {
   return normaliseText(doc).split(SENTENCE_END);
 }
 
-/** Whether one sentence of `doc` contains every needle, case-sensitively, once both are normalised. */
-export function sentenceStates(doc: string, needles: readonly string[]): boolean {
+/** Whether one sentence of `doc` contains every needle, once both are normalised. */
+export function sentenceStates(doc: string, needles: readonly string[], match: TextMatch = {}): boolean {
   if (needles.length === 0) throw new Error('no needles, so every sentence would match');
-  const wanted = needles.map((n) => nonEmpty(n, 'needle'));
-  return sentencesOf(doc).some((sentence) => wanted.every((n) => sentence.includes(n)));
+  const wanted = needles.map((n) => nonEmpty(n, 'needle', match));
+  return sentencesOf(doc).some((sentence) => wanted.every((n) => folded(sentence, match).includes(n)));
 }
 
 /** Each case-insensitive occurrence of `phrase` in `doc` that the `qualifier` does not follow (a separating

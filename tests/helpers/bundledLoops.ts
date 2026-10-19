@@ -69,12 +69,19 @@ export function bundledConsolidatorRecipes(): (BundledFlowLoop & { path: string 
   });
 }
 
-/** Every bundled def with a work goal and reviewers, with the prompt files it names (its work recipe and brief). */
-export function bundledGoalLoopsWithReviewers(): (BundledFlowLoop & { def: LoopDefV2; promptFiles: string[] })[] {
+export interface BundledGoalLoop extends BundledFlowLoop {
+  goal: string;
+  workRecipe: string;
+  /** The work recipe and every other prompt file the def names. */
+  promptFiles: string[];
+}
+
+/** Every bundled def with a work goal and reviewers. */
+export function bundledGoalLoopsWithReviewers(): BundledGoalLoop[] {
   return bundledFlowLoops().flatMap((p) => {
     const { def } = resolveBundledFlowLoop(p);
     if (def.work.goal === undefined || def.reviewers.length === 0) return [];
-    return [{ ...p, def, promptFiles: [def.work.recipe, ...(def.brief === undefined ? [] : [def.brief])] }];
+    return [{ ...p, goal: def.work.goal, workRecipe: def.work.recipe, promptFiles: [def.work.recipe, ...(def.brief === undefined ? [] : [def.brief])] }];
   });
 }
 

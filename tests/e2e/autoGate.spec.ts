@@ -1298,7 +1298,7 @@ test('auto gate concurrency, held frozen check: an interrupt armed during the he
 
 // #207 — a round whose only findings are NITs, or whose only fixes are documentation, changed nothing the
 // termination rule counts: the report passes the format check and the consolidator's `clean` reaches the gate
-// like any other. Each case waits for the gate or a loop error, so a rejected report fails on a named check.
+// like any other.
 const ROUND_REPORT_1 = '.agent-terminal/loop/reports/1.json';
 const REPAIR_LINE = /This is a REPAIR of the round-/;
 const ONLY_NITS: ScriptedIssue[] = [

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { CLEAN_RULE_LINES } from '../../src/shared/consolidatorOutput';
+import { composeConsolidatePrompt } from '../../src/main/consolidateTurn';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
 import { DISPOSITIONS, DOCUMENTATION_DISPOSITION, NIT_DISPOSITION } from '../../src/shared/roundReport';
 import {
@@ -10,19 +11,31 @@ import {
   bundledCharterFiles,
   bundledConsolidatorRecipes,
   bundledGoalLoopsWithReviewers,
+  type BundledGoalLoop,
 } from '../helpers/bundledLoops';
-import { FLOOR_EXAMPLES, FLOOR_GATE, sendsToInvalid } from '../helpers/materialityFloor';
+import { FLOOR_EXAMPLES, sendsToInvalid, statesFloorGate } from '../helpers/materialityFloor';
 import { specSection } from '../helpers/specSection';
-import { normaliseText, sentenceStates, sentencesOf, statesText, unqualifiedOccurrences } from '../helpers/statesText';
+import { sentenceStates, sentencesOf, statesText, timesStated, unqualifiedOccurrences } from '../helpers/statesText';
 
-// #207 AC 9 — every surface that no unit test pins states the one shared text, so a later edit to one copy fails
-// here. The bundle is discovered, never listed; `bundledLoopsDiscovery.test.ts` counts each discovery against the
-// files on disk.
+// #207 AC 9 — a later edit to one copy of a shared text fails here.
 
-describe('every bundled consolidator recipe states the shared clean rule (#207 AC 6)', () => {
+describe("every bundled consolidator recipe judges `clean` by the engine's clean rule alone (#207 AC 6)", () => {
   it.each(bundledConsolidatorRecipes().map((r) => [relative(BUNDLED_LOOPS_ROOT, r.path), r.path]))('%s', (_rel, path) => {
     const recipe = readFileSync(path, 'utf8');
-    expect.soft(statesText(recipe, CLEAN_RULE_LINES)).toBe(true);
+    const prompt = composeConsolidatePrompt({
+      recipeBody: recipe,
+      catalog: ['principal'],
+      reportRels: ['.agent-terminal/loop/reports/1.json'],
+      outputRel: '.agent-terminal/loop/consolidator.json',
+      round: 1,
+      turnKey: 'consolidate-x',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+    });
+    expect.soft(timesStated(prompt, CLEAN_RULE_LINES), 'the composed prompt states the clean rule exactly once').toBe(1);
+    for (const sentence of sentencesOf(CLEAN_RULE_LINES.join('\n'))) {
+      expect.soft(statesText(recipe, sentence), `the recipe restates a sentence of the clean rule: ${sentence}`).toBe(false);
+    }
+    expect.soft(sentenceStates(recipe, ['`clean`', 'turn instruction']), "the `clean` bullet defers to the turn instruction's rule").toBe(true);
     expect.soft(sentenceStates(recipe, ['fixed something', '`another round`']), 'the old clean definition is still stated').toBe(false);
   });
 });
@@ -48,7 +61,7 @@ describe('§27.6 states the NIT and documentation definitions and no materiality
   });
 
   it('does not make changing an observable outcome the condition for fixing a finding', () => {
-    expect(normaliseText(section())).not.toMatch(FLOOR_GATE);
+    expect(statesFloorGate(section())).toBe(false);
   });
 
   it.each(FLOOR_EXAMPLES)('does not send %s findings to `dismissed — invalid`', (_example, pattern) => {
@@ -65,7 +78,7 @@ describe('§27.5 lists the closed disposition set (#207 AC 9)', () => {
 
 describe('§27.3 and §27.4 state the NIT rule where they describe the fixer and the hand-off (#207)', () => {
   it('§27.3 no longer names the materiality floor', () => {
-    expect(normaliseText(specSection('27.3')).toLowerCase()).not.toContain('materiality floor');
+    expect(statesText(specSection('27.3'), 'materiality floor', { ignoreCase: true })).toBe(false);
   });
 
   it('§27.3 says a NIT is `dismissed — nit`, never fixed', () => {
@@ -101,29 +114,29 @@ describe("the Codex skill's judging step states the shared clean rule (#207 AC 6
 });
 
 describe('groom-goal-loop stops on a pass with no findings other than NITs (#207 AC 8)', () => {
-  const groom = (): ReturnType<typeof bundledGoalLoopsWithReviewers>[number] => {
+  const groom = (): BundledGoalLoop => {
     const found = bundledGoalLoopsWithReviewers().find((g) => g.loop === 'groom-goal-loop');
     if (found === undefined) throw new Error('no bundled groom-goal-loop');
     return found;
   };
   const surfaces: [string, () => string][] = [
-    ['its work.goal', () => groom().def.work.goal ?? ''],
-    ['its prompts/work.md', () => readFileSync(groom().def.work.recipe, 'utf8')],
+    ['its work.goal', () => groom().goal],
+    ['its prompts/work.md', () => readFileSync(groom().workRecipe, 'utf8')],
   ];
 
   it.each(surfaces)('%s says "no findings" only as "no findings other than NITs"', (_surface, text) => {
     expect.soft(unqualifiedOccurrences(text(), 'no findings', 'other than NITs')).toEqual([]);
-    expect.soft(normaliseText(text())).toContain('no findings other than NITs');
+    expect.soft(statesText(text(), 'no findings other than NITs')).toBe(true);
   });
 
   it('its prompts/work.md logs each NIT as `dismissed — nit` in groom-report.md\'s review history', () => {
-    const work = readFileSync(groom().def.work.recipe, 'utf8').toLowerCase();
-    expect(sentenceStates(work, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'])).toBe(true);
+    const work = readFileSync(groom().workRecipe, 'utf8');
+    expect(sentenceStates(work, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
   });
 });
 
 // Each goal loop whose subject is not a flow document stops on a pass whose only fixes are documentation. The
-// two exclusions grade a flow document, which is never documentation (scope 14).
+// two exclusions grade a flow document, which is never documentation.
 const FLOW_DOCUMENT_GOAL_LOOPS = ['groom-goal-loop', 'plan-goal-loop'];
 const DOC_ONLY_EXCEPTION = `other than documentation-only fixes recorded as \`${DOCUMENTATION_DISPOSITION}\``;
 
@@ -138,24 +151,26 @@ describe('every bundled goal loop whose subject is code ends on a documentation-
   });
 
   const surfaces = checked.flatMap((g) => [
-    [`${g.flow}/${g.loop} work.goal`, g.def.work.goal ?? ''],
+    [`${g.flow}/${g.loop} work.goal`, g.goal],
     ...g.promptFiles.map((f) => [relative(BUNDLED_LOOPS_ROOT, f), readFileSync(f, 'utf8')]),
   ]);
 
   it.each(surfaces)('%s says "nothing left to fix" only with the documentation-only exception', (_surface, text) => {
     expect.soft(unqualifiedOccurrences(text, 'nothing left to fix', DOC_ONLY_EXCEPTION)).toEqual([]);
-    expect.soft(normaliseText(text)).toContain(`nothing left to fix ${DOC_ONLY_EXCEPTION}`);
+    expect.soft(statesText(text, `nothing left to fix ${DOC_ONLY_EXCEPTION}`)).toBe(true);
   });
 });
 
-// The two kept texts are not materiality rules (scope 11): a decision-authority rule and the §28.8.1 altitude rule.
+// The two kept texts are not materiality rules: a decision-authority rule and the §28.8.1 altitude rule.
 const KEPT_NOT_A_FINDING = ['is not a finding because you would have chosen differently', 'is not a finding about that defect'];
 const MATERIALITY_MARKERS = ['raise a finding only where', 'is not a finding'];
 
-/** Each materiality marker `text` still states, once the kept texts are removed. */
+/** Each materiality marker `text` states more often than the kept texts that contain it account for. */
 function materialityRules(text: string): string[] {
-  const rest = KEPT_NOT_A_FINDING.reduce((t, kept) => t.replaceAll(kept, ''), normaliseText(text).toLowerCase());
-  return MATERIALITY_MARKERS.filter((m) => rest.includes(m));
+  const anyCase = { ignoreCase: true };
+  const kept = (marker: string): number =>
+    KEPT_NOT_A_FINDING.filter((k) => k.includes(marker)).reduce((n, k) => n + timesStated(text, k, anyCase), 0);
+  return MATERIALITY_MARKERS.filter((m) => timesStated(text, m, anyCase) > kept(m));
 }
 
 describe('the charter materiality check itself', () => {
@@ -171,7 +186,7 @@ describe('the charter materiality check itself', () => {
   ])('passes the kept text in %s', (_name, rel) => {
     const charter = readFileSync(join(BUNDLED_LOOPS_ROOT, rel), 'utf8');
     const sentences = sentencesOf(charter);
-    const keptSentences = sentences.filter((s) => KEPT_NOT_A_FINDING.some((k) => s.toLowerCase().includes(k)));
+    const keptSentences = sentences.filter((s) => KEPT_NOT_A_FINDING.some((k) => statesText(s, k, { ignoreCase: true })));
     expect(keptSentences.length).toBeGreaterThan(0);
     expect(materialityRules(keptSentences.join(' '))).toEqual([]);
   });

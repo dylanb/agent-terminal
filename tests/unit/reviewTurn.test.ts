@@ -11,8 +11,8 @@ import {
   reviewRoster,
 } from '../../src/main/reviewTurn';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
-import { normaliseText, sentenceStates, sentencesOf, statesText } from '../helpers/statesText';
-import { FLOOR_EXAMPLES, FLOOR_GATE, sendsToInvalid } from '../helpers/materialityFloor';
+import { sentenceStates, sentencesOf, statesText } from '../helpers/statesText';
+import { FLOOR_EXAMPLES, sendsToInvalid, statesFloorGate } from '../helpers/materialityFloor';
 import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
@@ -222,8 +222,7 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   });
 });
 
-// #207 — the fixer applies one rule: the shared NIT definition replaces the §27.6 materiality floor. Each check
-// reads the composed prompt with the reviewer hand-off removed, so the hand-off's own copy cannot satisfy it.
+// #207 — the fixer applies one rule: the shared NIT definition replaces the §27.6 materiality floor.
 const TODAYS_FLOOR_SENTENCE =
   `An in-scope finding that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not require — is \`${INVALID_DISPOSITION}\` (it is not a defect), NEVER \`${FIXED_DISPOSITION}\`.`;
 const KEPT_TEST_SUPPORT_RULE =
@@ -252,11 +251,11 @@ const goalPrompt = (): string => composeGoalReviewLines(reviewRoster(def()), { c
 
 describe('the materiality-floor check itself', () => {
   it('finds the floor as a condition for fixing, in any case', () => {
-    expect(FLOOR_GATE.test(normaliseText('Fix an issue only when acting on it changes an OBSERVABLE OUTCOME — correctness.'))).toBe(true);
+    expect(statesFloorGate('Fix an issue only when acting on it changes an OBSERVABLE\n  OUTCOME — correctness.')).toBe(true);
   });
 
   it('passes the kept test-support-code rule, whose observable-outcome wording is not the floor', () => {
-    expect(FLOOR_GATE.test(normaliseText(KEPT_TEST_SUPPORT_RULE))).toBe(false);
+    expect(statesFloorGate(KEPT_TEST_SUPPORT_RULE)).toBe(false);
   });
 
   it.each(FLOOR_EXAMPLES)('finds today\'s floor sending %s findings to `dismissed — invalid`', (_example, pattern) => {
@@ -294,7 +293,7 @@ describe.each([
   });
 
   it('no longer makes changing an observable outcome the condition for fixing a finding', () => {
-    expect(normaliseText(text())).not.toMatch(FLOOR_GATE);
+    expect(statesFloorGate(text())).toBe(false);
   });
 
   it.each(FLOOR_EXAMPLES)('no longer sends %s findings to `dismissed — invalid`', (_example, pattern) => {
@@ -642,7 +641,7 @@ describe.each([
   });
 
   it('does not make changing an observable outcome the condition for raising or fixing a finding', () => {
-    expect(normaliseText(handoff())).not.toMatch(FLOOR_GATE);
+    expect(statesFloorGate(handoff())).toBe(false);
   });
 
   it.each(FLOOR_EXAMPLES)('does not send %s findings to `dismissed — invalid`', (_example, pattern) => {

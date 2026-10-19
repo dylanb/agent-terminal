@@ -11,8 +11,7 @@ import {
   resolveBundledFlowLoop,
 } from '../helpers/bundledLoops';
 
-// The drift tests of #207 discover the bundle rather than list it, so a loop added later is covered without a
-// list edit. Each control below counts the same thing a second, independent way.
+// #207 — each control below counts what a bundle discovery finds a second, independent way.
 
 const dirs = (p: string): string[] => readdirSync(p, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
 const onDisk = (rel: (flow: string, loop: string) => string): string[] =>
@@ -48,7 +47,13 @@ describe('bundled loop discovery (#207 drift-test infrastructure)', () => {
     });
     const found = bundledGoalLoopsWithReviewers();
     expect(found.map((g) => join(BUNDLED_LOOPS_ROOT, g.flow, g.loop, `${g.loop}.yaml`)).sort()).toEqual(byYaml.sort());
+    for (const g of found) {
+      const doc = yaml.load(readFileSync(join(BUNDLED_LOOPS_ROOT, g.flow, g.loop, `${g.loop}.yaml`), 'utf8')) as { work: { goal: string } };
+      expect(g.goal, `${g.flow}/${g.loop}`).toBe(doc.work.goal);
+      expect(g.promptFiles, `${g.flow}/${g.loop}`).toContain(g.workRecipe);
+    }
     const red = found.find((g) => g.flow === 'feature-dev-v3' && g.loop === 'red-loop');
+    expect(red?.workRecipe.endsWith(join('red-loop', 'prompts', 'work.md'))).toBe(true);
     expect(red?.promptFiles.map((f) => f.slice(BUNDLED_LOOPS_ROOT.length + 1).split(sep).join('/')).sort()).toEqual([
       'feature-dev-v3/red-loop/prompts/brief.md',
       'feature-dev-v3/red-loop/prompts/work.md',

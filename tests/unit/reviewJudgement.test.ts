@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
-import { normaliseText, sentenceStates } from '../helpers/statesText';
+import { sameText, sentenceStates } from '../helpers/statesText';
 
 // #207 — copied verbatim from the ticket's "The NIT definition" section: the operator's text, which this ticket
-// does not edit. Every other surface is compared with the shared constant; this is the one check that the
-// constant is the operator's text.
+// does not edit.
 const OPERATOR_NIT_DEFINITION = `
 A change is a NIT if it meets ALL of the following criteria:
 
@@ -30,7 +29,7 @@ resource degrade, or future contributor be materially misled or blocked?"
 
 describe('the shared NIT definition (#207 AC 3, AC 9)', () => {
   it("is the operator's text, word for word", () => {
-    expect(normaliseText(NIT_DEFINITION_LINES.join('\n'))).toBe(normaliseText(OPERATOR_NIT_DEFINITION));
+    expect(sameText(NIT_DEFINITION_LINES, OPERATOR_NIT_DEFINITION)).toBe(true);
   });
 });
 

@@ -7,14 +7,11 @@ import { isJsonRecord as isRecord, readJsonObject } from './jsonArtifact';
 export const DISPOSITIONS = ['fixed', 'fixed — documentation', 'dismissed — out of scope', 'dismissed — invalid', 'dismissed — nit', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
-/** Anchors the canonical example — spelled once so it cannot desync from DISPOSITIONS. */
 export const FIXED_DISPOSITION: Disposition = 'fixed';
 
 /** A fix whose every change is documentation (§27.6, #207). */
 export const DOCUMENTATION_DISPOSITION: Disposition = 'fixed — documentation';
 
-/** The dispositions whose issue must record what changed — the validator, the format prompt and the test fixtures
- *  all read this one list. */
 export const CHANGE_RECORDING_DISPOSITIONS: readonly Disposition[] = [FIXED_DISPOSITION, DOCUMENTATION_DISPOSITION];
 
 export function recordsChange(disposition: string): boolean {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normaliseText, sentenceStates, statesText, unqualifiedOccurrences } from '../helpers/statesText';
+import { sameText, sentenceStates, statesText, timesStated, unqualifiedOccurrences } from '../helpers/statesText';
 
 const SHARED = ['1. **Behavioral Equivalence:** It produces identical runtime output,', '   side effects, and control flow.'];
 
@@ -23,8 +23,13 @@ describe('statesText — the same words in the same order, ignoring line breaks,
   });
 
   it('keeps an identifier underscore, so snake_case is not read as emphasis', () => {
-    expect(normaliseText('set work_goal and _this_')).toBe('set work_goal and this');
+    expect(sameText('set work_goal and _this_', 'set work_goal and this')).toBe(true);
     expect(statesText('the work goal', 'work_goal')).toBe(false);
+  });
+
+  it('matches regardless of case only when asked to', () => {
+    expect(statesText('The Materiality\nFloor', 'materiality floor')).toBe(false);
+    expect(statesText('The Materiality\nFloor', 'materiality floor', { ignoreCase: true })).toBe(true);
   });
 
   it('throws on a shared text that normalises to nothing, which every document would otherwise state', () => {
@@ -35,6 +40,34 @@ describe('statesText — the same words in the same order, ignoring line breaks,
 
   it('is case-sensitive: the shared text is quoted, not paraphrased', () => {
     expect(statesText('1. behavioral equivalence: it produces identical runtime output, side effects, and control flow.', SHARED)).toBe(false);
+  });
+});
+
+describe('timesStated — how many times a document states a shared text', () => {
+  it('counts each copy, however it is wrapped or emphasised', () => {
+    expect(timesStated('A *rule* here.\nThen a\n  rule here again.', 'rule here')).toBe(2);
+  });
+
+  it('counts none when the text is absent, and ignores case only when asked to', () => {
+    expect(timesStated('nothing to see', 'rule here')).toBe(0);
+    expect(timesStated('Rule here. rule here.', 'rule here', { ignoreCase: true })).toBe(2);
+  });
+});
+
+describe('sameText — two texts are the same words in the same order', () => {
+  it('ignores line breaks, indentation and emphasis', () => {
+    expect(sameText(SHARED.join('\n'), '1. Behavioral Equivalence: It produces identical runtime output, side effects, and control flow.')).toBe(true);
+  });
+
+  it('is false when one text only contains the other', () => {
+    expect(sameText(`Preamble. ${SHARED.join(' ')}`, SHARED)).toBe(false);
+  });
+});
+
+describe('sentenceStates with ignoreCase', () => {
+  it('finds needles in one sentence regardless of case only when asked to', () => {
+    expect(sentenceStates('Log it in the Review History.', ['review history'])).toBe(false);
+    expect(sentenceStates('Log it in the Review History.', ['review history'], { ignoreCase: true })).toBe(true);
   });
 });
 
