@@ -49,3 +49,4 @@ outputs:
     path: infra-capabilities.md
   - id: impl-report
     path: impl-report.md
+    sections: impl-report

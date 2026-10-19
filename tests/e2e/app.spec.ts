@@ -8039,8 +8039,10 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
   const cfg = seedV3Config('agent-term-e2e-implv3-cfg-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-implv3-bin-', { realCommitOps: true });
+  // §27.10 — each step rewrites its own section file whole, counting its runs; the app assembles impl-report.md.
   const report = (step: string): string =>
-    `mkdir -p ${V3_ART}; printf '%s\\n' '## ${step}' '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' >> ${V3_ART}/impl-report.md`;
+    `mkdir -p ${V3_ART}/impl-report; n=$(( $(cat .agent-terminal/runs-${step} 2>/dev/null || echo 0) + 1 )); echo $n > .agent-terminal/runs-${step}; printf '%s\\n' '## ${step}' "run $n of ${step}" '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' > ${V3_ART}/impl-report/${step}.md`;
+  const implReport = (): string => readIf(join(repo, V3_ART, 'impl-report.md'));
   const finish = (step: string, cmd: string): string => `${cmd}; ${report(step)}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
   const result = (outcome: Parameters<typeof examplePhaseResult>[0], path: string, build?: 'built'): string =>
     writePhaseResultSh(path, examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
@@ -8061,7 +8063,7 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
     {
       // The operator narrows the plan to 1 impl-slice in the approval session, so approving it re-sources the count.
       'plan-approve': `printf %s '${b64(`# plan\n\n${exampleSlicePlan(1)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')])}`,
-      'impl-approve': writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')]),
+      'impl-approve': `${report('impl-approve')}; ${writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
     },
   );
   app = await electron.launch({
@@ -8094,8 +8096,12 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes('.agent-terminal/loop/goal-progress.'))).toHaveLength(2);
   for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) {
     expect(goals.some((g) => g.includes(`turn-done:work-${step})`)), step).toBe(true);
-    expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);
+    expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toContain(`${V3_ART}/impl-report/${step}.md`);
   }
+  // §27.10 — the app assembled impl-report.md from the section files, in flow order, handing it to each next step.
+  const stepsInReport = (): string[] => implReport().split('\n').filter((l) => l.startsWith('## ')).map((l) => l.slice(3));
+  await expect.poll(stepsInReport, { timeout: EPIC_GATE_WAIT.gate }).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  expect(implReport()).toContain('run 1 of red');
   // §27.12 v2.202 — each session ran the real bundled check its prompt handed it, after writing its file, and
   // every check passed: each goal session's progress and result.
   const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
@@ -8127,6 +8133,13 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   for (const step of ['red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen')).slice(promptsAtReopen)).toContain(BRIEF);
   await atImplApprove();
+  // Each step that ran again replaced only its own section; infra's first and only run is still there.
+  expect(stepsInReport()).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  for (const step of ['red', 'green', 'refactor', 'integration-slice', 'impl-approve']) {
+    expect(implReport()).toContain(`run 2 of ${step}`);
+    expect(implReport()).not.toContain(`run 1 of ${step}`);
+  }
+  expect(implReport()).toContain('run 1 of infra');
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');

@@ -109,6 +109,25 @@ export interface AppWorkPromptReq {
   goalReview?: string[];
   /** §27.3 */
   goalProgress?: string[];
+  /** §27.10 */
+  reportSections?: ReportSectionTarget[];
+}
+
+/** §27.10 — the file this step writes its section of report `id` to, and the assembled report itself. */
+export interface ReportSectionTarget {
+  id: string;
+  sectionRel: string;
+  reportRel: string;
+}
+
+/** §27.10 */
+export function reportSectionLines(targets: ReportSectionTarget[]): string[] {
+  return targets.flatMap((t) => [
+    '',
+    `REPORT SECTION — this step's part of \`${t.id}\` is its own file, ${t.sectionRel}. Write your whole section to that`,
+    'file, and each time you update it, rewrite the whole file: never patch it in place.',
+    `Never edit ${t.reportRel}: the app rebuilds it from every step's section file, in flow order, before each step reads it.`,
+  ]);
 }
 
 export interface GoalLeg {
@@ -250,6 +269,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
       ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
     );
   }
+  if (req.reportSections !== undefined) parts.push(...reportSectionLines(req.reportSections));
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
   // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no
   // round history reach it — the boundary before the turn cleared the context; this block adds only the

@@ -19,6 +19,8 @@ import type { EpicGateOutcome } from './epicPromotion';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 import type { RunAppGateCommitSideEffect } from './appGateCommit';
 import { stripStatusControlChars } from '../shared/loopStatus';
+import { errMsg } from './errno';
+import type { SectionedReport } from './reportSections';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -39,6 +41,8 @@ export interface AppGateDecisionDeps {
    *  best-effort like `runSideEffect`. Injected here so the executor stays kind-agnostic. */
   runCommitSideEffect: RunAppGateCommitSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
+  /** §27.10 — rebuild a report from the section files its steps wrote; throws when it cannot. */
+  assembleReport(repoDir: string, report: SectionedReport): void;
   advanceFlow(repoDir: string, step: string): void;
   /** §28.4.1 — on an approve whose `def` declares the `plan` output, re-source the `slices` flow input from that
    *  plan WITHOUT re-entering the step; a later planning approve overwrites an earlier one (§28.8.1). Best-effort
@@ -311,6 +315,18 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
     gateAudit('clear-polish-failed', 1, reason);
   }
   deps.onViewChanged();
+
+  // §27.10
+  for (const o of r.def.outputs) {
+    if (o.sections === undefined) continue;
+    try {
+      deps.assembleReport(repoDir, { path: o.path, sections: o.sections });
+    } catch (e) {
+      const reason = errMsg(e);
+      deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);
+      deps.emitError(`${o.id} could not be assembled from its step sections: ${reason}`);
+    }
+  }
 
   // §27.13/§28.3 / AC3 — dispatch each declared side-effect by kind; an unknown kind is silently skipped.
   const refs = deps.refs(repoDir);
