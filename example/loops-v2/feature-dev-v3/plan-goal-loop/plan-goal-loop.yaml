@@ -4,7 +4,7 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: plan
-  goal: every reviewer's latest pass found nothing left to fix in the plan, and plan-report.md logs every decision the planner made, every item left for the operator, and every finding it fixed or dismissed
+  goal: "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and plan-report.md logs every decision the planner made, every item left for the operator, and every finding it fixed or dismissed"
   checkpoint:
     passes: 3
 reviewers:

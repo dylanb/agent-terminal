@@ -33,6 +33,10 @@ runs a single slice regardless of the breakdown. The **epic** plan is the except
 `## Sub-tickets` block instead (§28.7) and no `## Impl-slices`; for an epic, grade that partition, not the
 impl-slice block.
 
+Check where the plan puts each test edit. An edit to or deletion of an existing test that a slice needs belongs
+in that slice's RED step, because the engine halts an `auto` GREEN or refactor gate on any test file changed since
+RED (§27.9.1 N9b.7), even one the plan asked for. Any such edit scheduled in a GREEN or refactor step is a finding.
+
 Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
 two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
 more-precise citation that would not change the meaning, or a defensible authoring choice the ticket does

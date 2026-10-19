@@ -41,8 +41,8 @@ issue link instead.
 ## Decide, then report
 
 You work as one session without the operator: do the work, review it with the reviewers below, fix or dismiss
-what they find, and repeat until a review pass finds nothing left to fix. Never stop to ask the operator
-anything.
+what they find, and repeat until the review ends, as the review rules in these instructions say. Never stop to ask the
+operator anything.
 
 The operator settled the intent before you started: the ticket, the plan they approved, and the `groom-intent`
 input, whose `## Decision boundary` names what may be decided without them. Decide every question inside that
