@@ -42,6 +42,13 @@ export function autoHaltReasonLabel(reason: AutoHaltReason): string {
   return AUTO_HALT[reason].label;
 }
 
+/** §27.9.1 N9b.6/N9b.10 */
+export function autoHaltReasonText(r: { reason: AutoHaltReason; detail?: string }): string {
+  const letter = AUTO_HALT[r.reason].letter;
+  const label = letter === null ? AUTO_HALT[r.reason].label : `(${letter}) ${AUTO_HALT[r.reason].label}`;
+  return r.detail === undefined ? label : `${label}: ${r.detail}`;
+}
+
 export function autoHaltLetter(reason: AutoHaltReason): AutoHaltLetter | null {
   return AUTO_HALT[reason].letter;
 }

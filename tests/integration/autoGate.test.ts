@@ -126,6 +126,8 @@ interface Rig {
   view: (repoDir?: string) => FlowLoopView;
   pushView: (repoKey: string) => void;
   useEngine: (engine: EngineLike) => void;
+  asked: string[];
+  withdrawn: () => number;
 }
 
 type EngineLike = Parameters<typeof provideAppLoopView>[0];
@@ -179,6 +181,8 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
   const errors: Rig['errors'] = [];
   const approvals: Approval[] = [];
   const views: FlowLoopView[] = [];
+  const asked: string[] = [];
+  let withdrawn = 0;
   const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
   const notifier = createLoopNotifier({ isFocused: () => false, onFocusChanged: () => {}, notify, focusWindow: () => {}, reveal: () => {} });
   let nextOutcome: GateApproveOutcome | 'throw' | 'reject' = { kind: 'advanced', effectFailures: [] };
@@ -212,6 +216,8 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
     decisionBoundMs: resolveRuntimeConfig(opts.env ?? {}).autoGateDecisionMs,
+    askAgentWhy: (question: string) => void asked.push(question),
+    withdrawAgentQuestion: () => void (withdrawn += 1),
   } as AutoGateDeps);
   if (opts.approveAttached !== false) gate.attachApprove((dir, step, turnKey, decider) => {
     const a: Approval = { repoDir: dir, step, turnKey, decider: decider.kind };
@@ -252,6 +258,8 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
     view,
     pushView,
     useEngine: (e) => (engineLike = e),
+    asked,
+    withdrawn: () => withdrawn,
   };
 }
 
@@ -706,6 +714,75 @@ describe('autoGate — verdict and interrupt halts (AC2)', () => {
     expect(rig.approvals).toEqual([]);
 
     await reachGate(rig, 'stop for a human');
+    expect(autoHalts(rig)).toHaveLength(1);
+  });
+});
+
+describe('autoGate — a gate that stops for the operator asks the agent why (N9b.10)', () => {
+  it('an `auto` halt asks once, naming each reason, however often the view is read', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    rig.view();
+    rig.view();
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toContain('Why does this gate need me?');
+    expect(rig.asked[0]).toContain(`\`${STEP}\``);
+    expect(rig.asked[0]).toContain('stop for a human');
+  });
+
+  it('a `human` gate asks once, saying the gate is the operator\'s by design', async () => {
+    const rig = makeRig();
+    startTrusted(rig, loopSteps('human'));
+    await reachGate(rig, 'clean');
+    rig.view();
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toMatch(/the operator's by design/);
+  });
+
+  it('an undeclared-authority gate is the operator\'s too, and asks', async () => {
+    const rig = makeRig();
+    startTrusted(rig, loopSteps(undefined));
+    await reachGate(rig, 'clean');
+    expect(rig.asked).toHaveLength(1);
+  });
+
+  it('a clean `auto` gate the engine approves asks nothing', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
+    expect(rig.asked).toEqual([]);
+  });
+
+  it('each new gate stop asks again', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    rig.gate.beginLoopRun(repoDir, STEP);
+    await reachGate(rig, 'stop for a human');
+    expect(rig.asked).toHaveLength(2);
+  });
+
+  it('a human decision at the gate and a new loop run withdraw a question not yet delivered', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const before = rig.withdrawn();
+    rig.gate.humanDecision(repoDir, STEP, TURN)(true);
+    expect(rig.withdrawn()).toBe(before + 1);
+    rig.gate.beginLoopRun(repoDir, STEP);
+    expect(rig.withdrawn()).toBe(before + 2);
+  });
+
+  it('an agent question that throws never aborts the halt', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.asked.push = () => {
+      throw new Error('pty gone');
+    };
+    await reachGate(rig, 'stop for a human');
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'stop-for-a-human' }]);
     expect(autoHalts(rig)).toHaveLength(1);
   });
 });
@@ -1613,6 +1690,8 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       setTimer: (cb, ms) => clock.setTimer(cb, ms),
       clearTimer: (h) => clock.clearTimer(h),
       decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
+      askAgentWhy: () => {},
+      withdrawAgentQuestion: () => {},
     });
     const observed = composeObservedResolveDef((dir) => ({ tiers: tiers(), repoDir: dir }));
     const record = composeRecordFlowTransition({ recordTransition: () => {} }, gate);
@@ -2445,6 +2524,9 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['frozen-tests-changed']]);
     expect(rig.view().humanNeeded).toBe(true);
     expect(readChangedTests(repoDir)).toEqual({ step: STEP, paths: [FROZEN] });
+    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'frozen-tests-changed', detail: FROZEN }]);
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toContain(`(d) frozen tests changed: ${FROZEN}`);
   });
 
   it('(d): a new untracked test file is a detection', async () => {

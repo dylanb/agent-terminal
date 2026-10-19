@@ -95,6 +95,7 @@ import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding'
 import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
+import { createAgentQuestion } from './agentQuestion';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { implSliceCount } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
@@ -366,6 +367,10 @@ async function createWindow(): Promise<void> {
   };
   let lifecycle: FlowLifecycle;
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
+  const agentQuestion = createAgentQuestion({
+    readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    inject: (text) => inject(text, { submit: true }),
+  });
   const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let nextAutoGateTimer = 0;
   const autoGate = createAutoGate({
@@ -392,6 +397,8 @@ async function createWindow(): Promise<void> {
       autoGateTimers.delete(h.id);
     },
     decisionBoundMs: config.autoGateDecisionMs,
+    askAgentWhy: (question) => agentQuestion.ask(question),
+    withdrawAgentQuestion: () => agentQuestion.withdraw(),
   });
   const observedResolveDef = composeObservedResolveDef(appDefContext);
   const appEngine = createAppLoopEngine({
@@ -523,6 +530,7 @@ async function createWindow(): Promise<void> {
   // the engine exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => {
     appEngine.onInjectable();
+    agentQuestion.onInjectable();
   };
   // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§27.12): a streaming turn
   // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
