@@ -7,6 +7,7 @@ import { resolveLoopDefV2, type LoopDefV2 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, REPO_DIR } from '../helpers/bundledLoops';
 import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
+import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
 
 // feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
@@ -45,6 +46,7 @@ function loop(name: string): LoopDefV2 {
 const text = (path: string): string => readFileSync(path, 'utf8');
 const brief = (def: LoopDefV2): string => (def.brief === undefined ? '' : text(def.brief));
 const prompt = (def: LoopDefV2): string => `${brief(def)}\n${text(def.work.recipe)}`;
+const flat = (s: string): string => s.replace(/\s+/g, ' ');
 
 describe('feature-dev-v3 grooms in three steps, and approves the implementation once at the end', () => {
   it('replaces v2\'s groom step with the three, its two planning steps with two, adds the implementation approval before finalize, and keeps v2\'s other steps', () => {
@@ -91,7 +93,7 @@ describe('the three groom loops', () => {
 
   it('the groom step is a goal session that runs the intent reviewer itself', () => {
     const goal = loop('groom-goal-loop');
-    expect(goal.work.goal).toMatch(/no findings/);
+    expect(goal.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(goal.reviewers.map((r) => r.persona)).toEqual(['review-plan-intent']);
     expect(goal.rounds).toEqual({ kind: 'none' });
     expect(goal.outputs.map((o) => o.id).sort()).toEqual(['groom-report', 'groomed-ticket']);
@@ -138,7 +140,7 @@ describe('each implementation step is a goal session that reviews its own work (
     const v3 = loop(name);
     const v2 = loopV2(name);
     expect(v3.rounds).toEqual({ kind: 'none' });
-    expect(v3.work.goal).toMatch(/every reviewer's latest pass found nothing left to fix/);
+    expect(v3.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(v3.work.checkpoint).toEqual({ passes: 3 });
     expect(v3.work.completion).toBe(v2.work.completion);
     expect(v3.report.polish).toBe(v2.report.polish);
@@ -159,6 +161,14 @@ describe('each implementation step is a goal session that reviews its own work (
     expect(p).toContain('## Decision boundary');
     for (const heading of ['### Needs your call', '### Decisions', '### Review history', '### Test evidence']) expect(p).toContain(heading);
     expect(p).not.toMatch(/interview the operator/i);
+  });
+
+  it.each(CODE_LOOPS)('%s records its test evidence before the first review pass, and again after a fix that changes code or tests', (name) => {
+    const recipe = flat(text(loop(name).work.recipe));
+    const evidence = recipe.search(/under `### Test evidence` before any review/);
+    expect(evidence).toBeGreaterThan(-1);
+    expect(evidence).toBeLessThan(recipe.search(/Review it with the reviewers below/));
+    expect(recipe).toMatch(/When a fix changes code or tests, run the tests again and update `### Test evidence` before the next pass/);
   });
 
   it('the refactor step records the test result its goal session is graded on', () => {
@@ -200,7 +210,7 @@ describe('planning is one goal session that reviews itself, approved once (#212)
   it('the plan step is a goal session in legs of 3 that reviews with all 9 plan-polish reviewers', () => {
     const goal = loop('plan-goal-loop');
     expect(goal.rounds).toEqual({ kind: 'none' });
-    expect(goal.work.goal).toMatch(/every reviewer's latest pass found nothing left to fix/);
+    expect(goal.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(goal.work.checkpoint).toEqual({ passes: 3 });
     expect(goal.reviewers.map((r) => r.persona)).toEqual(v2Polish().reviewers.map((r) => r.persona));
     for (const [i, r] of goal.reviewers.entries()) expect(text(r.charter)).toBe(text(v2Polish().reviewers[i].charter));
@@ -251,6 +261,25 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     expect(p).not.toMatch(/interview the operator/i);
     expect(p).not.toMatch(/stops the loop for the operator/);
     expect(p).not.toMatch(/When\s+the\s+operator\s+decides/);
+  });
+
+  it('the plan step schedules every edit to an existing test in the RED step of the slice that needs it, and the tracer-slicer checks it', () => {
+    const rule = /edit to or deletion of an existing test that a slice needs in that slice's RED step, never its GREEN or refactor step/;
+    expect(flat(text(loop('plan-goal-loop').work.recipe))).toMatch(rule);
+    const slicer = loop('plan-goal-loop').reviewers.find((r) => r.persona === 'review-plan-tracer-slicer');
+    expect(flat(text(slicer!.charter))).toMatch(/edit to or deletion of an existing test that a slice needs belongs in that slice's RED step[\s\S]*? Any such edit scheduled in a GREEN or refactor step is a finding/);
+  });
+
+  it('the plan step re-reviews only the reviewers a fix concerns, and every reviewer only when a fix changes the plan\'s scope', () => {
+    expect(flat(text(loop('plan-goal-loop').work.recipe))).toMatch(
+      /A later pass runs only the reviewers whose findings you fixed and any whose area your fixes touched, and every reviewer again only when a fix changes the plan's acceptance criteria, scope, approach or slices/,
+    );
+  });
+
+  it.each(['groom-goal-loop', 'plan-goal-loop', ...CODE_LOOPS])('%s ends its review on a pass that changed nothing, never on a count of findings', (name) => {
+    const p = flat(prompt(loop(name)));
+    expect(p).not.toMatch(/finds nothing left to fix|returns no findings/);
+    expect(p).toMatch(/until the review ends, as the review rules in these instructions say/);
   });
 
   it('the plan step may write the report the approval step reads, and names only steps v3 has', () => {

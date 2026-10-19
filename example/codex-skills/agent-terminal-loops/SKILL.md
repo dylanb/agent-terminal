@@ -32,7 +32,9 @@ starts. Do not stand in for a missing piece with something else.
    one entry per `persona`.
 2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
    Then do what its work recipe asks. A definition with no `consolidator` has no review rounds: the loop
-   ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds.
+   ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds. It runs no review
+   when its work changed no file other than its own report and result files, and stops reviewing after a pass
+   whose fixes changed no such file.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives
@@ -85,6 +87,8 @@ starts. Do not stand in for a missing piece with something else.
    A file of that kind found elsewhere in the repository is not one of this work's flow documents, so never read
    it as one; it is still work when the ticket names it as something to change.
    The repository's standards and configuration are read where they live.
+   Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only
+   the targeted tests that checking a specific finding needs.
    Do not change any file: report your findings, and the fixer makes every change.
    Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.
    If you find nothing, return exactly: no findings

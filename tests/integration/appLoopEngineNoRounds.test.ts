@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { goalProgressRel, readAppLoopState } from '../../src/main/appLoopState';
 import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
-import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
+import { GOAL_NO_CHANGE_CLAUSE, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
 // §27.3 (v2.200) — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
@@ -176,6 +176,45 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     enterAndInjectWork(engine);
 
     expect(goalPrompt()).toMatch(/only disagrees with a decision you made and logged[^\n]*\n[^\n]*`dismissed — invalid`/);
+  });
+
+  it('work that changed nothing runs no review, and a pass whose fixes changed nothing ends the review', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = goalPrompt();
+    expect(prompt).toMatch(/When your work changed no file other than this step's own report and result files, run no review at all/);
+    expect(prompt).toMatch(/when its fixes changed no file other than this step's own report and result files[^.]*the review is done: do not\s+spawn the reviewers again/);
+    expect(prompt).toContain(GOAL_NO_CHANGE_CLAUSE);
+  });
+
+  it('a later pass re-runs only the reviewers a fix concerns, and all of them only when a fix changes the scope', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = goalPrompt();
+    expect(prompt).toMatch(/A later pass runs only the reviewers whose\s+findings you fixed and any whose area your fixes touched/);
+    expect(prompt).toMatch(/every reviewer again only when a fix changes\s+the acceptance criteria, the scope, the approach or the slices/);
+  });
+
+  it('a pass skips a reviewer whose lens the change cannot touch, and logs the skip', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    expect(goalPrompt()).toMatch(/skip a reviewer whose lens the change cannot touch[\s\S]*log each skip, with its reason, in the review history/);
+  });
+
+  it('hands each reviewer the recorded test results instead of a full suite or e2e run', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef());
+    enterAndInjectWork(engine);
+
+    const prompt = goalPrompt();
+    const handoff = prompt.slice(prompt.indexOf(REVIEWER_HANDOFF_BEGIN), prompt.indexOf(REVIEWER_HANDOFF_END));
+    expect(handoff).toMatch(/Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only\s+the targeted tests that checking a specific finding needs/);
   });
 
   it('a TDD phase session hands its reviewers the impl-slice it covers', () => {

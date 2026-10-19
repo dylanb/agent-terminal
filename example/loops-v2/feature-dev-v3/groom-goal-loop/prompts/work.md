@@ -1,7 +1,7 @@
 # groom-goal-loop — work turn
 
-Groom the linked GitHub issue into the `groomed-ticket` artifact, review it, and fix it until a review pass
-returns no findings, deciding every question yourself as the brief says.
+Groom the linked GitHub issue into the `groomed-ticket` artifact, review it, and fix it until the review
+ends, deciding every question yourself as the brief says.
 
 1. Read the `groom-intent` input, then the issue, its comments and linked issues, and the code, spec and
    standards it touches.
@@ -12,4 +12,4 @@ returns no findings, deciding every question yourself as the brief says.
    follow-up ticket any the problem does not need, logging each as a decision.
 3. Review the ticket with the reviewers below, then fix or dismiss every finding, logging each in
    `## Review history` and each decision a fix needs in `## Groomer decisions`.
-4. Repeat step 3 until a review pass returns no findings.
+4. Repeat step 3 until the review ends, as the review rules in these instructions say.
