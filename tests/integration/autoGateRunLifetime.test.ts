@@ -152,6 +152,7 @@ interface Rig {
   reachGate: (verdict: ConsolidatorVerdict) => Promise<void>;
   gateEntries: (startedAt: number, flow?: string) => string[] | null;
   errors: string[];
+  asked: string[];
   relaunch: (opts?: Omit<RigOpts, 'relaunchOf'>) => Rig;
 }
 
@@ -187,6 +188,7 @@ function makeRig(opts: RigOpts = {}): Rig {
 
   const approvals: Approval[] = [];
   const errors: string[] = [];
+  const asked: string[] = [];
   let flow!: FlowManager;
   const gate = createAutoGate({
     audit: (dir, cmd, exit) => recorder.recordCommand(dir, 'gate', cmd, exit),
@@ -202,6 +204,8 @@ function makeRig(opts: RigOpts = {}): Rig {
     setTimer: (cb, ms) => clock.setTimer(cb, ms),
     clearTimer: (h) => clock.clearTimer(h),
     decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
+    askAgentWhy: (question) => void asked.push(question),
+    withdrawAgentQuestion: () => {},
   });
   const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({
@@ -299,6 +303,7 @@ function makeRig(opts: RigOpts = {}): Rig {
       return parseAuditStream(readFileSync(file, 'utf8')).events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
     },
     errors,
+    asked,
     relaunch: (o = {}) => makeRig({ ...o, relaunchOf: rig }),
   };
   return rig;
@@ -590,6 +595,19 @@ describe('autoGate — a relaunch keeps the run\'s authority (N9b.8)', () => {
     expect(v.humanNeeded).toBe(true);
     expect(v.autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
     expect(rig.flow.state(rig.wt).stepName).toBe(STEP);
+  });
+
+  it('a (j) halt re-read after the relaunch asks the agent nothing (N9b.10)', async () => {
+    const before = makeRig();
+    expect(before.flowStart(before.wt).status).toBe('in_progress');
+    writeAppLoopState(before.wt, { loop: LOOP, step: STEP, turnKey: TURN, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+
+    const rig = before.relaunch();
+    await flush();
+    rig.view();
+    rig.view();
+    expect(rig.view().autoGate?.haltReasons.map((r) => r.reason) ?? []).toContain('relaunched');
+    expect(rig.asked).toEqual([]);
   });
 
   it('a `human` gate reached before the relaunch shows no (j) after it (negative pair)', async () => {
