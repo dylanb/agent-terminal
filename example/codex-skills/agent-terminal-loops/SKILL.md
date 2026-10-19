@@ -40,7 +40,9 @@ starts. Do not stand in for a missing piece with something else.
    for slice 1 and `<sections_dir>/<step>.slice-<n>.md` for a later slice, where `<step>` is the flow step's
    id — for example `impl-report/red.md` and `impl-report/red.slice-2.md`. Rewrite it whole each time. Then
    rebuild the bound document from every section file in that folder, by slice and then in flow-step order,
-   with any `_earlier.md` first, because no engine assembles it for you.
+   with any `_earlier.md` first, because no engine assembles it for you. The rebuilt document starts with the line
+   `<!-- agent-terminal:assembled-report -->`, which marks it as assembled, so a later assembly by the app
+   replaces it instead of keeping it as hand-written text.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives

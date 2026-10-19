@@ -5,7 +5,7 @@ import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
-import { sectionFile } from '../../src/main/reportSections';
+import { ASSEMBLED_MARKER, sectionFile } from '../../src/main/reportSections';
 import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 
 // §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
@@ -79,6 +79,7 @@ describe('the bundled Codex skill', () => {
     expect(text).toContain(`\`${sectionFile(dir, 'red', 1)?.rel}\``);
     expect(text).toContain(`\`${sectionFile(dir, 'red', 2)?.rel}\``);
     expect(text).toMatch(/rebuild the bound document from every section file/);
+    expect(text).toContain(`starts with the line \`${ASSEMBLED_MARKER}\``);
   });
 
   it('names the Codex home directories the installer writes the loops and the reviewer agents to', () => {

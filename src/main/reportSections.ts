@@ -8,7 +8,7 @@ import { isSafePathSegment } from '../shared/pathSegment';
 import { sliceArtifact } from './appWorkTurn';
 import { readDirEntries } from './dirEntries';
 import { atomicWriteFileSync } from './atomicFile';
-import { confinedRealPath, confinedRealPathResult } from './confinedPath';
+import { confinedRealPathResult } from './confinedPath';
 import { isErrno } from './errno';
 
 export interface SectionsDir {
@@ -28,9 +28,9 @@ export interface ReportSection {
 }
 
 const SECTION_EXT = '.md';
-const SECTION_NAME = /^([a-z0-9][a-z0-9-]*)(?:\.slice-([1-9][0-9]*))?\.md$/;
+const SECTION_NAME = /^(.+?)(?:\.slice-([1-9][0-9]*))?\.md$/;
 const EARLIER_FILE = '_earlier.md';
-const ASSEMBLED_MARKER = '<!-- agent-terminal:assembled-report -->';
+export const ASSEMBLED_MARKER = '<!-- agent-terminal:assembled-report -->';
 
 export function sectionFile(dir: SectionsDir, step: string, slice: number): { path: string; rel: string } | null {
   if (!isSafePathSegment(step)) return null;
@@ -39,7 +39,7 @@ export function sectionFile(dir: SectionsDir, step: string, slice: number): { pa
 
 export function sectionOf(fileName: string): { step: string; slice: number } | null {
   const m = SECTION_NAME.exec(fileName);
-  if (m === null) return null;
+  if (m === null || !isSafePathSegment(m[1])) return null;
   if (m[2] === undefined) return { step: m[1], slice: 1 };
   const slice = Number(m[2]);
   return slice > 1 ? { step: m[1], slice } : null;
@@ -79,9 +79,11 @@ export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonl
   for (const entry of readDirEntries(dir)) {
     const key = sectionOf(entry.name);
     if (key === null && entry.name !== EARLIER_FILE) continue;
-    const file = confinedRealPath(dir, path.join(dir, entry.name));
-    if (file === null) throw new Error(`the report section ${report.sectionsDir.rel}/${entry.name} leads outside ${report.sectionsDir.rel}`);
-    const body = readFileSync(file, 'utf8');
+    const file = confinedRealPathResult(dir, path.join(dir, entry.name));
+    const rel = `${report.sectionsDir.rel}/${entry.name}`;
+    if (!file.ok && file.cause === 'escapes') throw new Error(`the report section ${rel} leads outside ${report.sectionsDir.rel}`);
+    if (!file.ok) throw new Error(`the report section ${rel} could not be resolved: it is a broken link or cannot be reached`);
+    const body = readFileSync(file.path, 'utf8');
     if (key === null) earlier = body;
     else sections.push({ ...key, body });
   }

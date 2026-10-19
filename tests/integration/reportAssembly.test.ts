@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assembleReportOnDisk, sectionFile } from '../../src/main/reportSections';
@@ -80,6 +80,28 @@ describe('assembleReportOnDisk', () => {
     symlinkSync(outside, sectionFile(report.sectionsDir, 'red', 1)!.path);
     expect(() => assembleReportOnDisk(report, ORDER)).toThrow(/red\.md/);
     expect(existsSync(report.path)).toBe(false);
+  });
+
+  it('reports a section file that cannot be resolved as unresolvable, not as leading outside its folder', () => {
+    mkdirSync(report.sectionsDir.path, { recursive: true });
+    symlinkSync(join(root, 'missing.md'), sectionFile(report.sectionsDir, 'red', 1)!.path);
+    expect(() => assembleReportOnDisk(report, ORDER)).toThrow(/red\.md could not be resolved/);
+    expect(existsSync(report.path)).toBe(false);
+  });
+
+  it('replaces a dangling link planted at the report path with the assembled report, never creating its target', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'report-assembly-outside-'));
+    try {
+      const target = join(outside, 'not-yet.md');
+      symlinkSync(target, report.path);
+      write('red', 1, '## red — slice 1\nred work\n');
+      expect(assembleReportOnDisk(report, ORDER)).toBe('assembled');
+      expect(existsSync(target)).toBe(false);
+      expect(lstatSync(report.path).isSymbolicLink()).toBe(false);
+      expect(doc()).toContain('red work');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('never follows a symlink planted at the report path out of its folder: the target is untouched and assembly refuses', () => {
