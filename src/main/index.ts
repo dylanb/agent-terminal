@@ -367,11 +367,11 @@ async function createWindow(): Promise<void> {
     };
   };
   let lifecycle: FlowLifecycle;
-  // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
   const agentQuestion = createAgentQuestion({
     readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
     inject: (text) => inject(text, { submit: true }),
   });
+  // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
   const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let nextAutoGateTimer = 0;
   const autoGate = createAutoGate({

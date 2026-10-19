@@ -6,7 +6,7 @@ import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 import { composeGateQuestion, type GateStop } from '../shared/gateQuestion';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { displaySafeEcho, MAX_ECHOED_PATH_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
 import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGateDecision';
@@ -401,13 +401,14 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const frozenCheckReasons = (repoDir: string, step: string, result: ApproveTimeFrozenCheck): Reason[] => {
     if (!result.ok) return [{ reason: 'frozen-check-unavailable', detail: result.detail }];
     const changed = result.paths.length > 0;
+    const echoed = displaySafeEcho(result.paths.join(', '), MAX_ECHOED_PATH_LENGTH);
     try {
       recordChangedTests(repoDir, step, result.paths);
     } catch (e) {
       const unrecorded: Reason = { reason: 'frozen-check-unavailable', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
-      return changed ? [{ reason: 'frozen-tests-changed', detail: result.paths.join(', ') }, unrecorded] : [unrecorded];
+      return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }, unrecorded] : [unrecorded];
     }
-    return changed ? [{ reason: 'frozen-tests-changed', detail: result.paths.join(', ') }] : [];
+    return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }] : [];
   };
 
   const conclude = (repoDir: string, run: AutoRun, d: Deciding, reasons: Reason[]): void => {
@@ -591,6 +592,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run !== undefined) persist(repoKey, run);
     },
     endRun(repoKey) {
+      withdrawQuestion();
       const run = runs.get(repoKey);
       if (run === undefined) return;
       if (run.deciding !== null) run.deciding.ended = true;

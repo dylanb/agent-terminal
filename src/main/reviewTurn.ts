@@ -281,17 +281,17 @@ function polishDeferLines(): string[] {
 
 /** §27.3 */
 export const GOAL_NO_CHANGE_CLAUSE =
-  "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files";
+  "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change)";
 
 /** §27.3 */
 function goalPassLines(): string[] {
   return [
     '',
     'PASSES — run a review pass only over a change.',
-    "- When your work changed no file other than this step's own report and result files, run no review at all.",
-    "- After a pass, when its fixes changed no file other than this step's own report and result files — every",
+    "- When your work changed nothing but this step's report and its recorded test evidence, run no review at all.",
+    "- After a pass, when its fixes changed nothing but this step's report and its recorded test evidence — every",
     '  finding was dismissed, or the only edit was to the report or its test evidence — the review is done: do not',
-    '  spawn the reviewers again.',
+    '  spawn the reviewers again. An edit to the plan, the ticket, code or tests is a change.',
     '- Otherwise run another pass. The first pass runs every reviewer. A later pass runs only the reviewers whose',
     '  findings you fixed and any whose area your fixes touched; it runs every reviewer again only when a fix changes',
     '  the acceptance criteria, the scope, the approach or the slices the work answers to.',

@@ -184,9 +184,11 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     enterAndInjectWork(engine);
 
     const prompt = goalPrompt();
-    expect(prompt).toMatch(/When your work changed no file other than this step's own report and result files, run no review at all/);
-    expect(prompt).toMatch(/when its fixes changed no file other than this step's own report and result files[^.]*the review is done: do not\s+spawn the reviewers again/);
+    expect(prompt).toMatch(/When your work changed nothing but this step's report and its recorded test evidence, run no review at all/);
+    expect(prompt).toMatch(/when its fixes changed nothing but this step's report and its recorded test evidence[^.]*the review is done: do not\s+spawn the reviewers again/);
+    expect(prompt).toMatch(/An edit to the plan, the ticket, code or tests is a change\./);
     expect(prompt).toContain(GOAL_NO_CHANGE_CLAUSE);
+    expect(GOAL_NO_CHANGE_CLAUSE).toContain('an edit to the plan, the ticket, code or tests is a change');
   });
 
   it('a later pass re-runs only the reviewers a fix concerns, and all of them only when a fix changes the scope', () => {

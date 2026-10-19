@@ -64,6 +64,12 @@ describe('scripts/red-check.mjs on a Playwright spec (§28.5.2)', () => {
     expect(files).toEqual(new Set(['tests/fixtures/red-check/sample.case.ts', 'tests/fixtures/red-check/broken.case.mjs', SPEC]));
   });
 
+  it('reports a spec that failed to load as errored', () => {
+    const r = redCheck([`${E2E}/broken.spec.ts:5`], { env: { RED_CHECK_E2E_RUNNER: RUN_PLAYWRIGHT } });
+    expect(r.report, r.reason).not.toBeNull();
+    expect(r.report?.tests).toEqual([{ file: `${E2E}/broken.spec.ts`, name: 'the spec failed to load', outcome: 'errored', failures: [] }]);
+  }, 180_000);
+
   it('leaves nothing behind in .agent-terminal', () => {
     const dir = join(ROOT, '.agent-terminal');
     expect(existsSync(dir) ? readdirSync(dir).filter((n) => n.startsWith('red-check-')) : []).toEqual([]);
@@ -91,10 +97,10 @@ describe('scripts/red-check.mjs selecting the tests a RED changed in a spec (§2
     return repo;
   }
 
-  function selection(repo: string, args: string[]) {
+  function selection(repo: string, args: string[], env: Record<string, string> = {}) {
     const recordTo = join(repo, 'selection.txt');
     writeFileSync(recordTo, '');
-    const r = redCheck(args, { cwd: repo, env: { RED_CHECK_E2E_RUNNER: RECORD, RECORD_SELECTION_TO: recordTo } });
+    const r = redCheck(args, { cwd: repo, env: { RED_CHECK_E2E_RUNNER: RECORD, RECORD_SELECTION_TO: recordTo, ...env } });
     return { ...r, selected: readFileSync(recordTo, 'utf8').split('\n').filter((l) => l !== '') };
   }
 
@@ -106,6 +112,65 @@ describe('scripts/red-check.mjs selecting the tests a RED changed in a spec (§2
       const r = selection(repo, ['tests/e2e/a.spec.ts']);
       expect(r.report, r.reason).not.toBeNull();
       expect(r.selected).toEqual(['tests/e2e/a.spec.ts:3', 'tests/e2e/a.spec.ts:11']);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('selects the test a RED only deleted a line from', () => {
+    const repo = seedRepo();
+    try {
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(1);'), "test('two', () => {\n});"]));
+      expect(selection(repo, ['tests/e2e/a.spec.ts']).selected).toEqual(['tests/e2e/a.spec.ts:7']);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('names a spec given as ./path or an absolute path repo-relative, in the selection and the report', () => {
+    const repo = seedRepo();
+    try {
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(3);'), t('two', 'expect(2).toBe(2);')]));
+      const r = selection(repo, ['./tests/e2e/a.spec.ts', join(repo, 'tests/e2e/untouched.spec.ts:3')]);
+      expect(r.selected).toEqual(['tests/e2e/a.spec.ts:3', 'tests/e2e/untouched.spec.ts:3']);
+      expect(r.report?.tests.map((x) => x.file)).toEqual(['tests/e2e/a.spec.ts', 'tests/e2e/untouched.spec.ts']);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a selected spec the run returned no result for as errored, never as nothing', () => {
+    const repo = seedRepo();
+    try {
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(3);'), t('two', 'expect(2).toBe(2);')]));
+      expect(selection(repo, ['tests/e2e/a.spec.ts']).report?.tests.map((x) => [x.file, x.outcome])).toEqual([['tests/e2e/a.spec.ts', 'errored']]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports every selected spec as errored when the run wrote no report', () => {
+    const repo = seedRepo();
+    try {
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(3);'), t('two', 'expect(2).toBe(2);')]));
+      const r = selection(repo, ['tests/e2e/a.spec.ts', 'tests/e2e/untouched.spec.ts:3'], { RECORD_NO_REPORT: '1' });
+      expect(r.report?.tests.map((x) => [x.file, x.outcome])).toEqual([
+        ['tests/e2e/a.spec.ts', 'errored'],
+        ['tests/e2e/untouched.spec.ts', 'errored'],
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('selects the whole spec when git cannot diff it, so a broken diff never drops the spec from the check', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'red-check-select-'));
+    try {
+      git(repo, 'init', '-q');
+      mkdirSync(join(repo, 'tests', 'e2e'), { recursive: true });
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(3);')]));
+      git(repo, 'add', '.');
+      expect(selection(repo, ['tests/e2e/a.spec.ts']).selected).toEqual(['tests/e2e/a.spec.ts']);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -192,7 +257,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
     }
   });
 
-  it('runs exactly the selected tests with a JSON report into the I/O directory', () => {
+  it('runs exactly the selected tests once each, with no retries, and a JSON report into the I/O directory', () => {
     const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
     const io = mkdtempSync(join(tmpdir(), 'red-check-io-'));
     try {
@@ -204,7 +269,7 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
       });
       expect(r.status, r.stderr).toBe(0);
       const testLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('pnpm [exec] [playwright]')) ?? '';
-      expect(testLine).toBe(`pnpm [exec] [playwright] [test] [--reporter=list,json] [tests/e2e/a.spec.ts:3] [tests/e2e/a.spec.ts:11] PLAYWRIGHT_JSON_OUTPUT_NAME=${io}/report.json`);
+      expect(testLine).toBe(`pnpm [exec] [playwright] [test] [--retries=0] [--reporter=list,json] [tests/e2e/a.spec.ts:3] [tests/e2e/a.spec.ts:11] PLAYWRIGHT_JSON_OUTPUT_NAME=${io}/report.json`);
     } finally {
       rmSync(bin.dir, { recursive: true, force: true });
       rmSync(io, { recursive: true, force: true });

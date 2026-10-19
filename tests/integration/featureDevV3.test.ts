@@ -8,6 +8,7 @@ import { BUNDLED_LOOPS_ROOT, REPO_DIR } from '../helpers/bundledLoops';
 import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
+import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 
 // feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
@@ -160,10 +161,11 @@ describe('each implementation step is a goal session that reviews its own work (
     const def = loop(name);
     const reports = [...def.inputs, ...def.outputs].filter((b) => b.id === 'impl-report');
     expect(def.outputs.map((o) => o.id)).toContain('impl-report');
-    for (const b of reports) expect(b.sections?.rel, `${name} ${b.rel}`).toMatch(/\/artifacts\/impl-report$/);
+    for (const b of reports) expect(b.sectionsDir?.rel, `${name} ${b.rel}`).toMatch(/\/artifacts\/impl-report$/);
     const p = prompt(def).replace(/\s+/g, ' ');
     expect(p).not.toMatch(/(section for this step to|record it in) `impl-report\.md`/);
     expect(p).toMatch(/section file/);
+    expect(p).toContain(`named under ${REPORT_SECTION_HEADING} in your turn instructions`);
     if (name !== 'impl-approve-loop') {
       expect(def.work.goal).not.toContain('impl-report.md');
       expect(def.work.goal).toMatch(/report section file holds/);

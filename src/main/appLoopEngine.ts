@@ -411,9 +411,9 @@ function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId:
 }
 
 /** §27.10 */
-type SectionedOutput = ArtifactBinding & { sections: NonNullable<ArtifactBinding['sections']> };
+type SectionedOutput = ArtifactBinding & { sectionsDir: NonNullable<ArtifactBinding['sectionsDir']> };
 
-const sectionedOf = (bindings: ArtifactBinding[]): SectionedOutput[] => bindings.filter((b): b is SectionedOutput => b.sections !== undefined);
+const sectionedOf = (bindings: ArtifactBinding[]): SectionedOutput[] => bindings.filter((b): b is SectionedOutput => b.sectionsDir !== undefined);
 
 /** The reconstructable identity a chained turn is built for — the bound loop, its flow step, and the repo. */
 interface TurnCtx {
@@ -576,7 +576,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const assembleReports = (repoDir: string, reports: SectionedOutput[]): void => {
     for (const r of reports) {
       try {
-        deps.assembleReport(repoDir, { path: r.path, sections: r.sections });
+        deps.assembleReport(repoDir, { path: r.path, sectionsDir: r.sectionsDir });
       } catch (e) {
         deps.audit(repoDir, `§27 report ${r.id} could not be assembled: ${errMsg(e)}`, 1);
         deps.emitError(`${r.id} could not be assembled from its step sections: ${errMsg(e)}`);
@@ -1092,7 +1092,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   /** §27.10 */
   const sectionTargets = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, reports: SectionedOutput[]): ReportSectionTarget[] =>
     reports.flatMap((r) => {
-      const file = sectionFile(r.sections, turn.stepId, deps.currentSlice(turn.repoDir));
+      const file = sectionFile(r.sectionsDir, turn.stepId, deps.currentSlice(turn.repoDir));
       return file === null ? [] : [{ id: r.id, sectionRel: file.rel, reportRel: r.rel }];
     });
 

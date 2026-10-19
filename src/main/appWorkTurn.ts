@@ -121,10 +121,13 @@ export interface ReportSectionTarget {
 }
 
 /** §27.10 */
+export const REPORT_SECTION_HEADING = 'REPORT SECTION';
+
+/** §27.10 */
 export function reportSectionLines(targets: ReportSectionTarget[]): string[] {
   return targets.flatMap((t) => [
     '',
-    `REPORT SECTION — this step's part of \`${t.id}\` is its own file, ${t.sectionRel}. Write your whole section to that`,
+    `${REPORT_SECTION_HEADING} — this step's part of \`${t.id}\` is its own file, ${t.sectionRel}. Write your whole section to that`,
     'file, and each time you update it, rewrite the whole file: never patch it in place.',
     `Never edit ${t.reportRel}: the app rebuilds it from every step's section file, in flow order, before each step reads it.`,
   ]);

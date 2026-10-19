@@ -43,6 +43,7 @@ import { writeLoopCapabilities } from '../helpers/loopCapabilities';
 import { installPathGitStub } from '../helpers/pathGitStub';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { MAX_CAPABILITIES_BYTES } from '../../src/shared/loopCapabilities';
+import { MAX_ECHOED_PATH_LENGTH } from '../../src/shared/controlChars';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
 import { migrateBundledLoopDefOnEntry } from '../../src/main/migrateLoopDef';
 import { createGitRepoFixture } from '../helpers/gitRepo';
@@ -773,6 +774,26 @@ describe('autoGate — a gate that stops for the operator asks the agent why (N9
     expect(rig.withdrawn()).toBe(before + 1);
     rig.gate.beginLoopRun(repoDir, STEP);
     expect(rig.withdrawn()).toBe(before + 2);
+  });
+
+  it('ending the run (Terminate, Stop, a reset before Start) withdraws a question not yet delivered', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'stop for a human');
+    const before = rig.withdrawn();
+    rig.gate.endRun(repoDir);
+    expect(rig.withdrawn()).toBe(before + 1);
+  });
+
+  it('a Retry after a loop-error halt withdraws the question that halt asked', () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, 'error');
+    expect(rig.asked).toHaveLength(1);
+    expect(rig.asked[0]).toContain('(b) loop error or accepted failed turn');
+    const before = rig.withdrawn();
+    rig.gate.loopRunEvent(repoDir, STEP, TURN, 'retried');
+    expect(rig.withdrawn()).toBe(before + 1);
   });
 
   it('an agent question that throws never aborts the halt', async () => {
@@ -2528,6 +2549,21 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'frozen-tests-changed', detail: FROZEN }]);
     expect(rig.asked).toHaveLength(1);
     expect(rig.asked[0]).toContain(`(d) frozen tests changed: ${FROZEN}`);
+  });
+
+  it('(d): a long list of changed tests is echoed to the panel and the question cut to the echo bound, while the flag records every path', async () => {
+    const rig = makeRig();
+    startTrusted(rig);
+    const added = Array.from({ length: 40 }, (_, i) => `tests/a-long-descriptive-name-for-added-test-${String(i).padStart(2, '0')}.test.ts`);
+    for (const p of added) fixture.writeRepoFile(repoDir, p, 'test("added", () => {});\n');
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(readChangedTests(repoDir)?.paths).toHaveLength(added.length);
+    const detail = rig.view().autoGate?.haltReasons?.find((r) => r.reason === 'frozen-tests-changed')?.detail ?? '';
+    expect(detail.startsWith(added[0])).toBe(true);
+    expect(detail.length).toBe(MAX_ECHOED_PATH_LENGTH);
+    expect(rig.asked[0]).toContain(detail);
+    expect(rig.asked[0]).not.toContain(added[added.length - 1]);
   });
 
   it('(d): a new untracked test file is a detection', async () => {

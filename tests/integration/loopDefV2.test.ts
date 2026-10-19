@@ -717,21 +717,21 @@ describe('resolveLoopDefV2 — a reviewer with no tools list gets every tool (§
 
 describe('resolveLoopDefV2 — a report assembled from step sections (§27.10)', () => {
   const sectioned = (dir: string) =>
-    VALID_DEF.replace('outputs:\n  - id: plan\n    path: plan.md\n', `outputs:\n  - id: plan\n    path: plan.md\n    sections: ${dir}\n`);
+    VALID_DEF.replace('outputs:\n  - id: plan\n    path: plan.md\n', `outputs:\n  - id: plan\n    path: plan.md\n    sections_dir: ${dir}\n`);
 
   it('reads the folder the steps write their sections to, inside the artifacts subtree', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', sectioned('plan-sections'));
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     if (!r.ok) throw new Error(r.reason);
-    expect(r.def.outputs[0].sections?.rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'plan-sections'].join('/'));
-    expect(r.def.outputs[0].sections?.path).toContain(['loop', 'artifacts', 'plan-sections'].join(sep));
+    expect(r.def.outputs[0].sectionsDir?.rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'plan-sections'].join('/'));
+    expect(r.def.outputs[0].sectionsDir?.path).toContain(['loop', 'artifacts', 'plan-sections'].join(sep));
   });
 
   it('declares no sections folder for a binding that names none', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     if (!r.ok) throw new Error(r.reason);
-    expect(r.def.outputs[0].sections).toBeUndefined();
+    expect(r.def.outputs[0].sectionsDir).toBeUndefined();
   });
 
   it('rejects a sections folder that escapes the artifacts subtree or is the subtree itself', () => {

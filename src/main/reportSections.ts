@@ -17,7 +17,7 @@ export interface SectionsDir {
 
 export interface SectionedReport {
   path: string;
-  sections: SectionsDir;
+  sectionsDir: SectionsDir;
 }
 
 export interface ReportSection {
@@ -68,14 +68,14 @@ function readIfPresent(file: string): string | null {
 }
 
 export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonly string[]): 'assembled' | 'nothing-to-assemble' {
-  const dir = report.sections.path;
+  const dir = report.sectionsDir.path;
   const sections: ReportSection[] = [];
   let earlier: string | null = null;
   for (const entry of readDirEntries(dir)) {
     const key = sectionOf(entry.name);
     if (key === null && entry.name !== EARLIER_FILE) continue;
     const file = confinedRealPath(dir, path.join(dir, entry.name));
-    if (file === null) throw new Error(`the report section ${report.sections.rel}/${entry.name} leads outside ${report.sections.rel}`);
+    if (file === null) throw new Error(`the report section ${report.sectionsDir.rel}/${entry.name} leads outside ${report.sectionsDir.rel}`);
     const body = readFileSync(file, 'utf8');
     if (key === null) earlier = body;
     else sections.push({ ...key, body });

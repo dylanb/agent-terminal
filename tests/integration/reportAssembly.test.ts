@@ -6,18 +6,18 @@ import { assembleReportOnDisk, sectionFile } from '../../src/main/reportSections
 
 const ORDER = ['infra', 'red', 'green'];
 let root: string;
-let report: { path: string; sections: { path: string; rel: string } };
+let report: { path: string; sectionsDir: { path: string; rel: string } };
 
 const write = (step: string, slice: number, body: string): void => {
-  const f = sectionFile(report.sections, step, slice)!;
-  mkdirSync(report.sections.path, { recursive: true });
+  const f = sectionFile(report.sectionsDir, step, slice)!;
+  mkdirSync(report.sectionsDir.path, { recursive: true });
   writeFileSync(f.path, body);
 };
 const doc = (): string => readFileSync(report.path, 'utf8');
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'report-assembly-')));
-  report = { path: join(root, 'impl-report.md'), sections: { path: join(root, 'impl-report'), rel: 'impl-report' } };
+  report = { path: join(root, 'impl-report.md'), sectionsDir: { path: join(root, 'impl-report'), rel: 'impl-report' } };
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -68,7 +68,7 @@ describe('assembleReportOnDisk', () => {
 
   it('ignores a file in the sections folder that no step writes', () => {
     write('red', 1, '## red — slice 1\nred work\n');
-    writeFileSync(join(report.sections.path, 'notes.txt'), 'scratch\n');
+    writeFileSync(join(report.sectionsDir.path, 'notes.txt'), 'scratch\n');
     assembleReportOnDisk(report, ORDER);
     expect(doc()).not.toContain('scratch');
   });
@@ -76,8 +76,8 @@ describe('assembleReportOnDisk', () => {
   it('refuses a section file that leads outside its folder, and writes no report missing it', () => {
     const outside = join(root, 'elsewhere.md');
     writeFileSync(outside, '## red — slice 1\nsecret\n');
-    mkdirSync(report.sections.path, { recursive: true });
-    symlinkSync(outside, sectionFile(report.sections, 'red', 1)!.path);
+    mkdirSync(report.sectionsDir.path, { recursive: true });
+    symlinkSync(outside, sectionFile(report.sectionsDir, 'red', 1)!.path);
     expect(() => assembleReportOnDisk(report, ORDER)).toThrow(/red\.md/);
     expect(existsSync(report.path)).toBe(false);
   });

@@ -33,8 +33,8 @@ starts. Do not stand in for a missing piece with something else.
 2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
    Then do what its work recipe asks. A definition with no `consolidator` has no review rounds: the loop
    ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds. It runs no review
-   when its work changed no file other than its own report and result files, and stops reviewing after a pass
-   whose fixes changed no such file.
+   when its work changed nothing but its own report and recorded test evidence, and stops reviewing after a pass
+   whose fixes changed nothing else (an edit to the plan, the ticket, code or tests is a change).
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives

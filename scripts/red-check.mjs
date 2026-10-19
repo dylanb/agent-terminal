@@ -1,7 +1,7 @@
 // §28.5.2
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,7 +15,7 @@ const SPEC_ARG = /^(.*\.spec\.ts)((?::\d+)+)?$/;
 const TEST_DECLARATION = /^\s*test(?:\.(?:only|fail|fixme|skip|slow))?\s*\(/;
 
 const args = process.argv.slice(2);
-const specArgs = args.filter((a) => SPEC_ARG.test(a));
+const specArgs = args.filter((a) => SPEC_ARG.test(a)).map(repoRelativeSpec);
 const vitestArgs = args.filter((a) => !SPEC_ARG.test(a));
 
 const tests = [];
@@ -35,6 +35,12 @@ if (ok) process.stdout.write(`${JSON.stringify({ version: 1, tests }, null, 2)}\
 
 function rel(abs) {
   return path.relative(process.cwd(), abs).split(path.sep).join('/');
+}
+
+function repoRelativeSpec(arg) {
+  const [, file, lines = ''] = SPEC_ARG.exec(arg);
+  const abs = path.resolve(file);
+  return `${rel(existsSync(abs) ? realpathSync(abs) : abs)}${lines}`;
 }
 
 function controlFree(s) {
@@ -102,10 +108,12 @@ function git(...gitArgs) {
 }
 
 /** The Playwright selectors for the tests a RED added or changed in `file`: each changed line's enclosing test
- *  declaration (`file:line`), the whole file when git does not track it, nothing when it is unchanged. */
+ *  declaration (`file:line`), the whole file when git does not track it or cannot diff it, nothing when it is unchanged. */
 function changedTestSelectors(file) {
   if (git('ls-files', '--error-unmatch', '--', file).status !== 0) return [file];
-  const diff = git('diff', '--unified=0', 'HEAD', '--', file).stdout;
+  const diffed = git('diff', '--unified=0', 'HEAD', '--', file);
+  if (diffed.status !== 0) return [file];
+  const diff = diffed.stdout;
   const changed = [];
   for (const m of diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
     const start = Number(m[1]);
@@ -182,10 +190,9 @@ function playwrightReport(run, files) {
     for (const child of suite.suites ?? []) visit({ ...child, file: child.file ?? suite.file }, [...titles, child.title]);
   };
   for (const suite of run.suites ?? []) visit(suite, []);
-  if ((run.errors ?? []).length > 0) {
-    for (const file of files) {
-      if (!tests.some((t) => t.file === file)) tests.push({ file, name: 'the spec failed to load', outcome: 'errored', failures: [] });
-    }
+  const missing = (run.errors ?? []).length > 0 ? 'the spec failed to load' : 'the e2e run reported no result for the selection';
+  for (const file of files) {
+    if (!tests.some((t) => t.file === file)) tests.push({ file, name: missing, outcome: 'errored', failures: [] });
   }
   return tests;
 }

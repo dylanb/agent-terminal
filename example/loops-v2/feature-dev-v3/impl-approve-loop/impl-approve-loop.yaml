@@ -27,7 +27,7 @@ inputs:
     path: plan.md
   - id: impl-report
     path: impl-report.md
-    sections: impl-report
+    sections_dir: impl-report
   - id: infra-capabilities
     path: infra-capabilities.md
 outputs:
@@ -35,4 +35,4 @@ outputs:
     path: impl-summary.md
   - id: impl-report
     path: impl-report.md
-    sections: impl-report
+    sections_dir: impl-report

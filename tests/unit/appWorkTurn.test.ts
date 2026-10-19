@@ -6,6 +6,7 @@ import {
   sliceArtifact,
   completionMarker,
   composeAppWorkPrompt,
+  REPORT_SECTION_HEADING,
 } from '../../src/main/appWorkTurn';
 import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
@@ -501,6 +502,7 @@ describe('composeAppWorkPrompt — a step writes its own section of an assembled
 
   it('names the file this step writes its section to, and to rewrite it whole each time', () => {
     const prompt = composeAppWorkPrompt({ ...base, reportSections: [section] });
+    expect(prompt).toMatch(new RegExp(`^${REPORT_SECTION_HEADING} — .*${section.sectionRel.replace(/[.]/g, '\\.')}`, 'm'));
     expect(prompt).toContain(section.sectionRel);
     expect(prompt).toMatch(/rewrite the whole file/i);
     expect(prompt).toMatch(/never (patch|edit) it in place/i);

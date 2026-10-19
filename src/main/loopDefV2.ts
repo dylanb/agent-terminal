@@ -119,7 +119,7 @@ export interface ArtifactBinding {
   rel: string;
   /** §27.10 — the folder each step writes its own section of this document to; the engine assembles the
    *  document from them. */
-  sections?: { path: string; rel: string };
+  sectionsDir?: { path: string; rel: string };
 }
 
 /** §27.10 */
@@ -340,9 +340,9 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
     if (seen.has(id)) fail(`${what} id is declared twice: ${id}`);
     seen.add(id);
     const { path: p, rel } = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
-    if (rec.sections === undefined) return { id, path: p, rel };
-    const sections = confineArtifact(repoDir, requireString(rec.sections, `${what} ${id} sections`), `${what} ${id} sections`);
-    return { id, path: p, rel, sections };
+    if (rec.sections_dir === undefined) return { id, path: p, rel };
+    const sectionsDir = confineArtifact(repoDir, requireString(rec.sections_dir, `${what} ${id} sections_dir`), `${what} ${id} sections_dir`);
+    return { id, path: p, rel, sectionsDir };
   });
 }
 

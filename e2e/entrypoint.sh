@@ -19,7 +19,7 @@ if [ -n "${E2E_IO_DIR:-}" ]; then
   # §28.5.2 — scripts/red-check.mjs writes one Playwright selector per line to select.txt and reads report.json.
   selectors=()
   while IFS= read -r line; do [ -n "$line" ] && selectors+=("$line"); done < "$E2E_IO_DIR/select.txt"
-  PLAYWRIGHT_JSON_OUTPUT_NAME="$E2E_IO_DIR/report.json" pnpm exec playwright test --reporter=list,json "${selectors[@]}"
+  PLAYWRIGHT_JSON_OUTPUT_NAME="$E2E_IO_DIR/report.json" pnpm exec playwright test --retries=0 --reporter=list,json "${selectors[@]}"
   code=$?
 else
   # E2E_GREP optionally narrows the run (passed through from scripts/e2e-podman.sh).

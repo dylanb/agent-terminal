@@ -318,9 +318,9 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
 
   // §27.10
   for (const o of r.def.outputs) {
-    if (o.sections === undefined) continue;
+    if (o.sectionsDir === undefined) continue;
     try {
-      deps.assembleReport(repoDir, { path: o.path, sections: o.sections });
+      deps.assembleReport(repoDir, { path: o.path, sectionsDir: o.sectionsDir });
     } catch (e) {
       const reason = errMsg(e);
       deps.audit(repoDir, `§27 report ${o.id} could not be assembled: ${reason}`, 1);

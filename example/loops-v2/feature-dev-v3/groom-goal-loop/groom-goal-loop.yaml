@@ -4,7 +4,7 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: groomed-ticket
-  goal: "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and groom-report.md logs every decision the groomer made and every finding it fixed or dismissed"
+  goal: "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and groom-report.md logs every decision the groomer made and every finding it fixed or dismissed"
   checkpoint:
     passes: 3
 reviewers:
