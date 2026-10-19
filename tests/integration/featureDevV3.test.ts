@@ -164,6 +164,16 @@ describe('each implementation step is a goal session that reviews its own work (
     const p = prompt(def).replace(/\s+/g, ' ');
     expect(p).not.toMatch(/(section for this step to|record it in) `impl-report\.md`/);
     expect(p).toMatch(/section file/);
+    if (name !== 'impl-approve-loop') {
+      expect(def.work.goal).not.toContain('impl-report.md');
+      expect(def.work.goal).toMatch(/report section file holds/);
+    }
+  });
+
+  it('the green goal names the frozen-tests bar the gate checks: no test changed since RED', () => {
+    const goal = loop('green-loop').work.goal ?? '';
+    expect(goal).not.toContain('the RED tests unchanged');
+    expect(goal).toContain('no test changed since RED');
   });
 
   it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {

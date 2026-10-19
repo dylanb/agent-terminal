@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: commits
   completion: refactor
-  goal: "the tests still pass, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and impl-report.md holds this slice's refactor section with its decisions, review history and test evidence"
+  goal: "the tests still pass, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and this slice's refactor report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:

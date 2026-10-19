@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: red-result
   completion: red
-  goal: "the slice's new tests fail by assertion while every other test passes, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and impl-report.md holds this slice's red section with its decisions, review history and test evidence"
+  goal: "the slice's new tests fail by assertion while every other test passes, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed no file other than this step's own report and result files, and this slice's red report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:
