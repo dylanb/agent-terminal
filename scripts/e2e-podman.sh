@@ -4,6 +4,9 @@
 # launch cannot. Usage:
 #   ./scripts/e2e-podman.sh                 # whole suite
 #   ./scripts/e2e-podman.sh "Terminate"     # -g filter passed through to playwright
+#   E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
+#                                           # red-check run (§28.5.2): the tests in <dir>/select.txt,
+#                                           # JSON report to <dir>/report.json (see e2e/entrypoint.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +27,9 @@ podman build -t "$IMAGE" -f e2e/Containerfile .
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
-podman run --rm -it \
+tty=()
+[ -t 0 ] && tty=(-it)
+podman run --rm ${tty[@]+"${tty[@]}"} \
   --cap-add=SYS_ADMIN \
   --security-opt label=disable \
   --shm-size=1g \
@@ -33,4 +38,5 @@ podman run --rm -it \
   -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \
+  -e "E2E_IO_DIR=${E2E_IO_DIR:-}" \
   "$IMAGE"
