@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const cli = path.join(path.dirname(require.resolve('@playwright/test/package.json')), 'cli.js');
 const here = path.dirname(fileURLToPath(import.meta.url));
-const io = process.env.E2E_IO_DIR;
+const io = path.resolve(process.env.E2E_IO_DIR);
 const select = readFileSync(path.join(io, 'select.txt'), 'utf8').split('\n').filter((l) => l !== '');
 const run = spawnSync(process.execPath, [cli, 'test', '--config', path.join(here, 'playwright.config.mjs'), '--reporter=list,json', ...select], {
   stdio: ['ignore', 'inherit', 'inherit'],
