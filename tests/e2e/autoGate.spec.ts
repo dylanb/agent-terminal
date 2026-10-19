@@ -259,13 +259,13 @@ const haltRows = () => loopPanel().locator('[data-auto-halt-reason]');
 const autoHaltsAt = (home: string, repo: string, step: string): GateEntry[] =>
   auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt');
 
-async function startAutoGreen(prefix: string, agent: StepScript): Promise<{ home: string; repo: string; baseline: string }> {
+async function startAutoGreen(prefix: string, agent: StepScript, steps: AutoGateStep[] = AUTO_GREEN_THEN_MANUAL): Promise<{ home: string; repo: string; baseline: string }> {
   const home = tmp(`${prefix}home-`);
   const repo = seedAutoGateRepo(prefix, 'green');
   cleanup.push(repo);
   const baseline = gitIn(repo, 'rev-parse', 'HEAD');
   recordBaselineCommit(repo, gitIn(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), baseline);
-  seedTrustedFlow(home, repo, 'auto-green', autoGateFlowYaml(AUTO_GREEN_THEN_MANUAL));
+  seedTrustedFlow(home, repo, 'auto-green', autoGateFlowYaml(steps));
   await launchInto(prefix, repo, home, { green: agent });
   await flowControl().click();
   return { home, repo, baseline };
@@ -296,6 +296,43 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a round t
   expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
   expect(flowState(repo)).toMatch(/^step: green$/m);
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
+});
+
+// §27.9.1 N9b.10
+const injectedLog = (repo: string): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
+
+test('a gate that stops for the operator asks the agent why: an `auto` (d) halt names the reason and the changed test, in the agent and the panel', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(3, 0));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-why-d-', greenAgent({ touchTest: true, logInjected: true }));
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await expect
+    .poll(() => injectedLog(repo), { timeout: UI_MS })
+    .toContain('Why does this gate need me?')
+    .catch(failWithDiagnosis(home, repo));
+  const log = injectedLog(repo);
+  expect(log).toContain('(d) frozen tests changed: tests/frozen.test.ts');
+  expect(log.split('Why does this gate need me?')).toHaveLength(2);
+  await openLoopPanel();
+  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-tests-changed"]')).toContainText('tests/frozen.test.ts', { timeout: UI_MS });
+  expect(flowState(repo)).toMatch(/^step: green$/m);
+});
+
+test('a gate that stops for the operator asks the agent why: a `human` gate says it is the operator\'s by design', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 0));
+  const steps: AutoGateStep[] = [
+    { id: 'green', kind: 'loop', loop: 'green-loop', authority: 'human' },
+    { id: 'done', kind: 'manual' },
+  ];
+  const { home, repo } = await startAutoGreen('agent-term-e2e-why-human-', greenAgent({ logInjected: true }), steps);
+
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
+  await expect
+    .poll(() => injectedLog(repo), { timeout: UI_MS })
+    .toContain('Why does this gate need me?')
+    .catch(failWithDiagnosis(home, repo));
+  expect(injectedLog(repo)).toMatch(/the operator's by design/);
+  expect(flowState(repo)).toMatch(/^step: green$/m);
 });
 
 test('auto GREEN halts on frozen-test change and on unavailable check: `loop-capabilities.yaml` removed before the approve halts with (e) naming it, not (b) (AC12)', { tag: '@ownapp' }, async () => {

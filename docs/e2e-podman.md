@@ -29,7 +29,10 @@ podman machine start
 
 - The repo source is bind-mounted; `node_modules` is a **named volume** so the
   macOS-built native modules (node-pty) never shadow the Linux ones. node-pty is rebuilt
-  for the container's Electron ABI on each run.
+  for the container's Electron ABI on each run. Each checkout gets its own volume, named from its path, because
+  two checkouts running the harness at the same time would collide installing into one; the first run in a new
+  checkout installs from scratch. `E2E_NODE_MODULES_VOLUME=<name> ./scripts/e2e-podman.sh` names the volume
+  instead.
 - The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
   `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
   exits and mask the result (see `e2e/entrypoint.sh`).

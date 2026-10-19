@@ -32,7 +32,18 @@ starts. Do not stand in for a missing piece with something else.
    one entry per `persona`.
 2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
    Then do what its work recipe asks. A definition with no `consolidator` has no review rounds: the loop
-   ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds.
+   ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds. It runs no review
+   when its work changed nothing but its own report, recorded test evidence and documentation, and stops reviewing
+   after a pass whose fixes changed nothing else (an edit to the plan, the ticket, code or tests is a change, and a
+   comment-only edit to code or tests is documentation).
+   A recipe that says its section file is named under REPORT SECTION in your turn instructions means a
+   binding with a `sections_dir`: a hand run has no turn instructions, so the file is `<sections_dir>/<step>.md`
+   for slice 1 and `<sections_dir>/<step>.slice-<n>.md` for a later slice, where `<step>` is the flow step's
+   id — for example `impl-report/red.md` and `impl-report/red.slice-2.md`. Rewrite it whole each time. Then
+   rebuild the bound document from every section file in that folder, by slice and then in flow-step order,
+   with any `_earlier.md` first, because no engine assembles it for you. The rebuilt document starts with the line
+   `<!-- agent-terminal:assembled-report -->`, which marks it as assembled, so a later assembly by the app
+   replaces it instead of keeping it as hand-written text.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives
@@ -85,6 +96,8 @@ starts. Do not stand in for a missing piece with something else.
    A file of that kind found elsewhere in the repository is not one of this work's flow documents, so never read
    it as one; it is still work when the ticket names it as something to change.
    The repository's standards and configuration are read where they live.
+   Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only
+   the targeted tests that checking a specific finding needs.
    Do not change any file: report your findings, and the fixer makes every change.
    Judge each finding against this definition of a NIT, the one the fixer applies too:
 

@@ -3,15 +3,15 @@ import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { CLEAN_RULE_LINES } from '../../src/shared/consolidatorOutput';
 import { composeConsolidatePrompt } from '../../src/main/consolidateTurn';
+import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
 import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
-import { DISPOSITIONS, DOCUMENTATION_DISPOSITION, NIT_DISPOSITION } from '../../src/shared/roundReport';
+import { DISPOSITIONS, NIT_DISPOSITION } from '../../src/shared/roundReport';
 import {
   BUNDLED_LOOPS_ROOT,
   REPO_DIR,
   bundledCharterFiles,
   bundledConsolidatorRecipes,
   bundledGoalLoopsWithReviewers,
-  type BundledGoalLoop,
 } from '../helpers/bundledLoops';
 import { FLOOR_EXAMPLES, sendsToInvalid, statesFloorGate } from '../helpers/materialityFloor';
 import { specSection } from '../helpers/specSection';
@@ -113,51 +113,31 @@ describe("the Codex skill's judging step states the shared clean rule (#207 AC 6
   });
 });
 
-describe('groom-goal-loop stops on a pass with no findings other than NITs (#207 AC 8)', () => {
-  const groom = (): BundledGoalLoop => {
-    const found = bundledGoalLoopsWithReviewers().find((g) => g.loop === 'groom-goal-loop');
-    if (found === undefined) throw new Error('no bundled groom-goal-loop');
-    return found;
-  };
-  const surfaces: [string, () => string][] = [
-    ['its work.goal', () => groom().goal],
-    ['its prompts/work.md', () => readFileSync(groom().workRecipe, 'utf8')],
-  ];
+// #207 AC 8, AC 11 — a goal loop's stop condition is the shared no-change clause, which counts documentation as no
+// change; a NIT is dismissed, so a NIT-only pass changes nothing.
+const RETIRED_STOP_CONDITIONS = ['nothing left to fix', 'no findings other than NITs'];
 
-  it.each(surfaces)('%s says "no findings" only as "no findings other than NITs"', (_surface, text) => {
-    expect.soft(unqualifiedOccurrences(text(), 'no findings', 'other than NITs')).toEqual([]);
-    expect.soft(statesText(text(), 'no findings other than NITs')).toBe(true);
-  });
-
-  it('its prompts/work.md logs each NIT as `dismissed — nit` in groom-report.md\'s review history', () => {
-    const work = readFileSync(groom().workRecipe, 'utf8');
-    expect(sentenceStates(work, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
-  });
-});
-
-// Each goal loop whose subject is not a flow document stops on a pass whose only fixes are documentation. The
-// two exclusions grade a flow document, which is never documentation.
-const FLOW_DOCUMENT_GOAL_LOOPS = ['groom-goal-loop', 'plan-goal-loop'];
-const DOC_ONLY_EXCEPTION = `other than documentation-only fixes recorded as \`${DOCUMENTATION_DISPOSITION}\``;
-
-describe('every bundled goal loop whose subject is code ends on a documentation-only pass (#207 AC 11)', () => {
+describe('every bundled goal loop ends its review on the shared no-change clause (#207 AC 8, AC 11)', () => {
   const goalLoops = bundledGoalLoopsWithReviewers();
-  const checked = goalLoops.filter((g) => !FLOW_DOCUMENT_GOAL_LOOPS.includes(g.loop));
 
-  it('discovers both named exclusions and at least one loop to check', () => {
-    expect(goalLoops.map((g) => g.loop)).toEqual(expect.arrayContaining(FLOW_DOCUMENT_GOAL_LOOPS));
-    expect(checked.length).toBe(goalLoops.length - FLOW_DOCUMENT_GOAL_LOOPS.length);
-    expect(checked.length).toBeGreaterThan(0);
+  it.each(goalLoops.map((g) => [`${g.flow}/${g.loop}`, g.goal]))('%s work.goal states the shared clause', (_loop, goal) => {
+    expect(statesText(goal, GOAL_NO_CHANGE_CLAUSE)).toBe(true);
   });
 
-  const surfaces = checked.flatMap((g) => [
+  const surfaces = goalLoops.flatMap((g) => [
     [`${g.flow}/${g.loop} work.goal`, g.goal],
     ...g.promptFiles.map((f) => [relative(BUNDLED_LOOPS_ROOT, f), readFileSync(f, 'utf8')]),
   ]);
 
-  it.each(surfaces)('%s says "nothing left to fix" only with the documentation-only exception', (_surface, text) => {
-    expect.soft(unqualifiedOccurrences(text, 'nothing left to fix', DOC_ONLY_EXCEPTION)).toEqual([]);
-    expect.soft(statesText(text, `nothing left to fix ${DOC_ONLY_EXCEPTION}`)).toBe(true);
+  it.each(surfaces)('%s states no stop condition of its own', (_surface, text) => {
+    for (const retired of RETIRED_STOP_CONDITIONS) expect.soft(statesText(text, retired, { ignoreCase: true }), retired).toBe(false);
+  });
+
+  it("groom-goal-loop's prompts/work.md logs each NIT as `dismissed — nit` in groom-report.md's review history", () => {
+    const groom = goalLoops.find((g) => g.loop === 'groom-goal-loop');
+    expect(groom).toBeDefined();
+    const work = readFileSync(groom?.workRecipe ?? '', 'utf8');
+    expect(sentenceStates(work, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
   });
 });
 

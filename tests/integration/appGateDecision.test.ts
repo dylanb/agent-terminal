@@ -80,6 +80,7 @@ interface Recorder {
   sliceSources: string[];
   briefs: Array<{ repoDir: string; fromStep: string; text: string }>;
   briefClears: string[];
+  assembles: string[];
   order: string[];
 }
 
@@ -87,7 +88,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], order: [] };
+  const rec: Recorder = { sideEffects: [], commitSideEffects: [], accepts: [], advances: [], audits: [], errors: [], notices: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [], recordBaselines: [], reopens: [], sliceSources: [], briefs: [], briefClears: [], assembles: [], order: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
@@ -96,8 +97,13 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       ticket: over.ticket ?? null,
       bootstrap: null,
     }),
+    assembleReport: (_r, report) => {
+      rec.assembles.push(report.path);
+      rec.order.push('assemble');
+    },
     runSideEffect: async (action, ctx) => {
       rec.sideEffects.push({ action, ctx });
+      rec.order.push('side-effect');
       if (over.sideEffectThrows) throw new Error(over.sideEffectThrows);
     },
     runCommitSideEffect: async (ctx) => {
@@ -188,6 +194,38 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.advances).toEqual(['/repo']); // best-effort — the accept persisted and the flow advanced regardless
     expect(rec.accepts).toHaveLength(1);
     expect(rec.errors).toEqual([]); // not a blocking error over a successful approve
+  });
+
+  // §27.10 — a step that records an operator decision after its done-signal writes it to its section file only.
+  describe('a report assembled from step sections', () => {
+    const sectioned = { id: 'impl-report', path: '/repo/a/impl-report.md', rel: 'a/impl-report.md', sectionsDir: { path: '/repo/a/impl-report', rel: 'a/impl-report' } };
+    const withSections = { resolveDef: () => ({ ok: true as const, def: { ...defWithGate(APPROVE_MARK_READY), outputs: [sectioned] }, tierRoot: '/t', defDir: '/t/l' }) };
+
+    it('is rebuilt from its sections on approve, before any side-effect publishes it', async () => {
+      const { deps, rec } = mkDeps(withSections);
+      await approve(deps);
+      expect(rec.assembles).toEqual([sectioned.path]);
+      expect(rec.order.indexOf('assemble')).toBeLessThan(rec.order.indexOf('side-effect'));
+    });
+
+    it('is surfaced when it cannot be rebuilt, and the approve still advances', async () => {
+      const { deps, rec } = mkDeps({
+        ...withSections,
+        assembleReport: () => {
+          throw new Error('the report section a/impl-report/red.md leads outside a/impl-report');
+        },
+      });
+      await approve(deps);
+      expect(rec.errors.join('\n')).toMatch(/impl-report.*red\.md/);
+      expect(rec.audits.some((a) => a.cmd.includes('impl-report') && a.exit === 1)).toBe(true);
+      expect(rec.advances).toEqual(['/repo']);
+    });
+
+    it('is not rebuilt for a def whose outputs declare no sections', async () => {
+      const { deps, rec } = mkDeps({});
+      await approve(deps);
+      expect(rec.assembles).toEqual([]);
+    });
   });
 
   it('advances even when the approve declares no side-effect (approve is terminal regardless)', async () => {

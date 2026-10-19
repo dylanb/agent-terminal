@@ -18,9 +18,10 @@
 
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type TurnRunner } from './loopOrchestrator';
-import type { LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
+import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
+import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
@@ -129,6 +130,8 @@ export interface AppLoopEngineDeps {
   readArtifact(absPath: string): string | null;
   /** §27.10 */
   inputState(absPath: string): ChainedInputState;
+  /** §27.10 — rebuild a report from the section files its steps wrote; throws when it cannot. */
+  assembleReport(repoDir: string, report: SectionedReport): void;
   /** Persist the §27 run state (§27.10). */
   persist(repoDir: string, state: AppLoopRunState): void;
   /** Record a §25 audit event for the turn (best-effort; never aborts the turn). */
@@ -274,6 +277,8 @@ type ActiveAppTurn =
       instruction?: string;
       /** §27.10 (N6) */
       inputs?: ChainedInput[];
+      /** §27.10 */
+      reportSections?: SectionedOutput[];
       /** §27.3 */
       run: WorkRun;
       /** §27.3 */
@@ -405,6 +410,11 @@ function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId:
   };
 }
 
+/** §27.10 */
+type SectionedOutput = ArtifactBinding & { sectionsDir: NonNullable<ArtifactBinding['sectionsDir']> };
+
+const sectionedOf = (bindings: ArtifactBinding[]): SectionedOutput[] => bindings.filter((b): b is SectionedOutput => b.sectionsDir !== undefined);
+
 /** The reconstructable identity a chained turn is built for — the bound loop, its flow step, and the repo. */
 interface TurnCtx {
   repoDir: string;
@@ -513,6 +523,7 @@ function activeTurnFor(
     run: workRunFor(def, opts?.goal),
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
+    ...(sectionedOf(def.outputs).length > 0 ? { reportSections: sectionedOf(def.outputs) } : {}),
   };
 }
 
@@ -561,8 +572,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     | { kind: 're-enter'; ids: string[] }
     | { kind: 'reconstruct'; ids: string[] };
 
+  /** §27.10 */
+  const assembleReports = (repoDir: string, reports: SectionedOutput[]): void => {
+    for (const r of reports) {
+      try {
+        deps.assembleReport(repoDir, { path: r.path, sectionsDir: r.sectionsDir });
+      } catch (e) {
+        deps.audit(repoDir, `§27 report ${r.id} could not be assembled: ${errMsg(e)}`, 1);
+        deps.emitError(`${r.id} could not be assembled from its step sections: ${errMsg(e)}`);
+      }
+    }
+  };
+
   const chainFor = (repoDir: string, stepId: string, def: LoopDefV2, occasion: CarryOccasion): ChainedInput[] => {
     const bindings = occasion.kind === 'advance' ? def.inputs : def.inputs.filter((i) => occasion.ids.includes(i.id));
+    assembleReports(repoDir, sectionedOf(bindings));
     const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
     const announces = occasion.kind !== 'reconstruct';
     if (occasion.kind === 'advance' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
@@ -1064,6 +1088,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
+  /** §27.10 */
+  const sectionTargets = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, reports: SectionedOutput[]): ReportSectionTarget[] =>
+    reports.flatMap((r) => {
+      const file = sectionFile(r.sectionsDir, turn.stepId, deps.currentSlice(turn.repoDir));
+      return file === null ? [] : [{ id: r.id, sectionRel: file.rel, reportRel: r.rel }];
+    });
+
   /** §27.3/§27.4 */
   const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, ticket: number | null): string[] => {
     const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
@@ -1186,6 +1217,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
                   : null,
         ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
         ...(active.inputs !== undefined ? { inputs: active.inputs } : {}),
+        ...(active.reportSections !== undefined ? { reportSections: sectionTargets(active, active.reportSections) } : {}),
         ...briefFor(active),
         ...(workBrief !== undefined ? { loopBrief: workBrief } : {}),
         ...(active.run.kind === 'goal'
@@ -1267,6 +1299,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         if (end.kind === 'progress' && endGoalLegShort(active, active.run, end.progress)) return;
       }
       if (active.phase === 'work') {
+        assembleReports(active.repoDir, active.reportSections ?? []);
         // §28.5.3/§28.8.3 — a completed GREEN work turn records its (non-blocking) changed-test flag from the
         // gate's stash before advancing.
         drainChangedTestsStash(active);

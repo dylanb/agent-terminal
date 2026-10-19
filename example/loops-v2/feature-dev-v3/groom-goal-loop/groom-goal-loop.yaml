@@ -4,7 +4,7 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: groomed-ticket
-  goal: the latest review-plan-intent pass on the groomed ticket returned no findings other than NITs, and groom-report.md logs every decision the groomer made and every finding it fixed or dismissed, each NIT as `dismissed — nit` in its review history
+  goal: "no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report, its recorded test evidence and documentation (an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation), and groom-report.md logs every decision the groomer made and every finding it fixed or dismissed, each NIT as `dismissed — nit` in its review history"
   checkpoint:
     passes: 3
 reviewers:

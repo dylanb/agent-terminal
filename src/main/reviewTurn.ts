@@ -201,6 +201,8 @@ export function reviewerHandoffLines(req: ReviewerHandoffReq): string[] {
   }
   lines.push(
     ...flowDocumentLines('described-elsewhere').slice(1),
+    'Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only',
+    'the targeted tests that checking a specific finding needs.',
     'Do not change any file: report your findings, and the fixer makes every change.',
     'Judge each finding against this definition of a NIT, the one the fixer applies too:',
     '',
@@ -295,12 +297,38 @@ function polishDeferLines(): string[] {
   ];
 }
 
+const GOAL_UNCHANGED = "changed nothing but this step's report, its recorded test evidence and documentation";
+const GOAL_CHANGE_RULE = 'an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation';
+
+/** §27.3/§27.6 */
+export const GOAL_NO_CHANGE_CLAUSE = `no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, ${GOAL_UNCHANGED} (${GOAL_CHANGE_RULE})`;
+
+/** §27.3/§27.6 */
+function goalPassLines(): string[] {
+  return [
+    '',
+    'PASSES — run a review pass only over a change.',
+    `- When your work ${GOAL_UNCHANGED}, run no review at all.`,
+    `- After a pass, when its fixes ${GOAL_UNCHANGED} — every finding was dismissed, every fix was`,
+    `  \`${DOCUMENTATION_DISPOSITION}\`, or the only edit was to the report or its test evidence — the review is done: do not`,
+    `  spawn the reviewers again. ${GOAL_CHANGE_RULE[0].toUpperCase()}${GOAL_CHANGE_RULE.slice(1)}.`,
+    '- Otherwise run another pass. The first pass runs every reviewer. A later pass runs only the reviewers whose',
+    '  findings you fixed and any whose area your fixes touched; it runs every reviewer again only when a fix changes',
+    '  the acceptance criteria, the scope, the approach or the slices the work answers to.',
+    '- In any pass, skip a reviewer whose lens the change cannot touch, such as accessibility when no user-interface',
+    '  file changed, and log each skip, with its reason, in the review history. That is the only reason the first',
+    '  pass may leave a reviewer out.',
+    `The review ends when ${GOAL_NO_CHANGE_CLAUSE}.`,
+  ];
+}
+
 /** §27.3/§27.4/§27.8 */
 export function composeGoalReviewLines(roster: RosterEntry[], handoff: ReviewerHandoffReq, polish: PolishPolicy | undefined, kind: AgentKind): string[] {
   return [
     '',
-    'REVIEWS — this turn reviews its own work with the reviewers below, as often as your instructions say.',
+    'REVIEWS — this turn reviews its own work with the reviewers below, by the pass rules below.',
     ...reviewerSpawnLines(handoff, 'per the criterion below', kind),
+    ...goalPassLines(),
     ...fixCriterionLines(),
     '',
     'A finding that only disagrees with a decision you made and logged, inside your decision boundary, is',

@@ -23,6 +23,7 @@ import {
 } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { probeChainedInput } from '../../src/main/chainedInputProbe';
+import { assembleReportOnDisk } from '../../src/main/reportSections';
 import type { ArtifactBinding, LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
@@ -213,6 +214,9 @@ export class AppLoopEngineHarness {
       readRecipe: () => '# work turn\nProduce the plan.',
       readArtifact: (p) => this.readArtifact(p),
       inputState: probeChainedInput,
+      assembleReport: (_repoDir, report) => {
+        assembleReportOnDisk(report, [STEP]);
+      },
 
       persist: persistOverride ?? ((repoDir, state) => writeAppLoopState(repoDir, state, FIXED)),
       audit: this.audit,

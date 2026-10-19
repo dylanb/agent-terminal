@@ -1,7 +1,7 @@
 # plan-goal-loop — work turn
 
-Plan the linked ticket into the `plan` artifact, polish it, review it, and fix it until every reviewer's latest
-pass finds nothing left to fix, deciding every question yourself as the brief says.
+Plan the linked ticket into the `plan` artifact, polish it, review it, and fix it until the review ends,
+deciding every question yourself as the brief says.
 
 1. Read the `groom-intent` and `groomed-ticket` inputs, then the issue with its comments, and the code, spec and
    standards it touches. Read `loop-capabilities.yaml` for the repo's `test_command`, `build_command` and
@@ -10,8 +10,10 @@ pass finds nothing left to fix, deciding every question yourself as the brief sa
 3. Polish the draft with the plan-polish method under **Polishing the plan** below.
 4. Review the plan with the reviewers below, then fix or dismiss every finding, logging each in
    `## Review history` and each decision a fix needs in `## Planner decisions`. When a fix changes the plan's
-   approach, run the method's passes again over what it changed.
-5. Repeat step 4 until every reviewer's latest pass finds nothing left to fix.
+   approach, run the method's passes again over what it changed. The first pass runs every reviewer. A later pass
+   runs only the reviewers whose findings you fixed and any whose area your fixes touched, and every
+   reviewer again only when a fix changes the plan's acceptance criteria, scope, approach or slices.
+5. Repeat step 4 until the review ends, as the review rules in these instructions say.
 
 # The plan
 
@@ -37,6 +39,9 @@ scriptable per turn.
 ## Slice plan
 
 Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.
+Schedule every edit to or deletion of an existing test that a slice needs in that slice's RED step, never its GREEN
+or refactor step: the engine halts an `auto` GREEN or refactor gate on any test file changed since RED, even one the
+plan asked for.
 Size the slices before enumerating them (see **Slice sizing** above), then enumerate the impl-slices in the
 `## Impl-slices` block under **Machine-read plan blocks** above.
 

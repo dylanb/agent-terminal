@@ -14,7 +14,7 @@ import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
+import { GOAL_NO_CHANGE_CLAUSE, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleRoundReport, NIT_DISPOSITION } from '../../src/shared/roundReport';
 import { NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
 import { sentenceStates, statesText } from '../helpers/statesText';
@@ -5694,9 +5694,9 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await inputModal().locator('.confirm').click();
   await expect(inputModal()).toHaveCount(0);
   // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .toContain('176');
+  const persistedTicket = (): unknown =>
+    (load(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')) as { inputs?: Record<string, unknown> } | null)?.inputs?.ticket;
+  await expect.poll(persistedTicket, { timeout: 10_000 }).toBe('176');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
@@ -5705,9 +5705,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
   await expect(flowStation(1).locator('.nm')).toHaveText('groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .not.toContain('176');
+  await expect.poll(persistedTicket, { timeout: 10_000 }).toBeUndefined();
 
   await flowControl().click(); // Advance → plan again: because the input was cleared, the modal re-prompts
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
@@ -7892,10 +7890,10 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   expect(checks).not.toContain('exit=1');
   expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
-  // #207 AC 8 — the goal stops on a pass whose only findings are NITs, and the session is told what a NIT is and
-  // where each NIT dismissal is logged.
+  // #207 AC 8 — the goal stops on the shared no-change clause, and the session is told what a NIT is and where each
+  // NIT dismissal is logged.
   const groomPrompt = readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'));
-  for (const goal of goals) expect.soft(statesText(goal, 'no findings other than NITs'), goal).toBe(true);
+  for (const goal of goals) expect.soft(statesText(goal, GOAL_NO_CHANGE_CLAUSE), goal).toBe(true);
   expect.soft(statesText(groomPrompt, NIT_DEFINITION_LINES)).toBe(true);
   expect.soft(sentenceStates(groomPrompt, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
 
@@ -8047,8 +8045,10 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
   const cfg = seedV3Config('agent-term-e2e-implv3-cfg-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-implv3-bin-', { realCommitOps: true });
+  // §27.10 — each step rewrites its own section file whole, counting its runs; the app assembles impl-report.md.
   const report = (step: string): string =>
-    `mkdir -p ${V3_ART}; printf '%s\\n' '## ${step}' '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' >> ${V3_ART}/impl-report.md`;
+    `mkdir -p ${V3_ART}/impl-report; n=$(( $(cat .agent-terminal/runs-${step} 2>/dev/null || echo 0) + 1 )); echo $n > .agent-terminal/runs-${step}; printf '%s\\n' '## ${step}' "run $n of ${step}" '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' > ${V3_ART}/impl-report/${step}.md`;
+  const implReport = (): string => readIf(join(repo, V3_ART, 'impl-report.md'));
   const finish = (step: string, cmd: string): string => `${cmd}; ${report(step)}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
   const result = (outcome: Parameters<typeof examplePhaseResult>[0], path: string, build?: 'built'): string =>
     writePhaseResultSh(path, examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
@@ -8069,7 +8069,7 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
     {
       // The operator narrows the plan to 1 impl-slice in the approval session, so approving it re-sources the count.
       'plan-approve': `printf %s '${b64(`# plan\n\n${exampleSlicePlan(1)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')])}`,
-      'impl-approve': writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')]),
+      'impl-approve': `${report('impl-approve')}; ${writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
     },
   );
   app = await electron.launch({
@@ -8102,8 +8102,12 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.includes('.agent-terminal/loop/goal-progress.'))).toHaveLength(2);
   for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) {
     expect(goals.some((g) => g.includes(`turn-done:work-${step})`)), step).toBe(true);
-    expect(readIf(join(repo, V3_ART, 'impl-report.md'))).toContain(`## ${step}`);
+    expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toContain(`${V3_ART}/impl-report/${step}.md`);
   }
+  // §27.10 — the app assembled impl-report.md from the section files, in flow order, handing it to each next step.
+  const stepsInReport = (): string[] => implReport().split('\n').filter((l) => l.startsWith('## ')).map((l) => l.slice(3));
+  await expect.poll(stepsInReport, { timeout: EPIC_GATE_WAIT.gate }).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  expect(implReport()).toContain('run 1 of red');
   // §27.12 v2.202 — each session ran the real bundled check its prompt handed it, after writing its file, and
   // every check passed: each goal session's progress and result.
   const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
@@ -8135,6 +8139,13 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   for (const step of ['red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen')).slice(promptsAtReopen)).toContain(BRIEF);
   await atImplApprove();
+  // Each step that ran again replaced only its own section; infra's first and only run is still there.
+  expect(stepsInReport()).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  for (const step of ['red', 'green', 'refactor', 'integration-slice', 'impl-approve']) {
+    expect(implReport()).toContain(`run 2 of ${step}`);
+    expect(implReport()).not.toContain(`run 1 of ${step}`);
+  }
+  expect(implReport()).toContain('run 1 of infra');
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');

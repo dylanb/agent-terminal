@@ -5,6 +5,8 @@ import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { fixCriterionLines, reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/reviewTurn';
+import { ASSEMBLED_MARKER, sectionFile } from '../../src/main/reportSections';
+import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 
 // §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
 // agent name and loop path it gives as an example is checked against the bundle, so a renamed convention breaks
@@ -85,6 +87,17 @@ describe('the bundled Codex skill', () => {
     const skilled = skillFixCriterionLines();
     expect.soft([...engine].filter((line) => !skilled.has(line)), 'engine lines missing from the skill').toEqual([]);
     expect.soft([...skilled].filter((line) => !engine.has(line)), 'skill lines the engine does not have').toEqual([]);
+  });
+
+  it('tells a hand run, which has no engine to name or assemble them, where a step writes its report section and how the report is rebuilt', () => {
+    const dir = { path: path.resolve('/repo/impl-report'), rel: 'impl-report' };
+    const text = skill().replace(/\s+/g, ' ');
+    expect(text).toContain('`sections_dir`');
+    expect(text).toContain(REPORT_SECTION_HEADING);
+    expect(text).toContain(`\`${sectionFile(dir, 'red', 1)?.rel}\``);
+    expect(text).toContain(`\`${sectionFile(dir, 'red', 2)?.rel}\``);
+    expect(text).toMatch(/rebuild the bound document from every section file/);
+    expect(text).toContain(`starts with the line \`${ASSEMBLED_MARKER}\``);
   });
 
   it('names the Codex home directories the installer writes the loops and the reviewer agents to', () => {
