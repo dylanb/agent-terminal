@@ -38,6 +38,8 @@ inputs:
     path: groom-intent.md
   - id: impl-report
     path: impl-report.md
+    sections: impl-report
 outputs:
   - id: impl-report
     path: impl-report.md
+    sections: impl-report

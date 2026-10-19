@@ -1566,6 +1566,7 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),
     recordBaseline: () => {},
     persistAccept: () => {},
+    assembleReport: () => {},
     advanceFlow: (r) => void over.advances?.push(r),
     audit: () => {},
     emitError: () => {},

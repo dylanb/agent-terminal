@@ -57,9 +57,11 @@ question.
 
 ## The report
 
-The operator reads every step's report once, at the end of the implementation. Add one section for this step to
-`impl-report.md` among this work's flow documents, headed `## refactor — slice <n>`, and keep it current as you work. Leave
-every other section as it is; when this step runs again, replace its own section. Under it:
+The operator reads every step's report once, at the end of the implementation, in `impl-report.md` among this
+work's flow documents. Write this step's section, headed `## refactor — slice <n>`, to its own section file, named under
+REPORT SECTION in your turn instructions, and keep it current as you work: each time you update it, rewrite the
+whole file. The app assembles `impl-report.md` from every step's section file, so never edit it; when this step
+runs again, its new section replaces its old one. Under the heading:
 
 - `### Needs your call` — each item outside the decision boundary: what it is, the options, what each costs
   and gains, and your recommendation. `None.` when there is none.

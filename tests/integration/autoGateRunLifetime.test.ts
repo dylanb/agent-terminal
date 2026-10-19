@@ -219,6 +219,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: 'a'.repeat(40), branch: 'main' }),
     recordBaseline: () => {},
     persistAccept: (dir, state) => writeAppLoopState(dir, state, FIXED),
+    assembleReport: () => {},
     advanceFlow: stepScopedAdvance((dir) => flow.state(dir).stepName, (dir) => void flow.advance(dir)),
     audit: (dir, cmd, exit) => recorder.recordCommand(dir, 'gate', cmd, exit),
     emitError: () => {},

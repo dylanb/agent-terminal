@@ -36,8 +36,10 @@ inputs:
     path: groom-intent.md
   - id: impl-report
     path: impl-report.md
+    sections: impl-report
 outputs:
   - id: red-result
     path: red-result.json
   - id: impl-report
     path: impl-report.md
+    sections: impl-report

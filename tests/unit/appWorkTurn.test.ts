@@ -485,3 +485,34 @@ describe('composeAppWorkPrompt — the loop brief leads the work turn (§27.3)',
     expect(composeAppWorkPrompt(base).startsWith('# work turn')).toBe(true);
   });
 });
+
+describe('composeAppWorkPrompt — a step writes its own section of an assembled report (§27.10)', () => {
+  const base = {
+    recipeBody: '# work turn\nImplement the slice.',
+    turnKey: 'work-red',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    completion: null,
+  };
+  const section = {
+    id: 'impl-report',
+    sectionRel: '.agent-terminal/loop/artifacts/impl-report/red.slice-2.md',
+    reportRel: '.agent-terminal/loop/artifacts/impl-report.md',
+  };
+
+  it('names the file this step writes its section to, and to rewrite it whole each time', () => {
+    const prompt = composeAppWorkPrompt({ ...base, reportSections: [section] });
+    expect(prompt).toContain(section.sectionRel);
+    expect(prompt).toMatch(/rewrite the whole file/i);
+    expect(prompt).toMatch(/never (patch|edit) it in place/i);
+  });
+
+  it('tells the step never to write the assembled report, which the app rebuilds from every section', () => {
+    const prompt = composeAppWorkPrompt({ ...base, reportSections: [section] });
+    expect(prompt).toMatch(new RegExp(`never edit ${section.reportRel.replace(/[.]/g, '\\.')}`, 'i'));
+    expect(prompt).toMatch(/rebuilds it from every step's section file/i);
+  });
+
+  it('says nothing about sections for a step whose outputs declare none', () => {
+    expect(composeAppWorkPrompt(base)).not.toContain('impl-report');
+  });
+});

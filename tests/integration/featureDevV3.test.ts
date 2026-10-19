@@ -154,6 +154,16 @@ describe('each implementation step is a goal session that reviews its own work (
     if (name !== 'infra-loop') expect(def.inputs.map((i) => i.id)).toContain('impl-report');
   });
 
+  it.each([...CODE_LOOPS, 'impl-approve-loop'])('%s writes its part of the implementation report to its own section file, and reads the report assembled from every section', (name) => {
+    const def = loop(name);
+    const reports = [...def.inputs, ...def.outputs].filter((b) => b.id === 'impl-report');
+    expect(def.outputs.map((o) => o.id)).toContain('impl-report');
+    for (const b of reports) expect(b.sections?.rel, `${name} ${b.rel}`).toMatch(/\/artifacts\/impl-report$/);
+    const p = prompt(def).replace(/\s+/g, ' ');
+    expect(p).not.toMatch(/(section for this step to|record it in) `impl-report\.md`/);
+    expect(p).toMatch(/section file/);
+  });
+
   it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {
     const p = prompt(loop(name));
     expect(p).toContain('## Decision boundary');

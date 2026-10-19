@@ -137,6 +137,7 @@ import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type A
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
+import { assembleReportOnDisk } from './reportSections';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import { createAutoGate, defResolutionOf } from './autoGate';
@@ -476,6 +477,9 @@ async function createWindow(): Promise<void> {
       }
     },
     inputState: probeChainedInput,
+    assembleReport: (repoDir, report) => {
+      assembleReportOnDisk(report, flow.state(repoDir).steps);
+    },
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
     // §27.5 — the round-keyed report location: the confined absolute path the engine reads back and the
     // repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).
@@ -1002,6 +1006,9 @@ async function createWindow(): Promise<void> {
     runSideEffect: createRealAppGateGitHub(repoKey),
     runCommitSideEffect: createRealAppGateCommit(repoKey),
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+    assembleReport: (repoDir, report) => {
+      assembleReportOnDisk(report, flow.state(repoDir).steps);
+    },
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
     // §28.4.1/§28.8.1 — every approve whose def declares the `plan` output re-sources `slices`, the last one
     // winning: in feature-dev-v2 that is the plan-polish approve, so the polished plan decides the count the
