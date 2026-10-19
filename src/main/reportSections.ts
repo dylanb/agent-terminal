@@ -68,6 +68,15 @@ function readIfPresent(file: string): string | null {
   }
 }
 
+function realFolderIfPresent(dir: string): string | null {
+  try {
+    return realpathSync(dir);
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return null;
+    throw e;
+  }
+}
+
 function writeWhole(file: string, text: string): void {
   if (!atomicWriteFileSync(file, text, { mode: 0o644 })) throw new Error(`${path.basename(file)} could not be written: its folder is not a real directory`);
 }
@@ -89,7 +98,8 @@ export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonl
   }
   if (sections.length === 0) return 'nothing-to-assemble';
   const reportName = path.basename(report.path);
-  const leaf = confinedRealPathResult(realpathSync(path.dirname(report.path)), report.path);
+  const folder = realFolderIfPresent(path.dirname(report.path));
+  const leaf = folder === null ? ({ ok: false, cause: 'unresolvable' } as const) : confinedRealPathResult(folder, report.path);
   if (!leaf.ok && leaf.cause === 'escapes') throw new Error(`the report ${reportName} leads outside its folder`);
   if (earlier === null && leaf.ok) {
     const existing = readIfPresent(leaf.path);

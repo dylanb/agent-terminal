@@ -82,6 +82,13 @@ describe('assembleReportOnDisk', () => {
     expect(existsSync(report.path)).toBe(false);
   });
 
+  it('writes the report into its own folder when that folder does not exist yet', () => {
+    const nested = { ...report, path: join(root, 'reports', 'impl-report.md') };
+    write('red', 1, '## red — slice 1\nred work\n');
+    expect(assembleReportOnDisk(nested, ORDER)).toBe('assembled');
+    expect(readFileSync(nested.path, 'utf8')).toContain('red work');
+  });
+
   it('reports a section file that cannot be resolved as unresolvable, not as leading outside its folder', () => {
     mkdirSync(report.sectionsDir.path, { recursive: true });
     symlinkSync(join(root, 'missing.md'), sectionFile(report.sectionsDir, 'red', 1)!.path);
