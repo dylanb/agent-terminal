@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: commits
   completion: refactor
-  goal: "the tests still pass, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's refactor section with its decisions, review history and test evidence"
+  goal: "the tests still pass, every reviewer's latest pass found nothing left to fix other than documentation-only fixes recorded as `fixed — documentation`, and impl-report.md holds this slice's refactor section with its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:

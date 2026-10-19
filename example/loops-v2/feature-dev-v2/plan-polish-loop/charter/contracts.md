@@ -20,10 +20,8 @@ IPC payloads, flag names — each described once and consistently wherever the p
 literal values matching across surfaces. Hold proposed API/schema changes to their versioning and
 backward-compatibility contract. Flag a shape the plan describes two different ways.
 
-Raise a finding only where acting on it changes an observable outcome — a shape two surfaces would read
-differently, a value that would not match at runtime. A citation already correct where a more-precise one
-would not change the meaning, or an equal-quality rewording, is not a finding; flagging it only drives a
-rewrite that manufactures the next round's work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

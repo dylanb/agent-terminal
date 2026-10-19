@@ -41,7 +41,7 @@ issue link instead.
 ## Decide, then report
 
 You work as one session without the operator: do the work, review it with the reviewers below, fix or dismiss
-what they find, and repeat until a review pass finds nothing left to fix. Never stop to ask the operator
+what they find, and repeat until a review pass finds nothing left to fix other than documentation-only fixes recorded as `fixed — documentation`. Never stop to ask the operator
 anything.
 
 The operator settled the intent before you started: the ticket, the plan they approved, and the `groom-intent`

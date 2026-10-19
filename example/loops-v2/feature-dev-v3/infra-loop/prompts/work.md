@@ -40,6 +40,6 @@ settled it. Write `None.` under an empty heading.
 2. Review it with the reviewers below. The first pass runs every reviewer. A later pass runs the reviewers
    whose findings you fixed, and any whose area your fixes touched.
 3. Fix or dismiss every finding, and log each in the report.
-4. Repeat steps 2 and 3 until a review pass finds nothing left to fix.
+4. Repeat steps 2 and 3 until a review pass finds nothing left to fix other than documentation-only fixes recorded as `fixed — documentation`.
 5. Run the tests the repository requires before a pull request and confirm they pass. Record the commands and
    their results under `### Test evidence`.

@@ -26,7 +26,6 @@ const POLISH_METHOD_MARKERS = [
   '## Anti-patterns',
 ];
 
-const MATERIALITY_MARKER = 'Raise a finding only where';
 const SCOPE_MARKER = 'beyond what the ticket requires';
 const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
@@ -39,7 +38,6 @@ const SAME_GUARD_MARKER = 'another hole in the same';
 
 describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
   for (const f of charters) {
-    it(`${f} carries the materiality floor`, () => expect(read(f)).toContain(MATERIALITY_MARKER));
     it(`${f} treats additions beyond the ticket as a finding`, () => expect(read(f)).toContain(SCOPE_MARKER));
   }
 

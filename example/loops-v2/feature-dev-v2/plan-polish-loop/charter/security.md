@@ -26,10 +26,8 @@ plausible path across one of those boundaries; an attack outside that scope is n
 one matters, raise it as `needs a human` so the operator decides whether the scope widens — never grow
 the plan a new defense for it.
 
-Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
-two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
-more-precise citation that would not change the meaning, or a defensible authoring choice the ticket does
-not require is not a finding; flagging it only drives a rewrite that manufactures the next round's work.
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
 Judge the work against what the ticket requires. Do not ask for work beyond what the ticket requires:
 behavior, hardening, or structure the acceptance criteria and the repo's stated standards do not call for

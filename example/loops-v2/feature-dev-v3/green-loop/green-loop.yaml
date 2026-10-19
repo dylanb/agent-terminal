@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: green-result
   completion: green
-  goal: "the tests and the build pass with the RED tests unchanged, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's green section with its decisions, review history and test evidence"
+  goal: "the tests and the build pass with the RED tests unchanged, every reviewer's latest pass found nothing left to fix other than documentation-only fixes recorded as `fixed — documentation`, and impl-report.md holds this slice's green section with its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:

@@ -4,7 +4,7 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: commits
-  goal: "the full suite the repository requires before a pull request passes, including the end-to-end tests, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this step's section with its decisions, review history and test evidence"
+  goal: "the full suite the repository requires before a pull request passes, including the end-to-end tests, every reviewer's latest pass found nothing left to fix other than documentation-only fixes recorded as `fixed — documentation`, and impl-report.md holds this step's section with its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:

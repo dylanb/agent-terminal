@@ -28,6 +28,10 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 
 Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash; macOS + Linux, no `jq`) — **never hand-roll a poll.** The script's header documents the two non-obvious traps it removes (the Copilot login differs by API surface; a wrong poll predicate is indistinguishable from "not posted yet"). If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
 
+## Pushing to a branch that has a PR
+
+On every push to a branch that has a PR, bring the PR description's test evidence and history up to date in the same step — a description that still reports an earlier push's tests misleads every reviewer who reads it.
+
 ## Architecture (orientation only — details in the spec)
 
 - `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer. The flow **audit recorder** (§25) also lives here (`auditRecorder.ts` + `auditPaths.ts`): observe-only, best-effort, it writes each run's append-only YAML under `~/.agent-terminal/audit/` and never throws into the flow path.

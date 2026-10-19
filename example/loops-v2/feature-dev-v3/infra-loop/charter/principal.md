@@ -25,9 +25,6 @@ an `Operator decision (<date>): …` needs a human. A small capability that woul
 slices a recurring reviewer judgment and is missing is a finding to add; one whose value lies only outside
 this ticket belongs under `## Follow-up proposals`.
 
-Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
-two surfaces read, or whether the next reader can follow the artifact. A citation already correct where a
-more-precise one would not change the meaning, an equal-quality rewrite of already-correct code, or a
-defensible authoring choice the ticket does not require is not a finding; flagging it only drives a rewrite
-that manufactures the next round's work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.
 
