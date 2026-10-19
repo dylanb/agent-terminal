@@ -172,6 +172,26 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
     }
   });
 
+  it.each([
+    [{}, 'agent-terminal-e2e-node_modules'],
+    [{ E2E_NODE_MODULES_VOLUME: 'agent-terminal-e2e-node_modules-mine' }, 'agent-terminal-e2e-node_modules-mine'],
+  ])('mounts the node_modules cache volume the run names, so concurrent runs from two checkouts need not share one (%o)', (env, volume) => {
+    const bin = fakeBin(['podman']);
+    try {
+      const r = spawnSync('bash', ['scripts/e2e-podman.sh'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: `${bin.dir}:${process.env.PATH}`, ...env },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      const runLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('podman [run]')) ?? '';
+      expect(runLine).toContain(`[${volume}:/work/node_modules]`);
+    } finally {
+      rmSync(bin.dir, { recursive: true, force: true });
+    }
+  });
+
   it('runs exactly the selected tests with a JSON report into the I/O directory', () => {
     const bin = fakeBin(['pnpm', 'Xvfb', 'sleep']);
     const io = mkdtempSync(join(tmpdir(), 'red-check-io-'));

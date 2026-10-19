@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE=agent-terminal-e2e
-VOLUME=agent-terminal-e2e-node_modules
+VOLUME="${E2E_NODE_MODULES_VOLUME:-agent-terminal-e2e-node_modules}"
 FILTER="${1:-}"
 
 # Electron + Chromium + Xvfb need more than the 2 GiB default podman machine. Warn loudly
