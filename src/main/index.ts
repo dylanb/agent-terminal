@@ -95,6 +95,7 @@ import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding'
 import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
+import { createAgentQuestion } from './agentQuestion';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { implSliceCount } from '../shared/slicePlan';
 import { readTurnDone, watchTurnDone } from './turnDoneFile';
@@ -137,6 +138,7 @@ import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type A
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
+import { assembleReportOnDisk } from './reportSections';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import { createAutoGate, defResolutionOf } from './autoGate';
@@ -365,6 +367,10 @@ async function createWindow(): Promise<void> {
     };
   };
   let lifecycle: FlowLifecycle;
+  const agentQuestion = createAgentQuestion({
+    readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    inject: (text) => inject(text, { submit: true }),
+  });
   // §27.9.1 — the engine-held gate controller; it owns per-step gate authority from Start to run end.
   const autoGateTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let nextAutoGateTimer = 0;
@@ -392,6 +398,8 @@ async function createWindow(): Promise<void> {
       autoGateTimers.delete(h.id);
     },
     decisionBoundMs: config.autoGateDecisionMs,
+    askAgentWhy: (question) => agentQuestion.ask(question),
+    withdrawAgentQuestion: () => agentQuestion.withdraw(),
   });
   const observedResolveDef = composeObservedResolveDef(appDefContext);
   const appEngine = createAppLoopEngine({
@@ -476,6 +484,9 @@ async function createWindow(): Promise<void> {
       }
     },
     inputState: probeChainedInput,
+    assembleReport: (repoDir, report) => {
+      assembleReportOnDisk(report, flow.state(repoDir).steps);
+    },
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
     // §27.5 — the round-keyed report location: the confined absolute path the engine reads back and the
     // repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).
@@ -523,6 +534,7 @@ async function createWindow(): Promise<void> {
   // the engine exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => {
     appEngine.onInjectable();
+    agentQuestion.onInjectable();
   };
   // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§27.12): a streaming turn
   // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
@@ -1002,6 +1014,9 @@ async function createWindow(): Promise<void> {
     runSideEffect: createRealAppGateGitHub(repoKey),
     runCommitSideEffect: createRealAppGateCommit(repoKey),
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+    assembleReport: (repoDir, report) => {
+      assembleReportOnDisk(report, flow.state(repoDir).steps);
+    },
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
     // §28.4.1/§28.8.1 — every approve whose def declares the `plan` output re-sources `slices`, the last one
     // winning: in feature-dev-v2 that is the plan-polish approve, so the polished plan decides the count the

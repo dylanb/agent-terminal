@@ -5,7 +5,8 @@ import type { FlowAutoGateView } from '../shared/ipc';
 import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
-import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { composeGateQuestion, type GateStop } from '../shared/gateQuestion';
+import { displaySafeEcho, MAX_ECHOED_PATH_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
 import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGateDecision';
@@ -45,6 +46,10 @@ export interface AutoGateDeps {
   setTimer: (cb: () => void, ms: number) => AutoGateTimer;
   clearTimer: (handle: AutoGateTimer) => void;
   decisionBoundMs: number;
+  /** §27.9.1 N9b.10 */
+  askAgentWhy: (question: string) => void;
+  /** §27.9.1 N9b.10 */
+  withdrawAgentQuestion: () => void;
 }
 
 export interface AutoGate {
@@ -119,6 +124,7 @@ interface AutoRun {
   deciding: Deciding | null;
   hung: GateKey | null;
   haltShown: (GateKey & { reasons: Reason[] }) | null;
+  asked: GateKey | null;
 }
 
 const sameGate = (a: GateKey | null, step: string, turnKey: string, gateSeq: number): boolean =>
@@ -186,8 +192,17 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const clearFailedAt = (run: AutoRun, step: string): boolean =>
     run.haltShown?.step === step && run.haltShown.reasons.some((r) => r.reason === 'interrupt-armed' && r.detail !== undefined);
 
+  /** §27.9.1 N9b.10 */
+  const askWhy = (run: AutoRun, key: GateKey, stop: GateStop): void => {
+    if (sameGate(run.asked, key.step, key.turnKey, key.gateSeq)) return;
+    run.asked = { step: key.step, turnKey: key.turnKey, gateSeq: key.gateSeq };
+    bestEffort(() => deps.askAgentWhy(composeGateQuestion(stop)));
+  };
+
+  const withdrawQuestion = (): void => bestEffort(() => deps.withdrawAgentQuestion());
+
   /** One engine-decided entry naming every reason (§27.9.1 N9b.9), then the gate is the human's. */
-  const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean } = { write: true }): void => {
+  const halt = (repoDir: string, run: AutoRun, key: GateKey, held: Reason[], opts: { write: boolean; ask?: boolean } = { write: true }): void => {
     const failed = held.some((r) => r.reason === 'interrupt-armed') ? consume(repoDir) : null;
     const reasons = failed === null ? held : held.map((r) => (r.reason === 'interrupt-armed' ? { ...r, detail: failed } : r));
     const lr = run.loopRun;
@@ -196,6 +211,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     run.haltShown = { step: key.step, turnKey: key.turnKey, gateSeq: key.gateSeq, reasons };
     if (sameGate(run.deciding, key.step, key.turnKey, key.gateSeq)) clearDeciding(run);
     push(repoDir);
+    if (opts.ask !== false) askWhy(run, key, { kind: 'halted', step: key.step, reasons });
   };
 
   const setFailedEffect = (repoDir: string, run: AutoRun, detail: string): void => {
@@ -385,13 +401,14 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
   const frozenCheckReasons = (repoDir: string, step: string, result: ApproveTimeFrozenCheck): Reason[] => {
     if (!result.ok) return [{ reason: 'frozen-check-unavailable', detail: result.detail }];
     const changed = result.paths.length > 0;
+    const echoed = displaySafeEcho(result.paths.join(', '), MAX_ECHOED_PATH_LENGTH);
     try {
       recordChangedTests(repoDir, step, result.paths);
     } catch (e) {
       const unrecorded: Reason = { reason: 'frozen-check-unavailable', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
-      return changed ? [{ reason: 'frozen-tests-changed', detail: result.paths.join(', ') }, unrecorded] : [unrecorded];
+      return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }, unrecorded] : [unrecorded];
     }
-    return changed ? [{ reason: 'frozen-tests-changed' }] : [];
+    return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }] : [];
   };
 
   const conclude = (repoDir: string, run: AutoRun, d: Deciding, reasons: Reason[]): void => {
@@ -458,6 +475,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       deciding: null,
       hung: null,
       haltShown: null,
+      asked: null,
     };
     for (const step of start.definition.steps) {
       if (step.kind !== 'loop' || step.loop === undefined) continue;
@@ -526,7 +544,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     const verdictHalt = verdictReason(state.verdict);
     const reasons: Reason[] = [{ reason: 'relaunched' }, ...(verdictHalt !== null ? [{ reason: verdictHalt }] : [])];
     for (const r of evaluate(repoDir, run, state.step, 'verdict')) if (!reasons.some((x) => x.reason === r.reason)) reasons.push(r);
-    halt(repoDir, run, key, reasons, { write: !written });
+    halt(repoDir, run, key, reasons, { write: !written, ask: false });
   };
 
   const runFor = (repoKey: string): AutoRun | undefined => runs.get(repoKey) ?? rebuild(repoKey);
@@ -574,6 +592,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       if (run !== undefined) persist(repoKey, run);
     },
     endRun(repoKey) {
+      withdrawQuestion();
       const run = runs.get(repoKey);
       if (run === undefined) return;
       if (run.deciding !== null) run.deciding.ended = true;
@@ -583,6 +602,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     beginLoopRun(repoKey, step) {
       const run = runFor(repoKey);
       if (run === undefined) return;
+      withdrawQuestion();
       run.loopRun = { step, endedInError: false, acceptedFailure: false, needsAHuman: false, recorded: new Set() };
       run.atRunEnd = false;
       run.relaunchHalt = null;
@@ -610,7 +630,10 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
       const pg = run?.pendingGate ?? null;
       if (run === undefined || pg === null || !sameGate(pg, step, turnKey, run.gateSeq)) return;
       run.pendingGate = null;
-      if (!honouredAuto(run, step)) return;
+      if (!honouredAuto(run, step)) {
+        askWhy(run, pg, { kind: 'human-gate', step });
+        return;
+      }
       const verdictHalt = pg.cause === 'interrupt' ? 'interrupt-armed' : pg.cause === 'arm-unreadable' ? 'engine-input-missing' : verdictReason(pg.verdict);
       if (verdictHalt !== null) {
         const held = evaluate(repoDir, run, step, pg.cause);
@@ -646,6 +669,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         return;
       }
       if (event === 'retried') {
+        withdrawQuestion();
         lr.endedInError = false;
         if (!lr.acceptedFailure) lr.recorded.delete('loop-error');
         nextGate(run);
@@ -672,6 +696,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     humanDecision(repoKey, step, turnKey) {
       const run = runFor(repoKey);
       if (run === undefined) return () => {};
+      withdrawQuestion();
       const d = run.deciding;
       if (d !== null && d.step === step && (turnKey === null || d.turnKey === turnKey)) {
         d.humanAttempted = true;

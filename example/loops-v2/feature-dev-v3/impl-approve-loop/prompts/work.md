@@ -22,5 +22,6 @@ missed something, so the slice's steps run again before it comes back to them.
 
 Once you have written the done-signal, stay in this session. When the operator asks for a change, make it
 test-first as the repository's standards require, run the tests the repository requires before a pull request,
-record it in `impl-report.md` under a `## impl-approve` section as an `Operator decision (<date>): …`, and tell
-them what changed and the test result. The operator approves at the gate when they are satisfied.
+record it as an `Operator decision (<date>): …` under a `## impl-approve` heading in this step's report section
+file (named under REPORT SECTION in your turn instructions; rewrite the whole file each time), and tell them
+what changed and the test result. The operator approves at the gate when they are satisfied.

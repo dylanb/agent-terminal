@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: red-result
   completion: red
-  goal: "the slice's new tests fail by assertion while every other test passes, every reviewer's latest pass found nothing left to fix, and impl-report.md holds this slice's red section with its decisions, review history and test evidence"
+  goal: "the slice's new tests fail by assertion while every other test passes, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and this slice's red report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:
@@ -36,8 +36,10 @@ inputs:
     path: groom-intent.md
   - id: impl-report
     path: impl-report.md
+    sections_dir: impl-report
 outputs:
   - id: red-result
     path: red-result.json
   - id: impl-report
     path: impl-report.md
+    sections_dir: impl-report

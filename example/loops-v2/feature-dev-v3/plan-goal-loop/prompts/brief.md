@@ -134,8 +134,8 @@ These rules bind every edit to the plan, and take precedence over anything the p
 ## Decide, then report
 
 You work as one session without the operator: draft the plan, polish it, review it with the reviewers your
-instructions name, fix or dismiss what they find, and repeat until every reviewer's latest pass finds nothing
-left to fix. Never stop to ask the operator anything.
+instructions name, fix or dismiss what they find, and repeat until the review ends, as the review rules in these instructions say.
+Never stop to ask the operator anything.
 
 The operator settled the intent before you started: the groomed ticket they approved, and the `groom-intent`
 input, whose `## Decision boundary` names what may be decided without them. Read that boundary as covering
