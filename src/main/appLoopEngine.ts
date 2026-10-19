@@ -1088,7 +1088,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return `this turn's reviewers cannot run: ${problems.join('; ')}. Reviewers run as ${installed} installed with the example loops, each carrying its charter: install the example loops again, restart your agent session so it loads them, then Retry. A run whose charters were edited or overridden cannot run its reviewers`;
   };
 
-  /** §27.3/§27.4 */
   /** §27.10 */
   const sectionTargets = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, reports: SectionedOutput[]): ReportSectionTarget[] =>
     reports.flatMap((r) => {
@@ -1096,6 +1095,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return file === null ? [] : [{ id: r.id, sectionRel: file.rel, reportRel: r.rel }];
     });
 
+  /** §27.3/§27.4 */
   const goalReviewFor = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, run: Extract<WorkRun, { kind: 'goal' }>, ticket: number | null): string[] => {
     const subjectRel = turn.completion.kind === 'file' ? turn.completion.artifactRel : undefined;
     return composeGoalReviewLines(

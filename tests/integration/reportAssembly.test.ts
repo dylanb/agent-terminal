@@ -81,4 +81,19 @@ describe('assembleReportOnDisk', () => {
     expect(() => assembleReportOnDisk(report, ORDER)).toThrow(/red\.md/);
     expect(existsSync(report.path)).toBe(false);
   });
+
+  it('never follows a symlink planted at the report path out of its folder: the target is untouched and assembly refuses', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'report-assembly-outside-'));
+    try {
+      const target = join(outside, 'victim.md');
+      writeFileSync(target, 'outside content\n');
+      symlinkSync(target, report.path);
+      write('red', 1, '## red — slice 1\nred work\n');
+      expect(() => assembleReportOnDisk(report, ORDER)).toThrow(/impl-report\.md/);
+      expect(readFileSync(target, 'utf8')).toBe('outside content\n');
+      expect(existsSync(join(report.sectionsDir.path, '_earlier.md'))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });

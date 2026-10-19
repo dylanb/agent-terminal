@@ -2,12 +2,13 @@
 // engine assembles from those files derive from the one resolver below, so the writer's prompt and the
 // assembler cannot disagree on where a section lives.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { sliceArtifact } from './appWorkTurn';
 import { readDirEntries } from './dirEntries';
-import { confinedRealPath } from './confinedPath';
+import { atomicWriteFileSync } from './atomicFile';
+import { confinedRealPath, confinedRealPathResult } from './confinedPath';
 import { isErrno } from './errno';
 
 export interface SectionsDir {
@@ -67,6 +68,10 @@ function readIfPresent(file: string): string | null {
   }
 }
 
+function writeWhole(file: string, text: string): void {
+  if (!atomicWriteFileSync(file, text, { mode: 0o644 })) throw new Error(`${path.basename(file)} could not be written: its folder is not a real directory`);
+}
+
 export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonly string[]): 'assembled' | 'nothing-to-assemble' {
   const dir = report.sectionsDir.path;
   const sections: ReportSection[] = [];
@@ -81,13 +86,16 @@ export function assembleReportOnDisk(report: SectionedReport, stepOrder: readonl
     else sections.push({ ...key, body });
   }
   if (sections.length === 0) return 'nothing-to-assemble';
-  if (earlier === null) {
-    const existing = readIfPresent(report.path);
+  const reportName = path.basename(report.path);
+  const leaf = confinedRealPathResult(realpathSync(path.dirname(report.path)), report.path);
+  if (!leaf.ok && leaf.cause === 'escapes') throw new Error(`the report ${reportName} leads outside its folder`);
+  if (earlier === null && leaf.ok) {
+    const existing = readIfPresent(leaf.path);
     if (existing !== null && !isAssembledReport(existing)) {
-      writeFileSync(path.join(dir, EARLIER_FILE), existing);
+      writeWhole(path.join(dir, EARLIER_FILE), existing);
       earlier = existing;
     }
   }
-  writeFileSync(report.path, assembleReport(sections, stepOrder, earlier));
+  writeWhole(report.path, assembleReport(sections, stepOrder, earlier));
   return 'assembled';
 }

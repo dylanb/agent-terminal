@@ -11,7 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 IMAGE=agent-terminal-e2e
-VOLUME="${E2E_NODE_MODULES_VOLUME:-agent-terminal-e2e-node_modules}"
+# One node_modules volume per checkout: two checkouts' runs at once (an agent's red check in one worktree, the
+# operator's e2e in another) would otherwise install into the same volume and corrupt it.
+VOLUME="${E2E_NODE_MODULES_VOLUME:-agent-terminal-e2e-node_modules-$(printf %s "$PWD" | cksum | cut -d' ' -f1)}"
 FILTER="${1:-}"
 
 # Electron + Chromium + Xvfb need more than the 2 GiB default podman machine. Warn loudly

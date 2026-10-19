@@ -35,6 +35,12 @@ starts. Do not stand in for a missing piece with something else.
    ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds. It runs no review
    when its work changed nothing but its own report and recorded test evidence, and stops reviewing after a pass
    whose fixes changed nothing else (an edit to the plan, the ticket, code or tests is a change).
+   A recipe that says its section file is named under REPORT SECTION in your turn instructions means a
+   binding with a `sections_dir`: a hand run has no turn instructions, so the file is `<sections_dir>/<step>.md`
+   for slice 1 and `<sections_dir>/<step>.slice-<n>.md` for a later slice, where `<step>` is the flow step's
+   id — for example `impl-report/red.md` and `impl-report/red.slice-2.md`. Rewrite it whole each time. Then
+   rebuild the bound document from every section file in that folder, by slice and then in flow-step order,
+   with any `_earlier.md` first, because no engine assembles it for you.
 3. **Review and fix.** Spawn every reviewer on the roster in parallel as its installed agent, by its exact
    name. Never spawn a default or general agent in place of a reviewer's own. Give every reviewer the
    hand-off below word for word, with your values in place of the `<…>` placeholders, so what it receives

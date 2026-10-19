@@ -237,24 +237,38 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
     }
   });
 
-  it.each([
-    [{}, 'agent-terminal-e2e-node_modules'],
-    [{ E2E_NODE_MODULES_VOLUME: 'agent-terminal-e2e-node_modules-mine' }, 'agent-terminal-e2e-node_modules-mine'],
-  ])('mounts the node_modules cache volume the run names, so concurrent runs from two checkouts need not share one (%o)', (env, volume) => {
+  const podmanVolume = (script: string, env: Record<string, string>): string => {
     const bin = fakeBin(['podman']);
     try {
-      const r = spawnSync('bash', ['scripts/e2e-podman.sh'], {
-        cwd: ROOT,
+      const r = spawnSync('bash', [script], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PATH: `${bin.dir}:${process.env.PATH}`, ...env },
+        env: { ...process.env, PATH: `${bin.dir}:${process.env.PATH}`, E2E_NODE_MODULES_VOLUME: '', ...env },
       });
       expect(r.status, r.stderr).toBe(0);
       const runLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('podman [run]')) ?? '';
-      expect(runLine).toContain(`[${volume}:/work/node_modules]`);
+      return /\[([^\]]*):\/work\/node_modules\]/.exec(runLine)?.[1] ?? '';
     } finally {
       rmSync(bin.dir, { recursive: true, force: true });
     }
+  };
+
+  it('mounts a node_modules cache volume of its own per checkout, so a red check in one worktree never shares one with a run in another', () => {
+    const other = mkdtempSync(join(tmpdir(), 'red-check-checkout-'));
+    try {
+      mkdirSync(join(other, 'scripts'));
+      writeFileSync(join(other, 'scripts', 'e2e-podman.sh'), readFileSync(join(ROOT, 'scripts', 'e2e-podman.sh')));
+      const here = podmanVolume(join(ROOT, 'scripts', 'e2e-podman.sh'), {});
+      expect(here).toMatch(/^agent-terminal-e2e-node_modules-\S+$/);
+      expect(podmanVolume(join(ROOT, 'scripts', 'e2e-podman.sh'), {})).toBe(here);
+      expect(podmanVolume(join(other, 'scripts', 'e2e-podman.sh'), {})).not.toBe(here);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('mounts the node_modules cache volume E2E_NODE_MODULES_VOLUME names', () => {
+    expect(podmanVolume(join(ROOT, 'scripts', 'e2e-podman.sh'), { E2E_NODE_MODULES_VOLUME: 'agent-terminal-e2e-node_modules-mine' })).toBe('agent-terminal-e2e-node_modules-mine');
   });
 
   it('runs exactly the selected tests once each, with no retries, and a JSON report into the I/O directory', () => {
