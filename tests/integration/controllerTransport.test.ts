@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, type Socket } from 'node:net';
+import { connect, createServer, type Socket } from 'node:net';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ describe('controller real local transport', () => {
   let server: Awaited<ReturnType<typeof startControllerTransport>> | undefined;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'at-socket-'));
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'at-socket-')));
     appHome = join(root, 'state');
   });
   afterEach(async () => {
@@ -80,6 +80,85 @@ describe('controller real local transport', () => {
       if (kind === 'symlink') expect(existsSync(join(target, 'socket'))).toBe(false);
     },
   );
+
+  it.each(['file', 'symlink'] as const)(
+    'preserves an existing %s at the socket endpoint and permits registration after its removal', async kind => {
+      const endpoint = resolveControllerEndpoint(appHome);
+      mkdirSync(dirname(endpoint), { recursive: true, mode: 0o700 });
+      const target = join(root, 'endpoint-target');
+      writeFileSync(target, 'target contents');
+      if (kind === 'file') writeFileSync(endpoint, 'endpoint contents');
+      else symlinkSync(target, endpoint);
+      const original = lstatSync(endpoint);
+      const outcome = await startControllerTransport(appHome).then(value => {
+        server = value;
+        return 'listening';
+      }, () => 'rejected');
+      expect.soft(outcome).toBe('rejected');
+      const preserved = lstatSync(endpoint, { throwIfNoEntry: false });
+      expect.soft(preserved?.ino).toBe(original.ino);
+      expect.soft(preserved?.mode).toBe(original.mode);
+      expect.soft(readFileSync(target, 'utf8')).toBe('target contents');
+      if (preserved?.isFile()) expect.soft(readFileSync(endpoint, 'utf8')).toBe('endpoint contents');
+      if (kind === 'symlink') {
+        expect.soft(preserved?.isSymbolicLink()).toBe(true);
+        if (preserved?.isSymbolicLink()) expect.soft(readlinkSync(endpoint)).toBe(target);
+      }
+      await server?.dispose();
+      server = undefined;
+      rmSync(endpoint, { force: true });
+      const recovery = await startControllerTransport(appHome).then(value => {
+        server = value;
+        return 'listening';
+      }, () => 'rejected');
+      expect(recovery, 'rejected startup must release ownership').toBe('listening');
+      await registeredPeer('/work/after-obstruction');
+    },
+  );
+
+  it('preserves an independent live listener and permits registration after it closes', async () => {
+    const endpoint = resolveControllerEndpoint(appHome);
+    mkdirSync(dirname(endpoint), { recursive: true, mode: 0o700 });
+    const connections = new Set<Socket>();
+    const original = createServer(socket => {
+      connections.add(socket);
+      socket.on('close', () => connections.delete(socket));
+      socket.on('error', () => {});
+      socket.end('original listener');
+    });
+    try {
+      original.listen(endpoint);
+      await once(original, 'listening');
+      const inode = lstatSync(endpoint).ino;
+      const outcome = await startControllerTransport(appHome).then(value => {
+        server = value;
+        return 'listening';
+      }, () => 'rejected');
+      expect.soft(outcome).toBe('rejected');
+      expect.soft(lstatSync(endpoint, { throwIfNoEntry: false })?.ino).toBe(inode);
+      const response = await new Promise<string>(resolve => {
+        const client = connect(endpoint);
+        peers.push(client);
+        let data = '';
+        client.setTimeout(1_000, () => { client.destroy(); resolve('timed out'); });
+        client.on('data', chunk => { data += chunk.toString(); });
+        client.once('end', () => resolve(data));
+        client.once('error', error => resolve(error.message));
+      });
+      expect.soft(response).toBe('original listener');
+    } finally {
+      for (const socket of connections) socket.destroy();
+      await new Promise<void>((resolve, reject) => original.close(error => error ? reject(error) : resolve()));
+    }
+    await server?.dispose();
+    server = undefined;
+    const recovery = await startControllerTransport(appHome).then(value => {
+      server = value;
+      return 'listening';
+    }, () => 'rejected');
+    expect(recovery, 'live-listener rejection must release ownership').toBe('listening');
+    await registeredPeer('/work/after-listener');
+  });
 
   async function leaveCrashedControllerEndpoint() {
     const entry = join(root, 'crash-controller.cjs');

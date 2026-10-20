@@ -1,9 +1,11 @@
-import { createServer, type Socket } from 'node:net';
-import { mkdir } from 'node:fs/promises';
+import { connect, createServer, type Socket } from 'node:net';
+import { lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
 import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
+import { createWorktreeLock } from './worktreeLock';
+import { isErrno } from './errno';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
@@ -18,7 +20,14 @@ export async function startControllerTransport(appHome: string): Promise<{
   dispose(): Promise<void>;
 }> {
   const endpoint = resolveControllerEndpoint(appHome);
-  await mkdir(dirname(endpoint), { recursive: true, mode: 0o700 });
+  const directory = dirname(endpoint);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryStat = await lstat(directory);
+  if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid?.() || (directoryStat.mode & 0o777) !== 0o700) {
+    throw new Error('The controller endpoint directory must be owned by the current user with permissions 0700.');
+  }
+  const ownership = createWorktreeLock({ lockRoot: directory }).acquire(endpoint);
+  if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
   const registrations = new Map<Socket, ControllerTerminal>();
   const pending = new Map<string, { socket: Socket; finish(outcome: 'activated' | 'unavailable'): void }>();
@@ -51,10 +60,40 @@ export async function startControllerTransport(appHome: string): Promise<{
       } catch { socket.destroy(); }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(endpoint, resolve);
-  });
+  try {
+    const existing = await lstat(endpoint).catch(error => {
+      if (isErrno(error, 'ENOENT')) return null;
+      throw error;
+    });
+    if (existing) {
+      if (!existing.isSocket() || existing.uid !== process.getuid?.()) {
+        throw new Error('The controller endpoint is not an owned socket.');
+      }
+      await new Promise<void>((resolve, reject) => {
+        const probe = connect(endpoint);
+        probe.setTimeout(CONTROLLER_ACTIVATION_TIMEOUT_MS, () => {
+          probe.destroy();
+          reject(new Error('The controller endpoint did not respond.'));
+        });
+        probe.once('connect', () => {
+          probe.destroy();
+          reject(new Error('Another controller is already listening.'));
+        });
+        probe.once('error', error => {
+          if (isErrno(error, 'ECONNREFUSED')) resolve();
+          else reject(error);
+        });
+      });
+      await unlink(endpoint);
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(endpoint, resolve);
+    });
+  } catch (error) {
+    ownership.release();
+    throw error;
+  }
   return {
     terminals: () => [...registrations.values()],
     subscribeTerminals(listener) {
@@ -83,7 +122,11 @@ export async function startControllerTransport(appHome: string): Promise<{
       listeners.clear();
       for (const request of pending.values()) request.finish('unavailable');
       for (const socket of sockets) socket.destroy();
-      server.close(error => error ? reject(error) : resolve());
+      server.close(error => {
+        ownership.release();
+        if (error) reject(error);
+        else resolve();
+      });
     }),
   };
 }
