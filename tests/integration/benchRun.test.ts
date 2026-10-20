@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
@@ -20,6 +20,7 @@ import {
   type PreparedState,
 } from '../helpers/benchRunSetup';
 import { runBench, type BenchFlowRef, type BenchRunResult } from '../../src/main/benchRun';
+import { benchRootDir } from '../../src/main/benchPrepare';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { catalogEntryDefFile } from '../../src/main/flow';
@@ -243,6 +244,72 @@ describe('the restore is confined to the run\'s working folder', () => {
       worktrees: worktreeCount(b, repo),
       kept: result.runFolders.map((f) => existsSync(f) && isInside(realHome, realpathSync(f))),
     }).toEqual({ code: 'restore-escapes', copies: [], launches: 0, worktrees: 2, kept: [true] });
+  });
+});
+
+describe('a run that cannot be prepared', () => {
+  it('stops with prepare-failed when the run\'s worktree cannot be added, copying no issue and launching nothing', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    b.git(s.repo, ['branch', 'bench/s1/run-1']);
+    const github = createFakeBenchGithub();
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { github, launcher, clock: createFakeBenchClock(['s1']) }));
+
+    expect({ code: codeOf(result), copies: copies(github.writes), launches: launcher.launches.length, kept: result.runFolders.map((f) => existsSync(f)) }).toEqual({
+      code: 'prepare-failed',
+      copies: [],
+      launches: 0,
+      kept: [true],
+    });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('stops with prepare-failed when a later run\'s folder cannot be made, naming only folders that exist', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    let stampDir: string | null = null;
+    const launcher = createFakeLauncher({
+      scripts: [{}, {}],
+      inspect: (launch) => {
+        stampDir = dirname(dirname(launch.spanEndFile));
+        chmodSync(stampDir, 0o555);
+      },
+    });
+
+    try {
+      const result = await runBench(runRequest(s, roots, { runs: '2' }, { launcher }));
+
+      expect({ code: codeOf(result), launches: launcher.launches.length, kept: result.runFolders.map((f) => existsSync(f)) }).toEqual({
+        code: 'prepare-failed',
+        launches: 1,
+        kept: [true],
+      });
+    } finally {
+      if (stampDir !== null) chmodSync(stampDir, 0o755);
+    }
+  });
+
+  it('names the issue copy it made when the run\'s flow state then cannot be seeded', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const runFolder = join(benchRootDir(realpathSync(roots.appHome)), 's1', 'run-1');
+    const github = createFakeBenchGithub({
+      onCopy: () => {
+        const appDir = join(runFolder, 'bench-s1-run-1', '.agent-terminal');
+        mkdirSync(appDir, { recursive: true });
+        writeFileSync(join(appDir, 'flow-state.yaml'), ': not a flow state [');
+      },
+    });
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { github, launcher, clock: createFakeBenchClock(['s1']) }));
+
+    expect({ code: codeOf(result), reason: result.ok ? null : result.reason, launches: launcher.launches.length }).toEqual({
+      code: 'prepare-failed',
+      reason: expect.stringContaining('issue copy #501 was created'),
+      launches: 0,
+    });
   });
 });
 

@@ -80,6 +80,17 @@ describe('bench capture through the entry', () => {
   });
 });
 
+/** An operator-tier `plan-approve-loop` under `configDir` whose gate does not mark the PR ready. */
+function seedUnmarkedPlanApprove(configDir: string): void {
+  const loop = join(configDir, 'loops-v2', 'feature-dev-v3', 'plan-approve-loop');
+  cpSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'plan-approve-loop'), loop, { recursive: true });
+  const def = join(loop, 'plan-approve-loop.yaml');
+  const shipped = readFileSync(def, 'utf8');
+  const unpublished = shipped.replace('      - kind: gh\n        action: mark-ready\n', '');
+  if (unpublished === shipped) throw new Error('setup: the shipped plan-approve-loop no longer names mark-ready');
+  writeFileSync(def, unpublished);
+}
+
 describe('bench run through the entry', () => {
   const isInside = (parent: string, child: string): boolean => {
     const rel = relative(parent, child);
@@ -158,15 +169,7 @@ describe('bench run through the entry', () => {
     roots = createBenchRoots();
     const s = await capturedSetup(b, roots);
     const configDir = b.outsideDir('bench-env-claude-config');
-    if (override) {
-      const loop = join(configDir, 'loops-v2', 'feature-dev-v3', 'plan-approve-loop');
-      cpSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'plan-approve-loop'), loop, { recursive: true });
-      const def = join(loop, 'plan-approve-loop.yaml');
-      const shipped = readFileSync(def, 'utf8');
-      const unpublished = shipped.replace('      - kind: gh\n        action: mark-ready\n', '');
-      if (unpublished === shipped) throw new Error('setup: the shipped plan-approve-loop no longer names mark-ready');
-      writeFileSync(def, unpublished);
-    }
+    if (override) seedUnmarkedPlanApprove(configDir);
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan-approve', '--fixture', s.fixture, '--runs', '1'];
 
@@ -177,6 +180,73 @@ describe('bench run through the entry', () => {
         ? { exitCode: 0, refused: false, spans: [{ first: 'plan-approve', last: 'plan-approve' }] }
         : { exitCode: 'non-zero', refused: true, spans: [] },
     );
+  });
+
+  it('reads no operator tier when the env names a relative CLAUDE_CONFIG_DIR, even while the process env names one that overrides', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    seedUnmarkedPlanApprove(roots.configDir);
+    const launcher = createFakeLauncher();
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan-approve', '--fixture', s.fixture, '--runs', '1'];
+
+    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo, CLAUDE_CONFIG_DIR: 'relative/claude' }), s.repo, { ...deps(), launcher });
+
+    expect({ failed: exitCode !== 0, refused: output.includes('pr-acting-gate'), launches: launcher.launches.length }).toEqual({ failed: true, refused: true, launches: 0 });
+  });
+
+  it("runs from a subdirectory of the invoking repository as from its top level: the repository's catalog flow is the one launched", async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const sub = join(s.repo, 'src', 'deep');
+    mkdirSync(sub, { recursive: true });
+    const launcher = createFakeLauncher();
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'red..refactor', '--fixture', relative(sub, s.fixture), '--runs', '1'];
+
+    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: sub }), sub, { ...deps(), launcher });
+
+    expect({ exitCode, output: output.includes('refused') ? output : 'ok', spans: launcher.launches.map((l) => l.span) }).toEqual({
+      exitCode: 0,
+      output: 'ok',
+      spans: [{ first: 'red', last: 'refactor' }],
+    });
+  });
+
+  it('fails outside any repository before any label, copy, folder or launch', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const outside = b.outsideDir('bench-no-repo');
+    const github = createFakeBenchGithub();
+    const launcher = createFakeLauncher();
+    const argv = ['run', '--flow', V3_FLOW_FILE, '--span', 'plan', '--fixture', s.fixture, '--runs', '1'];
+
+    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: outside }), outside, { ...deps(), github, launcher });
+
+    expect({ failed: exitCode !== 0, failure: output.startsWith('bench run failed:'), appHome: readdirSync(roots.appHome), writes: github.writes, launches: launcher.launches.length }).toEqual({
+      failed: true,
+      failure: true,
+      appHome: [],
+      writes: [],
+      launches: 0,
+    });
+  });
+
+  it('prints every kept run folder, then the code, when a later run cannot be prepared', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '2'];
+
+    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), github: createFakeBenchGithub({ failCopyAt: 2 }) });
+
+    const lines = output.split('\n').filter((l) => l.length > 0);
+    expect({ failed: exitCode !== 0, folders: lines.slice(0, -1).map((l) => existsSync(l) && statSync(l).isDirectory()), last: lines.at(-1) }).toEqual({
+      failed: true,
+      folders: [true, true],
+      last: expect.stringMatching(/^bench run refused \(issue-copy-failed\)/),
+    });
   });
 
   it("exits non-zero and prints the refusal's code when run is refused, creating no run folder", async () => {

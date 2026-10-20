@@ -81,7 +81,7 @@ export async function runBench(request: BenchRunRequest): Promise<BenchRunResult
   const runFolders: string[] = [];
   for (let run = 1; run <= accepted.runs; run++) {
     const prepared = await prepareBenchRun({ invokingRepo: request.invokingRepo, appHome: request.appHome, fixtureDir: request.fixtureDir, accepted, span: request.span, stampDir, stamp, run, github });
-    runFolders.push(prepared.runFolder);
+    if (prepared.runFolder !== null) runFolders.push(prepared.runFolder);
     if (!prepared.ok) return { ok: false, code: prepared.code, runFolders, reason: prepared.reason };
     await launcher.open(prepared.launch);
   }

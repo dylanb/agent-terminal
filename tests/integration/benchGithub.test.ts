@@ -84,6 +84,49 @@ describe('the real BenchGithub', () => {
     });
   });
 
+  it('drops agent-loop/ready and bench-run in any letter case, so the copy carries one bench-run and is never pickable', async () => {
+    const log = fakeGh();
+    seedFakeGhIssue(log, { ...SOURCE, labels: ['Agent-Loop/Ready', 'BENCH-RUN', 'bench-run', 'area/bench'] });
+
+    const copy = readFakeGhIssue(log, await createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number }));
+
+    expect([...(copy?.labels ?? [])].sort()).toEqual(['area/bench', 'bench-run']);
+  });
+
+  it('copies a label whose name holds a comma or a double quote as that one label', async () => {
+    const log = fakeGh();
+    seedFakeGhIssue(log, { ...SOURCE, labels: ['x,agent-loop/ready', 'say "hi"'] });
+
+    const copy = readFakeGhIssue(log, await createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number }));
+
+    expect([...(copy?.labels ?? [])].sort()).toEqual(['bench-run', 'say "hi"', 'x,agent-loop/ready']);
+  });
+
+  it('names the copy it created when a comment copy then fails', async () => {
+    const log = fakeGh({ FAKE_GH_COMMENT_FAIL: '1' });
+    seedFakeGhIssue(log, SOURCE);
+
+    await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow(/issue #501 was created/);
+  });
+
+  it.each([
+    ['prints the source issue as the copy', 'https://github.com/fake/repo/issues/180'],
+    ['prints no issue URL', 'created'],
+  ])('refuses a copy whose create %s, posting no comment', async (_case, output) => {
+    const log = fakeGh({ FAKE_GH_CREATE_OUTPUT: output });
+    seedFakeGhIssue(log, SOURCE);
+
+    await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow(/issue copy outcome was not recognized/);
+    expect(ghCalls(log).filter((c) => c.startsWith('gh issue comment'))).toEqual([]);
+  });
+
+  it('refuses a source issue it does not recognize, creating no copy', async () => {
+    const log = fakeGh();
+
+    await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow(/source issue was not recognized/);
+    expect(ghCalls(log).filter((c) => c.startsWith('gh issue create'))).toEqual([]);
+  });
+
   it('pins every call of a copy to the repository and writes nothing to the source issue', async () => {
     const log = fakeGh();
     seedFakeGhIssue(log, SOURCE);

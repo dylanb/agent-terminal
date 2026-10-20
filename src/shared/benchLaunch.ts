@@ -1,16 +1,15 @@
 // #180 — the runner-to-app launch contract: the env value the runner launches the app with, the endings the app
 // observes, and the span-end file the app writes and the runner reads.
 
+import type { StepSpan } from './flowStepSpan';
+
 /** The env var the runner sets on the app it launches, holding the encoded launch value. */
 export const BENCH_LAUNCH_ENV = 'AGENT_TERMINAL_BENCH_LAUNCH';
 
 export const BENCH_LAUNCH_SCHEMA = 1;
 export const BENCH_SPAN_END_SCHEMA = 1;
 
-export interface BenchSpan {
-  first: string;
-  last: string;
-}
+export type BenchSpan = StepSpan;
 
 export interface BenchLaunch {
   schema_version: number;

@@ -79,6 +79,13 @@ describe('the real launcher', () => {
     expect({ atStart, afterExit: settled }).toEqual({ atStart: { started: true, settled: null }, afterExit: 'resolved' });
   }, 2 * WAIT_MS + 5_000);
 
+  it('resolves open(), never rejects, when the app cannot be started at all', async () => {
+    const { dir, launch } = standIn();
+    const launcher = createBenchLauncher({ execPath: join(dir, 'no-such-electron'), appArgs: [] }, RUNNER_ENV);
+
+    await expect(Promise.race([launcher.open(launch).then(() => 'resolved'), until(() => false).then(() => 'pending')])).resolves.toBe('resolved');
+  }, WAIT_MS + 5_000);
+
   it("launches the app with the runner's env, the launch value and its working folder, not in plain-Node mode, and exactly as benchLaunchEnv composes it", async () => {
     const { dir, launch, open } = standIn();
     let settled = false;

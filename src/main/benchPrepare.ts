@@ -45,7 +45,8 @@ export interface BenchPrepareRequest {
 
 export type BenchPrepared =
   | { ok: true; runFolder: string; launch: BenchLaunch }
-  | { ok: false; code: BenchPrepareFailure; runFolder: string; reason: string };
+  /** `runFolder` is null when the run's folder could not be made. */
+  | { ok: false; code: BenchPrepareFailure; runFolder: string | null; reason: string };
 
 /** Where every command's folder lives: `<app home>/.agent-terminal/bench/`. */
 export function benchRootDir(appHome: string): string {
@@ -120,6 +121,10 @@ export async function prepareBenchRun(request: BenchPrepareRequest): Promise<Ben
   const runFolder = path.join(request.stampDir, `run-${run}`);
   try {
     mkdirSync(runFolder);
+  } catch (e) {
+    return { ok: false, code: 'prepare-failed', runFolder: null, reason: errMsg(e) };
+  }
+  try {
     const worktree = path.join(runFolder, `bench-${stamp}-run-${run}`);
     await runAppCommand('git', ['worktree', 'add', '-q', '-b', `bench/${stamp}/run-${run}`, worktree, request.accepted.fixture.commit], request.invokingRepo);
     // The app's launch root and repo keys are real paths, so the launch names the worktree by its own.

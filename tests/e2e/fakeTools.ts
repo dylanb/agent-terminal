@@ -134,6 +134,7 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // The issue store (tests/helpers/fakeGhIssueStore.cjs) answers for the issues it holds and leaves the rest to
     // the canned arms below.
     `if [ "$1" = "issue" ] && [ "$2" = "view" ] && compgen -G "$FAKE_GHGIT_LOG.issue.*.json" > /dev/null; then ${STORE_CMD} view "$FAKE_GHGIT_LOG" "$@"; rc=$?; [ "$rc" -ne ${STORE_NOT_HELD} ] && exit "$rc"; fi\n` +
+    'if [ "$1" = "issue" ] && [ "$2" = "comment" ] && [ -n "$FAKE_GH_COMMENT_FAIL" ]; then cat > /dev/null; echo "HTTP 502: Bad Gateway" >&2; exit 1; fi\n' +
     `if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then exec ${STORE_CMD} comment "$FAKE_GHGIT_LOG" "$@"; fi\n` +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
@@ -153,6 +154,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // §28.7 — each `gh issue create` returns a fresh issue URL (a per-binDir counter seeded at 500) so the
     // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
     // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
+    // FAKE_GH_CREATE_OUTPUT replaces what `issue create` prints, and creates nothing.
+    'if [ "$1" = "issue" ] && [ "$2" = "create" ] && [ -n "${FAKE_GH_CREATE_OUTPUT+set}" ]; then cat > /dev/null; printf \'%s\\n\' "$FAKE_GH_CREATE_OUTPUT"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; ' +
     `${STORE_CMD} record-create "$FAKE_GHGIT_LOG" "$n" "$@" < /dev/null || exit 1; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n` +
     // §28.7 — the repo's labels live one per line in a sink: `label list` reports them, `label create` adds one

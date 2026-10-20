@@ -32,6 +32,9 @@ describe('the launch value', () => {
       encodeBenchLaunch({ ...LAUNCH, workingFolder: 'relative/folder' }),
       encodeBenchLaunch({ ...LAUNCH, span: { first: 'red' } } as unknown as BenchLaunch),
       encodeBenchLaunch({ ...LAUNCH, spanEndFile: 7 } as unknown as BenchLaunch),
+      encodeBenchLaunch({ ...LAUNCH, spanEndFile: 'span-end.json' }),
+      encodeBenchLaunch({ ...LAUNCH, span: { first: ' ', last: 'refactor' } }),
+      encodeBenchLaunch({ ...LAUNCH, span: { first: 'red', last: '' } }),
       encodeBenchLaunch({ ...LAUNCH, extra: true } as BenchLaunch),
     ];
     expect(malformed.map((v) => decodeBenchLaunch(v).ok)).toEqual(malformed.map(() => false));
@@ -45,7 +48,7 @@ describe('the span-end file', () => {
 
   it('refuses anything else, including the ending only the runner records', () => {
     const withEnding = (ending: string): string => serializeBenchSpanEnd('left span').replace('left span', ending);
-    const others = ['', '{ not json', withEnding('app exited'), withEnding('Left Span')];
+    const others = ['', '{ not json', withEnding('app exited'), withEnding('Left Span'), serializeBenchSpanEnd('left span').replace('"schema_version":1', '"schema_version":2')];
     expect(others.map((v) => parseBenchSpanEnd(v).ok)).toEqual(others.map(() => false));
   });
 });

@@ -33,6 +33,26 @@ function parseArgs(args) {
   return { positionals, flag };
 }
 
+/** One CSV record's fields (RFC 4180), as `gh` reads a `--label` value. */
+function csvFields(value) {
+  const fields = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quoted && c === '"' && value[i + 1] === '"') {
+      field += '"';
+      i++;
+    } else if (c === '"') quoted = !quoted;
+    else if (c === ',' && !quoted) {
+      fields.push(field);
+      field = '';
+    } else field += c;
+  }
+  fields.push(field);
+  return fields;
+}
+
 function readRecord(log, n) {
   const text = readIf(recordFile(log, n));
   if (text === null) return null;
@@ -70,7 +90,7 @@ const ops = {
   },
   'record-create'(log, n, ...args) {
     const { flag } = parseArgs(args);
-    const labels = flag('--label', '-l').flatMap((v) => v.split(',')).map((v) => v.trim()).filter((v) => v.length > 0);
+    const labels = flag('--label', '-l').flatMap(csvFields).map((v) => v.trim()).filter((v) => v.length > 0);
     writeRecord(log, Number(n), { number: Number(n), title: flag('--title', '-t').at(-1) ?? '', labels, comments: [] });
   },
   comment(log, ...args) {
