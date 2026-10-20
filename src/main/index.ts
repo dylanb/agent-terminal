@@ -124,7 +124,7 @@ import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
 import { hostedAgentKind } from './agentKind';
 import { foregroundCommand } from './foregroundCommand';
-import { userConfigAgentsDir } from './userConfig';
+import { userConfigAgentsDir, userConfigRoot } from './userConfig';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
@@ -140,6 +140,7 @@ import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { assembleReportOnDisk } from './reportSections';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
+import { appDefContext as buildAppDefContext } from './appDefContext';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import { createAutoGate, defResolutionOf } from './autoGate';
 import type { LoopBinding } from '../shared/loopNamespace';
@@ -360,11 +361,7 @@ async function createWindow(): Promise<void> {
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => {
     const load = resolveActiveDefinition(repoDir);
-    return {
-      tiers: resolveAppLoopDefTiers(iconLoc),
-      repoDir,
-      ...(load.ok ? { flow: load.definition.name } : {}),
-    };
+    return buildAppDefContext(iconLoc, userConfigRoot(), repoDir, load.ok ? load.definition.name : undefined);
   };
   let lifecycle: FlowLifecycle;
   const agentQuestion = createAgentQuestion({

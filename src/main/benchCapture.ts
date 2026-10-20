@@ -1,13 +1,13 @@
 // #180 — `bench capture`: a working folder of a real run becomes a fixture (docs/bench.md).
 
-import { lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BenchGithub } from './benchGithub';
 import { parseAppGitObjectId, runAppCommand } from './appCommand';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { baselineForBranch, readBaselineCommit } from './appLoopState';
-import { confinedRealPathResult, resolveJail } from './confinedPath';
-import { readDirEntries } from './dirEntries';
+import { readConfinedTree } from './benchTree';
+import { resolveJail } from './confinedPath';
 import { isErrno } from './errno';
 import { flowTypedInput } from './flow';
 import { createFlowStateStore } from './flowState';
@@ -67,34 +67,6 @@ function ticketOf(dir: string, appHome: string, inputs: Record<string, string>):
   return isFixtureIssueNumber(number) ? { name: ticket.name, number } : null;
 }
 
-type ArtifactWalk = { ok: true; files: Map<string, Buffer> } | { ok: false };
-
-/** Every artifact file, relative path → bytes, each entry confined to the folder's artifacts jail (CWE-22/59). */
-function readArtifacts(dir: string): ArtifactWalk {
-  const jail = resolveJail(dir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
-  if (jail === null) return { ok: false };
-  const files = new Map<string, Buffer>();
-  // The directories on the current path only, so a link back up is not followed while a link to a sibling is.
-  const ancestors = new Set<string>();
-  const walk = (real: string, rel: string): boolean => {
-    if (ancestors.has(real)) return true;
-    ancestors.add(real);
-    for (const entry of readDirEntries(real)) {
-      const res = confinedRealPathResult(jail, path.join(real, entry.name));
-      if (!res.ok) return false;
-      const entryRel = rel === '' ? entry.name : path.join(rel, entry.name);
-      const stat = statSync(res.path);
-      if (stat.isDirectory()) {
-        if (!walk(res.path, entryRel)) return false;
-      } else if (stat.isFile()) files.set(entryRel, readFileSync(res.path));
-    }
-    ancestors.delete(real);
-    return true;
-  };
-  const root = confinedRealPathResult(jail, jail);
-  return root.ok && walk(root.path, '') ? { ok: true, files } : { ok: false };
-}
-
 /** Removes a fixture folder it could not finish, so a failed write leaves no half-written fixture. */
 function writeFixture(fixtureDir: string, fixture: BenchFixture, artifacts: Map<string, Buffer>): BenchCaptureResult {
   mkdirSync(path.dirname(fixtureDir), { recursive: true });
@@ -127,7 +99,7 @@ export async function captureFixture(request: BenchCaptureRequest): Promise<Benc
   const stateInputs = state?.inputs ?? {};
   const ticket = ticketOf(dir, appHome, stateInputs);
   if (ticket === null) return refused('ticket-unresolved');
-  const artifacts = readArtifacts(dir);
+  const artifacts = readConfinedTree(resolveJail(dir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR));
   if (!artifacts.ok) return refused('artifact-escapes');
 
   const commit = parseAppGitObjectId(await runAppCommand('git', ['rev-parse', '--verify', 'HEAD^{commit}'], dir), 'HEAD');

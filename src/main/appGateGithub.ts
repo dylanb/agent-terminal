@@ -39,6 +39,12 @@ export interface AppGateGitHubOperations {
   ): Promise<void>;
 }
 
+/** The `gh` gate actions that act on the pickup pull request, so the gate verifies the bootstrap's PR identity
+ *  before each. The bench runner (#180) refuses a span holding one after pickup. */
+export function actsOnPickupPullRequest(action: string): boolean {
+  return action === 'mark-ready' || action === 'publish-pr-body';
+}
+
 export function createAppGateGitHub(
   github: AppGateGitHubOperations,
 ): RunAppGateSideEffect {
@@ -65,12 +71,15 @@ export function createAppGateGitHub(
       throw new Error('bootstrap PR identity does not match GitHub');
     }
   };
+  const verifyIfPullRequestActing = async (action: string, ctx: AppGateSideEffectCtx): Promise<void> => {
+    if (actsOnPickupPullRequest(action)) await verifyBootstrap(ctx);
+  };
 
   return async (action, ctx) => {
     switch (action) {
       case 'mark-ready':
         if (ctx.pr === null) throw new Error('no PR to mark ready');
-        await verifyBootstrap(ctx);
+        await verifyIfPullRequestActing(action, ctx);
         await github.markPullRequestReady(ctx.pr);
         return;
       case 'update-issue-body':
@@ -80,6 +89,7 @@ export function createAppGateGitHub(
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
+        await verifyIfPullRequestActing(action, ctx);
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
         return;
       case 'publish-pr-body':
@@ -89,7 +99,7 @@ export function createAppGateGitHub(
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
-        await verifyBootstrap(ctx);
+        await verifyIfPullRequestActing(action, ctx);
         await github.publishPullRequestBody(
           ctx.pr,
           ctx.bodyFile,

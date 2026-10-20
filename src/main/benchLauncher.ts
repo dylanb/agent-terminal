@@ -1,13 +1,15 @@
 // #180 — the real AppLauncher: it opens this checkout's app at a prepared working folder and resolves once that
 // app has exited.
 
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { BundleLocation } from './bundleLocation';
 import { resolveLaunchInvocation, type LaunchInvocation } from './cliShim';
-import type { BenchLaunch } from '../shared/benchLaunch';
+import { APP_LAUNCH_DIR_ENV } from './launchRoot';
+import { BENCH_LAUNCH_ENV, encodeBenchLaunch, type BenchLaunch } from '../shared/benchLaunch';
 
 export interface AppLauncher {
-  /** Resolves when the launched app process has exited. */
+  /** Resolves when the launched app process has exited, and never rejects: an app that fails to start has ended too. */
   open(launch: BenchLaunch): Promise<void>;
 }
 
@@ -16,16 +18,33 @@ export interface BenchAppTarget {
   bundle: BundleLocation;
 }
 
-/** The app the runner launches and the bundle it reads, from the runner's own Electron binary and main dir. */
+/** The app the runner launches and the bundle it reads, from the runner's own Electron binary and main dir: the
+ *  unpackaged app whose `app.getAppPath()` is that main dir (§23.5). */
 export function benchAppTarget(execPath: string, mainDir: string): BenchAppTarget {
-  return { invocation: resolveLaunchInvocation(execPath, true, path.join(mainDir, 'index.js'), mainDir), bundle: { packaged: false, appPath: '' } };
+  return {
+    invocation: resolveLaunchInvocation(execPath, true, path.join(mainDir, 'index.js'), mainDir),
+    bundle: { packaged: false, appPath: mainDir },
+  };
 }
 
-/** The env the app is launched with: the runner's own, carrying `launch`. */
-export function benchLaunchEnv(env: NodeJS.ProcessEnv, _launch: BenchLaunch): NodeJS.ProcessEnv {
-  return { ...env };
+/** The env the app is launched with: the runner's own, out of plain-Node mode, opening the launch's working folder
+ *  (§23.4) and carrying `launch`. */
+export function benchLaunchEnv(env: NodeJS.ProcessEnv, launch: BenchLaunch): NodeJS.ProcessEnv {
+  const { ELECTRON_RUN_AS_NODE: _plainNode, ...rest } = env;
+  return { ...rest, [APP_LAUNCH_DIR_ENV]: launch.workingFolder, [BENCH_LAUNCH_ENV]: encodeBenchLaunch(launch) };
 }
 
-export function createBenchLauncher(_invocation: LaunchInvocation, _env: NodeJS.ProcessEnv): AppLauncher {
-  return { open: () => Promise.reject(new Error('not launched')) };
+export function createBenchLauncher(invocation: LaunchInvocation, env: NodeJS.ProcessEnv): AppLauncher {
+  return {
+    open: (launch) =>
+      new Promise<void>((resolve) => {
+        const child = spawn(invocation.execPath, invocation.appArgs, {
+          cwd: launch.workingFolder,
+          env: benchLaunchEnv(env, launch),
+          stdio: ['ignore', 'ignore', 'inherit'],
+        });
+        child.once('error', () => resolve());
+        child.once('exit', () => resolve());
+      }),
+  };
 }

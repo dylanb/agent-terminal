@@ -5,9 +5,11 @@ import path from 'node:path';
 import { createBenchGithub } from './benchGithub';
 import { captureFixture, type BenchCaptureRefusal } from './benchCapture';
 import { benchAppTarget, createBenchLauncher } from './benchLauncher';
-import { createBenchClock, runBench, type BenchRunDeps } from './benchRun';
+import { createBenchClock, runBench, type BenchFlowRef, type BenchRunDeps, type BenchRunRefusal } from './benchRun';
 import { errMsg } from './errno';
 import { resolveAppHome } from './launchRoot';
+import { userConfigRootFrom } from './userConfig';
+import type { BenchSpan } from '../shared/benchLaunch';
 
 /** The rollup entry name the build emits the runner under (`out/main/<BENCH_ENTRY>.js`). */
 export const BENCH_ENTRY = 'bench';
@@ -25,12 +27,14 @@ export function realBenchDeps(execPath: string, mainDir: string, env: NodeJS.Pro
   return {
     github: createBenchGithub(),
     launcher: createBenchLauncher(target.invocation, env),
-    appBundle: { packaged: true, resourcesPath: mainDir },
-    clock: createBenchClock(() => now() + 1),
+    appBundle: target.bundle,
+    clock: createBenchClock(now),
   };
 }
 
-const USAGE = 'usage: bench capture <working-folder> <fixture-dir>\n';
+const USAGE =
+  'usage: bench capture <working-folder> <fixture-dir>\n' +
+  '       bench run --flow <catalog-id|path to flow.yaml> --span <first>[..<last>] --fixture <fixture-dir> --runs <n>\n';
 
 const CAPTURE_REFUSALS: Record<BenchCaptureRefusal, string> = {
   'uncommitted-changes': 'the working folder has changes outside .agent-terminal/ that are not committed',
@@ -39,24 +43,78 @@ const CAPTURE_REFUSALS: Record<BenchCaptureRefusal, string> = {
   'artifact-escapes': 'a loop artifact resolves outside the working folder or cannot be resolved (a dangling or unreadable link)',
 };
 
-export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps): Promise<BenchOutcome> {
-  const [command, workingFolder, fixtureDir, ...rest] = argv;
-  if (command === 'run') {
-    const result = await runBench({
-      flow: { kind: 'id', id: '' },
-      span: { first: '', last: '' },
-      fixtureDir: '',
-      runs: '',
-      invokingRepo: cwd,
-      appHome: resolveAppHome(env, env.HOME ?? ''),
-      userConfigRoot: '',
-      deps,
-    });
-    return { exitCode: 0, output: result.runFolders.map((f) => `${f}\n`).join('') };
+const RUN_REFUSALS: Record<BenchRunRefusal, string> = {
+  'flow-unloadable': 'the flow, or one of its loop definitions, does not load',
+  'span-unknown-step': 'a span step is not a step of the flow',
+  'span-out-of-order': "the span's last step comes before its first in the flow",
+  'runs-invalid': 'the run count is not a whole number of at least 1',
+  'fixture-unparsable': "the fixture's fixture.json is not a fixture, or its inputs hold the flow's ticket input",
+  'commit-absent': "the fixture's commit is not in the invoking repository",
+  'issue-other-repository': "the fixture's issue is not in the invoking repository's GitHub repository",
+  'pr-acting-gate': "the span starts after the flow's pickup step and holds a gate that acts on the pickup pull request",
+  'label-failed': 'the bench-run label could not be looked up, or is missing and could not be created',
+  'stamp-exists': "this command's run folder already exists",
+  'restore-escapes': 'a fixture artifact, a flow-home file or a restore destination resolves outside its folder',
+  'issue-copy-failed': "the fixture's issue could not be copied",
+  'prepare-failed': "a run's working folder could not be prepared",
+};
+
+const RUN_FLAGS = ['--flow', '--span', '--fixture', '--runs'] as const;
+type RunFlag = (typeof RUN_FLAGS)[number];
+
+/** `run`'s flags, each given once with a value, and nothing else; null on anything else. */
+function parseRunFlags(args: string[]): Record<RunFlag, string> | null {
+  const values: Partial<Record<RunFlag, string>> = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = RUN_FLAGS.find((f) => f === args[i]);
+    const value = args[i + 1];
+    if (flag === undefined || value === undefined || values[flag] !== undefined) return null;
+    values[flag] = value;
   }
-  if (command !== 'capture' || workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
+  return RUN_FLAGS.every((f) => values[f] !== undefined) ? (values as Record<RunFlag, string>) : null;
+}
+
+const isFlowPath = (value: string): boolean => value.includes('/') || value.endsWith('.yaml') || value.endsWith('.yml');
+
+/** Split at the first `..` only, so a value with more parts names no step and is refused, never cut short. */
+function parseSpan(value: string): BenchSpan {
+  const at = value.indexOf('..');
+  return at < 0 ? { first: value, last: value } : { first: value.slice(0, at), last: value.slice(at + 2) };
+}
+
+async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps): Promise<BenchOutcome> {
+  const flags = parseRunFlags(args);
+  if (flags === null) return { exitCode: 1, output: USAGE };
+  const flow: BenchFlowRef = isFlowPath(flags['--flow']) ? { kind: 'path', file: path.resolve(invoking, flags['--flow']) } : { kind: 'id', id: flags['--flow'] };
+  const home = env.HOME ?? '';
+  const result = await runBench({
+    flow,
+    span: parseSpan(flags['--span']),
+    fixtureDir: path.resolve(invoking, flags['--fixture']),
+    runs: flags['--runs'],
+    invokingRepo: invoking,
+    appHome: resolveAppHome(env, home),
+    userConfigRoot: userConfigRootFrom(env, home),
+    deps,
+  });
+  const folders = result.runFolders.map((f) => `${f}\n`).join('');
+  if (result.ok) return { exitCode: 0, output: folders };
+  return { exitCode: 1, output: `${folders}bench run refused (${result.code}): ${RUN_REFUSALS[result.code]}${result.reason === undefined ? '' : ` — ${result.reason}`}\n` };
+}
+
+export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps): Promise<BenchOutcome> {
   // `pnpm run` moves the working directory to the package root and names the invoking one in INIT_CWD.
   const invoking = env.INIT_CWD || cwd;
+  const [command, ...args] = argv;
+  if (command === 'run') {
+    try {
+      return await benchRunCommand(args, env, invoking, deps);
+    } catch (e) {
+      return { exitCode: 1, output: `bench run failed: ${errMsg(e)}\n` };
+    }
+  }
+  const [workingFolder, fixtureDir, ...rest] = args;
+  if (command !== 'capture' || workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
   const fixture = path.resolve(invoking, fixtureDir);
   try {
     const result = await captureFixture({

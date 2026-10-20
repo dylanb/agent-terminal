@@ -168,17 +168,23 @@ export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
 export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+  return readUntrustedFlowDefinition(file).load;
+}
+
+/** `loadUntrustedFlowDefinition`, with the exact text it validated (null when it read none), so a caller that
+ *  copies the definition copies those bytes, never a second read of the file (CWE-367). */
+export function readUntrustedFlowDefinition(file: string): { load: FlowLoad; text: string | null } {
   const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
-  if (read.ok) return parseFlowDefinition(read.text, file);
+  if (read.ok) return { load: parseFlowDefinition(read.text, file), text: read.text };
   switch (read.cause) {
     case 'absent':
-      return { ok: false, error: `no flow.yaml found at ${file}` };
+      return { load: { ok: false, error: `no flow.yaml found at ${file}` }, text: null };
     case 'over-cap':
-      return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
+      return { load: { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` }, text: null };
     case 'unreadable':
       return {
-        ok: false,
-        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+        load: { ok: false, error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}` },
+        text: null,
       };
     default:
       return read.cause satisfies never;
