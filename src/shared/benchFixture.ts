@@ -20,6 +20,16 @@ export interface BenchFixture {
   repeat_counts: Record<string, number>;
 }
 
+/** The canonical fixture manifest docs/bench.md embeds, and the shape an operator writes by hand. */
+export const EXAMPLE_BENCH_FIXTURE: BenchFixture = {
+  schema_version: BENCH_FIXTURE_SCHEMA,
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  phase_baseline: '89abcdef0123456789abcdef0123456789abcdef',
+  issue: { repository: 'github.com/owner/repo', number: 180 },
+  inputs: { slices: '2' },
+  repeat_counts: { refactor: 1 },
+};
+
 export type BenchFixtureRead = { ok: true; fixture: BenchFixture } | { ok: false; reason: string };
 
 export const isFixtureIssueNumber = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;

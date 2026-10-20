@@ -2,25 +2,32 @@
 // output out.
 
 import path from 'node:path';
-import { createBenchGithub, type BenchGithub } from './benchGithub';
+import { createBenchGithub } from './benchGithub';
 import { captureFixture, type BenchCaptureRefusal } from './benchCapture';
+import { benchAppTarget, createBenchLauncher } from './benchLauncher';
+import { createBenchClock, runBench, type BenchRunDeps } from './benchRun';
 import { errMsg } from './errno';
 import { resolveAppHome } from './launchRoot';
 
 /** The rollup entry name the build emits the runner under (`out/main/<BENCH_ENTRY>.js`). */
 export const BENCH_ENTRY = 'bench';
 
-export interface BenchDeps {
-  github: BenchGithub;
-}
+export type BenchDeps = BenchRunDeps;
 
 export interface BenchOutcome {
   exitCode: number;
   output: string;
 }
 
-export function realBenchDeps(): BenchDeps {
-  return { github: createBenchGithub() };
+/** `execPath` and `mainDir` are the runner's own Electron binary and built main directory; `now` is epoch ms. */
+export function realBenchDeps(execPath: string, mainDir: string, env: NodeJS.ProcessEnv, now: () => number): BenchDeps {
+  const target = benchAppTarget(execPath, mainDir);
+  return {
+    github: createBenchGithub(),
+    launcher: createBenchLauncher(target.invocation, env),
+    appBundle: { packaged: true, resourcesPath: mainDir },
+    clock: createBenchClock(() => now() + 1),
+  };
 }
 
 const USAGE = 'usage: bench capture <working-folder> <fixture-dir>\n';
@@ -34,6 +41,19 @@ const CAPTURE_REFUSALS: Record<BenchCaptureRefusal, string> = {
 
 export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps): Promise<BenchOutcome> {
   const [command, workingFolder, fixtureDir, ...rest] = argv;
+  if (command === 'run') {
+    const result = await runBench({
+      flow: { kind: 'id', id: '' },
+      span: { first: '', last: '' },
+      fixtureDir: '',
+      runs: '',
+      invokingRepo: cwd,
+      appHome: resolveAppHome(env, env.HOME ?? ''),
+      userConfigRoot: '',
+      deps,
+    });
+    return { exitCode: 0, output: result.runFolders.map((f) => `${f}\n`).join('') };
+  }
   if (command !== 'capture' || workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
   // `pnpm run` moves the working directory to the package root and names the invoking one in INIT_CWD.
   const invoking = env.INIT_CWD || cwd;

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { benchMain, realBenchDeps } from './benchMain';
 
 const env = { ...process.env, HOME: process.env.HOME || homedir() };
-void benchMain(process.argv.slice(2), env, process.cwd(), realBenchDeps()).then(({ exitCode, output }) => {
+void benchMain(process.argv.slice(2), env, process.cwd(), realBenchDeps(process.execPath, __dirname, env, () => Date.now())).then(({ exitCode, output }) => {
   process.stdout.write(output);
   process.exit(exitCode);
 });
