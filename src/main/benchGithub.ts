@@ -61,6 +61,12 @@ function parseSourceIssue(text: string): SourceIssue {
   return { title: raw.title, body: raw.body, labels, comments };
 }
 
+/** GitHub label names are case-insensitive, so a case variant of either is the same label. */
+const DROPPED_LABELS = new Set([EPIC_READY_LABEL, BENCH_RUN_LABEL].map((l) => l.toLowerCase()));
+
+/** `gh`'s `--label` value is a CSV list, so a name holding `,` or `"` travels as one quoted field. */
+const asOneLabel = (name: string): string => (/[,"]/.test(name) ? `"${name.replace(/"/g, '""')}"` : name);
+
 /** The author line names the login without `@`, so the attribution itself notifies no one. */
 const copiedComment = (c: SourceIssue['comments'][number]): string => `Copied from a comment by ${c.author} at ${c.createdAt}.\n\n${c.body}`;
 
@@ -87,12 +93,12 @@ export function createBenchGithub(): BenchGithub {
     },
     copyIssue: async ({ repository, number }) => {
       const source = parseSourceIssue(await run(repository, ['issue', 'view', String(number), '--json', 'title,body,labels,comments'], 'source issue read failed'));
-      const labels = [...source.labels.filter((l) => l !== EPIC_READY_LABEL && l !== BENCH_RUN_LABEL), BENCH_RUN_LABEL];
-      const created = await run(repository, ['issue', 'create', '--title', source.title, '--body-file', '-', ...labels.flatMap((l) => ['--label', l])], 'issue copy failed', source.body);
+      const labels = [...source.labels.filter((l) => !DROPPED_LABELS.has(l.toLowerCase())), BENCH_RUN_LABEL];
+      const created = await run(repository, ['issue', 'create', '--title', source.title, '--body-file', '-', ...labels.flatMap((l) => ['--label', asOneLabel(l)])], 'issue copy failed', source.body);
       const copy = numberFromGithubUrl(created);
       if (copy === null || copy === number) throw new Error('issue copy outcome was not recognized');
       for (const comment of source.comments) {
-        await run(repository, ['issue', 'comment', String(copy), '--body-file', '-'], 'comment copy failed', copiedComment(comment));
+        await run(repository, ['issue', 'comment', String(copy), '--body-file', '-'], `issue #${copy} was created, but a comment copy failed`, copiedComment(comment));
       }
       return copy;
     },

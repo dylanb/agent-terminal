@@ -1,7 +1,9 @@
 // #180 — the bench runner's pure entry: argv, env and the invoking directory in, an exit code and the printed
 // output out.
 
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { runAppCommand } from './appCommand';
 import { createBenchGithub } from './benchGithub';
 import { captureFixture, type BenchCaptureRefusal } from './benchCapture';
 import { benchAppTarget, createBenchLauncher } from './benchLauncher';
@@ -82,6 +84,11 @@ function parseSpan(value: string): BenchSpan {
   return at < 0 ? { first: value, last: value } : { first: value.slice(0, at), last: value.slice(at + 2) };
 }
 
+/** The top level of the repository `dir` is in, as a real path: the folder the app keys a repository on. */
+async function repositoryRoot(dir: string): Promise<string> {
+  return realpathSync(await runAppCommand('git', ['rev-parse', '--show-toplevel'], dir).then((out) => out.trim()));
+}
+
 async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps): Promise<BenchOutcome> {
   const flags = parseRunFlags(args);
   if (flags === null) return { exitCode: 1, output: USAGE };
@@ -92,7 +99,7 @@ async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking:
     span: parseSpan(flags['--span']),
     fixtureDir: path.resolve(invoking, flags['--fixture']),
     runs: flags['--runs'],
-    invokingRepo: invoking,
+    invokingRepo: await repositoryRoot(invoking),
     appHome: resolveAppHome(env, home),
     userConfigRoot: userConfigRootFrom(env, home),
     deps,

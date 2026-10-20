@@ -118,8 +118,8 @@ function seed(request: BenchPrepareRequest, workingFolder: string, copy: number)
 export async function prepareBenchRun(request: BenchPrepareRequest): Promise<BenchPrepared> {
   const { stamp, run } = request;
   const runFolder = path.join(request.stampDir, `run-${run}`);
-  mkdirSync(runFolder);
   try {
+    mkdirSync(runFolder);
     const worktree = path.join(runFolder, `bench-${stamp}-run-${run}`);
     await runAppCommand('git', ['worktree', 'add', '-q', '-b', `bench/${stamp}/run-${run}`, worktree, request.accepted.fixture.commit], request.invokingRepo);
     // The app's launch root and repo keys are real paths, so the launch names the worktree by its own.
@@ -132,7 +132,11 @@ export async function prepareBenchRun(request: BenchPrepareRequest): Promise<Ben
     } catch (e) {
       throw new PrepareError('issue-copy-failed', errMsg(e));
     }
-    seed(request, workingFolder, copy);
+    try {
+      seed(request, workingFolder, copy);
+    } catch (e) {
+      throw new PrepareError(e instanceof PrepareError ? e.code : 'prepare-failed', `${errMsg(e)} (issue copy #${copy} was created)`);
+    }
     return {
       ok: true,
       runFolder,
