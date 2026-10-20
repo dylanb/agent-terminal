@@ -6,6 +6,9 @@ import {
   originUrls,
   type OriginConfigReader,
 } from './originUrl';
+import { REPOSITORY_PART, validGitHubRepositorySelector } from '../shared/githubSelector';
+
+export { validGitHubRepositorySelector };
 
 export interface GitHubRepositoryIdentity {
   selector: string;
@@ -41,7 +44,6 @@ export function createGitHubRepositorySource(
   };
 }
 
-const REPOSITORY_PART = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
 const BRANCH_NAME = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
 function repositoryFromRemote(
@@ -94,17 +96,6 @@ function repositoryFromRemote(
     owner,
     name,
   };
-}
-
-export function validGitHubRepositorySelector(value: string): boolean {
-  const parts = value.split('/');
-  return (
-    parts.length === 3 &&
-    parts.every(
-      (part) =>
-        REPOSITORY_PART.test(part) && part !== '.' && part !== '..',
-    )
-  );
 }
 
 export function matchesGitHubRepositoryUrl(

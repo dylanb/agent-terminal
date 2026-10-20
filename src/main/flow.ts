@@ -16,6 +16,7 @@ import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
+import { readWholeNumber } from '../shared/flowStateValues';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
@@ -285,6 +286,16 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
 }
 
 /** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
+/** §18.4 / §24.2.3 T7 — the step that declares a typed ref input, and that input's name: one source for both the
+ *  ref value (the input's name) and its visibility gate (the step), so they cannot desync. */
+export function flowTypedInput(definition: FlowDefinition, type: string): { step: FlowStepDef; name: string } | undefined {
+  for (const step of definition.steps) {
+    const input = (step.inputs ?? []).find((i) => i.type === type);
+    if (input) return { step, name: input.name };
+  }
+  return undefined;
+}
+
 export interface RunIdentity {
   startedAt: number;
   flow: string;
@@ -401,17 +412,8 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
-  // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
-  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
-    for (const step of steps) {
-      const input = (step.inputs ?? []).find((i) => i.type === type);
-      if (input) return { step, name: input.name };
-    }
-    return undefined;
-  };
-  const ticketInput = typedInput('github-ticket');
-  const prInput = typedInput('pr');
+  const ticketInput = flowTypedInput(def, 'github-ticket');
+  const prInput = flowTypedInput(def, 'pr');
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -456,8 +458,7 @@ export function createFlowMachine(
   // prototype chain.
   const numericInput = (name: string | undefined): number | undefined => {
     if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
-    const raw = inputs[name];
-    return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+    return readWholeNumber(inputs[name]);
   };
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
