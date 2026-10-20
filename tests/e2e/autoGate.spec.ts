@@ -298,6 +298,21 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a round t
   expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
 });
 
+test('auto GREEN that only adds tests is engine-approved, and its commit carries a new test file and a test appended to a RED test file', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 1));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-green-adds-', greenAgent({ addTest: true }));
+
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
+    .toMatch(/^step: done$/m)
+    .catch(failWithDiagnosis(home, repo));
+  expect(autoHaltsAt(home, repo, 'green')).toEqual([]);
+  expect(readChangedTests(repo)?.paths).toEqual([]);
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toEqual(
+    expect.arrayContaining(['tests/frozen.test.ts', 'tests/green_added.test.ts']),
+  );
+});
+
 // §27.9.1 N9b.10
 const injectedLog = (repo: string): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
 

@@ -2556,6 +2556,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     startTrusted(rig);
     const added = Array.from({ length: 40 }, (_, i) => `tests/a-long-descriptive-name-for-added-test-${String(i).padStart(2, '0')}.test.ts`);
     for (const p of added) fixture.writeRepoFile(repoDir, p, 'test("added", () => {});\n');
+    recordBaselineCommit(repoDir, 'main', fixture.commitAll(repoDir, 'RED adds the tests'));
+    for (const p of added) fixture.writeRepoFile(repoDir, p, 'test("edited", () => {});\n');
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(readChangedTests(repoDir)?.paths).toHaveLength(added.length);
@@ -2566,14 +2568,15 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(rig.asked[0]).not.toContain(added[added.length - 1]);
   });
 
-  it('(d): a new untracked test file is a detection', async () => {
+  it('a new untracked test file is not a detection, and the gate is approved', async () => {
     const rig = makeRig();
     startTrusted(rig);
     fixture.writeRepoFile(repoDir, 'tests/added.test.ts', 'test("added", () => {});\n');
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(letters(rig)).toEqual(['frozen-tests-changed']);
-    expect(readChangedTests(repoDir)?.paths).toEqual(['tests/added.test.ts']);
+    expect(autoHalts(rig)).toEqual([]);
+    expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
+    expect(readChangedTests(repoDir)?.paths).toEqual([]);
   });
 
   it('(d): a `changed-tests.yaml` already holding `paths: []` is not read as the result', async () => {

@@ -5,7 +5,7 @@ work:
   recipe: prompts/work.md
   artifact: green-result
   completion: green
-  goal: "the tests and the build pass with no test changed since RED, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report, its recorded test evidence and documentation (an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation), and this slice's green report section file holds its decisions, review history and test evidence"
+  goal: "the tests and the build pass with no line of a RED test changed or removed, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report, its recorded test evidence and documentation (an edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation), and this slice's green report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:
