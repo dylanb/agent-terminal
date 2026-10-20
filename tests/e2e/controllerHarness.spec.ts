@@ -27,6 +27,7 @@ test('controller harness owns crash, restart and real shell startup evidence', {
 test('controller harness owns two independent real terminals and cleans up', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
   try {
+    await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     const first = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.repositories[0]);
     const second = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.worktrees[0]);
     for (const [app, dir] of [[first, h.fixture.repositories[0]], [second, h.fixture.worktrees[0]]] as const) {

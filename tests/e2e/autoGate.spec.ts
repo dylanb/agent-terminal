@@ -1,5 +1,6 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -305,7 +306,7 @@ test('a gate that stops for the operator asks the agent why: an `auto` (d) halt 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await expect
     .poll(() => injectedLog(repo), { timeout: UI_MS })
-    .toContain('Why does this gate need me?')
+    .toContain('(d) frozen tests changed: tests/frozen.test.ts')
     .catch(failWithDiagnosis(home, repo));
   const log = injectedLog(repo);
   expect(log).toContain('(d) frozen tests changed: tests/frozen.test.ts');

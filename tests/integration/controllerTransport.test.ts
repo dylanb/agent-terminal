@@ -41,7 +41,7 @@ describe('controller real local transport', () => {
     const socket = await peer(directory);
     const received: ControllerMessage[] = [];
     const decoder = createControllerDecoder();
-    socket.on('data', (chunk: Buffer) => received.push(...decoder.push(chunk)));
+    socket.on('data', (chunk: Buffer) => received.push(...decoder.push(chunk).filter(message => message.type === 'activate')));
     await vi.waitFor(() => expect(server!.terminals().some(terminal => terminal.launchDirectory === directory)).toBe(true));
     return { socket, received, id: server!.terminals().find(terminal => terminal.launchDirectory === directory)!.id };
   }
@@ -292,7 +292,7 @@ describe('controller real local transport', () => {
       const decoder = createControllerDecoder();
       socket.on('data', (chunk: Buffer) => {
         for (const message of decoder.push(chunk)) {
-          messages.push(message);
+          if (message.type === 'activate') messages.push(message);
           if (message.type === 'activate') socket.write(encodeControllerMessage({
             version: 1, type: 'result', requestId: message.requestId, outcome: 'activated',
           }));

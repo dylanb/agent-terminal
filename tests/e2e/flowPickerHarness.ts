@@ -1,8 +1,9 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 // The @ownapp launch harness for A3 (#134) flow-picker e2e (§23.4). Home, repos and user-data dir are kept
 // across a relaunch so persisted state is what the relaunched app reads.
 
-import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
