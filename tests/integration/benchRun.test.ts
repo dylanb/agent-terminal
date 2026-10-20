@@ -508,13 +508,14 @@ describe('N runs', () => {
   it.each(['../escaped', '..', 'a/b'])('fails on a clock stamp %j that is not one path segment, making no folder and launching nothing', async (stamp) => {
     fresh();
     const s = await capturedSetup(b, roots);
-    const before = readTree(roots.appHome);
+    const entries = (): string[] => readdirSync(roots.appHome, { recursive: true }).map(String).sort();
+    const before = entries();
     const launcher = createFakeLauncher();
     const github = createFakeBenchGithub();
 
     const run = runBench(runRequest(s, roots, {}, { clock: createFakeBenchClock([stamp]), launcher, github }));
 
     await expect(run).rejects.toThrow();
-    expect({ copies: copies(github.writes), launches: launcher.launches.length, home: readTree(roots.appHome) }).toEqual({ copies: [], launches: 0, home: before });
+    expect({ copies: copies(github.writes), launches: launcher.launches.length, home: entries() }).toEqual({ copies: [], launches: 0, home: before });
   });
 });
