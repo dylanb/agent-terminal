@@ -141,6 +141,33 @@ describe('bench run through the entry', () => {
     expect({ exitCode, spans: launcher.launches.map((l) => l.span), output }).toEqual({ exitCode: 0, spans: [{ first: 'red', last: 'refactor' }], output: expect.any(String) });
   });
 
+  it('reads a bare --flow ending in .yaml as a path in the invoking directory', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const invoking = join(s.repo, 'flow-here');
+    mkdirSync(invoking);
+    writeFileSync(join(invoking, 'flow.yaml'), readFileSync(V3_FLOW_FILE));
+    const launcher = createFakeLauncher();
+    const argv = ['run', '--flow', 'flow.yaml', '--span', 'plan', '--fixture', s.fixture, '--runs', '1'];
+
+    const { exitCode } = await main(argv, roots.env({ INIT_CWD: invoking }), invoking, { ...deps(), launcher });
+
+    expect({ exitCode, launches: launcher.launches.length }).toEqual({ exitCode: 0, launches: 1 });
+  });
+
+  it('refuses a span with a second .. as naming no step, launching nothing', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const launcher = createFakeLauncher();
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'red..refactor..x', '--fixture', s.fixture, '--runs', '1'];
+
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher });
+
+    expect({ failed: exitCode !== 0, namesCode: output.includes('(span-unknown-step)'), launches: launcher.launches.length }).toEqual({ failed: true, namesCode: true, launches: 0 });
+  });
+
   it.each([
     ['no --flow', (fx: string) => ['run', '--span', 'plan', '--fixture', fx, '--runs', '1']],
     ['no --span', (fx: string) => ['run', '--flow', 'feature-dev-v3', '--fixture', fx, '--runs', '1']],
@@ -149,6 +176,7 @@ describe('bench run through the entry', () => {
     ['--runs with no value', (fx: string) => ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', fx, '--runs']],
     ['an unknown flag', (fx: string) => ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', fx, '--runs', '1', '--bogus', 'x']],
     ['a stray positional', (fx: string) => ['run', 'extra', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', fx, '--runs', '1']],
+    ['--runs given twice', (fx: string) => ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', fx, '--runs', '1', '--runs', '2']],
   ] as const)('prints the usage and exits non-zero for run with %s, before preparing or launching anything', async (_, argvOf) => {
     b = createBenchFixtureBuilder();
     roots = createBenchRoots();

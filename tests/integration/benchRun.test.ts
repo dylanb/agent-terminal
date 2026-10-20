@@ -167,6 +167,16 @@ describe('preparing a run', () => {
     expect(states).toEqual({ captured: expectedState(s.commit), handWritten: expectedState(s.commit) });
   });
 
+  it("prepares and launches when the invoking repository's owner and name are spelled with capitals", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { launcher, github: createFakeBenchGithub({ repository: 'github.com/Bench-Owner/Bench-Repo' }) }));
+
+    expect({ code: codeOf(result), launches: launcher.launches.length }).toEqual({ code: null, launches: 1 });
+  });
+
   it('installs, in every run, the flow bytes it validated before the first, though the file changes between runs', async () => {
     fresh();
     const s = await capturedSetup(b, roots);

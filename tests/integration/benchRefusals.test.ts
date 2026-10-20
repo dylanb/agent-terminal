@@ -119,6 +119,7 @@ describe('bench run refusals', () => {
       over: (inv) => ({ fixtureDir: inv.fixture({ inputs: { slices: '2', ticket: '180' } }) }),
     },
     { name: 'a fixture commit the invoking repository lacks', code: 'commit-absent', over: (inv) => ({ fixtureDir: inv.fixture({ commit: 'd'.repeat(40) }) }) },
+    { name: 'a fixture commit that names a tree, not a commit', code: 'commit-absent', over: (inv) => ({ fixtureDir: inv.fixture({ commit: b.git(inv.repo, ['rev-parse', 'HEAD^{tree}']) }) }) },
     {
       name: "a fixture issue in another repository than the invoking one's",
       code: 'issue-other-repository',

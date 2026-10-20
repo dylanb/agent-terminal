@@ -130,6 +130,17 @@ describe('the real BenchGithub', () => {
     expect(ghCalls(log).filter((c) => c.startsWith('gh issue create'))).toEqual([]);
   });
 
+  it.each([
+    ['a label with no name', { ...SOURCE, labels: [null] }],
+    ['a comment with no author', { ...SOURCE, comments: [{ createdAt: '2026-01-02T03:04:05Z', body: 'x' }] }],
+  ])('refuses a source issue holding %s, creating no copy', async (_case, issue) => {
+    const log = fakeGh();
+    seedFakeGhIssue(log, issue as unknown as FakeGhIssue);
+
+    await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow();
+    expect(ghCalls(log).filter((c) => c.startsWith('gh issue create'))).toEqual([]);
+  });
+
   it('pins every call of a copy to the repository and writes nothing to the source issue', async () => {
     const log = fakeGh();
     seedFakeGhIssue(log, SOURCE);

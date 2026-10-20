@@ -21,6 +21,8 @@ export interface FakeBenchGithubOptions {
   onCopy?: () => void;
   /** The 1-based `copyIssue` call that fails (logged as `→ failed`, then rejected); none when absent. */
   failCopyAt?: number;
+  /** The selector `repositoryOf` answers, as `gh` spells it. Default `FAKE_BENCH_REPOSITORY`. */
+  repository?: string;
 }
 
 export interface FakeBenchGithub extends BenchGithub {
@@ -39,7 +41,7 @@ export function createFakeBenchGithub(opts: FakeBenchGithubOptions = {}): FakeBe
   };
   return {
     writes,
-    repositoryOf: async () => FAKE_BENCH_REPOSITORY,
+    repositoryOf: async () => opts.repository ?? FAKE_BENCH_REPOSITORY,
     ensureBenchRunLabel: async (repository) => {
       if (label === 'create-fails') {
         log(`ensureBenchRunLabel ${repository} → failed`);
