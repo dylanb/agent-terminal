@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { readFakeGhIssue, seedFakeGhGit, seedFakeGhIssue, seedFakeGhLabels, type FakeGhIssue } from '../e2e/fakeTools';
-import { createBenchGithub } from '../../src/main/benchGithub';
+import { BENCH_RUN_LABEL, createBenchGithub } from '../../src/main/benchGithub';
+import { runAppCommand } from '../../src/main/appCommand';
+import { errMsg } from '../../src/main/errno';
 
 // #180 — the real BenchGithub against the PATH-first fake `gh`, over real git.
 
@@ -169,9 +172,18 @@ describe('the real BenchGithub', () => {
     });
   });
 
-  it('rejects, carrying why, when the label is missing and cannot be created', async () => {
+  it("rejects, carrying gh's own failure, when the label is missing and cannot be created", async () => {
     fakeGh({ FAKE_GH_LABEL_CREATE_FAIL: '1' });
+    const ghFailure = await runAppCommand('gh', ['label', 'create', BENCH_RUN_LABEL, '--repo', REPOSITORY], tmpdir()).then(
+      () => null,
+      (e: unknown) => errMsg(e),
+    );
 
-    await expect(createBenchGithub().ensureBenchRunLabel(REPOSITORY)).rejects.toThrow();
+    const failure = await createBenchGithub().ensureBenchRunLabel(REPOSITORY).then(
+      () => null,
+      (e: unknown) => errMsg(e),
+    );
+
+    expect({ ghFailed: ghFailure !== null, carried: ghFailure !== null && failure !== null && failure.includes(ghFailure) }).toEqual({ ghFailed: true, carried: true });
   });
 });
