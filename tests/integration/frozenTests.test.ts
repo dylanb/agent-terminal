@@ -50,21 +50,54 @@ describe('changedTestPaths (§28.5.1)', () => {
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
   });
 
-  it('reports an added test file and ignores an added source file', async () => {
+  it('does not report a test file added since the baseline, nor tests appended to a frozen test file', async () => {
     const { dir, baseline } = seeded();
     repos.writeRepoFile(dir, 'tests/b.test.ts', 'b\n');
-    repos.writeRepoFile(dir, 'src/b.ts', 's\n');
-    const head = repos.commitAll(dir, 'add both');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nappended\n');
+    const head = repos.commitAll(dir, 'add tests');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('reports a frozen test that only lost lines, even when lines were also added elsewhere', async () => {
+    const dir = repos.makeGitRepo('frozen-tests');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\nc\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nc\nnew\n');
+    const head = repos.commitAll(dir, 'drop a line, add one');
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
-      'tests/b.test.ts',
+      'tests/a.test.ts',
+    ]);
+  });
+
+  it('reports a frozen binary test fixture that changed', async () => {
+    const dir = repos.makeGitRepo('frozen-tests');
+    repos.writeRepoFile(dir, 'tests/keep.test.ts', 'k\n');
+    writeFileSync(join(dir, 'tests/fixture.bin'), Buffer.from([0, 1, 2]));
+    const baseline = repos.commitAll(dir, 'seed');
+    writeFileSync(join(dir, 'tests/fixture.bin'), Buffer.from([0, 1, 2, 3]));
+    const head = repos.commitAll(dir, 'grow the fixture');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/fixture.bin',
+    ]);
+  });
+
+  it('reports a deleted frozen test file that was empty', async () => {
+    const dir = repos.makeGitRepo('frozen-tests');
+    repos.writeRepoFile(dir, 'tests/empty.test.ts', '');
+    repos.writeRepoFile(dir, 'tests/keep.test.ts', 'k\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.removeRepoFile(dir, 'tests/empty.test.ts');
+    const head = repos.commitAll(dir, 'delete the empty test');
+    await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
+      'tests/empty.test.ts',
     ]);
   });
 
   it('returns every changed test file, sorted and deduped', async () => {
-    const { dir, baseline } = seeded();
-    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\n');
-    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
-    repos.writeRepoFile(dir, 'tests/m.test.ts', 'm\n');
+    const dir = repos.makeGitRepo('frozen-tests');
+    for (const name of ['z', 'a', 'm']) repos.writeRepoFile(dir, `tests/${name}.test.ts`, `${name}\n`);
+    const baseline = repos.commitAll(dir, 'seed');
+    for (const name of ['z', 'a', 'm']) repos.writeRepoFile(dir, `tests/${name}.test.ts`, `${name}2\n`);
     const head = repos.commitAll(dir, 'many');
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
       'tests/a.test.ts',
@@ -81,8 +114,10 @@ describe('changedTestPaths (§28.5.1)', () => {
   });
 
   it('detects a change to a test file with a non-ASCII name (the -z / quotePath contract)', async () => {
-    const { dir, baseline } = seeded();
+    const dir = repos.makeGitRepo('frozen-tests');
     repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u2\n');
     const head = repos.commitAll(dir, 'unicode test');
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: TEST_GLOBS })).resolves.toEqual([
       'tests/café-ünïcode.test.ts',
@@ -295,9 +330,11 @@ describe('changedTestPaths (§28.5.1)', () => {
     // A maliciously bloated capabilities file (many long globs) times the changed paths can amplify matching
     // work far past any single pair. These globs fail-fast against the path, so the guard must be the AGGREGATE
     // length budget (globChars × Σ path bytes), not the per-match char cost. One long changed path suffices.
-    const { dir, baseline } = seeded();
+    const dir = repos.makeGitRepo('frozen-tests');
     const longSeg = (n: number): string => Array(n).fill('a').join('/');
     repos.writeRepoFile(dir, `tests/${longSeg(300)}.test.ts`, 'x\n'); // a ~600-byte changed path
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, `tests/${longSeg(300)}.test.ts`, 'x2\n');
     const head = repos.commitAll(dir, 'long path');
     const bloatedGlobs = Array(200).fill('z'.repeat(1000)); // 200k glob chars, none matching
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: bloatedGlobs })).rejects.toThrow(/budget/i);
@@ -327,9 +364,12 @@ describe('changedTestPaths (§28.5.1)', () => {
   // (the shared matchedTestPaths applies the exclusion to BOTH modes — pinned here so the commit-mode behavior is
   // not left to the working-tree block alone; CWE-200).
   it('never counts the app state dirs as a changed test even under a matching glob (commit↔commit)', async () => {
-    const { dir, baseline } = seeded();
+    const dir = repos.makeGitRepo('frozen-tests');
     repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n');
     repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x2\n');
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't2\n');
     const head = repos.commitAll(dir, 'app state + a real test');
     await expect(changedTestPaths({ repoDir: dir, baseline, head, testGlobs: ['**'] })).resolves.toEqual([
       'tests/real.test.ts',
@@ -340,8 +380,7 @@ describe('changedTestPaths (§28.5.1)', () => {
 // §28.5.3 (S4) — the GREEN frozen check: `changedTestPaths` with `head` OMITTED compares the baseline commit to
 // the WORKING TREE (git's own "one revision diffs against the working tree" convention), because at GREEN
 // completion the phase commit has not landed yet (HEAD is still the RED baseline) and the GREEN edits live in
-// the working tree. "Changed" is name-only (any change, incl. a deletion — the deliberate asymmetry with the RED
-// added-lines `workingTreeTestPaths`), UNION untracked files so a brand-new test authored this turn is caught.
+// the working tree.
 describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)', () => {
   let repos: GitRepoFixture;
   const TEST_GLOBS = ['tests/**'];
@@ -368,7 +407,7 @@ describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)'
     ]);
   });
 
-  it('reports a tracked test whose working-tree edit only REMOVED lines (name-only counts any change)', async () => {
+  it('reports a tracked test whose working-tree edit only REMOVED lines', async () => {
     const dir = repos.makeGitRepo('frozen-wt');
     repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nb\nc\n');
     const baseline = repos.commitAll(dir, 'seed');
@@ -386,11 +425,19 @@ describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)'
     ]);
   });
 
-  it('reports a brand-new UNTRACKED test file (the ls-files -o union — a two-dot diff alone would miss it)', async () => {
+  it('does not report a brand-new untracked test file, nor tests appended to a frozen test file', async () => {
     const { dir, baseline } = seeded();
-    repos.writeRepoFile(dir, 'tests/new.test.ts', 't\n'); // untracked, uncommitted
+    repos.writeRepoFile(dir, 'tests/new.test.ts', 't\n');
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a\nappended\n');
+    await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([]);
+  });
+
+  it('reports a frozen test removed from the index but left on disk as an untracked file, then edited', async () => {
+    const { dir, baseline } = seeded();
+    repos.git(dir, ['rm', '-q', '--cached', 'tests/a.test.ts']);
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
     await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
-      'tests/new.test.ts',
+      'tests/a.test.ts',
     ]);
   });
 
@@ -427,29 +474,34 @@ describe('changedTestPaths — baseline↔working-tree (head omitted, §28.5.3)'
     ]);
   });
 
-  it('unions and sorts both arms (tracked-changed ∪ untracked), deduped', async () => {
+  it('reports an altered frozen test and not a new test added beside it', async () => {
     const { dir, baseline } = seeded();
-    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n'); // tracked change (diff arm)
-    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\n'); // untracked add (ls-files arm)
+    repos.writeRepoFile(dir, 'tests/a.test.ts', 'a2\n');
+    repos.writeRepoFile(dir, 'tests/z.test.ts', 'z\n');
     await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
       'tests/a.test.ts',
-      'tests/z.test.ts',
     ]);
   });
 
   it('never counts the app state dirs as a changed test even under a matching glob', async () => {
-    const { dir, baseline } = seeded();
-    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n'); // the loop's own state
+    const dir = repos.makeGitRepo('frozen-wt');
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x\n');
     repos.writeRepoFile(dir, '.agent-loop/pr-context.md', 'x\n');
-    repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n'); // a genuine changed test
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, '.agent-terminal/loop/changed-tests.yaml', 'x2\n'); // the loop's own state
+    repos.writeRepoFile(dir, '.agent-loop/pr-context.md', 'x2\n');
+    repos.writeRepoFile(dir, 'tests/real.test.ts', 't2\n'); // a genuine changed test
     await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: ['**'] })).resolves.toEqual([
       'tests/real.test.ts',
     ]);
   });
 
-  it('detects an untracked test with a non-ASCII name (the -z contract on the ls-files arm)', async () => {
-    const { dir, baseline } = seeded();
+  it('detects a working-tree change to a test with a non-ASCII name (the -z contract)', async () => {
+    const dir = repos.makeGitRepo('frozen-wt');
     repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u\n');
+    const baseline = repos.commitAll(dir, 'seed');
+    repos.writeRepoFile(dir, 'tests/café-ünïcode.test.ts', 'u2\n');
     await expect(changedTestPaths({ repoDir: dir, baseline, testGlobs: TEST_GLOBS })).resolves.toEqual([
       'tests/café-ünïcode.test.ts',
     ]);

@@ -58,9 +58,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // §28.3 — the `commit` side-effect's porcelain ops delegate to REAL git so HEAD genuinely advances in the
     // repo, while every bootstrap/remote op below stays canned. These subcommands are never used by the drive.
     // §28.5.1/§28.5.3 delegates the commit side-effect's real ops to real git: add/reset/commit, rev-list (the
-    // baseline sha+parent capture), ls-files (the working-tree RED test detection + the GREEN frozen check's
-    // untracked arm, filter-free), diff (workingTreeTestPaths' --numstat arm AND the GREEN frozen check's
-    // baseline↔working-tree name-only arm), and ls-tree/cat-file (the GREEN frozen check's baselineCapabilities
+    // baseline sha+parent capture), ls-files (the working-tree RED test detection, filter-free), diff
+    // (workingTreeTestPaths' --numstat arm AND the GREEN frozen check's baseline↔working-tree diffs), and ls-tree/cat-file (the GREEN frozen check's baselineCapabilities
     // reads the committed loop-capabilities.yaml as a blob). rev-parse is delegated ONLY for the object-resolve
     // form `--verify --end-of-options <rev>` (4 args): the pre-commit HEAD the parent-linkage guard compares
     // against AND the baseline `<sha>^{commit}` resolve baselineCapabilities does — the canned bootstrap/flow
@@ -225,10 +224,12 @@ export interface StepScript {
   resultOutcome?: PhaseOutcome;
   writeTest?: boolean;
   // §28.5.3 GREEN work mode: the build classification written alongside `resultOutcome` (default 'built'), and
-  // whether the turn MODIFIES a committed test-glob file (`touchTest`, the frozen-check detection) vs a non-test
-  // file. `resultOutcome` defaults to 'passed'.
+  // whether the turn ALTERS a line of the committed tests/frozen.test.ts (`touchTest`, the frozen-check
+  // detection) or only ADDS tests (`addTest`: a new test file and a test appended to tests/frozen.test.ts),
+  // instead of editing a non-test file. `resultOutcome` defaults to 'passed'.
   buildOutcome?: BuildOutcome;
   touchTest?: boolean;
+  addTest?: boolean;
   // §28.5.3 GREEN work mode: whether the review-and-fix round (not the work turn) modifies the committed
   // test-glob file.
   reviewTouchesTest?: boolean;
@@ -301,12 +302,15 @@ function stepArms(stepId: string, opts: StepScript): string[] {
       : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts`;
   const redBody = [bump, writeRedTest, writeResult(opts.resultOutcome ?? 'failed-assertion')];
   // §28.5.3 — the GREEN work turn: the frozen check diffs the committed baseline against the working tree, so
-  // editing the committed tests/frozen.test.ts is what raises the flag.
-  const testEdit = `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' >> tests/frozen.test.ts`;
+  // rewriting the committed tests/frozen.test.ts is what raises the flag; appending to it does not.
+  const testEdit = `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' > tests/frozen.test.ts`;
+  const testAdd =
+    `mkdir -p tests; printf '%s\\n' 'test("green appends", () => {});' >> tests/frozen.test.ts; ` +
+    `printf '%s\\n' 'test("green adds", () => {});' > tests/green_added.test.ts`;
   const featureEdit = `printf '%s\\n' 'export const y = 2;' > feature.ts`;
   const greenBody = [
     bump,
-    opts.touchTest === true ? testEdit : featureEdit,
+    opts.touchTest === true ? testEdit : opts.addTest === true ? testAdd : featureEdit,
     writeResult(opts.resultOutcome ?? 'passed', opts.buildOutcome ?? 'built'),
   ];
   const workBody: string[] | null =
@@ -356,7 +360,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   // behavior-preserving change so the approve commit has content.
   const writeRefactorResult =
     `r=$(rnd); ${writePhaseResultSh('.agent-terminal/loop/refactor-results/$r.json', examplePhaseResult(opts.resultOutcome ?? 'passed'))}`;
-  const touchFrozenTest = `mkdir -p tests; printf '%s\\n' 'review-round edit' >> tests/frozen.test.ts`;
+  const touchFrozenTest = `mkdir -p tests; printf '%s\\n' 'review-round edit' > tests/frozen.test.ts`;
   const reviewExtra = byTurn('n', opts.extraShell?.review);
   const reviewAct =
     `${count(reviewKey, 'n')}; ` +
