@@ -285,7 +285,6 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
-/** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
 /** §18.4 / §24.2.3 T7 — the step that declares a typed ref input, and that input's name: one source for both the
  *  ref value (the input's name) and its visibility gate (the step), so they cannot desync. */
 export function flowTypedInput(definition: FlowDefinition, type: string): { step: FlowStepDef; name: string } | undefined {
@@ -296,6 +295,7 @@ export function flowTypedInput(definition: FlowDefinition, type: string): { step
   return undefined;
 }
 
+/** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
 export interface RunIdentity {
   startedAt: number;
   flow: string;
