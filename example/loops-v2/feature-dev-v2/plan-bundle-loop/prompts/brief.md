@@ -37,7 +37,7 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
   command-line flag, a transport, a service the slice has yet to build — those are two increments: give each
   its own `### Impl-slice`, ordered by that dependency. Never plan RED/GREEN increments inside one impl-slice;
   the chain runs one RED, one GREEN and one refactor per impl-slice, so increments inside one cannot run.
-  This split overrides every sizing rule below. A ticket that needs more than 5 dependency-ordered slices is
+  This split overrides every sizing rule below. A ticket that needs more than 10 dependency-ordered slices is
   an epic (§28.7), or a decision for the operator when it cannot be split into sub-tickets.
 - Plan **no more than 5 impl-slices** per ticket. A small ticket is one slice.
 - Estimate each slice's size (production plus test lines changed). Aim for slices of **more than 200 lines**,
