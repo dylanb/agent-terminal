@@ -83,7 +83,7 @@ function writeConfined(jail: string, rel: string, bytes: Buffer | string): void 
 
 function restoreArtifacts(fixtureDir: string, workingFolder: string): void {
   const source = readConfinedTree(resolveJail(fixtureDir, BENCH_FIXTURE_ARTIFACTS));
-  if (!source.ok) throw new PrepareError('restore-escapes', "a fixture artifact resolves outside the fixture's folder");
+  if (!source.ok) throw new PrepareError('restore-escapes', "a fixture artifact resolves outside the fixture's folder or cannot be resolved (a dangling or unreadable link)");
   const jail = ownJail(resolveJail(workingFolder, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR), 'the loop artifacts folder');
   for (const [rel, bytes] of source.files) writeConfined(jail, rel, bytes);
 }

@@ -76,6 +76,17 @@ describe('bench run refusals', () => {
         return { flow: { kind: 'path', file } };
       },
     },
+    {
+      name: 'a flow one of whose loop steps names a loop no tier holds',
+      code: 'flow-unloadable',
+      over: () => {
+        const file = join(b.outsideDir('bench-missing-loop'), 'flow.yaml');
+        const unresolvable = V3_FLOW.replace('loop: groom-goal-loop', 'loop: no-such-loop');
+        if (unresolvable === V3_FLOW) throw new Error('setup: feature-dev-v3 no longer names groom-goal-loop');
+        writeFileSync(file, unresolvable);
+        return { flow: { kind: 'path', file } };
+      },
+    },
     { name: 'a span step the flow lacks', code: 'span-unknown-step', over: () => ({ span: span('red', 'no-such-step') }) },
     { name: 'a span first step the flow lacks', code: 'span-unknown-step', over: () => ({ span: span('no-such-step', 'refactor') }) },
     { name: 'span steps out of flow order', code: 'span-out-of-order', over: () => ({ span: span('refactor', 'red') }) },

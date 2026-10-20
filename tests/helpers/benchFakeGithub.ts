@@ -6,6 +6,9 @@ import type { BenchGithub } from '../../src/main/benchGithub';
  *  a fixture can only have come through the seam. */
 export const FAKE_BENCH_REPOSITORY = 'github.com/bench-owner/bench-repo';
 
+/** The message the fake's `ensureBenchRunLabel` rejects with under `label: 'create-fails'`. */
+export const FAKE_LABEL_FAILURE = 'fake: label creation failed: HTTP 403';
+
 /** The number the fake gives its first copy; later copies count up from it. */
 export const FAKE_FIRST_COPY = 501;
 
@@ -38,8 +41,12 @@ export function createFakeBenchGithub(opts: FakeBenchGithubOptions = {}): FakeBe
     writes,
     repositoryOf: async () => FAKE_BENCH_REPOSITORY,
     ensureBenchRunLabel: async (repository) => {
-      const result = label === 'present' ? 'existed' : label === 'absent' ? 'created' : 'failed';
-      if (label === 'absent') label = 'present';
+      if (label === 'create-fails') {
+        log(`ensureBenchRunLabel ${repository} → failed`);
+        throw new Error(FAKE_LABEL_FAILURE);
+      }
+      const result = label === 'present' ? 'existed' : 'created';
+      label = 'present';
       log(`ensureBenchRunLabel ${repository} → ${result}`);
       return result;
     },

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { runAppCommand } from './appCommand';
 import { EPIC_READY_LABEL } from './epicPromotion';
 import { errMsg } from './errno';
-import { ensureGithubLabel, type PinnedGh } from './githubLabel';
+import { ensureGithubLabel, type LabelEnsured, type PinnedGh } from './githubLabel';
 import { createGitHubRepositorySource } from './githubRepository';
 import { numberFromGithubUrl } from '../shared/githubUrl';
 
@@ -15,8 +15,6 @@ export interface BenchIssueRef {
   number: number;
 }
 
-export type BenchLabelResult = 'created' | 'existed' | 'failed';
-
 export const BENCH_RUN_LABEL = 'bench-run';
 export const BENCH_RUN_LABEL_DESCRIPTION = 'An issue copy made by a Bench-1 re-run (#180)';
 
@@ -24,7 +22,7 @@ export interface BenchGithub {
   /** The `host/owner/name` selector of the GitHub repository `repoDir` belongs to. */
   repositoryOf(repoDir: string): Promise<string>;
   /** Make sure `repository` has the `bench-run` label, never changing one that exists. */
-  ensureBenchRunLabel(repository: string): Promise<BenchLabelResult>;
+  ensureBenchRunLabel(repository: string): Promise<LabelEnsured>;
   /** A new issue in the source's repository copying it as it stands now; resolves to the copy's number. */
   copyIssue(source: BenchIssueRef): Promise<number>;
 }
@@ -84,13 +82,7 @@ export function createBenchGithub(): BenchGithub {
       run(repository, args, failure);
   return {
     repositoryOf: async (repoDir) => (await createGitHubRepositorySource(repoDir).resolve()).selector,
-    ensureBenchRunLabel: async (repository) => {
-      try {
-        return await ensureGithubLabel(pinned(repository), BENCH_RUN_LABEL, BENCH_RUN_LABEL_DESCRIPTION);
-      } catch {
-        return 'failed';
-      }
-    },
+    ensureBenchRunLabel: (repository) => ensureGithubLabel(pinned(repository), BENCH_RUN_LABEL, BENCH_RUN_LABEL_DESCRIPTION),
     copyIssue: async ({ repository, number }) => {
       const source = parseSourceIssue(await run(repository, ['issue', 'view', String(number), '--json', 'title,body,labels,comments'], 'source issue read failed'));
       const labels = [...source.labels.filter((l) => !DROPPED_LABELS.has(l.toLowerCase())), BENCH_RUN_LABEL];

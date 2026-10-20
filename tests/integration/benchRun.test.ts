@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, join, relative, sep } from 'node:path';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
-import { createFakeBenchGithub, FAKE_BENCH_REPOSITORY } from '../helpers/benchFakeGithub';
+import { createFakeBenchGithub, FAKE_BENCH_REPOSITORY, FAKE_LABEL_FAILURE } from '../helpers/benchFakeGithub';
 import { createFakeBenchClock, createFakeLauncher } from '../helpers/benchFakeLauncher';
 import {
   capturedSetup,
@@ -307,7 +307,7 @@ describe('a run that cannot be prepared', () => {
 
     expect({ code: codeOf(result), reason: result.ok ? null : result.reason, launches: launcher.launches.length }).toEqual({
       code: 'prepare-failed',
-      reason: expect.stringContaining('issue copy #501 was created'),
+      reason: expect.stringMatching(/#501\b/),
       launches: 0,
     });
   });
@@ -339,8 +339,9 @@ describe('the bench-run label', () => {
 
     const result = await runBench(runRequest(s, roots, { runs: '2' }, { github, launcher }));
 
-    expect({ code: codeOf(result), copies: copies(github.writes), launches: launcher.launches.length, appHome: readdirSync(roots.appHome), worktrees: worktreeCount(b, s.repo) }).toEqual({
+    expect({ code: codeOf(result), reason: result.ok ? null : result.reason, copies: copies(github.writes), launches: launcher.launches.length, appHome: readdirSync(roots.appHome), worktrees: worktreeCount(b, s.repo) }).toEqual({
       code: 'label-failed',
+      reason: FAKE_LABEL_FAILURE,
       copies: [],
       launches: 0,
       appHome: [],

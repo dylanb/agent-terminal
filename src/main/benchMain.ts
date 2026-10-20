@@ -56,7 +56,7 @@ const RUN_REFUSALS: Record<BenchRunRefusal, string> = {
   'pr-acting-gate': "the span starts after the flow's pickup step and holds a gate that acts on the pickup pull request",
   'label-failed': 'the bench-run label could not be looked up, or is missing and could not be created',
   'stamp-exists': "this command's run folder already exists",
-  'restore-escapes': 'a fixture artifact, a flow-home file or a restore destination resolves outside its folder',
+  'restore-escapes': 'a fixture artifact, a flow-home file or a restore destination resolves outside its folder or cannot be resolved',
   'issue-copy-failed': "the fixture's issue could not be copied",
   'prepare-failed': "a run's working folder could not be prepared",
 };

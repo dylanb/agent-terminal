@@ -245,7 +245,7 @@ describe('bench run through the entry', () => {
     expect({ failed: exitCode !== 0, folders: lines.slice(0, -1).map((l) => existsSync(l) && statSync(l).isDirectory()), last: lines.at(-1) }).toEqual({
       failed: true,
       folders: [true, true],
-      last: expect.stringMatching(/^bench run refused \(issue-copy-failed\)/),
+      last: expect.stringMatching(/^bench run refused \(issue-copy-failed\).*fake: issue copy failed/),
     });
   });
 

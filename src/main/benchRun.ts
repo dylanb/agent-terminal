@@ -8,7 +8,7 @@ import type { AppLauncher } from './benchLauncher';
 import type { BundleLocation } from './bundleLocation';
 import { benchRootDir, prepareBenchRun, type BenchPrepareFailure } from './benchPrepare';
 import { checkBenchRefusals, type BenchFlowRef, type BenchRefusal } from './benchRefusals';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import type { BenchSpan } from '../shared/benchLaunch';
 
 export type { BenchFlowRef } from './benchRefusals';
@@ -72,7 +72,11 @@ export async function runBench(request: BenchRunRequest): Promise<BenchRunResult
   if (!check.ok) return { ok: false, code: check.code, runFolders: [] };
   const { accepted } = check;
 
-  if ((await github.ensureBenchRunLabel(accepted.fixture.issue.repository)) === 'failed') return { ok: false, code: 'label-failed', runFolders: [] };
+  try {
+    await github.ensureBenchRunLabel(accepted.fixture.issue.repository);
+  } catch (e) {
+    return { ok: false, code: 'label-failed', runFolders: [], reason: errMsg(e) };
+  }
 
   const stamp = clock.stamp();
   const stampDir = makeStampDir(request.appHome, stamp);
