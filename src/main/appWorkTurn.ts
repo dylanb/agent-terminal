@@ -183,7 +183,8 @@ export function goalProgressLines(req: { progressRel: string; notesRel: string; 
   lines.push(
     `- \`"blocked"\` when you cannot go on without the operator. Put what you need from them, with your recommendation, in`,
     `  \`${f.blocked}\` as one JSON string. The step then stops for the operator, so use it only when no choice inside your`,
-    '  decision boundary lets you go on.',
+    '  decision boundary lets you go on. If the operator resolves what you were blocked on in this session, carry on',
+    '  with the goal: when this leg ends, rewrite the progress file and then the done-signal; the step continues from there.',
     'Only `done` is held to the completion check and the verification the instructions below ask for before the',
     'done-signal. On `checkpoint` or `blocked`, write the done-signal once the progress file is written, whether or not',
     'that check holds yet.',
