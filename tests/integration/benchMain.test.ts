@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
 import { createFakeBenchGithub } from '../helpers/benchFakeGithub';
@@ -43,6 +43,12 @@ const deps = (scripts: FakeLaunchScript[] = [{}]): BenchDeps => ({
 });
 const manifestIn = (dir: string): boolean => existsSync(join(dir, 'fx', BENCH_FIXTURE_MANIFEST));
 
+/** `benchMain` with what it printed as it went, then its final output, as one transcript. */
+async function main(argv: string[], env: NodeJS.ProcessEnv, cwd: string, d: BenchDeps, printed: string[] = []): Promise<{ exitCode: number; output: string }> {
+  const { exitCode, output } = await benchMain(argv, env, cwd, d, (text) => printed.push(text));
+  return { exitCode, output: printed.join('') + output };
+}
+
 describe('bench capture through the entry', () => {
   it('resolves relative paths against INIT_CWD when it is set, not against cwd', async () => {
     const wf = runFolder();
@@ -51,7 +57,7 @@ describe('bench capture through the entry', () => {
     const elsewhere = join(b.outsideDir('bench-cwd'), 'a', 'b');
     mkdirSync(elsewhere, { recursive: true });
 
-    const { exitCode } = await benchMain(['capture', relative(invoking, wf), 'fx'], roots.env({ INIT_CWD: invoking }), elsewhere, deps());
+    const { exitCode } = await main(['capture', relative(invoking, wf), 'fx'], roots.env({ INIT_CWD: invoking }), elsewhere, deps());
 
     expect({ exitCode, atInitCwd: manifestIn(invoking), atCwd: manifestIn(elsewhere) }).toEqual({ exitCode: 0, atInitCwd: true, atCwd: false });
   });
@@ -60,7 +66,7 @@ describe('bench capture through the entry', () => {
     const wf = runFolder();
     const invoking = b.outsideDir('bench-invoking');
 
-    const { exitCode } = await benchMain(['capture', relative(invoking, wf), 'fx'], roots.env(), invoking, deps());
+    const { exitCode } = await main(['capture', relative(invoking, wf), 'fx'], roots.env(), invoking, deps());
 
     expect({ exitCode, atCwd: manifestIn(invoking) }).toEqual({ exitCode: 0, atCwd: true });
   });
@@ -70,7 +76,7 @@ describe('bench capture through the entry', () => {
     b.writeRepoFile(wf, 'notes.txt', 'draft\n');
     const invoking = b.outsideDir('bench-invoking');
 
-    const { exitCode, output } = await benchMain(['capture', wf, 'fx'], roots.env(), invoking, deps());
+    const { exitCode, output } = await main(['capture', wf, 'fx'], roots.env(), invoking, deps());
 
     expect({ failed: exitCode !== 0, namesCode: output.includes('uncommitted-changes'), fixture: existsSync(join(invoking, 'fx')) }).toEqual({
       failed: true,
@@ -104,7 +110,7 @@ describe('bench run through the entry', () => {
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', relative(s.repo, s.fixture), '--runs', String(n)];
     const launcher = createFakeLauncher({ scripts: Array.from({ length: n }, () => ({})) });
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher });
 
     const realHome = realpathSync(roots.appHome);
     const folders = output.split('\n').filter((l) => l.length > 0);
@@ -130,7 +136,7 @@ describe('bench run through the entry', () => {
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', relative(s.repo, V3_FLOW_FILE), '--span', 'red..refactor', '--fixture', relative(s.repo, s.fixture), '--runs', '1'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo }), elsewhere, { ...deps(), launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), elsewhere, { ...deps(), launcher });
 
     expect({ exitCode, spans: launcher.launches.map((l) => l.span), output }).toEqual({ exitCode: 0, spans: [{ first: 'red', last: 'refactor' }], output: expect.any(String) });
   });
@@ -150,7 +156,7 @@ describe('bench run through the entry', () => {
     const github = createFakeBenchGithub();
     const launcher = createFakeLauncher();
 
-    const { exitCode, output } = await benchMain(argvOf(s.fixture), roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), github, launcher });
+    const { exitCode, output } = await main(argvOf(s.fixture), roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), github, launcher });
 
     expect({ failed: exitCode !== 0, usage: output.startsWith('usage:'), appHome: readdirSync(roots.appHome), writes: github.writes, launches: launcher.launches.length }).toEqual({
       failed: true,
@@ -173,7 +179,7 @@ describe('bench run through the entry', () => {
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan-approve', '--fixture', s.fixture, '--runs', '1'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo, CLAUDE_CONFIG_DIR: configDir }), s.repo, { ...deps(), launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo, CLAUDE_CONFIG_DIR: configDir }), s.repo, { ...deps(), launcher });
 
     expect({ exitCode: exitCode === 0 ? 0 : 'non-zero', refused: output.includes('pr-acting-gate'), spans: launcher.launches.map((l) => l.span) }).toEqual(
       override
@@ -190,7 +196,7 @@ describe('bench run through the entry', () => {
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan-approve', '--fixture', s.fixture, '--runs', '1'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo, CLAUDE_CONFIG_DIR: 'relative/claude' }), s.repo, { ...deps(), launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo, CLAUDE_CONFIG_DIR: 'relative/claude' }), s.repo, { ...deps(), launcher });
 
     expect({ failed: exitCode !== 0, refused: output.includes('pr-acting-gate'), launches: launcher.launches.length }).toEqual({ failed: true, refused: true, launches: 0 });
   });
@@ -204,7 +210,7 @@ describe('bench run through the entry', () => {
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'red..refactor', '--fixture', relative(sub, s.fixture), '--runs', '1'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: sub }), sub, { ...deps(), launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: sub }), sub, { ...deps(), launcher });
 
     expect({ exitCode, output: output.includes('refused') ? output : 'ok', spans: launcher.launches.map((l) => l.span) }).toEqual({
       exitCode: 0,
@@ -222,7 +228,7 @@ describe('bench run through the entry', () => {
     const launcher = createFakeLauncher();
     const argv = ['run', '--flow', V3_FLOW_FILE, '--span', 'plan', '--fixture', s.fixture, '--runs', '1'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: outside }), outside, { ...deps(), github, launcher });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: outside }), outside, { ...deps(), github, launcher });
 
     expect({ failed: exitCode !== 0, failure: output.startsWith('bench run failed:'), appHome: readdirSync(roots.appHome), writes: github.writes, launches: launcher.launches.length }).toEqual({
       failed: true,
@@ -233,13 +239,28 @@ describe('bench run through the entry', () => {
     });
   });
 
+  it("prints each run's folder as soon as it is made, before the next run's app opens", async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const printed: string[] = [];
+    const printedAtOpen: string[][] = [];
+    const launcher = createFakeLauncher({ scripts: [{}, {}], inspect: () => printedAtOpen.push(printed.join('').split('\n').filter((l) => l.length > 0)) });
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '2'];
+
+    const { exitCode } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher }, printed);
+
+    const folders = launcher.launches.map((l) => dirname(l.spanEndFile));
+    expect({ exitCode, printedAtOpen }).toEqual({ exitCode: 0, printedAtOpen: [[folders[0]], folders] });
+  });
+
   it('prints every kept run folder, then the code, when a later run cannot be prepared', async () => {
     b = createBenchFixtureBuilder();
     roots = createBenchRoots();
     const s = await capturedSetup(b, roots);
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '2'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), github: createFakeBenchGithub({ failCopyAt: 2 }) });
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), github: createFakeBenchGithub({ failCopyAt: 2 }) });
 
     const lines = output.split('\n').filter((l) => l.length > 0);
     expect({ failed: exitCode !== 0, folders: lines.slice(0, -1).map((l) => existsSync(l) && statSync(l).isDirectory()), last: lines.at(-1) }).toEqual({
@@ -255,7 +276,7 @@ describe('bench run through the entry', () => {
     const s = await capturedSetup(b, roots);
     const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '0'];
 
-    const { exitCode, output } = await benchMain(argv, roots.env({ INIT_CWD: s.repo }), s.repo, deps());
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, deps());
 
     expect({ failed: exitCode !== 0, namesCode: output.includes('runs-invalid'), appHome: readdirSync(roots.appHome), output }).toEqual({
       failed: true,

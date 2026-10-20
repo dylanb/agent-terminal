@@ -89,7 +89,10 @@ async function repositoryRoot(dir: string): Promise<string> {
   return realpathSync(await runAppCommand('git', ['rev-parse', '--show-toplevel'], dir).then((out) => out.trim()));
 }
 
-async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps): Promise<BenchOutcome> {
+/** Writes `text` where the operator reads it, as soon as it is known. */
+export type BenchPrint = (text: string) => void;
+
+async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps, print: BenchPrint): Promise<BenchOutcome> {
   const flags = parseRunFlags(args);
   if (flags === null) return { exitCode: 1, output: USAGE };
   const flow: BenchFlowRef = isFlowPath(flags['--flow']) ? { kind: 'path', file: path.resolve(invoking, flags['--flow']) } : { kind: 'id', id: flags['--flow'] };
@@ -102,14 +105,14 @@ async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking:
     invokingRepo: await repositoryRoot(invoking),
     appHome: resolveAppHome(env, home),
     userConfigRoot: userConfigRootFrom(env, home),
+    reportRunFolder: (folder) => print(`${folder}\n`),
     deps,
   });
-  const folders = result.runFolders.map((f) => `${f}\n`).join('');
-  if (result.ok) return { exitCode: 0, output: folders };
-  return { exitCode: 1, output: `${folders}bench run refused (${result.code}): ${RUN_REFUSALS[result.code]}${result.reason === undefined ? '' : ` — ${result.reason}`}\n` };
+  if (result.ok) return { exitCode: 0, output: '' };
+  return { exitCode: 1, output: `bench run refused (${result.code}): ${RUN_REFUSALS[result.code]}${result.reason === undefined ? '' : ` — ${result.reason}`}\n` };
 }
 
-async function benchCaptureCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps): Promise<BenchOutcome> {
+async function benchCaptureCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps, _print: BenchPrint): Promise<BenchOutcome> {
   const [workingFolder, fixtureDir, ...rest] = args;
   if (workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
   const fixture = path.resolve(invoking, fixtureDir);
@@ -125,13 +128,14 @@ async function benchCaptureCommand(args: string[], env: NodeJS.ProcessEnv, invok
 
 const COMMANDS = { capture: benchCaptureCommand, run: benchRunCommand } as const;
 
-export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps): Promise<BenchOutcome> {
+/** `output` is what is left to print once the command ends; run folders go to `print` as they are made. */
+export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps, print: BenchPrint): Promise<BenchOutcome> {
   // `pnpm run` moves the working directory to the package root and names the invoking one in INIT_CWD.
   const invoking = env.INIT_CWD || cwd;
   const [command, ...args] = argv;
   if (command !== 'capture' && command !== 'run') return { exitCode: 1, output: USAGE };
   try {
-    return await COMMANDS[command](args, env, invoking, deps);
+    return await COMMANDS[command](args, env, invoking, deps, print);
   } catch (e) {
     return { exitCode: 1, output: `bench ${command} failed: ${errMsg(e)}\n` };
   }

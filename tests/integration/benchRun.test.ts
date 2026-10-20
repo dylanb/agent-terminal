@@ -23,7 +23,8 @@ import { runBench, type BenchFlowRef, type BenchRunResult } from '../../src/main
 import { benchRootDir } from '../../src/main/benchPrepare';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createFlowStateStore } from '../../src/main/flowState';
-import { catalogEntryDefFile } from '../../src/main/flow';
+import { catalogEntryDefFile, FLOWS_CATALOG_SUBDIR } from '../../src/main/flow';
+import { FLOW_HOME_SUBDIR } from '../../src/main/flowHome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import { loadTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../src/main/todoTemplate';
 
@@ -165,6 +166,25 @@ describe('preparing a run', () => {
 
     expect(states).toEqual({ captured: expectedState(s.commit), handWritten: expectedState(s.commit) });
   });
+
+  it('installs, in every run, the flow bytes it validated before the first, though the file changes between runs', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const file = join(b.outsideDir('bench-flow-edit'), 'flow.yaml');
+    writeFileSync(file, EDITED_V3_FLOW);
+    const installed: (string | undefined)[] = [];
+    const launcher = createFakeLauncher({
+      scripts: [{}, {}],
+      inspect: (launch) => {
+        installed.push(installedFlow(launch.workingFolder, roots.appHome)?.flow);
+        writeFileSync(file, `${V3_FLOW}# changed after validation\n`);
+      },
+    });
+
+    await runBench(runRequest(s, roots, { flow: { kind: 'path', file }, runs: '2' }, { launcher }));
+
+    expect(installed).toEqual([EDITED_V3_FLOW, EDITED_V3_FLOW]);
+  });
 });
 
 describe('the restore is confined to the run\'s working folder', () => {
@@ -207,6 +227,34 @@ describe('the restore is confined to the run\'s working folder', () => {
         const fixture = join(b.outsideDir('bench-confine-c-fx'), 'fx');
         b.writeHandFixture(fixture, handFields(commit), FIXTURE_ARTIFACTS);
         return { fixture, repo: dir, outside: () => readdirSync(outsideDir), outsideBefore: [] };
+      },
+    },
+    {
+      name: "a fixture commit that makes only the repo's flow catalog a link out of the tree",
+      arrange: () => {
+        const { dir } = b.makeRepository('bench-confine-d');
+        const outsideDir = b.outsideDir('bench-confine-d-out');
+        b.git(dir, ['checkout', '-q', '-b', 'hostile']);
+        const commit = b.commitTrackedSymlink(dir, [FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR].join('/'), outsideDir);
+        b.git(dir, ['checkout', '-q', 'main']);
+        b.seedFlow(dir, 'feature-dev-v3', V3_FLOW);
+        const fixture = join(b.outsideDir('bench-confine-d-fx'), 'fx');
+        b.writeHandFixture(fixture, handFields(commit), FIXTURE_ARTIFACTS);
+        return { fixture, repo: dir, outside: () => readTree(outsideDir), outsideBefore: {} };
+      },
+    },
+    {
+      name: 'a fixture commit that makes a folder inside the loop artifacts a link out of the tree',
+      arrange: () => {
+        const { dir } = b.makeRepository('bench-confine-e');
+        const outsideDir = b.outsideDir('bench-confine-e-out');
+        b.git(dir, ['checkout', '-q', '-b', 'hostile']);
+        const commit = b.commitTrackedSymlink(dir, [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'impl-report'].join('/'), outsideDir);
+        b.git(dir, ['checkout', '-q', 'main']);
+        b.seedFlow(dir, 'feature-dev-v3', V3_FLOW);
+        const fixture = join(b.outsideDir('bench-confine-e-fx'), 'fx');
+        b.writeHandFixture(fixture, handFields(commit), FIXTURE_ARTIFACTS);
+        return { fixture, repo: dir, outside: () => readTree(outsideDir), outsideBefore: {} };
       },
     },
   ];

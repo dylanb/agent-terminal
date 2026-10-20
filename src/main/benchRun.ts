@@ -44,6 +44,8 @@ export interface BenchRunRequest {
   appHome: string;
   /** The user-config root loop defs resolve their operator tier under; none when null. */
   userConfigRoot: string | null;
+  /** Called with each run folder the moment it exists, so an interrupted command has already named it. */
+  reportRunFolder(folder: string): void;
   deps: BenchRunDeps;
 }
 
@@ -85,7 +87,10 @@ export async function runBench(request: BenchRunRequest): Promise<BenchRunResult
   const runFolders: string[] = [];
   for (let run = 1; run <= accepted.runs; run++) {
     const prepared = await prepareBenchRun({ invokingRepo: request.invokingRepo, appHome: request.appHome, fixtureDir: request.fixtureDir, accepted, span: request.span, stampDir, stamp, run, github });
-    if (prepared.runFolder !== null) runFolders.push(prepared.runFolder);
+    if (prepared.runFolder !== null) {
+      runFolders.push(prepared.runFolder);
+      request.reportRunFolder(prepared.runFolder);
+    }
     if (!prepared.ok) return { ok: false, code: prepared.code, runFolders, reason: prepared.reason };
     await launcher.open(prepared.launch);
   }

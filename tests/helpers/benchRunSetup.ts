@@ -67,6 +67,7 @@ export function runRequest(s: Pick<BenchRunSetup, 'repo' | 'fixture'>, roots: Be
     invokingRepo: s.repo,
     appHome: roots.appHome,
     userConfigRoot: roots.configDir,
+    reportRunFolder: () => undefined,
     ...over,
     deps: { github: createFakeBenchGithub(), launcher: createFakeLauncher(), appBundle: roots.bundle, clock: createFakeBenchClock(), ...deps },
   };
