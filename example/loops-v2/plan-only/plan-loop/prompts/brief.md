@@ -1,8 +1,8 @@
 # plan-loop — brief
 
 A slice exists so that it can be tested end to end on its own — not so that every piece that *could* be
-tested end to end gets a slice of its own. Plan **no more than 5 impl-slices** per ticket (a small ticket is
-one slice). Aim for slices of **more than 200 lines** changed, and fold any slice below **one eighth** of the
+tested end to end gets a slice of its own. Target **no more than 5 impl-slices** per ticket (a small ticket is
+one slice); only the dependency split below may take a ticket past 5, and never past **10**. Aim for slices of **more than 200 lines** changed, and fold any slice below **one eighth** of the
 ticket's total estimate into the slice before or after it, carrying all of its ACs. These are planning
 guidance for you alone; reviewers do not grade slice count or size.
 
@@ -12,8 +12,9 @@ its check only once production code that another of the slice's tests drives exi
 transport, a service the slice has yet to build — those are two increments: give each its own impl-slice,
 ordered by that dependency. Never plan RED/GREEN increments inside one impl-slice; the chain runs one RED, one
 GREEN and one refactor per impl-slice, so increments inside one cannot run.
-This split overrides every sizing rule above. A ticket that needs more than 5 dependency-ordered slices is an
-epic (§28.7), or a decision for the operator when it cannot be split into sub-tickets.
+This split overrides every sizing rule above except the limit of 10. A ticket that needs more than 10
+dependency-ordered slices is an epic (§28.7), or a decision for the operator when it cannot be split into
+sub-tickets.
 
 No acceptance criterion may be deferred, narrowed, or dropped from the plan. Every AC must be assigned to a
 slice that implements it, and the final integration slice must wire every AC into production unless the plan

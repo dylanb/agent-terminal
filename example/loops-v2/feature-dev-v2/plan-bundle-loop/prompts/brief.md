@@ -37,9 +37,11 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
   command-line flag, a transport, a service the slice has yet to build — those are two increments: give each
   its own `### Impl-slice`, ordered by that dependency. Never plan RED/GREEN increments inside one impl-slice;
   the chain runs one RED, one GREEN and one refactor per impl-slice, so increments inside one cannot run.
-  This split overrides every sizing rule below. A ticket that needs more than 10 dependency-ordered slices is
-  an epic (§28.7), or a decision for the operator when it cannot be split into sub-tickets.
-- Plan **no more than 5 impl-slices** per ticket. A small ticket is one slice.
+  This split overrides every sizing rule below except the limit of 10. A ticket that needs more than 10
+  dependency-ordered slices is an epic (§28.7), or a decision for the operator when it cannot be split into
+  sub-tickets.
+- Target **no more than 5 impl-slices** per ticket; only the dependency split above may take a ticket past 5,
+  and never past **10**. A small ticket is one slice.
 - Estimate each slice's size (production plus test lines changed). Aim for slices of **more than 200 lines**,
   and let no slice fall below **one eighth** of the ticket's total estimate.
 - Fold a slice that misses those marks into the slice before or after it, and give the combined slice every
@@ -47,7 +49,7 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
 - Group by shared work: slices that extend the same test file, doc, or changelog entry belong together, and
   so do pinning tests of behavior that already holds (their GREEN has nothing to change).
 
-The cap, the size floor, folding and grouping are planning guidance for you alone; reviewers do not grade
+The target, the size floor, folding and grouping are planning guidance for you alone; reviewers do not grade
 slice count or size. The dependency split is not sizing: the tracer-slicer grades it.
 
 ## Machine-read plan blocks
