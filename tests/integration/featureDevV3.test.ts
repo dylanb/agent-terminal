@@ -172,10 +172,27 @@ describe('each implementation step is a goal session that reviews its own work (
     }
   });
 
-  it('the green goal names the frozen-tests bar the gate checks: no test changed since RED', () => {
+  it('the green goal names the frozen-tests bar the gate checks: no line of a RED test changed or removed', () => {
     const goal = loop('green-loop').work.goal ?? '';
     expect(goal).not.toContain('the RED tests unchanged');
-    expect(goal).toContain('no test changed since RED');
+    expect(goal).toContain('no line of a RED test changed or removed');
+  });
+
+  it('green may add tests that test behaviour and weaken no other test, seen failing first, but never edits a RED test', () => {
+    const work = flat(text(loop('green-loop').work.recipe));
+    expect(work).toMatch(/Never change or remove a line of a test RED wrote/);
+    expect(work).toMatch(/You may add new tests/);
+    expect(work).toMatch(/must test observable behaviour, never the implementation, and must not weaken any other test/);
+    expect(work).toMatch(/run it to see it fail/);
+    const boundary = flat(brief(loop('green-loop')));
+    expect(boundary).toContain('a change to or removal of a line of a test RED wrote');
+    expect(boundary).not.toContain('an edit to a test that is frozen at this point');
+  });
+
+  it('green\'s regression-guard reviewer grades the tests GREEN added', () => {
+    const charter = flat(text(loop('green-loop').reviewers.find((r) => r.persona === 'impl-review-regression-guard')!.charter));
+    expect(charter).toMatch(/For each test GREEN added, confirm it weakens no other test/);
+    expect(charter).toMatch(/tests observable behavior, not the implementation, and was seen failing before the code it covers/);
   });
 
   it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {

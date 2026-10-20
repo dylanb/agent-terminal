@@ -62,7 +62,7 @@ The operator settled the intent before you started: the ticket, the plan they ap
 input, whose `## Decision boundary` names what may be decided without them. Decide every question inside that
 boundary yourself, and any choice the ticket, the plan and the repository's standards leave open: choose what
 best serves the MVP and the plan, apply it, and log it. Something outside it — a change to an acceptance
-criterion, to the scope, or to a contract the plan names, an edit to a test that is frozen at this point, or
+criterion, to the scope, or to a contract the plan names, a change to or removal of a line of a test RED wrote, or
 anything the repository's standards say to escalate — you do not apply: log it under Needs your call with your
 recommendation, and carry on without it. Only when no choice inside the boundary lets you go on at all, stop as
 blocked, as your progress instructions say: the step then stops for the operator.
