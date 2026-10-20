@@ -105,6 +105,9 @@ export interface TurnRunner {
   /** The operator took a stalled turn out of the runner's hands (accept or terminate): a later done-signal for
    *  it must not complete it a second time. */
   release(): void;
+  /** §27.3 — a turn that stopped at its gate for the operator is back in flight with its prompt already in, so
+   *  its next done-signal completes, retries or errors it as usual. Inert while a turn is in flight. */
+  reopen(turnKey: string): void;
   state(): TurnState;
   /** A turn that went quiet after its prompt went in, which its own done-signal still finishes (§27.12). */
   stalled(): boolean;
@@ -298,6 +301,17 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     },
     release() {
       stalled = false;
+    },
+    reopen(key) {
+      if (state === 'in-flight') return;
+      turnKey = key;
+      attempts = 1;
+      retryCause = null;
+      awaitingInjectable = false;
+      stalled = false;
+      preamble = null;
+      setState('in-flight');
+      deps.armTimer();
     },
     state() {
       return state;

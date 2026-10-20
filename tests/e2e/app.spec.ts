@@ -7980,6 +7980,45 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   rmSync(binDir, { recursive: true, force: true });
 });
 
+test('§27.3 v2.207 — once the operator resolves a blocked goal session in the session, its rewritten done-signal takes the step on through its auto gate', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-unblock-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-unblock-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-unblock-bin-', { realCommitOps: true });
+  // The groom goal blocks on a question; once the operator answers it in the session, it finishes the goal and
+  // rewrites its progress file and then its turn-done file.
+  const blocked = `printf '{"leg": 1, "status": "blocked", "blocked": "The ticket asks for two exports."}\\n' > "$gp"`;
+  const resolved =
+    `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
+    `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
+    `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
+
+  await typeCommand('Ship one export. Carry on.');
+  await passAutoGate(home, repo, 'groom');
+  expect(readIf(appFlowState(repo))).toContain('step: groom-approve\n');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // Without shell integration there is no command span, so the agent is read from the terminal's foreground process.
 for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detected from what the terminal runs (shell integration ${integration === '1' ? 'on' : 'off'}), a goal session spawns its reviewers as their Codex agents`, { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-codexv3-', {

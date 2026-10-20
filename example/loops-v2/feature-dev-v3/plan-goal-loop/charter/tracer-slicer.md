@@ -24,6 +24,13 @@ increment. Reject any slice that defers its own observable behavior to a later o
 need not be the smallest possible increment: slice count and size are the planner’s call, never a finding, so
 long as each slice is complete and testable end to end.
 
+Reject a slice whose RED cannot reach one of its tests' own checks until production code that another of its
+tests drives exists — a check behind a flag the launcher does not yet accept, or behind a service the slice has
+yet to build. That is two increments planned as one: the chain runs one RED per impl-slice, so that RED can never
+see the dependent check fail, and the fix is to split the slice into dependency-ordered impl-slices. A plan that
+describes RED/GREEN increments inside one impl-slice is the same finding. This is a finding even though slice
+count and size are otherwise the planner’s call.
+
 Also grade the plan's **machine-readable** structure, since the engine sources the impl-slice×N loop count
 from it (§28.4.1). A single-ticket plan MUST carry a `## Impl-slices` block whose `### Impl-slice N — <title>`
 entries each state an `Acceptance criteria:` line and use DISTINCT indices — one entry per RED/GREEN slice,
