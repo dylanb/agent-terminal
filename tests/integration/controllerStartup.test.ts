@@ -81,8 +81,9 @@ describe('initial controller registration', () => {
     expect.soft(attempts.length, 'retry must remain slow').toBeLessThanOrEqual(4);
     expect.soft(peak, 'only one pending registration at a time').toBe(1);
     for (let i = 1; i < attempts.length; i++) {
-      expect.soft(attempts[i] - attempts[i - 1]).toBeGreaterThanOrEqual(5_000);
-      expect.soft(attempts[i] - attempts[i - 1]).toBeLessThanOrEqual(8_000);
+      const elapsedMs = Math.round(attempts[i] - attempts[i - 1]);
+      expect.soft(elapsedMs).toBeGreaterThanOrEqual(5_000);
+      expect.soft(elapsedMs).toBeLessThanOrEqual(8_000);
     }
     cancel();
     const countAtClose = attempts.length;

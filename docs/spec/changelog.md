@@ -1,3 +1,5 @@
+> **#218 timing clarification (operator decision 2026-10-20):** Compare observed retry gaps with the 5–8 second bounds after rounding each elapsed interval to the nearest millisecond. Nominal retry scheduling and registration deadlines are unchanged.
+
 > **#218 slice 1:** Mandatory confirmed controller registration before shell/flow startup, usable waiting guidance, bounded pending retries and cancellation. §5, §6, §11 and §23.6 describe the readiness handshake and initial timing; established-connection recovery and retained-pane behavior remain the dependent slices.
 
 > **C1 (#217):** Added §23.6 separate controller launch, fixed launch identity, connection-owned terminal activation and independent-work lifecycle; §6 documents the controller preload and IPC contract; §11 and README document separate packages, Ubuntu verification scope and the accepted native macOS GUI verification gap. Later controller slices retain their assigned scope.
