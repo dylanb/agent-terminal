@@ -1,3 +1,4 @@
+import { shellQuote } from '../../src/shared/shellQuote';
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { cpSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,7 +38,7 @@ test('packaged controller identifies and activates independent packaged terminal
       await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
       await terminals[index].page.locator('.xterm-screen').click();
       await terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
-      typeAtDesktop(`printf 'PACKAGED_READY_%s\\n' '${index}'`, h.fixture.env);
+      typeAtDesktop(`printf 'PACKAGED_READY_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect(terminals[index].page.locator('.xterm-rows')).toContainText(`PACKAGED_READY_${index}`);
       await terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
       await expect.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
@@ -49,7 +50,7 @@ test('packaged controller identifies and activates independent packaged terminal
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => ({
         minimized: BrowserWindow.getAllWindows()[0].isMinimized(), focused: BrowserWindow.getAllWindows()[0].isFocused(),
       }))).toEqual({ minimized: false, focused: true });
-      typeAtDesktop(`printf 'PACKAGED_TARGET_%s\\n' '${index}'`, h.fixture.env);
+      typeAtDesktop(`printf 'PACKAGED_TARGET_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect.soft(terminals[index].page.locator('.xterm-rows')).toContainText(`PACKAGED_TARGET_${index}`);
       await expect.soft(terminals[1 - index].page.locator('.xterm-rows')).not.toContainText(`PACKAGED_TARGET_${index}`);
     }
@@ -57,7 +58,7 @@ test('packaged controller identifies and activates independent packaged terminal
     for (const [index, terminal] of terminals.entries()) {
       await terminal.app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.restore(); window.focus(); });
       await terminal.page.locator('.xterm-screen').click();
-      typeAtDesktop(`printf 'PACKAGED_AFTER_QUIT_%s\\n' '${index}'`, h.fixture.env);
+      typeAtDesktop(`printf 'PACKAGED_AFTER_QUIT_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect(terminal.page.locator('.xterm-rows')).toContainText(`PACKAGED_AFTER_QUIT_${index}`);
     }
     for (const runtime of ['missing', 'corrupt'] as const) {

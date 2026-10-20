@@ -1,5 +1,5 @@
 import { connect, type Socket } from 'node:net';
-import { resolveControllerEndpoint } from './controllerTransport';
+import { resolveControllerEndpoint } from './controllerEndpoint';
 import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 

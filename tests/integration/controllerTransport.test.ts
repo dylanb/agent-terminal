@@ -1,3 +1,4 @@
+import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, createServer, type Socket } from 'node:net';
 import { once } from 'node:events';
@@ -6,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { startControllerTransport, resolveControllerEndpoint, CONTROLLER_ACTIVATION_TIMEOUT_MS } from '../../src/main/controllerTransport';
+import { startControllerTransport, CONTROLLER_ACTIVATION_TIMEOUT_MS } from '../../src/main/controllerTransport';
 import { createControllerDecoder, encodeControllerMessage, type ControllerMessage } from '../../src/shared/controllerProtocol';
 
 describe('controller real local transport', () => {
@@ -67,7 +68,6 @@ describe('controller real local transport', () => {
       } else {
         mkdirSync(directory, { mode: 0o700 });
         if (kind === 'permissions') chmodSync(directory, 0o777);
-        // Model a different invoking OS user; retain the real on-disk owner and filesystem.
         if (kind === 'ownership') vi.spyOn(process, 'getuid').mockReturnValue(statSync(directory).uid + 1);
       }
       const outcome = await startControllerTransport(appHome).then(value => {

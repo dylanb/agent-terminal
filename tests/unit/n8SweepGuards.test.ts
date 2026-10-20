@@ -98,8 +98,8 @@ function resolveModule(fromFile: string, spec: string): string | null {
 describe('AC1 — no orphaned src module survives the sweep', () => {
   const ROOTS = [
     'src/main/index.ts',
-    'src/main/controller.ts', // controller main build entry
-    'src/renderer/src/controller.ts', // controller.html module entry
+    'src/main/controller.ts',
+    'src/renderer/src/controller.ts',
     'src/preload/index.ts',
     'src/renderer/src/index.ts',
     'src/main/appIconBuild.ts', // build-time

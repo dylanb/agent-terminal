@@ -1,6 +1,7 @@
 import { connect, createServer, type Socket } from 'node:net';
 import { lstat, mkdir, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
 import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
@@ -8,10 +9,6 @@ import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
-
-export function resolveControllerEndpoint(appHome: string): string {
-  return join(appHome, 'controller', 'socket');
-}
 
 export async function startControllerTransport(appHome: string): Promise<{
   terminals(): ControllerTerminal[];

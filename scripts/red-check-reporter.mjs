@@ -1,7 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-// §28.5.2
 export default class RedCheckReporter {
   onTestRunEnd(modules, unhandledErrors) {
     const tests = [];

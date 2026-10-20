@@ -248,7 +248,6 @@ export interface StepScript {
   consolidateAttempts?: string[];
   // Shell run before the done-signal of this step's n-th turn of each kind (index = n-1).
   extraShell?: { work?: string[]; review?: string[]; consolidate?: string[] };
-  // Append every submitted line to .agent-terminal/injected-log.
   logInjected?: boolean;
 }
 

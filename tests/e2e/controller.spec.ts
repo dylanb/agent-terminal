@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { join, resolve } from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createControllerHarness } from './controllerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { createControllerDesktopHarness } from './controllerDesktop';
@@ -45,14 +45,16 @@ test('controller keeps launch identity after real shell navigation', { tag: '@ow
   const h = createControllerHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+    const destination = join(h.fixture.nonGit, "operator's directory");
+    mkdirSync(destination);
     const original = h.fixture.worktrees[0];
     const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, original);
     await terminal.page.locator('.xterm-screen').click();
-    await terminal.page.keyboard.type(`cd '${h.fixture.nonGit}' && printf 'NAVIGATED_%s\\n' "$PWD"`);
+    await terminal.page.keyboard.type(`cd ${shellQuote(destination)} && printf 'NAVIGATED_%s\\n' "$PWD"`);
     await terminal.page.keyboard.press('Enter');
-    await expect(terminal.page.locator('.xterm-rows')).toContainText(`NAVIGATED_${h.fixture.nonGit}`);
+    await expect(terminal.page.locator('.xterm-rows')).toContainText(`NAVIGATED_${destination}`);
     await expect.soft(controller.page.getByRole('button', { name: original, exact: false })).toHaveCount(1);
-    await expect(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(0);
+    await expect(controller.page.getByRole('button', { name: destination, exact: false })).toHaveCount(0);
   } finally {
     await h.dispose();
   }
@@ -160,7 +162,7 @@ test('terminals continue real PTY work after the controller explicitly quits', {
     await controller.app.close();
     for (const [index, terminal] of terminals.entries()) {
       await terminal.page.locator('.xterm-screen').click();
-      await terminal.page.keyboard.type(`printf 'AFTER_QUIT_%s\\n' '${index}'`);
+      await terminal.page.keyboard.type(`printf 'AFTER_QUIT_%s\\n' ${shellQuote(String(index))}`);
       await terminal.page.keyboard.press('Enter');
       await expect(terminal.page.locator('.xterm-rows')).toContainText(`AFTER_QUIT_${index}`);
     }
@@ -325,7 +327,7 @@ test('pane activation delivers desktop keyboard input only to the selected termi
     for (const [index, terminal] of terminals.entries()) {
       await terminal.page.locator('.xterm-screen').click();
       await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
-      typeAtDesktop(`printf 'DESKTOP_READY_%s\\n' '${index}'`, h.fixture.env);
+      typeAtDesktop(`printf 'DESKTOP_READY_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect(terminal.page.locator('.xterm-rows')).toContainText(`DESKTOP_READY_${index}`);
       await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
       await expect.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
@@ -335,7 +337,7 @@ test('pane activation delivers desktop keyboard input only to the selected termi
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
       await controller.page.getByRole('button', { name: directory, exact: false }).click();
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      typeAtDesktop(`printf 'DESKTOP_TARGET_%s\\n' '${index}'`, h.fixture.env);
+      typeAtDesktop(`printf 'DESKTOP_TARGET_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect.soft(terminals[index].page.locator('.xterm-rows')).toContainText(`DESKTOP_TARGET_${index}`);
       await expect.soft(terminals[1 - index].page.locator('.xterm-rows')).not.toContainText(`DESKTOP_TARGET_${index}`);
     }
