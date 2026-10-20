@@ -109,30 +109,30 @@ async function benchRunCommand(args: string[], env: NodeJS.ProcessEnv, invoking:
   return { exitCode: 1, output: `${folders}bench run refused (${result.code}): ${RUN_REFUSALS[result.code]}${result.reason === undefined ? '' : ` — ${result.reason}`}\n` };
 }
 
+async function benchCaptureCommand(args: string[], env: NodeJS.ProcessEnv, invoking: string, deps: BenchDeps): Promise<BenchOutcome> {
+  const [workingFolder, fixtureDir, ...rest] = args;
+  if (workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
+  const fixture = path.resolve(invoking, fixtureDir);
+  const result = await captureFixture({
+    workingFolder: path.resolve(invoking, workingFolder),
+    fixtureDir: fixture,
+    appHome: resolveAppHome(env, env.HOME ?? ''),
+    github: deps.github,
+  });
+  if (!result.ok) return { exitCode: 1, output: `bench capture refused (${result.code}): ${CAPTURE_REFUSALS[result.code]}\n` };
+  return { exitCode: 0, output: `${fixture}\n` };
+}
+
+const COMMANDS = { capture: benchCaptureCommand, run: benchRunCommand } as const;
+
 export async function benchMain(argv: string[], env: NodeJS.ProcessEnv, cwd: string, deps: BenchDeps): Promise<BenchOutcome> {
   // `pnpm run` moves the working directory to the package root and names the invoking one in INIT_CWD.
   const invoking = env.INIT_CWD || cwd;
   const [command, ...args] = argv;
-  if (command === 'run') {
-    try {
-      return await benchRunCommand(args, env, invoking, deps);
-    } catch (e) {
-      return { exitCode: 1, output: `bench run failed: ${errMsg(e)}\n` };
-    }
-  }
-  const [workingFolder, fixtureDir, ...rest] = args;
-  if (command !== 'capture' || workingFolder === undefined || fixtureDir === undefined || rest.length > 0) return { exitCode: 1, output: USAGE };
-  const fixture = path.resolve(invoking, fixtureDir);
+  if (command !== 'capture' && command !== 'run') return { exitCode: 1, output: USAGE };
   try {
-    const result = await captureFixture({
-      workingFolder: path.resolve(invoking, workingFolder),
-      fixtureDir: fixture,
-      appHome: resolveAppHome(env, env.HOME ?? ''),
-      github: deps.github,
-    });
-    if (!result.ok) return { exitCode: 1, output: `bench capture refused (${result.code}): ${CAPTURE_REFUSALS[result.code]}\n` };
-    return { exitCode: 0, output: `${fixture}\n` };
+    return await COMMANDS[command](args, env, invoking, deps);
   } catch (e) {
-    return { exitCode: 1, output: `bench capture failed: ${errMsg(e)}\n` };
+    return { exitCode: 1, output: `bench ${command} failed: ${errMsg(e)}\n` };
   }
 }

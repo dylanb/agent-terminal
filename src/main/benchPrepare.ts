@@ -61,16 +61,16 @@ class PrepareError extends Error {
   }
 }
 
+const confinedOk = (jail: string, target: string): boolean => {
+  const res = confinedRealPathResult(jail, target);
+  return res.ok && res.path === path.resolve(target);
+};
+
 /** `jail` as a symlink-free directory inside the worktree, or a restore refusal (CWE-22/59). */
 function ownJail(jail: string | null, what: string): string {
   if (jail === null || !confinedOk(jail, jail)) throw new PrepareError('restore-escapes', `${what} resolves outside the working folder`);
   return jail;
 }
-
-const confinedOk = (jail: string, target: string): boolean => {
-  const res = confinedRealPathResult(jail, target);
-  return res.ok && res.path === path.resolve(target);
-};
 
 /** Writes `bytes` at `rel` under `jail`, the destination confined before any directory is created. */
 function writeConfined(jail: string, rel: string, bytes: Buffer | string): void {
