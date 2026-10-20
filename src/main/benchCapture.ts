@@ -95,30 +95,8 @@ function readArtifacts(dir: string): ArtifactWalk {
   return root.ok && walk(root.path, '') ? { ok: true, files } : { ok: false };
 }
 
-/** Writes nothing until every check has passed, and removes a fixture folder it could not finish. */
-export async function captureFixture(request: BenchCaptureRequest): Promise<BenchCaptureResult> {
-  const { workingFolder: dir, fixtureDir, appHome, github } = request;
-  if (exists(fixtureDir)) return refused('fixture-exists');
-  if (await hasUncommittedChanges(dir)) return refused('uncommitted-changes');
-  const state = createFlowStateStore(dir).read();
-  const ticket = ticketOf(dir, appHome, state?.inputs ?? {});
-  if (ticket === null) return refused('ticket-unresolved');
-  const artifacts = readArtifacts(dir);
-  if (!artifacts.ok) return refused('artifact-escapes');
-
-  const commit = parseAppGitObjectId(await runAppCommand('git', ['rev-parse', '--verify', 'HEAD^{commit}'], dir), 'HEAD');
-  const branch = currentGitBranch(dir);
-  const baseline = baselineForBranch(readBaselineCommit(dir), branch.ok ? branch.branch : null);
-  const inputs = Object.fromEntries(Object.entries(state?.inputs ?? {}).filter(([name]) => name !== ticket.name));
-  const fixture: BenchFixture = {
-    schema_version: BENCH_FIXTURE_SCHEMA,
-    commit,
-    ...(baseline !== null ? { phase_baseline: baseline.sha } : {}),
-    issue: { repository: await github.repositoryOf(dir), number: ticket.number },
-    inputs,
-    repeat_counts: { ...(state?.repeatCounts ?? {}) },
-  };
-
+/** Removes a fixture folder it could not finish, so a failed write leaves no half-written fixture. */
+function writeFixture(fixtureDir: string, fixture: BenchFixture, artifacts: Map<string, Buffer>): BenchCaptureResult {
   mkdirSync(path.dirname(fixtureDir), { recursive: true });
   try {
     mkdirSync(fixtureDir);
@@ -127,7 +105,7 @@ export async function captureFixture(request: BenchCaptureRequest): Promise<Benc
     throw e;
   }
   try {
-    for (const [rel, bytes] of artifacts.files) {
+    for (const [rel, bytes] of artifacts) {
       const file = path.join(fixtureDir, BENCH_FIXTURE_ARTIFACTS, rel);
       mkdirSync(path.dirname(file), { recursive: true });
       writeFileSync(file, bytes);
@@ -138,4 +116,33 @@ export async function captureFixture(request: BenchCaptureRequest): Promise<Benc
     throw e;
   }
   return { ok: true };
+}
+
+/** Writes nothing until every check has passed. */
+export async function captureFixture(request: BenchCaptureRequest): Promise<BenchCaptureResult> {
+  const { workingFolder: dir, fixtureDir, appHome, github } = request;
+  if (exists(fixtureDir)) return refused('fixture-exists');
+  if (await hasUncommittedChanges(dir)) return refused('uncommitted-changes');
+  const state = createFlowStateStore(dir).read();
+  const stateInputs = state?.inputs ?? {};
+  const ticket = ticketOf(dir, appHome, stateInputs);
+  if (ticket === null) return refused('ticket-unresolved');
+  const artifacts = readArtifacts(dir);
+  if (!artifacts.ok) return refused('artifact-escapes');
+
+  const commit = parseAppGitObjectId(await runAppCommand('git', ['rev-parse', '--verify', 'HEAD^{commit}'], dir), 'HEAD');
+  const branch = currentGitBranch(dir);
+  const baseline = baselineForBranch(readBaselineCommit(dir), branch.ok ? branch.branch : null);
+  return writeFixture(
+    fixtureDir,
+    {
+      schema_version: BENCH_FIXTURE_SCHEMA,
+      commit,
+      ...(baseline !== null ? { phase_baseline: baseline.sha } : {}),
+      issue: { repository: await github.repositoryOf(dir), number: ticket.number },
+      inputs: Object.fromEntries(Object.entries(stateInputs).filter(([name]) => name !== ticket.name)),
+      repeat_counts: { ...(state?.repeatCounts ?? {}) },
+    },
+    artifacts.files,
+  );
 }
