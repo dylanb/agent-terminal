@@ -13,13 +13,14 @@ export function createControllerFixture() {
     mkdirSync(config);
     mkdirSync(bin);
     const shell = join(bin, 'bash');
-    writeFileSync(shell, '#!/bin/sh\nif [ "$1" = "-l" ]; then shift; fi\nexec /bin/bash --noprofile --norc "$@"\n', { mode: 0o700 });
+    writeFileSync(shell, '#!/bin/sh\nif [ "$1" = "-l" ]; then shift; fi\nif [ "$#" = 0 ]; then printf "started\\n" >> "$CONTROLLER_TEST_SHELL_STARTS"; fi\nexec /bin/bash --noprofile --norc "$@"\n', { mode: 0o700 });
     const env: Record<string, string> = {};
     for (const key of ['HOME', 'PATH', 'DISPLAY', 'XAUTHORITY', 'TMPDIR', 'SystemRoot']) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     Object.assign(env, {
       APP_HOME_DIR: home, APP_SHELL: shell, CLAUDE_CONFIG_DIR: config,
+      CONTROLLER_TEST_SHELL_STARTS: join(root, 'shell-starts'),
       XDG_CONFIG_HOME: config, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_AUTHOR_NAME: 'Controller fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
       GIT_COMMITTER_NAME: 'Controller fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',

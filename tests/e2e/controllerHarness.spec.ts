@@ -1,7 +1,28 @@
-import { expect, test } from '@playwright/test';
-import { existsSync } from 'node:fs';
+import { test, expect } from '@playwright/test';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
+
+test('controller harness owns crash, restart and real shell startup evidence', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  const root = h.fixture.root;
+  try {
+    const target = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
+    const controller = await h.launch(target, h.fixture.nonGit);
+    const child = controller.app.process();
+    await h.crash(controller.app);
+    expect(child.signalCode).toBe('SIGKILL');
+    const restarted = await h.launch(target, h.fixture.nonGit);
+    await expect(restarted.page.locator('body')).toContainText(/no terminals (?:are )?connected/i);
+    const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
+    await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
+    const marker = join(root, 'shell-starts');
+    await expect.poll(() => existsSync(marker) ? readFileSync(marker, 'utf8') : '').toBe('started\n');
+  } finally {
+    await h.dispose();
+  }
+  expect(existsSync(root)).toBe(false);
+});
 
 test('controller harness owns two independent real terminals and cleans up', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();

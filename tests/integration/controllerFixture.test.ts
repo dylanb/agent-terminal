@@ -1,10 +1,23 @@
 import { afterEach, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createControllerFixture } from '../helpers/controllerFixture';
 
 const fixtures: ReturnType<typeof createControllerFixture>[] = [];
 afterEach(() => { for (const fixture of fixtures.splice(0)) fixture.dispose(); });
+
+it('records session shell startups without counting login PATH probes', () => {
+  const fixture = createControllerFixture(); fixtures.push(fixture);
+  const marker = join(fixture.root, 'shell-starts');
+  expect(existsSync(marker)).toBe(false);
+  execFileSync(fixture.env.APP_SHELL, ['-l', '-c', 'echo -n "$PATH"'], { env: fixture.env });
+  expect(existsSync(marker)).toBe(false);
+  for (const args of [[], ['-l']]) {
+    execFileSync(fixture.env.APP_SHELL, args, { env: fixture.env, input: 'exit 0\n' });
+  }
+  expect(readFileSync(marker, 'utf8')).toBe('started\nstarted\n');
+});
 
 it('owns isolated state, real equal-basename repositories and worktrees without changing HOME', () => {
   const a = createControllerFixture(); fixtures.push(a);
