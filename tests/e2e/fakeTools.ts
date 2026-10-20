@@ -248,7 +248,7 @@ export interface StepScript {
   consolidateAttempts?: string[];
   // Shell run before the done-signal of this step's n-th turn of each kind (index = n-1).
   extraShell?: { work?: string[]; review?: string[]; consolidate?: string[] };
-  // Append every non-empty injected line to .agent-terminal/injected-log.
+  // Append every submitted line to .agent-terminal/injected-log.
   logInjected?: boolean;
 }
 
@@ -411,8 +411,8 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     turnCountFn(binDir) +
     'while IFS= read -r line; do\n' +
-    '  [ -z "$line" ] && continue\n' +
     logInjected +
+    '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     repairArm +

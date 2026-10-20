@@ -164,6 +164,8 @@ import {
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
 import { createRealAppBootstrapPorts } from './appBootstrapPorts';
+import { registerControllerTerminal } from './controllerClient';
+import { captureControllerIdentity } from './controllerIdentity';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -196,6 +198,7 @@ async function createWindow(): Promise<void> {
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
   });
+  const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot));
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
   // PTY I/O after the shell exits is dropped, not driven into a dead master fd (§5; ptyIo.ts).
   const ptyIo = createPtyIo(ptyProcess);
@@ -1444,6 +1447,7 @@ async function createWindow(): Promise<void> {
     // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
+      unregisterController,
       () => disposeIpc(),
       () => ptyProcess.kill(),
       () => scanner.dispose(),

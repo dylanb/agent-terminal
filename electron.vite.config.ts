@@ -35,6 +35,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: path.resolve(__dirname, 'src/main/index.ts'),
+          controller: path.resolve(__dirname, 'src/main/controller.ts'),
           // §27.12 — the agent-runnable format checker, resolved at runtime by resolveArtifactCheckScript.
           [ARTIFACT_CHECK_ENTRY]: path.resolve(__dirname, 'src/main/artifactCheckMain.ts'),
         },
@@ -44,5 +45,8 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
   },
-  renderer: {},
+  renderer: { build: { rollupOptions: { input: {
+    index: path.resolve(__dirname, 'src/renderer/index.html'),
+    controller: path.resolve(__dirname, 'src/renderer/controller.html'),
+  } } } },
 });

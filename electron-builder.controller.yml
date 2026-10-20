@@ -1,0 +1,8 @@
+extends: ./electron-builder.yml
+appId: dev.agentterminal.controller
+productName: agent-terminal-controller
+directories:
+  output: dist/controller
+extraMetadata:
+  name: agent-terminal-controller
+  main: out/main/controller.js

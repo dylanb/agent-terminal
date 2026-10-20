@@ -1281,5 +1281,27 @@ declare global {
     flow: FlowApi;
     cli: CliApi;
     examples: ExamplesApi;
+    controller: ControllerApi;
   }
 }
+export interface ControllerTerminal {
+  id: string;
+  launchDirectory: string;
+  repositoryRoot: string | null;
+}
+
+export interface ControllerApi {
+  subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
+  activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
+}
+
+export const CONTROLLER_CH = {
+  subscribe: 'controller:subscribe',
+  terminals: 'controller:terminals',
+  activate: 'controller:activate',
+} as const;
+export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
+
+export interface ControllerSnapshot { sessionId: SessionId; terminals: ControllerTerminal[] }
+export interface ControllerActivation { sessionId: SessionId; id: string }
+
