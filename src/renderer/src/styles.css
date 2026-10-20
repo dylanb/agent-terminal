@@ -620,3 +620,5 @@ button:hover { border-color:var(--dim); }
 .controller-pane-list button { min-width:0; white-space:normal; overflow-wrap:anywhere; text-align:left; padding:var(--r); border:1px solid var(--hair); border-radius:var(--r); background:var(--card); color:var(--text); }
 .controller-panes > [role="alert"]:empty { margin:0; }
 body:has(> .controller-panes) { overflow:visible; }
+
+.startup-waiting { padding:clamp(16px, 4vw, 48px); height:100%; overflow:auto; overflow-wrap:anywhere; }

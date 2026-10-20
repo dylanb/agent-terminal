@@ -19,7 +19,12 @@
         <circle cx="13.5" cy="5.1" r="1.6" fill="currentColor" />
       </symbol>
     </svg>
-    <div id="app" class="app">
+    <section id="startup-waiting" class="startup-waiting" role="status">
+      <h1>Waiting for the controller</h1>
+      <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If it is already running, make sure both apps use the same build and restart the controller.</p>
+      <p>You can close this window while waiting.</p>
+    </section>
+    <div id="app" class="app" hidden>
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
         <nav class="blk" aria-label="Views">

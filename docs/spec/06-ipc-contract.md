@@ -128,3 +128,7 @@ contextBridge.exposeInMainWorld('viewer', {
 
 ---
 
+
+### Initial terminal readiness (#218)
+
+The terminal-only `window.term.startup` API is typed in `src/shared/ipc.ts`. `ready()` invokes `startup:ready` with `sessionId`; its promise resolves only after confirmed controller registration and main-process initialization. The renderer then installs terminal/flow UI and calls `rendered()`, sending `startup:rendered` with `sessionId` to release buffered PTY output. Main validates the sender window and session on both channels. Neither channel authorizes registration or shell startup. Before readiness, the window shows static waiting instructions; terminal input is unrouted and flow-start invokes reject. Closing disposes the handshake and registration.

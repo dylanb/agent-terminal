@@ -36,6 +36,14 @@ import { createCliInstall } from './cliInstall';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
+void window.term.startup.ready().then(() => {
+  document.getElementById('startup-waiting')!.hidden = true;
+  document.getElementById('app')!.hidden = false;
+  initialize();
+  window.term.startup.rendered();
+});
+
+function initialize(): void {
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
 // One shared OSC-7 repo provider (§16.3) so no consumer re-derives the key.
 const repo = createRepoContext(window.monitor);
@@ -350,4 +358,6 @@ if (artifactsHost) {
       if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
     })
     .catch(() => {}); // a rejected invoke (main restart) keeps the default widths, never rejects
+}
+
 }

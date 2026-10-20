@@ -46,6 +46,7 @@ export async function startControllerTransport(appHome: string): Promise<{
           if (message.type === 'register' && !registrations.has(socket)) {
             registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
             notify();
+            socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
           } else if (message.type === 'result') {
             const request = pending.get(message.requestId);
             if (request?.socket === socket) request.finish(message.outcome);
