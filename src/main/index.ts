@@ -198,7 +198,13 @@ async function createWindow(): Promise<void> {
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
   });
-  const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot));
+  const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot), () => {
+    if (win.isDestroyed()) return 'unavailable';
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    return 'activated';
+  });
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
   // PTY I/O after the shell exits is dropped, not driven into a dead master fd (§5; ptyIo.ts).
   const ptyIo = createPtyIo(ptyProcess);

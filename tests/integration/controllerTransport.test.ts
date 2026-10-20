@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, type Socket } from 'node:net';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startControllerTransport, resolveControllerEndpoint, CONTROLLER_ACTIVATION_TIMEOUT_MS } from '../../src/main/controllerTransport';
@@ -19,6 +21,7 @@ describe('controller real local transport', () => {
   });
   afterEach(async () => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     for (const peer of peers.splice(0)) peer.destroy();
     await server?.dispose();
     server = undefined;
@@ -51,6 +54,122 @@ describe('controller real local transport', () => {
       { id: expect.any(String), launchDirectory: '/work/first', repositoryRoot: null },
     ]));
   });
+
+  it.each(['permissions', 'ownership', 'file', 'symlink'] as const)(
+    'rejects an existing endpoint directory with unsafe %s without changing it', async kind => {
+      const directory = dirname(resolveControllerEndpoint(appHome));
+      mkdirSync(appHome, { recursive: true, mode: 0o700 });
+      const target = join(root, 'target');
+      if (kind === 'file') writeFileSync(directory, 'leave this file alone');
+      else if (kind === 'symlink') {
+        mkdirSync(target, { mode: 0o700 });
+        symlinkSync(target, directory);
+      } else {
+        mkdirSync(directory, { mode: 0o700 });
+        if (kind === 'permissions') chmodSync(directory, 0o777);
+        // Model a different invoking OS user; retain the real on-disk owner and filesystem.
+        if (kind === 'ownership') vi.spyOn(process, 'getuid').mockReturnValue(statSync(directory).uid + 1);
+      }
+      const outcome = await startControllerTransport(appHome).then(value => {
+        server = value;
+        return 'listening';
+      }, () => 'rejected');
+      expect.soft(outcome).toBe('rejected');
+      if (kind === 'permissions') expect(statSync(directory).mode & 0o777).toBe(0o777);
+      if (kind === 'file') expect(readFileSync(directory, 'utf8')).toBe('leave this file alone');
+      if (kind === 'symlink') expect(existsSync(join(target, 'socket'))).toBe(false);
+    },
+  );
+
+  async function leaveCrashedControllerEndpoint() {
+    const entry = join(root, 'crash-controller.cjs');
+    await build({
+      stdin: {
+        contents: `import { startControllerTransport } from './src/main/controllerTransport';
+          startControllerTransport(process.argv[2]).then(() => process.stdout.write('ready\\n'));`,
+        resolveDir: process.cwd(),
+      },
+      bundle: true, platform: 'node', format: 'cjs', outfile: entry,
+    });
+    const child = spawn(process.execPath, [entry, appHome], { stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', code => reject(new Error(`Controller exited before ready: ${code}`)));
+        child.stdout!.once('data', () => resolve());
+      });
+    } finally {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
+    expect(statSync(resolveControllerEndpoint(appHome)).isSocket()).toBe(true);
+  }
+
+  it('relaunches after a controller crash and accepts a new terminal', async () => {
+    await leaveCrashedControllerEndpoint();
+    const outcome = await startControllerTransport(appHome).then(value => {
+      server = value;
+      return 'listening';
+    }, () => 'rejected');
+    expect(outcome, 'a dead controller must not prevent relaunch').toBe('listening');
+    await registeredPeer('/work/relaunched');
+  });
+
+  it('concurrent relaunches elect one listener and a later controller cannot replace it', async () => {
+    await leaveCrashedControllerEndpoint();
+    const attempts = await Promise.allSettled([startControllerTransport(appHome), startControllerTransport(appHome)]);
+    const winners = attempts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+    server = winners[0];
+    for (const extra of winners.slice(1)) await extra.dispose();
+    expect(winners, 'exactly one controller must recover the stale endpoint').toHaveLength(1);
+    const original = await registeredPeer('/work/winner');
+    const collision = await startControllerTransport(appHome).then(async value => {
+      await value.dispose();
+      return 'replaced';
+    }, () => 'rejected');
+    expect.soft(collision).toBe('rejected');
+    await registeredPeer('/work/after-relaunch-collision');
+    expect(server!.terminals().map(terminal => terminal.id)).toContain(original.id);
+    const activation = server!.activate(original.id);
+    await vi.waitFor(() => expect(original.received).toHaveLength(1));
+    const request = original.received[0];
+    if (request.type !== 'activate') throw new Error('Expected activation request');
+    original.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    expect(await activation).toBe('activated');
+  });
+
+  it.each(['confirmation', 'disconnect', 'timeout'] as const)(
+    'bounds pending activations and recovers capacity after %s', async release => {
+      server = await startControllerTransport(appHome);
+      const terminal = await registeredPeer('/work/saturated');
+      const healthy = await registeredPeer('/work/healthy');
+      const pending = Array.from({ length: 128 }, () => server!.activate(terminal.id));
+      await vi.waitFor(() => expect(terminal.received).toHaveLength(128));
+      let overflow: string | undefined;
+      const rejected = server.activate(healthy.id).then(value => { overflow = value; return value; });
+      await vi.waitFor(() => expect(overflow, 'overflow must return promptly').toBe('unavailable'));
+      expect.soft(healthy.received).toEqual([]);
+      if (release === 'confirmation') {
+        const request = terminal.received[0];
+        if (request.type !== 'activate') throw new Error('Expected activation request');
+        terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+        expect(await pending[0]).toBe('activated');
+      } else if (release === 'disconnect') {
+        terminal.socket.destroy();
+        expect(await Promise.all(pending)).toEqual(Array(128).fill('unavailable'));
+      } else {
+        expect(await Promise.all(pending)).toEqual(Array(128).fill('unavailable'));
+      }
+      const resumed = server.activate(healthy.id);
+      await vi.waitFor(() => expect(healthy.received).toHaveLength(1));
+      const request = healthy.received[0];
+      if (request.type !== 'activate') throw new Error('Expected activation request');
+      healthy.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+      expect(await resumed).toBe('activated');
+      await rejected;
+    }, 10_000,
+  );
 
   it('gives equal-directory connections separate opaque identities', async () => {
     server = await startControllerTransport(appHome);

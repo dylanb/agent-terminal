@@ -57,3 +57,11 @@ flowchart TD
 
 ---
 
+
+## 23.6 Separate controller — C1 (#217)
+
+A separately launched controller presents one pane per live terminal connection. Registration is optional and never delays independent terminal work. Identity is the resolved launch directory (§23.4) plus optional repository/worktree root captured at launch, fixed for the terminal lifetime. Equal paths do not merge terminals. Each pane activates only its connection’s original window, restoring and focusing it without PTY input, flow transitions, or gate decisions. The empty state explains launch order; panes reflow with the available width.
+
+The controller’s close action minimizes its window and retains connections. Explicit Quit releases its connections while terminals continue. C1 removes ended connections automatically and provides accessible unavailable feedback for unconfirmed activation, without claiming that a timeout proves disconnection. A confirmed result survives a later disconnect; disconnect before confirmation returns unavailable. No discovery of earlier terminals, reconnection, persistent registry, notification replacement, or remote control is added. Retained disconnected panes and dismissal are assigned to #218.
+
+Both applications share a user-local endpoint rooted in the app-state home, with a bounded, versioned data protocol. Live connection identities, not path labels or process IDs, authorize routing. Renderer access is restricted to snapshots and activation through the shared IPC contract. Existing §19 gates and §24.2.3 T4 notifications keep their semantics. See README for installation and C1 lifecycle limits.
