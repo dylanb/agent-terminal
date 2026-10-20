@@ -1,11 +1,12 @@
 // Fake tools shared by the e2e specs (one spec never imports another, or Playwright registers its tests
 // twice): the PATH-first fake `gh`/`git` shims, the scriptable fake agent, and the config/catalog seeds.
 
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { ticketPromptLines } from '../../src/shared/currentTicket';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
 import { exampleConsolidatorOutput, type ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
@@ -30,11 +31,16 @@ export const exampleConfigDir = seedSharedExampleConfig();
 const HOLD_WAIT_FN =
   'hold_wait() { echo "held $$ $2" >> "$FAKE_GHGIT_LOG"; end=$((SECONDS + 30)); while [ -e "$1" ]; do if [ "$SECONDS" -ge "$end" ]; then echo "expired $$" >> "$FAKE_GHGIT_LOG"; return 1; fi; sleep 0.05; done; echo "released $$" >> "$FAKE_GHGIT_LOG"; }\n';
 
+const STORE_SCRIPT = resolve(__dirname, '..', 'helpers', 'fakeGhIssueStore.cjs');
+const STORE_CMD = `${shellQuote(process.execPath)} ${shellQuote(STORE_SCRIPT)}`;
+const STORE_NOT_HELD = 3;
+
 // The §27 bootstrap shells real git/gh. e2e prepends a fake gh + git on PATH that record their argv
 // and emit canned output (no network/auth/remote), so the run is deterministic on a real PTY: the PTY
 // + shell are real, only the bootstrap helpers are stubbed.
-// Returns the bin dir to prepend to PATH and the log file the fakes append every invocation to.
-export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): { binDir: string; logFile: string } {
+// Returns the bin dir to prepend to PATH, a gh-only bin dir (the same `gh`, store and log, no `git`) for a process
+// whose git must stay real, and the log file the fakes append every invocation to.
+export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } = {}): { binDir: string; ghOnlyBinDir: string; logFile: string } {
   const binDir = mkdtempSync(join(tmpdir(), prefix));
   const logFile = join(binDir, 'calls.log');
   // Resolve REAL git once from the test process (whose PATH lacks binDir, so this is never the shim) rather
@@ -125,6 +131,10 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     'action=$(gh_action "$@")\n' +
     'if [ -n "$action" ] && [ -n "$FAKE_GH_HOLD" ] && [ "$action" = "$FAKE_GH_HOLD_ACTION" ] && [ -e "$FAKE_GH_HOLD" ]; then hold_wait "$FAKE_GH_HOLD" "gh $*" || exit 1; fi\n' +
     'if [ -n "$action" ] && [ "$action" = "$FAKE_GH_FAIL_ACTION" ]; then echo "fake gh: injected failure for $action" >&2; exit 1; fi\n' +
+    // The issue store (tests/helpers/fakeGhIssueStore.cjs) answers for the issues it holds and leaves the rest to
+    // the canned arms below.
+    `if [ "$1" = "issue" ] && [ "$2" = "view" ] && compgen -G "$FAKE_GHGIT_LOG.issue.*.json" > /dev/null; then ${STORE_CMD} view "$FAKE_GHGIT_LOG" "$@"; rc=$?; [ "$rc" -ne ${STORE_NOT_HELD} ] && exit "$rc"; fi\n` +
+    `if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then exec ${STORE_CMD} comment "$FAKE_GHGIT_LOG" "$@"; fi\n` +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
     // seedServedTicket's knob; BEFORE the §28.7 body-read arm, which would otherwise shadow the served issue.
@@ -143,7 +153,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     // §28.7 — each `gh issue create` returns a fresh issue URL (a per-binDir counter seeded at 500) so the
     // sub-tickets carry distinct numbers, and CAPTURES its stdin body per-issue so each sub-ticket body is
     // independently assertable (the create must consume stdin or the caller's --body-file - write blocks).
-    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; cat > "$FAKE_GHGIT_LOG.issue-body.$n"; ' +
+    `${STORE_CMD} record-create "$FAKE_GHGIT_LOG" "$n" "$@" < /dev/null || exit 1; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n` +
     // §28.7 — the repo's labels live one per line in a sink: `label list` reports them, `label create` adds one
     // (or fails under FAKE_GH_LABEL_CREATE_FAIL), and under FAKE_GH_STRICT_LABELS an `--add-label` of an
     // agent-loop/* label the repo lacks fails as real GitHub does.
@@ -169,7 +180,37 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     'exit 0\n';
   writeFileSync(join(binDir, 'git'), fakeGit, { mode: 0o755 });
   writeFileSync(join(binDir, 'gh'), fakeGh, { mode: 0o755 });
-  return { binDir, logFile };
+  const ghOnlyBinDir = join(binDir, 'gh-only');
+  mkdirSync(ghOnlyBinDir);
+  writeFileSync(join(ghOnlyBinDir, 'gh'), fakeGh, { mode: 0o755 });
+  return { binDir, ghOnlyBinDir, logFile };
+}
+
+const store = (args: string[], input = ''): string => execFileSync(process.execPath, [STORE_SCRIPT, ...args], { input, encoding: 'utf8' });
+
+/** An issue in the fake `gh` store: `labels` by name, each comment's author by login. */
+export interface FakeGhIssue {
+  number: number;
+  title: string;
+  body: string;
+  labels: string[];
+  comments: { author: string; createdAt: string; body: string }[];
+}
+
+/** Put `issue` in the store of the fake `gh` that logs to `logFile`. */
+export function seedFakeGhIssue(logFile: string, issue: FakeGhIssue): void {
+  store(['seed', logFile], JSON.stringify(issue));
+}
+
+/** The issue the store holds under `number`, as its writes left it, or null when it holds none. */
+export function readFakeGhIssue(logFile: string, number: number): FakeGhIssue | null {
+  const out = store(['dump', logFile, String(number)]);
+  return out.length === 0 ? null : (JSON.parse(out) as FakeGhIssue);
+}
+
+/** The repository's labels before any `gh label create`. */
+export function seedFakeGhLabels(logFile: string, labels: string[]): void {
+  writeFileSync(`${logFile}.labels`, labels.map((l) => `${l}\n`).join(''));
 }
 
 // The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
@@ -428,6 +469,65 @@ export function seedFakeAgentSteps(binDir: string, steps: Record<string, StepScr
 export function seedFakeAgentV2(binDir: string, opts: StepScript & { stepId: string }): void {
   const { stepId, ...step } = opts;
   seedFakeAgentSteps(binDir, { [stepId]: step });
+}
+
+/** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
+export const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "${status}"}\\n' "$leg" > "$gp"`;
+/** The shell that runs every check the goal prompt in `$p` hands the session, logging what each printed. */
+export const GOAL_CHECK_CMD = `grep 'ELECTRON_RUN_AS_NODE=1 ' "$p" | sed 's/^ *//' > .agent-terminal/checks-seen; while IFS= read -r chk <&3; do { eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; done 3< .agent-terminal/checks-seen`;
+/** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
+export const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.json' | head -1)`;
+const STEP_OF_LINE = `$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z0-9-]*' | head -1 | sed 's/turn-done:work-//')`;
+const TICKET_LEAD = `${ticketPromptLines(0)[1].split('#0')[0]}#`;
+
+/** One goal-session fake agent's script. `goal[step]` holds the shell for each `/goal` the session gets for
+ *  `step`, in order (one per leg; a step re-entered later continues the list), run with the leg in `$leg`, the
+ *  progress file in `$gp` and the prompt file in `$p`. `work[step]` holds the shell for each plain work turn of
+ *  `step`, in order. The agent signals done after each entry. `recordTicket` saves, before each `/goal` entry,
+ *  the text of the issue on the prompt's TICKET line to `.agent-terminal/ticket-seen.<step>.txt`. */
+export interface GoalSessionScript {
+  goal?: Record<string, string[]>;
+  work?: Record<string, string[]>;
+  extra?: string[];
+  recordTicket?: boolean;
+}
+
+/** The turns `seedGoalSessionAgent`'s agent got and had no entry for (`<goal|work> <step> <n>`), and each
+ *  `/goal` whose ticket it was told to read but could not (`ticket-unread <step> <n>`). */
+export function goalAgentOverruns(binDir: string): string[] {
+  const file = join(binDir, 'overruns');
+  return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [];
+}
+
+/** A goal-session fake agent: it answers each turn with the next entry of `script` for that turn's step and
+ *  records, in the working folder, every `/goal` line, the prompt each named and every `/compact` line. A turn
+ *  past its step's entries does nothing but log an overrun (`goalAgentOverruns`). */
+export function seedGoalSessionAgent(binDir: string, name: string, script: GoalSessionScript): void {
+  const overruns = shellQuote(join(binDir, 'overruns'));
+  const miss = (what: string): string => `printf '%s\\n' "${what} $n" >> ${overruns}`;
+  const entries = (kind: 'goal' | 'work', step: string, list: string[]): string =>
+    `n=$(turn_count ${shellQuote(`${kind}-${step}`)}); case "$n" in ` +
+    list.map((cmd, i) => `${i + 1}) ${cmd}; ${doneSignal(`work-${step}`)} ;;`).join(' ') +
+    ` *) ${miss(`${kind} ${step}`)} ;; esac`;
+  const readTicket = script.recordTicket
+    ? `l=$(grep -F -m1 ${shellQuote(TICKET_LEAD)} "$p"); t=\${l#*${shellQuote(TICKET_LEAD)}}; t=\${t%%[!0-9]*}; ` +
+      `if [ -n "$l" ] && [ -n "$t" ] && (set -o pipefail; gh issue view "$t" --json title,body,labels,comments | ${STORE_CMD} ticket-text > .agent-terminal/ticket-seen."$step".txt); then :; ` +
+      `else rm -f .agent-terminal/ticket-seen."$step".txt; n=$(turn_count "ticket-$step"); printf '%s\\n' "ticket-unread $step $n" >> ${overruns}; fi; `
+    : '';
+  const goalCases = Object.entries(script.goal ?? {}).map(([step, list]) => `${shellQuote(step)}) ${entries('goal', step, list)} ;;`).join(' ');
+  const workCases = Object.entries(script.work ?? {}).map(([step, list]) => `${shellQuote(step)}) ${entries('work', step, list)} ;;`).join(' ');
+  const text =
+    '#!/usr/bin/env bash\n' +
+    turnCountFn(binDir) +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
+    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
+    `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
+    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; cat "$p" >> .agent-terminal/goal-prompts-seen; ${GOAL_LEG_CMD}; step=${STEP_OF_LINE}; ` +
+    `${readTicket}case "$step" in ${goalCases} *) n=$(turn_count "goal-$step"); printf '%s\\n' "goal $step $n" >> ${overruns} ;; esac ;;\n` +
+    (script.extra ?? []).join('') +
+    `    *turn-done:work-*) step=${STEP_OF_LINE}; case "$step" in ${workCases} *) n=$(turn_count "work-$step"); printf '%s\\n' "work $step $n" >> ${overruns} ;; esac ;;\n` +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, name), text, { mode: 0o755 });
 }
 
 export function writeCatalogEntry(home: string, id: string, yamlText: string): void {
