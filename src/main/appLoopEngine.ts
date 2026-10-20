@@ -1542,6 +1542,25 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return false;
   };
 
+  /** §27.3 — a goal turn at the gate its block stopped it at, whose session no longer records the block. */
+  const blockResolved = (a: ActiveAppTurn | null): a is Extract<ActiveAppTurn, { phase: 'work' }> => {
+    if (a?.phase !== 'work' || a.run.kind !== 'goal' || runner.state() === 'in-flight') return false;
+    const persisted = readAppLoopState(a.repoDir);
+    if (persisted?.turnKey !== a.turnKey || persisted.status !== 'complete' || persisted.verdict !== 'stop for a human') return false;
+    const end = goalEnd(a, a.run);
+    return end.kind === 'shortfall' || end.progress.status !== 'blocked';
+  };
+
+  /** §27.3 */
+  const resumeResolvedBlock = (a: Extract<ActiveAppTurn, { phase: 'work' }>): void => {
+    runner.reopen(a.turnKey);
+    a.verdict = undefined;
+    a.verdictReason = undefined;
+    persist('working');
+    deps.audit(a.repoDir, `§27 goal turn ${a.turnKey} resumed after the operator resolved its block (done-signal)`, 0);
+    hook(() => deps.loopRunEvent?.(a.repoDir, a.stepId, a.turnKey, 'retried'));
+  };
+
   /** §27.3/§27.12c — Accept on a goal turn that does not record the goal done acts on what it records instead:
    *  a shortfall is refused, a checkpoint starts the next leg, a block stops for a human. True when it did. */
   const acceptActsOnGoalProgress = (a: ActiveAppTurn): boolean => {
@@ -1693,6 +1712,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onDoneSignal() {
       if (legPromptPending) return;
       const a = active;
+      if (blockResolved(a)) resumeResolvedBlock(a);
       if (goalStopsShort(a)) {
         runner.onDoneSignal();
       } else if (a?.completion.kind === 'red') {
