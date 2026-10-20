@@ -48,3 +48,15 @@ pnpm run package    # electron-builder: dmg/zip (macOS), AppImage/deb (Linux)
 | `APP_SHELL` | `$SHELL`, else `bash` | Shell binary for the hosted session. Defaults to the user's login shell; set this to override (e.g. Homebrew bash on macOS). |
 | `APP_SUBMIT_DELAY_MS` | `50` | Settle delay between an injected paste and the submitting `\r` (§9.3). Raise on loaded machines/CI if "Insert & submit" submissions are swallowed. |
 | `APP_AUTO_GATE_DECISION_MS` | `300000` | How long the engine may take to decide an `auto` gate before it hands the gate to a human (§27.9.1 N9b.5(e)). A non-finite or non-positive value falls back to the default; fractions round up; values above 2147483647 are clamped to it. |
+
+## Separate controller (C1, #217)
+
+Launch **Agent Terminal Controller** before launching the terminals you want to see. Each pane shows the terminal’s fixed, resolved launch directory and its repository/worktree root when present. Shell navigation does not rename the pane. Two terminals in the same directory remain separate panes. Click a pane (or focus it with Tab and press Enter) to restore and focus that terminal. Activation sends no shell input, agent instructions, or gate decisions.
+
+For development, run `pnpm run build`, then `pnpm exec electron out/main/controller.js`; launch terminals separately with `pnpm exec electron .` from the checkout, using `APP_LAUNCH_DIR` as described in Settings to select a launch directory.
+
+Build the terminal packages with `pnpm run package`. After that build, run `pnpm exec electron-builder --config electron-builder.controller.yml` for the separate controller packages in `dist/controller`. Both use the existing macOS DMG/ZIP and Ubuntu AppImage/DEB distribution formats. Install both applications. On macOS launch `agent-terminal-controller.app`, then `agent-terminal.app`; on Ubuntu launch the controller’s desktop entry or executable, then the terminal’s. Packages contain their runtime resources and do not require a source checkout. Both apps must run as the same user with the same app-state home.
+
+Closing the controller window minimizes it and preserves connections; restore it using the operating system’s window switcher. Use the application’s Quit action to exit. Terminals remain usable without a controller and after it quits. C1 does not discover already-running terminals or reconnect after a controller exit: launch new terminals while the controller is running. A disconnected pane is removed automatically in C1; retained disconnected panes and explicit dismissal belong to #218. An activation that cannot be confirmed reports “Terminal unavailable” without selecting another terminal.
+
+Linux support verification for this slice is Ubuntu only. The native desktop proof uses Ubuntu 24.04.5 LTS with Xfce 4.18/Xorg in an ARM64 VM and unpacked application directories. Native macOS GUI automation is untestable in the current environment under an explicit operator-accepted verification gap; this is not evidence of successful macOS restoration or keyboard delivery.

@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { controllerApi } from './controller';
+import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import {
   CH,
   SESSION_ID,
@@ -221,9 +223,13 @@ export const examplesApi: ExamplesApi = {
     }) as Promise<InstallExamplesResult>,
 };
 
-contextBridge.exposeInMainWorld('term', termApi);
-contextBridge.exposeInMainWorld('monitor', monitorApi);
-contextBridge.exposeInMainWorld('viewer', viewerApi);
-contextBridge.exposeInMainWorld('flow', flowApi);
-contextBridge.exposeInMainWorld('cli', cliApi);
-contextBridge.exposeInMainWorld('examples', examplesApi);
+if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
+  contextBridge.exposeInMainWorld('controller', controllerApi);
+} else {
+  contextBridge.exposeInMainWorld('term', termApi);
+  contextBridge.exposeInMainWorld('monitor', monitorApi);
+  contextBridge.exposeInMainWorld('viewer', viewerApi);
+  contextBridge.exposeInMainWorld('flow', flowApi);
+  contextBridge.exposeInMainWorld('cli', cliApi);
+  contextBridge.exposeInMainWorld('examples', examplesApi);
+}

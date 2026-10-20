@@ -4,6 +4,22 @@ Use `contextIsolation: true`, `nodeIntegration: false`, and a preload script exp
 
 All payloads carry a `sessionId` (a single fixed id in this version). This costs nothing now and means multi-session support later is additive, not a channel redesign.
 
+### Separate controller surface (§23.6, #217)
+
+The controller preload exposes only `window.controller`, with the typed `ControllerApi` and channel names defined in `src/shared/ipc.ts`. Terminal windows retain their existing preload surfaces. The controller main process accepts subscription and activation requests only from its own window.
+
+| Channel | Direction | Payload | Meaning |
+|---|---|---|---|
+| `controller:subscribe` | renderer → main | `{sessionId}` | Request the current connected-terminal snapshot. |
+| `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Current connections, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, and nullable `repositoryRoot`. |
+| `controller:activate` | renderer → main (invoke) | `{sessionId, id} → 'activated' \| 'unavailable'` | Activate only the live connection named by `id`; no shell input or flow operation is accepted. |
+
+`subscribeTerminals(listener)` delivers terminal snapshots and returns an unsubscribe function; `activateTerminal(id)` returns the activation outcome. Directory labels are display data, not routing authority. A confirmed activation remains completed if the connection later closes; disconnection before confirmation or expiry returns unavailable. Late responses cannot change a completed outcome or target a replacement terminal. A timeout alone does not remove a connected pane.
+
+The main processes communicate through the bounded, versioned local protocol defined in `src/shared/controllerProtocol.ts`, not renderer IPC. Both applications share that encoder/decoder and the endpoint resolver. Terminal registration is optional and captures launch identity once; activation invokes only that terminal's window restoration/focus callback. See §23.6 for lifecycle and scope.
+
+### Terminal surfaces
+
 | Channel | Direction | Payload | Meaning |
 |---|---|---|---|
 | `pty:data` | main → renderer | `{sessionId, data: string}` | Output bytes to write to xterm. |
