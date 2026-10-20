@@ -1,3 +1,5 @@
+> **#218 slice 2:** Established connections recover automatically within the initial-registration timing bounds, preserving work and human gates. Controller restart restores distinct live terminals and their original activation targets; closing a terminal cancels recovery. Retained errors and dismissal remain slices 3–4.
+
 > **#218 timing clarification (operator decision 2026-10-20):** Compare observed retry gaps with the 5–8 second bounds after rounding each elapsed interval to the nearest millisecond. Nominal retry scheduling and registration deadlines are unchanged.
 
 > **#218 slice 1:** Mandatory confirmed controller registration before shell/flow startup, usable waiting guidance, bounded pending retries and cancellation. §5, §6, §11 and §23.6 describe the readiness handshake and initial timing; established-connection recovery and retained-pane behavior remain the dependent slices.
