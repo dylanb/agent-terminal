@@ -934,7 +934,7 @@ async function createWindow(): Promise<void> {
   // their own bodies because their readiness/notice handling diverges.
   const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
-    const after = inTransition(repoKey, appLoopEntryFor(kind, benchPorts?.startEntryFor(repoKey)), mutate);
+    const after = inTransition(repoKey, appLoopEntryFor(kind), mutate);
     recordFlowTransition(repoKey, kind, before, after);
     return trackLoop(repoKey, withDerived(repoKey, after));
   };
