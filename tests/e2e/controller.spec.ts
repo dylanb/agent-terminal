@@ -169,7 +169,7 @@ test('terminals continue real PTY work after the controller explicitly quits', {
   } finally { await h.dispose(); }
 });
 
-test('controller removes only the disconnected terminal and explains the final empty state', { tag: '@ownapp' }, async () => {
+test('controller retains disconnected identities while another terminal remains activatable', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
@@ -177,7 +177,8 @@ test('controller removes only the disconnected terminal and explains the final e
       h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory)));
     await expect.soft(controller.page.getByRole('button')).toHaveCount(2);
     await terminals[0].app.close();
-    await expect.soft(controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false })).toHaveCount(0);
+    await expect.soft(controller.page.locator('body')).toContainText(h.fixture.repositories[0]);
+    await expect.soft(controller.page.locator('body')).toContainText(/disconnected/i);
     await expect.soft(controller.page.getByRole('button', { name: h.fixture.repositories[1], exact: false })).toHaveCount(1);
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
@@ -188,9 +189,8 @@ test('controller removes only the disconnected terminal and explains the final e
     await terminals[1].page.keyboard.press('Enter');
     await expect(terminals[1].page.locator('.xterm-rows')).toContainText('SURVIVOR_ALIVE');
     await terminals[1].app.close();
-    await expect.soft(controller.page.getByRole('button')).toHaveCount(0);
-    await expect.soft(controller.page.locator('body')).toContainText(/no terminals (?:are )?connected/i);
-    await expect.soft(controller.page.locator('body')).toContainText(/launch.*terminal.*controller.*running/i);
+    await expect.soft(controller.page.locator('body')).toContainText(h.fixture.repositories[1]);
+    await expect.soft(controller.page.locator('body')).not.toContainText(/no terminals (?:are )?connected/i);
   } finally { await h.dispose(); }
 });
 
@@ -256,7 +256,7 @@ test('controller retains its connected terminals across close and restore and ca
   } finally { await h.dispose(); }
 });
 
-for (const action of ['activate', 'close-and-restore', 'quit'] as const) {
+for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recover', 'quit-and-recover'] as const) {
   test(`controller ${action} preserves a waiting human gate and sends no agent input`, { tag: '@ownapp' }, async () => {
     test.setTimeout(120_000);
     const h = await createControllerDesktopHarness();
@@ -301,7 +301,16 @@ for (const action of ['activate', 'close-and-restore', 'quit'] as const) {
         await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
         await expect(controller.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1);
       } else {
-        await controller.app.close();
+        if (action === 'crash-and-recover') await h.crash(controller.app);
+        else await controller.app.close();
+        if (action === 'crash-and-recover' || action === 'quit-and-recover') {
+          await expect.soft(approve).toBeVisible();
+          expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml'), input: read('injected-log') }).toEqual(before);
+          const recovered = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+          await expect.soft(recovered.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1, { timeout: 10_000 });
+          await recovered.page.getByRole('button', { name: repo, exact: false })
+            .evaluateAll(buttons => (buttons[0] as HTMLButtonElement | undefined)?.click());
+        }
       }
       await expect.soft(approve).toBeVisible();
       expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml'), input: read('injected-log') }).toEqual(before);
@@ -311,6 +320,10 @@ for (const action of ['activate', 'close-and-restore', 'quit'] as const) {
       await expect.poll(() => read('injected-log')).toContain('C1_INPUT_BARRIER\n');
       expect.soft(read('injected-log')).toBe(`${before.input}C1_INPUT_BARRIER\n`);
       expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml') }).toEqual({ flow: before.flow, loop: before.loop });
+      if (action === 'crash-and-recover' || action === 'quit-and-recover') {
+        await approve.click();
+        await expect.poll(() => read('flow-state.yaml'), { timeout: 30_000 }).toMatch(/^status: done$/m);
+      }
     } finally {
       try { await h.dispose(); }
       finally { rmSync(repo, { recursive: true, force: true }); rmSync(binDir, { recursive: true, force: true }); }

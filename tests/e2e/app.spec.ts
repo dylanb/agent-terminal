@@ -1,6 +1,7 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
@@ -7607,6 +7608,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
 // reopen, and every RED / GREEN / refactor turn of the reopened slice is handed it (work prompts and fixers);
 // approving refactor ends the slice and clears it, so the next loop's prompt carries no brief.
 test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN and refactor turns, then clears it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(6));
   const repo = seedFullTddChainRepo('agent-term-e2e-redbrief-', 'red'); // the slice phases are all this test needs
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });
@@ -7967,6 +7969,45 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
   await expect(loopPanel()).toContainText('The ticket asks for two exports.', { timeout: 30_000 });
   expect(readIf(appFlowState(repo))).toContain('step: groom\n');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§27.3 v2.207 — once the operator resolves a blocked goal session in the session, its rewritten done-signal takes the step on through its auto gate', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-unblock-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-unblock-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-unblock-bin-', { realCommitOps: true });
+  // The groom goal blocks on a question; once the operator answers it in the session, it finishes the goal and
+  // rewrites its progress file and then its turn-done file.
+  const blocked = `printf '{"leg": 1, "status": "blocked", "blocked": "The ticket asks for two exports."}\\n' > "$gp"`;
+  const resolved =
+    `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
+    `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
+    `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
+
+  await typeCommand('Ship one export. Carry on.');
+  await passAutoGate(home, repo, 'groom');
+  expect(readIf(appFlowState(repo))).toContain('step: groom-approve\n');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

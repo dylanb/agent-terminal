@@ -38,13 +38,29 @@ describe('controller real local transport', () => {
   }
 
   async function registeredPeer(directory: string) {
+    const previous = new Set(server!.terminals().map(terminal => terminal.id));
     const socket = await peer(directory);
     const received: ControllerMessage[] = [];
     const decoder = createControllerDecoder();
-    socket.on('data', (chunk: Buffer) => received.push(...decoder.push(chunk)));
-    await vi.waitFor(() => expect(server!.terminals().some(terminal => terminal.launchDirectory === directory)).toBe(true));
-    return { socket, received, id: server!.terminals().find(terminal => terminal.launchDirectory === directory)!.id };
+    socket.on('data', (chunk: Buffer) => received.push(...decoder.push(chunk).filter(message => message.type === 'activate')));
+    await vi.waitFor(() => expect(server!.terminals().some(terminal => terminal.launchDirectory === directory && !previous.has(terminal.id))).toBe(true));
+    return { socket, received, id: server!.terminals().find(terminal => terminal.launchDirectory === directory && !previous.has(terminal.id))!.id };
   }
+
+  it.each(['end', 'destroy'] as const)('retains identifying disconnected state after peer %s, including the last pane', async loss => {
+    server = await startControllerTransport(appHome);
+    const terminal = await registeredPeer('/work/retained');
+    const updates: ReturnType<typeof server.terminals>[] = [];
+    const unsubscribe = server.subscribeTerminals(items => updates.push(items));
+    terminal.socket[loss]();
+    await vi.waitFor(() => expect(updates.length).toBeGreaterThan(1));
+    expect.soft(server.terminals()).toEqual([expect.objectContaining({
+      id: terminal.id, launchDirectory: '/work/retained', repositoryRoot: null, status: 'disconnected',
+    })]);
+    expect.soft(updates.at(-1)).toEqual([expect.objectContaining({ id: terminal.id, status: 'disconnected' })]);
+    expect(await server.activate(terminal.id)).toBe('unavailable');
+    unsubscribe();
+  });
 
   it('creates a private endpoint and accepts registration on a first run with no app-state root', async () => {
     rmSync(appHome, { recursive: true, force: true });
@@ -292,7 +308,7 @@ describe('controller real local transport', () => {
       const decoder = createControllerDecoder();
       socket.on('data', (chunk: Buffer) => {
         for (const message of decoder.push(chunk)) {
-          messages.push(message);
+          if (message.type === 'activate') messages.push(message);
           if (message.type === 'activate') socket.write(encodeControllerMessage({
             version: 1, type: 'result', requestId: message.requestId, outcome: 'activated',
           }));
@@ -344,8 +360,17 @@ describe('controller real local transport', () => {
     if (request.type !== 'activate') throw new Error('Expected activation request');
     terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect.soft(await result).toBe('activated');
+    const disconnected = new Promise<void>(resolve => {
+      let initial = true;
+      const unsubscribe = server!.subscribeTerminals(() => {
+        if (initial) return;
+        unsubscribe();
+        resolve();
+      });
+      initial = false;
+    });
     terminal.socket.end();
-    await vi.waitFor(() => expect(server!.terminals()).toEqual([]));
+    await disconnected;
     expect(await result).toBe('activated');
   });
 
@@ -356,8 +381,17 @@ describe('controller real local transport', () => {
     const result = server.activate(terminal.id).then(value => { settled = true; return value; });
     await vi.waitFor(() => expect(terminal.received).toHaveLength(1));
     expect.soft(settled).toBe(false);
+    const disconnected = new Promise<void>(resolve => {
+      let initial = true;
+      const unsubscribe = server!.subscribeTerminals(() => {
+        if (initial) return;
+        unsubscribe();
+        resolve();
+      });
+      initial = false;
+    });
     terminal.socket.end();
-    await vi.waitFor(() => expect(server!.terminals()).toEqual([]));
+    await disconnected;
     expect(await result).toBe('unavailable');
     const replacement = await registeredPeer('/work/replaced');
     expect(replacement.id).not.toBe(terminal.id);

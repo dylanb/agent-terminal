@@ -33,17 +33,59 @@ afterEach(() => {
 });
 
 describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
-  function mount() {
+  function mount(items: ControllerTerminal[] = terminals) {
     document.documentElement.setAttribute('data-theme', theme);
     const host = document.createElement('main');
     document.body.append(host);
     const activated: string[] = [];
-    const controller: ControllerApi = {
-      subscribeTerminals(listener) { listener(terminals); return () => {}; },
+    const controller: ControllerApi & { dismissTerminal(id: string): Promise<void> } = {
+      subscribeTerminals(listener) { listener(items); return () => {}; },
+      async dismissTerminal() {},
       async activateTerminal(id) { activated.push(id); return 'activated'; },
     };
     return { host, activated, component: createControllerPanes(host, { controller }) };
   }
+
+  it.each([320, 900])('paints a readable error state distinct from a live pane in a %ipx host', width => {
+    const disconnected = { ...terminals[0], status: 'disconnected' as const };
+    const { host, component } = mount([disconnected, terminals[1]]);
+    host.style.width = `${width}px`;
+    try {
+      const labels = [...host.querySelectorAll<HTMLElement>('*')].filter(element =>
+        element.childElementCount === 0 && element.textContent?.includes(disconnected.launchDirectory));
+      const label = labels[0] ?? host;
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--danger)';
+      host.append(probe);
+      expect.soft(getComputedStyle(label).color).toBe(getComputedStyle(probe).color);
+      expect.soft(readable(host, disconnected.launchDirectory), 'disconnected identity is visible, nonzero and unclipped').toBe(true);
+      expect.soft(readable(host, 'Disconnected: terminal unavailable'), 'disconnected error is visible, nonzero and unclipped').toBe(true);
+      const behind = background(label);
+      expect.soft(contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind)).toBeGreaterThanOrEqual(4.5);
+      expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
+      probe.remove();
+    } finally { component.dispose(); }
+  });
+
+  it.each([320, 900])('paints an accessible dismiss control and keyboard focus in a %ipx host', async width => {
+    const { host, component } = mount([{ ...terminals[0], status: 'disconnected' }]);
+    host.style.width = `${width}px`;
+    try {
+      await userEvent.tab();
+      const button = [...host.querySelectorAll('button')].find(item => /dismiss/i.test(item.getAttribute('aria-label') ?? item.textContent ?? ''));
+      const style = button ? getComputedStyle(button) : undefined;
+      const box = button?.getBoundingClientRect();
+      const hostBox = host.getBoundingClientRect();
+      const behind = button ? background(button) : undefined;
+      const ringBehind = button ? background(button.parentElement!) : undefined;
+      expect.soft(Boolean(button && box && box.width > 0 && box.height > 0 &&
+        box.left >= hostBox.left && box.right <= hostBox.right && readable(host, button.textContent ?? '') &&
+        style && behind && contrastRatio(ringOver(style.color, opacity(button), behind), behind) >= 4.5), 'dismiss control is painted, readable and fits its host').toBe(true);
+      expect.soft(Boolean(button && document.activeElement === button && style && ringBehind &&
+        style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0 &&
+        contrastRatio(ringOver(style.outlineColor, opacity(button), ringBehind), ringBehind) >= 3), 'dismiss control has visible keyboard focus').toBe(true);
+    } finally { component.dispose(); }
+  });
 
   it('reflows the activation controls as the host narrows', () => {
     const { host, component } = mount();
@@ -72,29 +114,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     host.style.width = `${width}px`;
     try {
       const hostBox = host.getBoundingClientRect();
-      const readable = (text: string) => {
-        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const start = node.textContent?.indexOf(text) ?? -1;
-          if (start < 0) continue;
-          const range = document.createRange();
-          range.setStart(node, start);
-          range.setEnd(node, start + text.length);
-          const boxes = [...range.getClientRects()];
-          return boxes.length > 0 && boxes.every(box => box.width > 0 && box.height > 0
-            && box.left >= hostBox.left && box.right <= hostBox.right
-            && box.top >= hostBox.top && box.bottom <= hostBox.bottom
-            && [...ancestors(node.parentElement!)].every(parent => {
-              const style = getComputedStyle(parent);
-              const clip = parent.getBoundingClientRect();
-              return style.visibility === 'visible' && Number(style.opacity) > 0
-                && (style.overflowX === 'visible' || (box.left >= clip.left && box.right <= clip.right))
-                && (style.overflowY === 'visible' || (box.top >= clip.top && box.bottom <= clip.bottom));
-            }));
-        }
-        return false;
-      };
-      for (const terminal of terminals) expect.soft(readable(terminal.launchDirectory)).toBe(true);
+      for (const terminal of terminals) expect.soft(readable(host, terminal.launchDirectory)).toBe(true);
       const buttons = [...host.querySelectorAll('button')];
       expect.soft(buttons).toHaveLength(2);
       for (const [index, button] of buttons.entries()) {
@@ -138,6 +158,30 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     } finally { component.dispose(); }
   });
 });
+
+function readable(host: HTMLElement, text: string): boolean {
+  const hostBox = host.getBoundingClientRect();
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const start = node.textContent?.indexOf(text) ?? -1;
+    if (start < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + text.length);
+    const boxes = [...range.getClientRects()];
+    return boxes.length > 0 && boxes.every(box => box.width > 0 && box.height > 0
+      && box.left >= hostBox.left && box.right <= hostBox.right
+      && box.top >= hostBox.top && box.bottom <= hostBox.bottom
+      && [...ancestors(node.parentElement!)].every(parent => {
+        const style = getComputedStyle(parent);
+        const clip = parent.getBoundingClientRect();
+        return style.visibility === 'visible' && Number(style.opacity) > 0
+          && (style.overflowX === 'visible' || (box.left >= clip.left && box.right <= clip.right))
+          && (style.overflowY === 'visible' || (box.top >= clip.top && box.bottom <= clip.bottom));
+      }));
+  }
+  return false;
+}
 
 function* ancestors(element: Element): Generator<Element> {
   for (let current: Element | null = element; current; current = current.parentElement) yield current;

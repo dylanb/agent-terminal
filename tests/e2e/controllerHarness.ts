@@ -1,5 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { createControllerFixture } from '../helpers/controllerFixture';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 
@@ -24,6 +25,13 @@ export function createControllerHarness() {
       });
       apps.push(app);
       return { app, page: await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS }) };
+    },
+    async crash(app: ElectronApplication): Promise<void> {
+      const child = app.process();
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const closed = once(child, 'close', { signal: AbortSignal.timeout(WINDOW_TIMEOUT_MS) });
+      child.kill('SIGKILL');
+      await closed;
     },
     async dispose(): Promise<void> {
       const results = await Promise.allSettled(apps.splice(0).map(app => app.close()));

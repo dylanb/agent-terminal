@@ -8,5 +8,6 @@ export const controllerApi: ControllerApi = {
     ipcRenderer.send(CONTROLLER_CH.subscribe, { sessionId: SESSION_ID });
     return () => { ipcRenderer.removeListener(CONTROLLER_CH.terminals, receive); };
   },
+  dismissTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.dismiss, { sessionId: SESSION_ID, id }),
   activateTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.activate, { sessionId: SESSION_ID, id }),
 };

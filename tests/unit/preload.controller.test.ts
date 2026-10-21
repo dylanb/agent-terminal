@@ -15,11 +15,23 @@ it('exposes only the narrow controller API to the controller window', async () =
   process.argv = [...argv, '--agent-terminal-controller-window'];
   await import('../../src/preload/index');
   expect([...exposed.keys()]).toEqual(['controller']);
-  expect(exposed.get('controller')).toEqual({ subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function) });
+  expect(exposed.get('controller')).toEqual({ subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function) });
 });
 
 it('preserves the terminal window APIs without the controller role', async () => {
   process.argv = argv.filter(value => value !== '--agent-terminal-controller-window');
   await import('../../src/preload/index');
   expect([...exposed.keys()].sort()).toEqual(['cli', 'examples', 'flow', 'monitor', 'term', 'viewer']);
+});
+
+
+it('sends an occurrence-targeted dismissal through the controller bridge', async () => {
+  process.argv = [...argv, '--agent-terminal-controller-window'];
+  await import('../../src/preload/index');
+  const { ipcRenderer } = await import('electron');
+  const { SESSION_ID } = await import('../../src/shared/ipc');
+  vi.mocked(ipcRenderer.invoke).mockClear();
+  const api = exposed.get('controller') as { dismissTerminal?: (id: string) => Promise<void> };
+  await api.dismissTerminal?.('retained-occurrence');
+  expect(ipcRenderer.invoke).toHaveBeenCalledWith('controller:dismiss', { sessionId: SESSION_ID, id: 'retained-occurrence' });
 });

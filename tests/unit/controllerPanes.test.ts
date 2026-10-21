@@ -8,12 +8,13 @@ const terminal: ControllerTerminal = { id: 'terminal-a', launchDirectory: '/left
 function service(initial: ControllerTerminal[] = [terminal], outcome: 'activated' | 'unavailable' = 'activated') {
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
   const activated: string[] = [];
-  const api: ControllerApi = {
+  const api: ControllerApi & { dismissTerminal(id: string): Promise<void> } = {
     subscribeTerminals(listener) {
       listeners.add(listener);
       listener(initial);
       return () => { listeners.delete(listener); };
     },
+    async dismissTerminal() {},
     async activateTerminal(id) {
       activated.push(id);
       return outcome;
@@ -32,6 +33,25 @@ describe('controller panes', () => {
     try {
       expect.soft(host.textContent).toContain(terminal.launchDirectory);
       expect.soft(host.textContent).toContain(`Repository: ${terminal.repositoryRoot}`);
+    } finally { component.dispose(); }
+  });
+
+  it.each(['aside', 'main'])('retains an accessible disconnected identity and unavailable action in %s', async tag => {
+    const host = document.createElement(tag);
+    document.body.append(host);
+    const s = service();
+    const component = createControllerPanes(host, { controller: s.api });
+    try {
+      const disconnected = { ...terminal, status: 'disconnected' as const };
+      s.publish([disconnected]);
+      expect.soft(host.textContent).toContain(terminal.launchDirectory);
+      expect.soft(host.textContent).toContain(terminal.repositoryRoot);
+      expect.soft(host.textContent).toMatch(/disconnected/i);
+      expect.soft(host.textContent).not.toMatch(/no terminals connected/i);
+      const activation = [...host.querySelectorAll('button')].find(button => button.textContent?.includes(terminal.launchDirectory));
+      activation?.click();
+      await Promise.resolve();
+      expect.soft(s.activated).toEqual([]);
     } finally { component.dispose(); }
   });
 
@@ -75,7 +95,7 @@ describe('controller panes', () => {
     } finally { component.dispose(); }
   });
 
-  it('explains the empty state after the last connection ends', () => {
+  it('explains the empty state when no terminal has registered', () => {
     const host = document.createElement('section');
     const s = service();
     const component = createControllerPanes(host, { controller: s.api });
@@ -86,16 +106,20 @@ describe('controller panes', () => {
     } finally { component.dispose(); }
   });
 
-  it('keeps keyboard focus reachable after its focused pane disconnects', () => {
+  it.each([true, false])('keeps a usable focus target when the focused pane disconnects (live peer: %s)', livePeer => {
     const host = document.createElement('section');
     document.body.append(host);
     const survivor = { ...terminal, id: 'survivor', launchDirectory: '/right/project' };
-    const s = service([terminal, survivor]);
+    const s = service(livePeer ? [terminal, survivor] : [terminal]);
     const component = createControllerPanes(host, { controller: s.api });
     try {
       host.querySelector('button')!.focus();
-      s.publish([survivor]);
-      expect(host.contains(document.activeElement)).toBe(true);
+      const disconnected = { ...terminal, status: 'disconnected' as const };
+      s.publish(livePeer ? [disconnected, survivor] : [disconnected]);
+      const focused = document.activeElement as HTMLElement;
+      expect.soft(host.contains(focused)).toBe(true);
+      expect.soft(focused.matches(':disabled, [aria-disabled="true"]')).toBe(false);
+      expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(livePeer ? /disconnected|dismiss|\/right\/project/i : /disconnected|dismiss/i);
     } finally { component.dispose(); }
   });
 
@@ -137,5 +161,45 @@ describe('controller panes', () => {
     else reject(new Error('Connection closed'));
     await pending.catch(() => {});
     expect(host.childElementCount).toBe(0);
+  });
+});
+
+
+describe('dismiss disconnected panes', () => {
+  it.each(['aside', 'main'])('dismisses the selected occurrence from %s without activating it', async tag => {
+    const host = document.createElement(tag);
+    document.body.append(host);
+    const stale = { ...terminal, status: 'disconnected' as const };
+    const s = service([stale]);
+    const dismissed: string[] = [];
+    const api = { ...s.api, async dismissTerminal(id: string) { dismissed.push(id); s.publish([]); } };
+    const component = createControllerPanes(host, { controller: api });
+    try {
+      const dismiss = [...host.querySelectorAll('button')].find(button => /dismiss/i.test(button.getAttribute('aria-label') ?? button.textContent ?? ''));
+      dismiss?.click();
+      await Promise.resolve();
+      expect.soft(dismissed).toEqual([terminal.id]);
+      expect.soft(s.activated).toEqual([]);
+      expect.soft(host.textContent).toMatch(/no terminals connected.*launch.*terminal/i);
+    } finally { component.dispose(); }
+  });
+
+  it.each([true, false])('moves focus after dismissal to a usable target (live peer: %s)', async livePeer => {
+    const host = document.createElement('main');
+    document.body.append(host);
+    const survivor = { ...terminal, id: 'survivor', launchDirectory: '/other' };
+    const stale = { ...terminal, status: 'disconnected' as const };
+    const s = service(livePeer ? [stale, survivor] : [stale]);
+    const api = { ...s.api, async dismissTerminal() { s.publish(livePeer ? [survivor] : []); } };
+    const component = createControllerPanes(host, { controller: api });
+    try {
+      const dismiss = [...host.querySelectorAll('button')].find(button => /dismiss/i.test(button.getAttribute('aria-label') ?? button.textContent ?? ''));
+      dismiss?.focus();
+      dismiss?.click();
+      await Promise.resolve();
+      const focused = document.activeElement as HTMLElement;
+      expect(host.contains(focused) && !focused.matches(':disabled') &&
+        (livePeer ? focused.textContent?.includes('/other') : /launch.*terminal/i.test(focused.textContent ?? ''))).toBe(true);
+    } finally { component.dispose(); }
   });
 });

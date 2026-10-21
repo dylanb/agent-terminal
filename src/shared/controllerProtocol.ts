@@ -3,6 +3,7 @@ import type { ControllerTerminal } from './ipc';
 export const CONTROLLER_MAX_MESSAGE_BYTES = 16 * 1024;
 
 export type ControllerMessage =
+  | { version: 1; type: 'registered' }
   | ({ version: 1; type: 'register' } & Pick<ControllerTerminal, 'launchDirectory' | 'repositoryRoot'>)
   | { version: 1; type: 'activate'; requestId: string }
   | { version: 1; type: 'result'; requestId: string; outcome: 'activated' | 'unavailable' };
@@ -23,6 +24,9 @@ export function parseControllerMessage(frame: string): ControllerMessage {
     case 'register':
       if (!absolutePath(message.launchDirectory) || (message.repositoryRoot !== null && !absolutePath(message.repositoryRoot))) throw new Error('Invalid controller identity');
       keys = ['version', 'type', 'launchDirectory', 'repositoryRoot'];
+      break;
+    case 'registered':
+      keys = ['version', 'type'];
       break;
     case 'activate':
       if (!requestId) throw new Error('Invalid activation request');

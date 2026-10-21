@@ -6,12 +6,13 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 
 ### Separate controller surface (§23.6, #217)
 
-The controller preload exposes only `window.controller`, with the typed `ControllerApi` and channel names defined in `src/shared/ipc.ts`. Terminal windows retain their existing preload surfaces. The controller main process accepts subscription and activation requests only from its own window.
+The controller preload exposes only `window.controller`, with the typed `ControllerApi` and channel names defined in `src/shared/ipc.ts`. Terminal windows retain their existing preload surfaces. The controller main process accepts subscription, activation and dismissal requests only from its own window.
 
 | Channel | Direction | Payload | Meaning |
 |---|---|---|---|
-| `controller:subscribe` | renderer → main | `{sessionId}` | Request the current connected-terminal snapshot. |
-| `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Current connections, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, and nullable `repositoryRoot`. |
+| `controller:dismiss` | renderer → main | `{sessionId, id}` | Remove only the targeted disconnected occurrence. Unknown, live and replaced identities are harmless no-ops; never stop terminal work or prevent registration. |
+| `controller:subscribe` | renderer → main | `{sessionId}` | Request the current live and retained-disconnected terminal snapshot. |
+| `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Live and retained-disconnected identities, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, nullable `repositoryRoot`, and optional `status` (`connected` or `disconnected`; absent means connected). Disconnected identities have no live activation route. |
 | `controller:activate` | renderer → main (invoke) | `{sessionId, id} → 'activated' \| 'unavailable'` | Activate only the live connection named by `id`; no shell input or flow operation is accepted. |
 
 `subscribeTerminals(listener)` delivers terminal snapshots and returns an unsubscribe function; `activateTerminal(id)` returns the activation outcome. Directory labels are display data, not routing authority. A confirmed activation remains completed if the connection later closes; disconnection before confirmation or expiry returns unavailable. Late responses cannot change a completed outcome or target a replacement terminal. A timeout alone does not remove a connected pane.
@@ -128,3 +129,7 @@ contextBridge.exposeInMainWorld('viewer', {
 
 ---
 
+
+### Initial terminal readiness (#218)
+
+The terminal-only `window.term.startup` API is typed in `src/shared/ipc.ts`. `ready()` invokes `startup:ready` with `sessionId`; its promise resolves only after confirmed controller registration and main-process initialization. The renderer then installs terminal/flow UI and calls `rendered()`, sending `startup:rendered` with `sessionId` to release buffered PTY output. Main validates the sender window and session on both channels. Neither channel authorizes registration or shell startup. Before readiness, the window shows static waiting instructions; terminal input is unrouted and flow-start invokes reject. Closing disposes the handshake and registration.

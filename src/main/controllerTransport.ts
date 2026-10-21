@@ -10,12 +10,15 @@ import { isErrno } from './errno';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
-export async function startControllerTransport(appHome: string): Promise<{
+export interface ControllerRegistry {
   terminals(): ControllerTerminal[];
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
+  dismiss(id: string): void;
   dispose(): Promise<void>;
-}> {
+}
+
+export async function startControllerTransport(appHome: string): Promise<ControllerRegistry> {
   const endpoint = resolveControllerEndpoint(appHome);
   const directory = dirname(endpoint);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -27,15 +30,19 @@ export async function startControllerTransport(appHome: string): Promise<{
   if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
   const registrations = new Map<Socket, ControllerTerminal>();
+  const retained = new Map<string, ControllerTerminal>();
+  const snapshot = () => [...retained.values(), ...registrations.values()].map(terminal => ({ ...terminal }));
   const pending = new Map<string, { socket: Socket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
-  const notify = () => { for (const listener of listeners) listener([...registrations.values()]); };
+  const notify = () => { for (const listener of listeners) listener(snapshot()); };
   const server = createServer(socket => {
     sockets.add(socket);
     const decoder = createControllerDecoder();
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
       sockets.delete(socket);
+      const terminal = registrations.get(socket);
+      if (terminal) retained.set(terminal.id, { ...terminal, status: 'disconnected' });
       registrations.delete(socket);
       for (const request of pending.values()) if (request.socket === socket) request.finish('unavailable');
       notify();
@@ -44,8 +51,12 @@ export async function startControllerTransport(appHome: string): Promise<{
       try {
         for (const message of decoder.push(chunk)) {
           if (message.type === 'register' && !registrations.has(socket)) {
+            for (const [id, terminal] of retained) {
+              if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
+            }
             registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
             notify();
+            socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
           } else if (message.type === 'result') {
             const request = pending.get(message.requestId);
             if (request?.socket === socket) request.finish(message.outcome);
@@ -92,11 +103,14 @@ export async function startControllerTransport(appHome: string): Promise<{
     throw error;
   }
   return {
-    terminals: () => [...registrations.values()],
+    terminals: snapshot,
     subscribeTerminals(listener) {
       listeners.add(listener);
-      listener([...registrations.values()]);
+      listener(snapshot());
       return () => { listeners.delete(listener); };
+    },
+    dismiss(id) {
+      if (retained.delete(id)) notify();
     },
     async activate(id) {
       const socket = [...registrations].find(([, terminal]) => terminal.id === id)?.[0];

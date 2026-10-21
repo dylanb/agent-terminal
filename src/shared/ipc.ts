@@ -19,6 +19,8 @@ export const CH = {
   ptyInput: 'pty:input',
   ptyResize: 'pty:resize',
   ptyExit: 'pty:exit',
+  startupReady: 'startup:ready',
+  startupRendered: 'startup:rendered',
   monitorCapture: 'monitor:capture',
   monitorEvent: 'monitor:event',
   monitorEventRemoved: 'monitor:eventRemoved',
@@ -1075,6 +1077,7 @@ export type InstallExamplesResult =
 export type OsPlatform = 'darwin' | 'win32' | 'linux';
 
 export interface TermApi {
+  startup: StartupApi;
   onData(cb: (data: string) => void): () => void;
   onExit(cb: (msg: PtyExitMsg) => void): () => void;
   input(data: string): void;
@@ -1285,6 +1288,7 @@ declare global {
   }
 }
 export interface ControllerTerminal {
+  status?: 'connected' | 'disconnected';
   id: string;
   launchDirectory: string;
   repositoryRoot: string | null;
@@ -1293,15 +1297,22 @@ export interface ControllerTerminal {
 export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
+  dismissTerminal(id: string): Promise<void>;
 }
 
 export const CONTROLLER_CH = {
   subscribe: 'controller:subscribe',
   terminals: 'controller:terminals',
   activate: 'controller:activate',
+  dismiss: 'controller:dismiss',
 } as const;
 export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
 
 export interface ControllerSnapshot { sessionId: SessionId; terminals: ControllerTerminal[] }
 export interface ControllerActivation { sessionId: SessionId; id: string }
 
+
+export interface StartupApi {
+  ready(): Promise<void>;
+  rendered(): void;
+}

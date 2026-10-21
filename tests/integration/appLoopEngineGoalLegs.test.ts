@@ -531,6 +531,79 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
 
     expect(h.audit.mock.calls.map((c) => c[1])).toContain(`§27 goal turn ${TURN_KEY} blocked on the operator`);
   });
+
+  it('once the operator resolves the block, the session finishing and rewriting its done-signal takes the turn to its gate', () => {
+    const gateReaching = vi.fn();
+    const loopRunEvent = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching, loopRunEvent });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    writeArtifact(true);
+    writeProgress(exampleGoalProgress(1, 'done'));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
+    expect(gateReaching).toHaveBeenLastCalledWith(h.repo, STEP, TURN_KEY, 'clean', 'verdict');
+    expect(loopRunEvent).toHaveBeenCalledWith(h.repo, STEP, TURN_KEY, 'retried');
+    expect(h.audit.mock.calls.map((c) => c[1])).toContain(`§27 goal turn ${TURN_KEY} resumed after the operator resolved its block (done-signal)`);
+  });
+
+  it('a done-signal while the session still records the block leaves the turn at its gate', () => {
+    const gateReaching = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human' });
+    expect(gateReaching).toHaveBeenCalledTimes(1);
+  });
+
+  it('a resolved block whose session falls short of its completion check gets the usual retry, as any done-signal does', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+    const before = goalCommands().length;
+
+    writeProgress(exampleGoalProgress(1, 'done'));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)?.status).toBe('working');
+    expect(goalCommands().length).toBe(before + 1);
+  });
+
+  it('after a relaunch, a resolved block resumes the same way', () => {
+    const first = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(first);
+    writeProgress(BLOCKED);
+    first.onDoneSignal();
+
+    const relaunched = makeEngine();
+    relaunched.resume(h.repo);
+    writeArtifact(true);
+    writeProgress(exampleGoalProgress(1, 'done'));
+    relaunched.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
+  });
+
+  it('the prompt tells the session it may carry on once the operator resolves the block, and how to end the turn then', () => {
+    const engine = makeEngine();
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+
+    const prompt = promptOf(lastGoal()).replace(/\s+/g, ' ');
+    expect(prompt).toMatch(/If the operator resolves what you were blocked on in this session, carry on with the goal/);
+    expect(prompt).toMatch(/rewrite the progress file and then the done-signal; the step continues from there/);
+  });
 });
 
 describe('a stalled turn says it is stalled, and nothing restarts it (§27.12 v2.201)', () => {

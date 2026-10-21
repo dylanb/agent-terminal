@@ -45,6 +45,10 @@ import {
 } from '../shared/ipc';
 
 export const termApi: TermApi = {
+  startup: {
+    ready: () => ipcRenderer.invoke(CH.startupReady, { sessionId: SESSION_ID }) as Promise<void>,
+    rendered: () => ipcRenderer.send(CH.startupRendered, { sessionId: SESSION_ID }),
+  },
   onData: (cb) => {
     const h = (_e: unknown, m: PtyDataMsg): void => cb(m.data);
     ipcRenderer.on(CH.ptyData, h);

@@ -4,6 +4,13 @@ import { createControllerDecoder, encodeControllerMessage, parseControllerMessag
 const registration = { version: 1, type: 'register', launchDirectory: '/tmp/project', repositoryRoot: null } as const;
 
 describe('controller wire protocol', () => {
+  it('accepts the explicit registration confirmation shared by controller and terminal', () => {
+    const confirmation = { version: 1, type: 'registered' };
+    let parsed: unknown;
+    try { parsed = parseControllerMessage(JSON.stringify(confirmation)); } catch { parsed = null; }
+    expect(parsed).toEqual(confirmation);
+  });
+
   it.each([
     registration,
     { version: 1, type: 'activate', requestId: 'request-a' },
