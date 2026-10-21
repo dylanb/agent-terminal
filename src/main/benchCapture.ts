@@ -48,7 +48,6 @@ function exists(p: string): boolean {
 
 const LOOP_STATE_PREFIX = `${APP_LOOP_DIR_SEGMENTS[0]}/`;
 
-/** AC 8 — modified or staged tracked files and untracked files git does not ignore, outside `.agent-terminal/`. */
 async function hasUncommittedChanges(dir: string): Promise<boolean> {
   const status = await runAppCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'], dir);
   return status

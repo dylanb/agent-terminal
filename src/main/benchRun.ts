@@ -18,7 +18,6 @@ export type { BenchFlowRef } from './benchRefusals';
 
 export interface BenchClock {
   now(): number;
-  /** One path segment of `[A-Za-z0-9._-]`, naming one command's runs. */
   stamp(): string;
 }
 
