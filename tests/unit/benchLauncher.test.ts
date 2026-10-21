@@ -14,6 +14,8 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+const POLL_MS = 10;
+
 const STAND_IN = `
 const fs = require('node:fs');
 const path = require('node:path');
@@ -21,7 +23,7 @@ const dir = process.argv[2];
 fs.writeFileSync(path.join(dir, 'env.json'), JSON.stringify(process.env));
 fs.writeFileSync(path.join(dir, 'started'), '');
 const release = path.join(dir, 'release');
-const wait = () => (fs.existsSync(release) ? process.exit(Number(fs.readFileSync(release, 'utf8') || '0')) : setTimeout(wait, 10));
+const wait = () => (fs.existsSync(release) ? process.exit(Number(fs.readFileSync(release, 'utf8') || '0')) : setTimeout(wait, ${POLL_MS}));
 wait();
 `;
 
@@ -42,7 +44,7 @@ function standIn(): { dir: string; launch: BenchLaunch; open: () => Promise<void
 /** Polls until `done()` holds or the wait runs out; the caller asserts on what it then observes. */
 async function until(done: () => boolean): Promise<void> {
   const end = Date.now() + WAIT_MS;
-  while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, POLL_MS));
 }
 
 describe('the real launcher', () => {

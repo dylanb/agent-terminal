@@ -15,11 +15,13 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+const POLL_MS = 10;
+
 const STAND_IN = `
 const fs = require('node:fs');
 const path = require('node:path');
 fs.writeFileSync(path.join(__dirname, 'env.json'), JSON.stringify(process.env));
-const wait = () => (fs.existsSync(path.join(__dirname, 'release')) ? process.exit(0) : setTimeout(wait, 10));
+const wait = () => (fs.existsSync(path.join(__dirname, 'release')) ? process.exit(0) : setTimeout(wait, ${POLL_MS}));
 wait();
 `;
 
@@ -27,7 +29,7 @@ const WAIT_MS = 10_000;
 
 async function until(done: () => boolean): Promise<void> {
   const end = Date.now() + WAIT_MS;
-  while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, POLL_MS));
 }
 
 describe('realBenchDeps', () => {
