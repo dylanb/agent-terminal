@@ -1,16 +1,18 @@
 // §27.13 v2.211 — the operator's confirm of a held run's ticket and pull request: a status line with a way back
 // into the dialog, and the blocking dialog itself (UI-STANDARDS §5) the app raises on its own.
 
-import type { ConfirmRunPickupResult, PickupConfirmView, RunRef } from '../../shared/ipc';
+import type { ConfirmRunPickupResult, PickupConfirmView } from '../../shared/ipc';
+import { runKeyOf, type RunIdentity } from '../../shared/runIdentity';
 import type { FlowViewArgs } from './flowView';
 import { createModalShell } from './modalShell';
+import { captureFocusReturn, captureSubtreeFocus } from './dom';
 
 type Proposed = Extract<PickupConfirmView, { state: 'proposed' }>;
 
 export interface PickupConfirmDeps {
   modalHost: HTMLElement;
   onView(cb: (...args: FlowViewArgs) => void): () => void;
-  confirm(repoKey: string, run: RunRef, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
+  confirm(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
   onFocusLost?: () => void;
 }
 
@@ -18,7 +20,7 @@ export interface PickupConfirm {
   dispose(): void;
 }
 
-const runKey = (repoKey: string, run: RunRef): string => `${repoKey}\u0000${run.flow}\u0000${run.startedAt}`;
+const runKey = (repoKey: string, run: RunIdentity): string => JSON.stringify([repoKey, runKeyOf(run)]);
 const parseNumber = (text: string): number | null => (/^\d+$/.test(text.trim()) && Number(text) > 0 ? Number(text) : null);
 
 export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps): PickupConfirm {
@@ -32,7 +34,8 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
     shell.render(null);
   };
 
-  const openDialog = (repoKey: string, held: Proposed, opener: HTMLElement | null): void => {
+  /** `opener` is the control that opened it; the app's own raise returns focus to wherever the operator was. */
+  const openDialog = (repoKey: string, held: Proposed, opener?: HTMLElement): void => {
     openFor = runKey(repoKey, held.run);
     shell.render(({ doc: d, titleId, close, confirm: accept }) => {
       const describedById = `${titleId}-desc`;
@@ -51,9 +54,12 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
           ? 'This run is past its pickup, but the app has no saved pull request for it and no branch is checked out. Nothing in the run continues until you confirm its ticket and pull request.'
           : `This run is past its pickup, but the app has no saved pull request for it. This is what it found for ${held.branch}. Nothing in the run continues until you confirm, or correct, these.`;
       body.append(ph);
+      let describedBy = describedById;
       if (held.problems.length > 0) {
         const list = d.createElement('ul');
         list.className = 'cd-resources';
+        list.id = `${titleId}-problems`;
+        describedBy = `${describedById} ${list.id}`;
         for (const problem of held.problems) {
           const item = d.createElement('li');
           item.textContent = problem;
@@ -106,28 +112,39 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
           return;
         }
         error.textContent = '';
+        const returnFocus = captureFocusReturn(ok);
         ok.disabled = true;
-        void deps.confirm(repoKey, held.run, pr, ticket).then((result) => {
+        const refused = (reason: string): void => {
           ok.disabled = false;
-          if (result.ok) {
+          error.textContent = reason;
+          returnFocus();
+        };
+        deps.confirm(repoKey, held.run, pr, ticket).then(
+          (result) => {
+            if (!result.ok) return refused(result.reason);
+            ok.disabled = false;
             openFor = null;
             accept();
-          } else {
-            error.textContent = result.reason;
-          }
-        });
+          },
+          (e: unknown) => refused(e instanceof Error ? e.message : String(e)),
+        );
       });
       foot.append(later, ok);
       card.append(foot);
-      return { card, initialFocus: (held.pr === null ? prInput : ok) as HTMLElement, describedById, grow: body, scroll: body, role: 'alertdialog' };
+      const initialFocus = held.pr === null || held.problems.length > 0 ? prInput : ok;
+      return { card, initialFocus, describedById: describedBy, grow: body, scroll: body, role: 'alertdialog' };
     }, opener);
   };
 
+  /** Empties the host when no run is held, handing focus to `onFocusLost` if it was on the line (UI §4.5). */
   const render = (...[repoKey, view]: FlowViewArgs): void => {
+    const focusWasHere = host.contains(doc.activeElement);
+    const restoreFocus = captureSubtreeFocus(host);
     host.replaceChildren();
     const held = view?.pickupConfirm;
     if (repoKey === null || held === undefined) {
       if (openFor !== null) closeDialog();
+      if (focusWasHere) deps.onFocusLost?.();
       return;
     }
     const key = runKey(repoKey, held.run);
@@ -137,6 +154,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
     if (held.state === 'looking') {
       status.textContent = 'Looking up this run’s ticket and pull request…';
       host.append(status);
+      if (focusWasHere) deps.onFocusLost?.();
       return;
     }
     status.textContent = 'This run is waiting for you to confirm its ticket and pull request.';
@@ -146,9 +164,10 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
     reopen.setAttribute('aria-haspopup', 'dialog');
     reopen.addEventListener('click', () => openDialog(repoKey, held, reopen));
     host.append(status, reopen);
+    restoreFocus(() => reopen);
     if (!offered.has(key)) {
       offered.add(key);
-      openDialog(repoKey, held, null);
+      openDialog(repoKey, held);
     }
   };
 

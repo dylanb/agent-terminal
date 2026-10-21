@@ -133,8 +133,8 @@ import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups } from './trustedPickups';
-import { inProgressRunIdentity, type RunIdentity } from './gateRunState';
-import { awaitingPickupConfirm, createRunPickupConfirmations, PICKUP_CONFIRM_FIRST } from './runPickupConfirm';
+import { inProgressRunIdentity } from './gateRunState';
+import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, type HeldPickupRun } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
@@ -692,52 +692,41 @@ async function createWindow(): Promise<void> {
       audit.recordCommand(repoDir, 'pickup', `§27 pickup could not be saved for a relaunch: ${reason}`, 1);
       send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's pull request could not be saved, so a relaunch will not know it: ${reason}` });
     },
+    forgetFailed: (repoDir, reason) => audit.recordCommand(repoDir, 'pickup', `§27 an ended run's saved pickup could not be removed: ${reason}`, 1),
   });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
-  // §27.13 v2.211 — the pickup contract of the step that picked this run up, and whether that step is the current one.
-  const reachedPickup = (repoKey: string): { contract: PickupContractV2; current: boolean } | null => {
+  // §27.13 v2.211
+  const runsBegunHere = new Set<string>();
+  const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
+    const run = inProgressRunIdentity(repoKey);
+    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
     const load = resolveActiveDefinition(repoKey);
     if (!load.ok) return null;
-    const reached = load.definition.steps.slice(0, flow.state(repoKey).position);
-    const contractOf = (step: FlowStepDef): PickupContractV2 | null => {
+    const view = flow.state(repoKey);
+    const reached = reachedPickupStep(load.definition.steps, view.position, (step: FlowStepDef): PickupContractV2 | null => {
       if (step.kind !== 'loop' || step.loop === undefined) return null;
       const resolved = observedResolveDef(repoKey, step.loop);
       return resolved.ok ? resolved.def.pickup : null;
-    };
-    for (const [i, step] of reached.entries()) {
-      const contract = contractOf(step);
-      if (contract !== null) return { contract, current: i === reached.length - 1 };
-    }
-    return null;
-  };
-  const pickupHeldRun = (repoKey: string): RunIdentity | null => {
-    const run = inProgressRunIdentity(repoKey);
-    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
-    const reached = reachedPickup(repoKey);
-    const refs = flow.state(repoKey).refs;
-    return awaitingPickupConfirm({
+    });
+    const held = awaitingPickupConfirm({
       run,
       pickupInFlight: pickupInFlight?.repoKey === repoKey,
-      pickupStep: reached === null ? 'none' : reached.current ? 'current' : 'behind',
-      runBegunHere: pickupRecordPredatesRun.has(repoKey),
-      flowNamesTicketAndPr: refs?.ticket !== undefined && refs.pr !== undefined,
-      record: readPickupRecord(repoKey).kind,
+      pickupStep: reached?.at ?? 'none',
+      runBegunHere: runsBegunHere.has(repoKey),
+      flowRefs: { ticket: view.refs?.ticket ?? null, pr: view.refs?.pr ?? null },
+      bootstrapRecord: readPickupRecord(repoKey),
     });
+    return held === null || reached === null ? null : { run: held, initialStatus: reached.contract.initialStatus };
   };
   const pickupConfirmations = createRunPickupConfirmations({
     heldRun: pickupHeldRun,
     evidence: (repoKey) => {
       const branch = currentGitBranch(repoKey);
-      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, record: readPickupRecord(repoKey) };
+      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, bootstrapRecord: readPickupRecord(repoKey) };
     },
     lookup: createRealPullRequestLookup,
-    initialStatus: (repoKey) => {
-      const record = readPickupRecord(repoKey);
-      if (record.kind === 'complete' && record.bootstrap.initialStatus !== undefined) return record.bootstrap.initialStatus;
-      return reachedPickup(repoKey)?.contract.initialStatus ?? 'planning';
-    },
     trust: (repoKey, pickup) => {
       trustedAppBootstraps.set(repoKey, pickup);
       pickupRecordPredatesRun.delete(repoKey);
@@ -971,13 +960,16 @@ async function createWindow(): Promise<void> {
   const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
     const previous = trustedAppBootstraps.get(repoKey);
     const predated = pickupRecordPredatesRun.has(repoKey);
+    const begunHere = runsBegunHere.has(repoKey);
     trustedAppBootstraps.delete(repoKey);
     pickupRecordPredatesRun.add(repoKey);
+    runsBegunHere.add(repoKey);
     try {
       return transition();
     } catch (e) {
-      if (previous !== undefined) trustedAppBootstraps.set(repoKey, previous);
+      if (previous !== undefined) trustedAppBootstraps.restore(repoKey, previous);
       if (!predated) pickupRecordPredatesRun.delete(repoKey);
+      if (!begunHere) runsBegunHere.delete(repoKey);
       throw e;
     }
   };

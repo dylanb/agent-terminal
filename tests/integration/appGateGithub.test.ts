@@ -255,7 +255,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
           initialStatus: 'planning',
         },
       }),
-    ).rejects.toThrow(/bootstrap PR identity/i);
+    ).rejects.toThrow(/bootstrap PR identity does not match GitHub: pull request #42 is on other\/branch, not plan-loop\/issue-78/);
     expect(g.state.ready).toEqual(new Set());
   });
 });

@@ -47,9 +47,8 @@ export function createAppGateGitHub(
         `bootstrap PR identity could not be verified: ${errMsg(e)}`,
       );
     }
-    if (pickupMismatch(pullRequest, bootstrap) !== null) {
-      throw new Error('bootstrap PR identity does not match GitHub');
-    }
+    const mismatch = pickupMismatch(pullRequest, bootstrap);
+    if (mismatch !== null) throw new Error(`bootstrap PR identity does not match GitHub: ${mismatch}`);
   };
 
   return async (action, ctx) => {

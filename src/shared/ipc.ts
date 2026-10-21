@@ -1,6 +1,7 @@
 // Typed IPC contract (§6) — single source of truth for channel names and payloads. Every payload
 // carries sessionId so multi-session support is additive later.
 
+import type { RunIdentity } from './runIdentity';
 import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
@@ -634,22 +635,17 @@ export interface FlowStateView {
   pickupConfirm?: PickupConfirmView;
 }
 
-/** A run's identity: its flow's name and its Start instant in epoch ms (§27.9.1). */
-export interface RunRef {
-  flow: string;
-  startedAt: number;
-}
 
 /** §27.13 v2.211 */
 export type PickupConfirmView =
-  | { run: RunRef; state: 'looking' }
-  | { run: RunRef; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
+  | { run: RunIdentity; state: 'looking' }
+  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
 
 /** §6 — the run is named so a confirm can only release the hold the operator was shown. */
 export interface FlowConfirmRunPickupMsg {
   sessionId: SessionId;
   repoKey: string;
-  run: RunRef;
+  run: RunIdentity;
   pr: number;
   ticket: number;
 }
@@ -1214,7 +1210,7 @@ export interface FlowApi {
   /** §18.7.3 */
   rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
   /** §27.13 v2.211 */
-  confirmRunPickup(repoKey: string, run: RunRef, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
+  confirmRunPickup(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

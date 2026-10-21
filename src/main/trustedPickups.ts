@@ -16,11 +16,14 @@ export interface TrustedPickups {
   get(repoDir: string): AppLoopBootstrap | undefined;
   set(repoDir: string, pickup: AppLoopBootstrap): void;
   delete(repoDir: string): void;
+  /** Undo a `delete` whose transition threw: the run is the one that owned the pickup, or none. */
+  restore(repoDir: string, pickup: AppLoopBootstrap): void;
 }
 
 export interface TrustedPickupsDeps {
   currentRun(repoDir: string): RunIdentity | null;
   persistFailed(repoDir: string, reason: string): void;
+  forgetFailed(repoDir: string, reason: string): void;
 }
 
 export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
@@ -47,13 +50,30 @@ export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
     },
     delete(repoDir) {
       loaded.delete(repoDir);
-      const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
-      if (file !== null) rmSync(file, { force: true });
+      try {
+        const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
+        if (file !== null) rmSync(file, { force: true });
+      } catch (e) {
+        deps.forgetFailed(repoDir, errMsg(e));
+      }
+    },
+    restore(repoDir, pickup) {
+      loaded.set(repoDir, pickup);
+      const run = deps.currentRun(repoDir);
+      if (run === null) return;
+      try {
+        writeRunPickup(repoDir, run, pickup);
+      } catch (e) {
+        deps.persistFailed(repoDir, errMsg(e));
+      }
     },
   };
 }
 
 function writeRunPickup(repoDir: string, run: RunIdentity, pickup: AppLoopBootstrap): void {
+  if (!isPositiveInt(pickup.pr) || !isPositiveInt(pickup.issue) || !isNonBlank(pickup.branch) || !isNonBlank(pickup.initialStatus)) {
+    throw new Error('invalid §27 run pickup');
+  }
   const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
   if (file === null) throw new Error('§27 loop area is unresolvable');
   const doc = {

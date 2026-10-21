@@ -25,10 +25,15 @@ let modalHost: HTMLElement;
 let push: (...args: FlowViewArgs) => void;
 let confirm: ReturnType<typeof vi.fn<(repoKey: string, run: typeof RUN, pr: number, ticket: number) => Promise<ConfirmRunPickupResult>>>;
 
+let focusLost: number;
+let terminal: HTMLInputElement;
+
 beforeEach(() => {
-  document.body.innerHTML = '<div id="h"></div><div id="m"></div>';
+  document.body.innerHTML = '<input id="terminal"><div id="h"></div><div id="m"></div>';
   host = document.getElementById('h')!;
   modalHost = document.getElementById('m')!;
+  terminal = document.getElementById('terminal') as HTMLInputElement;
+  focusLost = 0;
   confirm = vi.fn(async () => ({ ok: true }) as ConfirmRunPickupResult);
   createPickupConfirm(host, {
     modalHost,
@@ -37,6 +42,9 @@ beforeEach(() => {
       return () => {};
     },
     confirm,
+    onFocusLost: () => {
+      focusLost += 1;
+    },
   });
 });
 
@@ -143,6 +151,95 @@ describe('the confirm dialog', () => {
     push(null, null);
     expect(dialog()).toBeNull();
     expect(host.textContent).toBe('');
+  });
+});
+
+describe('the dialog’s accessibility (UI-STANDARDS §4.5–§4.6, §5; WCAG 2.4.3, 1.3.1)', () => {
+  it('is labelled by its title and described by its text and the problems found', () => {
+    push('/repo', view(proposed({ problems: ['GitHub has no open pull request for plan-loop/issue-218.'] })));
+    const d = dialog()!;
+    expect(document.getElementById(d.getAttribute('aria-labelledby')!)?.textContent).toContain('ticket and pull request');
+    const described = d.getAttribute('aria-describedby')!.split(' ').map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toContain('This run is past its pickup');
+    expect(described).toContain('GitHub has no open pull request');
+  });
+
+  it('starts on the pull request field when something did not line up, and on Confirm when nothing did', () => {
+    push('/repo', view(proposed({ problems: ['GitHub has no open pull request for plan-loop/issue-218.'] })));
+    expect(document.activeElement).toBe(field('Pull request'));
+    button(dialog()!, 'Not now').click();
+    push('/repo', view(proposed({ run: { ...RUN, startedAt: RUN.startedAt + 1 } })));
+    expect(document.activeElement).toBe(button(dialog()!, 'Confirm'));
+  });
+
+  it('Tab wraps inside the dialog', () => {
+    push('/repo', view(proposed()));
+    const confirmButton = button(dialog()!, 'Confirm');
+    confirmButton.focus();
+    dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(dialog()!.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(confirmButton);
+  });
+
+  it.each([
+    ['“Not now”', () => button(dialog()!, 'Not now').click()],
+    ['Escape', () => dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))],
+  ])('the dialog the app raised returns focus to where the operator was when %s closes it', (_name, closeIt) => {
+    terminal.focus();
+    push('/repo', view(proposed()));
+    closeIt();
+    expect(dialog()).toBeNull();
+    expect(document.activeElement).toBe(terminal);
+  });
+
+  it('a confirm that lands returns focus to where the operator was', async () => {
+    terminal.focus();
+    push('/repo', view(proposed()));
+    button(dialog()!, 'Confirm').click();
+    await flush();
+    expect(document.activeElement).toBe(terminal);
+  });
+
+  it('a refused confirm returns focus to Confirm, inside the dialog, after the wait blurs it', async () => {
+    push('/repo', view(proposed()));
+    const ok = button(dialog()!, 'Confirm');
+    ok.focus();
+    confirm.mockImplementationOnce(async () => {
+      // Chromium blurs a control that is disabled while focused; jsdom does not, so strand focus on <body> directly.
+      const elsewhere = document.body.appendChild(document.createElement('input'));
+      elsewhere.focus();
+      elsewhere.remove();
+      return { ok: false, reason: 'pull request #233 is not open (closed)' };
+    });
+    ok.click();
+    await flush();
+    expect(document.activeElement).toBe(ok);
+  });
+
+  it('a confirm call that fails is reported in the dialog, and Confirm can be used again', async () => {
+    confirm.mockRejectedValueOnce(new Error('the app could not reach its main process'));
+    push('/repo', view(proposed()));
+    const ok = button(dialog()!, 'Confirm');
+    ok.click();
+    await flush();
+    expect(dialog()!.querySelector('[role="alert"]')?.textContent).toContain('could not reach its main process');
+    expect(ok.disabled).toBe(false);
+  });
+
+  it('a refresh of the side-panel line keeps focus on its button', () => {
+    push('/repo', view(proposed()));
+    button(dialog()!, 'Not now').click();
+    button(host, 'Confirm ticket and PR').focus();
+    push('/repo', view(proposed()));
+    expect(document.activeElement).toBe(button(host, 'Confirm ticket and PR'));
+  });
+
+  it('clearing the side-panel line while focus is on it hands focus to the fallback', () => {
+    push('/repo', view(proposed()));
+    button(dialog()!, 'Not now').click();
+    button(host, 'Confirm ticket and PR').focus();
+    push('/repo', view());
+    expect(focusLost).toBe(1);
   });
 });
 

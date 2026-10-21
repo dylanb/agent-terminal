@@ -15,12 +15,19 @@ const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
 let repo: string;
 let current: RunIdentity | null;
 let failures: string[];
-const relaunch = () => createTrustedPickups({ currentRun: () => current, persistFailed: (_repo, reason) => failures.push(reason) });
+let forgetFailures: string[];
+const relaunch = () =>
+  createTrustedPickups({
+    currentRun: () => current,
+    persistFailed: (_repo, reason) => failures.push(reason),
+    forgetFailed: (_repo, reason) => forgetFailures.push(reason),
+  });
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'trusted-pickups-'));
   current = RUN;
   failures = [];
+  forgetFailures = [];
 });
 afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
@@ -74,7 +81,12 @@ describe('the run is the one flow-state.yaml says is in progress (#155)', () => 
     mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
     writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: ${status}\nflow: ${RUN.flow}\nstarted_at: ${startedAt}\n`);
   };
-  const app = () => createTrustedPickups({ currentRun: inProgressRunIdentity, persistFailed: (_repo, reason) => failures.push(reason) });
+  const app = () =>
+    createTrustedPickups({
+      currentRun: inProgressRunIdentity,
+      persistFailed: (_repo, reason) => failures.push(reason),
+      forgetFailed: (_repo, reason) => forgetFailures.push(reason),
+    });
 
   it('a relaunch mid-run trusts the pickup that run completed', () => {
     flowState(RUN.startedAt);
@@ -135,6 +147,41 @@ describe('the persisted record fails closed', () => {
     app.set(repo, PICKUP);
     expect(failures).toHaveLength(1);
     expect(app.get(repo)).toEqual(PICKUP);
+  });
+
+  it('a delete that cannot remove the file is reported, does not throw, and this app stops trusting the pickup', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    rmSync(file());
+    mkdirSync(join(file(), 'in-the-way'), { recursive: true });
+    expect(() => app.delete(repo)).not.toThrow();
+    expect(forgetFailures).toHaveLength(1);
+    expect(app.get(repo)).toBeUndefined();
+  });
+
+  it('a restore puts back a pickup a failed transition deleted, for this app and a relaunched one, and reports nothing', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    app.delete(repo);
+    app.restore(repo, PICKUP);
+    expect(app.get(repo)).toEqual(PICKUP);
+    expect(relaunch().get(repo)).toEqual(PICKUP);
+    expect(failures).toEqual([]);
+  });
+
+  it('a restore with no run in progress keeps the pickup in this app only, and reports nothing', () => {
+    current = null;
+    const app = relaunch();
+    app.restore(repo, PICKUP);
+    expect(app.get(repo)).toEqual(PICKUP);
+    expect(failures).toEqual([]);
+    expect(existsSync(file())).toBe(false);
+  });
+
+  it('a set of a pickup the reader would refuse is reported as not saved', () => {
+    relaunch().set(repo, { ...PICKUP, branch: ' ' });
+    expect(failures).toHaveLength(1);
+    expect(existsSync(file())).toBe(false);
   });
 
   it('never writes a .gitignore, and leaves an existing one byte-for-byte unchanged (§19.1/§25)', () => {

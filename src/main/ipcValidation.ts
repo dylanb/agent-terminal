@@ -7,6 +7,7 @@ import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { RUN_IDENTITY_KEYS } from '../shared/runIdentity';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -258,7 +259,7 @@ export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPick
     isLiveSession(m) &&
     isSafeRepoKey(m.repoKey) &&
     isRecord(m.run) &&
-    hasExactKeys(m.run, ['flow', 'startedAt']) &&
+    hasExactKeys(m.run, RUN_IDENTITY_KEYS) &&
     typeof m.run.flow === 'string' &&
     typeof m.run.startedAt === 'number' &&
     Number.isFinite(m.run.startedAt) &&

@@ -10,29 +10,43 @@ import type { ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
 export const PICKUP_CONFIRM_FIRST =
   'Confirm the run’s ticket and pull request first: the app has no saved pull request for this run, so nothing in it continues until you do.';
 
-/** About a worktree whose run has no saved or confirmed pickup. */
+export type ReachedPickupStep<C> = { contract: C; at: 'behind' | 'current' } | null;
+
+/** The first step up to the 1-based `position` whose loop runs a pickup. */
+export function reachedPickupStep<S, C>(steps: readonly S[], position: number, contractOf: (step: S) => C | null): ReachedPickupStep<C> {
+  const reached = steps.slice(0, position);
+  for (const [i, step] of reached.entries()) {
+    const contract = contractOf(step);
+    if (contract !== null) return { contract, at: i === reached.length - 1 ? 'current' : 'behind' };
+  }
+  return null;
+}
+
 export interface PickupHoldFacts {
   run: RunIdentity | null;
   pickupInFlight: boolean;
-  /** Where the run's first pickup step sits relative to the step it is on. */
   pickupStep: 'none' | 'behind' | 'current';
-  /** This app started, restarted or rebound the run, so nothing about its pickup was lost to a relaunch. */
+  /** This app started or restarted the run, so nothing about its pickup was lost to a relaunch. */
   runBegunHere: boolean;
-  flowNamesTicketAndPr: boolean;
-  record: PickupRecord['kind'];
+  flowRefs: { ticket: number | null; pr: number | null };
+  bootstrapRecord: PickupRecord;
 }
 
-/** The run that waits for the operator's confirm, or null. */
 export function awaitingPickupConfirm(f: PickupHoldFacts): RunIdentity | null {
-  if (f.run === null || f.pickupInFlight || f.pickupStep === 'none' || f.runBegunHere || f.flowNamesTicketAndPr) return null;
-  return f.pickupStep === 'behind' || f.record !== 'none' ? f.run : null;
+  if (f.run === null || f.pickupInFlight || f.pickupStep === 'none' || f.runBegunHere) return null;
+  const record = f.bootstrapRecord;
+  const { ticket, pr } = f.flowRefs;
+  const recordAgrees = record.kind === 'none' || (record.kind === 'complete' && record.bootstrap.pr === pr && record.bootstrap.issue === ticket);
+  if (ticket !== null && pr !== null && recordAgrees) return null;
+  if (f.pickupStep === 'behind') return f.run;
+  if (record.kind === 'pending') return f.run;
+  return record.kind === 'complete' && ticket !== null && record.bootstrap.issue === ticket ? f.run : null;
 }
 
 export interface PickupEvidence {
-  /** null on a detached HEAD or when git cannot report the branch. */
   branch: string | null;
   flowTicket: number | null;
-  record: PickupRecord;
+  bootstrapRecord: PickupRecord;
 }
 
 export interface PickupProposal {
@@ -44,8 +58,9 @@ export interface PickupProposal {
 
 export async function proposeRunPickup(evidence: PickupEvidence, lookup: PullRequestLookup): Promise<PickupProposal> {
   const problems: string[] = [];
-  const recorded = evidence.record.kind === 'complete' ? evidence.record.bootstrap : null;
-  if (evidence.record.kind === 'invalid') problems.push(`The pickup record could not be used: ${evidence.record.detail}.`);
+  const record = evidence.bootstrapRecord;
+  const recorded = record.kind === 'complete' ? record.bootstrap : null;
+  if (record.kind === 'invalid') problems.push(`The pickup record could not be used: ${record.detail}. Its turns stay stopped until it is repaired, even after you confirm.`);
   const { branch } = evidence;
   let pr: number | null = null;
   let closing: number[] | null = null;
@@ -90,12 +105,15 @@ export async function verifyRunPickup(
   }
 }
 
+export interface HeldPickupRun {
+  run: RunIdentity;
+  initialStatus: string;
+}
+
 export interface RunPickupConfirmDeps {
-  /** The run awaiting a confirm, or null when the worktree has none. */
-  heldRun(repoKey: string): RunIdentity | null;
+  heldRun(repoKey: string): HeldPickupRun | null;
   evidence(repoKey: string): PickupEvidence;
   lookup(repoKey: string): PullRequestLookup;
-  initialStatus(repoKey: string): string;
   trust(repoKey: string, pickup: AppLoopBootstrap): void;
   changed(): void;
 }
@@ -106,11 +124,17 @@ export interface RunPickupConfirmations {
   confirm(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
 }
 
+const NO_LONGER_WAITING = 'This run is no longer waiting for its ticket and pull request.';
+
 export function createRunPickupConfirmations(deps: RunPickupConfirmDeps): RunPickupConfirmations {
   const proposals = new Map<string, { run: RunIdentity; proposal: PickupProposal | null }>();
+  const heldAs = (repoKey: string, run: RunIdentity): HeldPickupRun | null => {
+    const held = deps.heldRun(repoKey);
+    return held !== null && sameRun(held.run, run) ? held : null;
+  };
   return {
     view(repoKey) {
-      const run = deps.heldRun(repoKey);
+      const run = deps.heldRun(repoKey)?.run ?? null;
       if (run === null) {
         proposals.delete(repoKey);
         return undefined;
@@ -130,14 +154,16 @@ export function createRunPickupConfirmations(deps: RunPickupConfirmDeps): RunPic
     },
     held: (repoKey) => deps.heldRun(repoKey) !== null,
     async confirm(repoKey, run, pr, ticket) {
-      const held = deps.heldRun(repoKey);
-      if (held === null || !sameRun(held, run)) return { ok: false, reason: 'This run is no longer waiting for its ticket and pull request.' };
-      const { branch } = deps.evidence(repoKey);
+      if (heldAs(repoKey, run) === null) return { ok: false, reason: NO_LONGER_WAITING };
+      const { branch, flowTicket } = deps.evidence(repoKey);
+      if (flowTicket !== null && ticket !== flowTicket) {
+        return { ok: false, reason: `This run is for ticket #${flowTicket}; Restart the run to work on a different ticket.` };
+      }
       const refusal = await verifyRunPickup(deps.lookup(repoKey), { branch, pr, ticket });
       if (refusal !== null) return { ok: false, reason: refusal };
-      const still = deps.heldRun(repoKey);
-      if (still === null || !sameRun(still, run) || branch === null) return { ok: false, reason: 'This run is no longer waiting for its ticket and pull request.' };
-      deps.trust(repoKey, { pr, branch, issue: ticket, initialStatus: deps.initialStatus(repoKey) });
+      const held = heldAs(repoKey, run);
+      if (held === null || branch === null) return { ok: false, reason: NO_LONGER_WAITING };
+      deps.trust(repoKey, { pr, branch, issue: ticket, initialStatus: held.initialStatus });
       proposals.delete(repoKey);
       deps.changed();
       return { ok: true };

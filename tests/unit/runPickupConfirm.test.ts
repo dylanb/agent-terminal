@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   awaitingPickupConfirm,
+  reachedPickupStep,
   createRunPickupConfirmations,
   proposeRunPickup,
   verifyRunPickup,
@@ -34,7 +35,7 @@ function lookup(prs: PullRequest[], opts: { failList?: string; failView?: string
 const evidence = (over: Partial<PickupEvidence> = {}): PickupEvidence => ({
   branch: BRANCH,
   flowTicket: 218,
-  record: { kind: 'none' },
+  bootstrapRecord: { kind: 'none' },
   ...over,
 });
 
@@ -55,7 +56,7 @@ describe('the proposal the operator is asked to confirm', () => {
 
   it('falls back to the pickup record’s PR when the branch has no open PR, and says so', async () => {
     const record = { kind: 'complete' as const, bootstrap: { pr: 233, branch: BRANCH, issue: 218 } };
-    const proposal = await proposeRunPickup(evidence({ record }), lookup([]));
+    const proposal = await proposeRunPickup(evidence({ bootstrapRecord: record }), lookup([]));
     expect(proposal).toMatchObject({ pr: 233, ticket: 218 });
     expect(proposal.problems.join('\n')).toContain(`no open pull request for ${BRANCH}`);
   });
@@ -68,14 +69,15 @@ describe('the proposal the operator is asked to confirm', () => {
 
   it('flags a pickup record that disagrees with what GitHub says', async () => {
     const record = { kind: 'complete' as const, bootstrap: { pr: 100, branch: 'other', issue: 218 } };
-    const proposal = await proposeRunPickup(evidence({ record }), lookup([open233]));
+    const proposal = await proposeRunPickup(evidence({ bootstrapRecord: record }), lookup([open233]));
     expect(proposal.pr).toBe(233);
     expect(proposal.problems.join('\n')).toContain('#100');
   });
 
   it('flags an unreadable pickup record', async () => {
-    const proposal = await proposeRunPickup(evidence({ record: { kind: 'invalid', detail: 'bootstrap.yaml is not valid YAML' } }), lookup([open233]));
+    const proposal = await proposeRunPickup(evidence({ bootstrapRecord: { kind: 'invalid', detail: 'bootstrap.yaml is not valid YAML' } }), lookup([open233]));
     expect(proposal.problems.join('\n')).toContain('bootstrap.yaml is not valid YAML');
+    expect(proposal.problems.join('\n')).toMatch(/turns stay stopped until it is repaired/i);
   });
 
   it('proposes no PR on a detached HEAD, and says why', async () => {
@@ -113,16 +115,15 @@ describe('verifying what the operator confirms', () => {
 describe('the hold', () => {
   const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
 
-  function harness(prs: PullRequest[] = [open233]) {
+  function harness(prs: PullRequest[] = [open233], gh: (prs: PullRequest[]) => PullRequestLookup = lookup) {
     let heldRun: RunIdentity | null = RUN;
     let ev = evidence();
     const trusted: AppLoopBootstrap[] = [];
     let changes = 0;
     const confirmations = createRunPickupConfirmations({
-      heldRun: () => heldRun,
+      heldRun: () => (heldRun === null ? null : { run: heldRun, initialStatus: 'planning' }),
       evidence: () => ev,
-      lookup: () => lookup(prs),
-      initialStatus: () => 'planning',
+      lookup: () => gh(prs),
       trust: (_repo, pickup) => {
         trusted.push(pickup);
         heldRun = null;
@@ -177,10 +178,10 @@ describe('the hold', () => {
   });
 
   it('a confirm GitHub does not back is refused with the reason, and the run stays held', async () => {
-    const h = harness();
-    const result = await h.confirmations.confirm('/repo', RUN, 233, 300);
+    const h = harness([{ ...open233, closingIssues: [999] }]);
+    const result = await h.confirmations.confirm('/repo', RUN, 233, 218);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain('#300');
+    if (!result.ok) expect(result.reason).toContain('does not close ticket #218');
     expect(h.trusted).toEqual([]);
     expect(h.confirmations.held('/repo')).toBe(true);
   });
@@ -209,6 +210,49 @@ describe('the hold', () => {
     expect(h.trusted).toEqual([]);
   });
 
+  it('a confirm naming a ticket other than the flow’s own is refused, naming the flow’s ticket', async () => {
+    const h = harness([{ ...open233, closingIssues: [218, 300] }]);
+    const result = await h.confirmations.confirm('/repo', RUN, 233, 300);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('#218');
+    expect(h.trusted).toEqual([]);
+  });
+
+  function slowGitHub() {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gh = (prs: PullRequest[]): PullRequestLookup => {
+      const fast = lookup(prs);
+      return { openForBranch: fast.openForBranch, pullRequest: async (n) => {
+        await gate;
+        return fast.pullRequest(n);
+      } };
+    };
+    return { gh, release: () => release() };
+  }
+
+  it('a confirm whose run is replaced while GitHub is being asked is refused, and saves nothing', async () => {
+    const slow = slowGitHub();
+    const h = harness([open233], slow.gh);
+    const pending = h.confirmations.confirm('/repo', RUN, 233, 218);
+    h.switchRun({ ...RUN, startedAt: RUN.startedAt + 1 });
+    slow.release();
+    expect((await pending).ok).toBe(false);
+    expect(h.trusted).toEqual([]);
+  });
+
+  it('a confirm whose run stops waiting while GitHub is being asked is refused, and saves nothing', async () => {
+    const slow = slowGitHub();
+    const h = harness([open233], slow.gh);
+    const pending = h.confirmations.confirm('/repo', RUN, 233, 218);
+    h.release();
+    slow.release();
+    expect((await pending).ok).toBe(false);
+    expect(h.trusted).toEqual([]);
+  });
+
   it('a new run held after the first is looked up afresh', async () => {
     const h = harness();
     h.confirmations.view('/repo');
@@ -221,19 +265,20 @@ describe('the hold', () => {
 
 describe('which runs wait for a confirm', () => {
   const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
+  const complete = (pr: number, issue: number) => ({ kind: 'complete' as const, bootstrap: { pr, branch: 'plan-loop/issue-176', issue } });
   const facts = (over: Partial<Parameters<typeof awaitingPickupConfirm>[0]> = {}): Parameters<typeof awaitingPickupConfirm>[0] => ({
     run: RUN,
     pickupInFlight: false,
     pickupStep: 'behind',
     runBegunHere: false,
-    flowNamesTicketAndPr: false,
-    record: 'none',
+    flowRefs: { ticket: 176, pr: null },
+    bootstrapRecord: { kind: 'none' },
     ...over,
   });
 
   it('a run resumed past its pickup with no saved pickup waits, whatever the pickup record says', () => {
-    for (const record of ['none', 'pending', 'complete', 'invalid'] as const) {
-      expect(awaitingPickupConfirm(facts({ record }))).toEqual(RUN);
+    for (const bootstrapRecord of [{ kind: 'none' as const }, { kind: 'pending' as const }, complete(4242, 176), { kind: 'invalid' as const, detail: 'x' }]) {
+      expect(awaitingPickupConfirm(facts({ bootstrapRecord }))).toEqual(RUN);
     }
   });
 
@@ -242,16 +287,45 @@ describe('which runs wait for a confirm', () => {
     ['a pickup is running now', { pickupInFlight: true }],
     ['the run has not reached a pickup step', { pickupStep: 'none' as const }],
     ['this app started the run, so it saw its pickup or the lack of one', { runBegunHere: true }],
-    ['this app started the run, at its pickup step', { runBegunHere: true, pickupStep: 'current' as const, record: 'complete' as const }],
-    ['the flow’s own inputs name both the ticket and the PR', { flowNamesTicketAndPr: true }],
+    ['this app started the run, at its pickup step', { runBegunHere: true, pickupStep: 'current' as const, bootstrapRecord: complete(4242, 176) }],
+    ['the flow’s own inputs name both the ticket and the PR, with no pickup record', { flowRefs: { ticket: 176, pr: 77 } }],
+    ['the flow’s own inputs name the ticket and PR the pickup record names', { flowRefs: { ticket: 176, pr: 4242 }, bootstrapRecord: complete(4242, 176) }],
   ])('nothing waits when %s', (_name, over) => {
     expect(awaitingPickupConfirm(facts(over))).toBeNull();
   });
 
-  it('at the pickup step, a resumed run waits only when a pickup record exists', () => {
-    expect(awaitingPickupConfirm(facts({ pickupStep: 'current', record: 'none' }))).toBeNull();
-    expect(awaitingPickupConfirm(facts({ pickupStep: 'current', record: 'pending' }))).toEqual(RUN);
-    expect(awaitingPickupConfirm(facts({ pickupStep: 'current', record: 'complete' }))).toEqual(RUN);
-    expect(awaitingPickupConfirm(facts({ pickupStep: 'current', record: 'invalid' }))).toEqual(RUN);
+  it('a run whose flow inputs name a PR the pickup record contradicts still waits', () => {
+    expect(awaitingPickupConfirm(facts({ flowRefs: { ticket: 176, pr: 77 }, bootstrapRecord: complete(4242, 176) }))).toEqual(RUN);
+    expect(awaitingPickupConfirm(facts({ flowRefs: { ticket: 176, pr: 77 }, bootstrapRecord: { kind: 'pending' } }))).toEqual(RUN);
+  });
+
+  it('at the pickup step, a resumed run waits only on evidence that its own pickup began', () => {
+    const current = (bootstrapRecord: Parameters<typeof awaitingPickupConfirm>[0]['bootstrapRecord'], ticket: number | null = 176) =>
+      awaitingPickupConfirm(facts({ pickupStep: 'current', bootstrapRecord, flowRefs: { ticket, pr: null } }));
+    expect(current({ kind: 'pending' })).toEqual(RUN);
+    expect(current(complete(4242, 176))).toEqual(RUN);
+    expect(current({ kind: 'none' })).toBeNull();
+    expect(current(complete(100, 90))).toBeNull();
+    expect(current(complete(100, 90), null)).toBeNull();
+    expect(current({ kind: 'invalid', detail: 'unreadable' })).toBeNull();
+  });
+});
+
+describe('the pickup step a run has reached', () => {
+  type Step = { id: string; pickup?: string };
+  const steps: Step[] = [{ id: 'groom' }, { id: 'plan', pickup: 'planning' }, { id: 'impl', pickup: 'implementing' }, { id: 'done' }];
+  const contractOf = (s: Step) => (s.pickup === undefined ? null : s.pickup);
+
+  it('is none before the first step that runs a pickup', () => {
+    expect(reachedPickupStep(steps, 1, contractOf)).toBeNull();
+  });
+
+  it('is current while the run is on that step', () => {
+    expect(reachedPickupStep(steps, 2, contractOf)).toEqual({ contract: 'planning', at: 'current' });
+  });
+
+  it('is behind once the run has moved past it, and is always the first such step', () => {
+    expect(reachedPickupStep(steps, 3, contractOf)).toEqual({ contract: 'planning', at: 'behind' });
+    expect(reachedPickupStep(steps, 4, contractOf)).toEqual({ contract: 'planning', at: 'behind' });
   });
 });
