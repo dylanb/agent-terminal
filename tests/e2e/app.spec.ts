@@ -32,12 +32,16 @@ import {
   chainBudget,
   CHAIN_ROSTERS,
   exampleConfigDir,
+  GOAL_CHECK_CMD,
+  goalAgentOverruns,
+  goalProgressCmd,
   PLAN_V2_ROSTER,
   seedCommitGateConfig,
   seedCompletionGateConfig,
   seedFakeAgentV2,
   seedFakeGhGit,
   seedFullTddChainAgent,
+  seedGoalSessionAgent,
   writeCatalogEntry,
 } from './fakeTools';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
@@ -7830,30 +7834,20 @@ async function driveToEpicPlanPolishGate(repo: string, home: string): Promise<vo
 // ---- §27.3 v2.200 — feature-dev-v3 grooms in three steps: interview, one goal session, then the operator's approval ----
 // The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
 // one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
-/** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
-const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "${status}"}\\n' "$leg" > "$gp"`;
-/** The shell that runs every check the goal prompt in `$p` hands the session, logging what each printed. */
-const GOAL_CHECK_CMD = `grep 'ELECTRON_RUN_AS_NODE=1 ' "$p" | sed 's/^ *//' > .agent-terminal/checks-seen; while IFS= read -r chk <&3; do { eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; done 3< .agent-terminal/checks-seen`;
-/** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
-const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.json' | head -1)`;
+const V3_ART = '.agent-terminal/loop/artifacts';
+const writeV3 = (file: string, lines: string[]): string => `mkdir -p ${V3_ART}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${V3_ART}/${file}`;
+const V3_GROOM_INTENT = writeV3('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')]);
 
 function seedGroomV3Agent(binDir: string): void {
-  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
-  const art = '.agent-terminal/loop/artifacts';
-  const write = (file: string, lines: string[]): string => `mkdir -p ${art}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${art}/${file}`;
   // Leg 1 of the groom goal checkpoints; the leg after the compact finishes the groom.
-  const finish = `${write('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ${write('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}`;
-  const script =
-    '#!/usr/bin/env bash\n' +
-    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
-    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
-    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
-    `    /goal*) printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; ${GOAL_LEG_CMD}; if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish}; fi; ${GOAL_CHECK_CMD}; ${done('work-groom')} ;;\n` +
-    `    *turn-done:work-groom-intent*) ${write('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')])}; ${done('work-groom-intent')} ;;\n` +
-    `    *turn-done:work-groom-approve*) ${write('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')])}; ${done('work-groom-approve')} ;;\n` +
-    '  esac\ndone\n';
-  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+  const finish = `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}`;
+  seedGoalSessionAgent(binDir, 'fake-agent', {
+    goal: { groom: [`${goalProgressCmd('checkpoint')}; ${GOAL_CHECK_CMD}`, `${finish}; ${GOAL_CHECK_CMD}`] },
+    work: {
+      'groom-intent': [V3_GROOM_INTENT],
+      'groom-approve': [writeV3('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')])],
+    },
+  });
 }
 
 test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and publishes the ticket when the operator approves', { tag: '@ownapp' }, async () => {
@@ -7888,7 +7882,7 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
   expect(checks.match(/OK: \.agent-terminal\/loop\/goal-progress\.[0-9a-f]{8}\.json/g)).toHaveLength(2);
   expect(checks).not.toContain('exit=1');
-  expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
+  expect(readIf(join(repo, '.agent-terminal', 'compacts-seen')).split('\n').filter((c) => c.startsWith('/compact'))).toHaveLength(1);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
 
   // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
@@ -7904,28 +7898,6 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   rmSync(binDir, { recursive: true, force: true });
 });
 
-/** A goal-session fake agent for feature-dev-v3. `goal[step]` is the shell a `/goal` for `step` runs, with the
- *  leg in `$leg`, before it signals done; a step it has no entry for says nothing. `work[step]` answers a plain
- *  work turn. Every `/goal` and `/compact` line is logged. */
-function seedV3GoalAgent(binDir: string, name: string, goal: Record<string, string>, work: Record<string, string> = {}, extra: string[] = []): void {
-  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
-  const goalCases = Object.entries(goal).map(([step, cmd]) => `${step}) ${cmd}; ${done(`work-${step}`)} ;;`).join(' ');
-  const script =
-    '#!/usr/bin/env bash\n' +
-    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
-    '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
-    `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
-    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; cat "$p" >> .agent-terminal/goal-prompts-seen; ${GOAL_LEG_CMD}; step=$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z-]*' | sed 's/turn-done:work-//'); case "$step" in ${goalCases} esac ;;\n` +
-    Object.entries(work).map(([step, cmd]) => `    *turn-done:work-${step}*) ${cmd}; ${done(`work-${step}`)} ;;\n`).join('') +
-    extra.join('') +
-    '  esac\ndone\n';
-  writeFileSync(join(binDir, name), script, { mode: 0o755 });
-}
-
-const V3_ART = '.agent-terminal/loop/artifacts';
-const writeV3 = (file: string, lines: string[]): string => `mkdir -p ${V3_ART}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${V3_ART}/${file}`;
-const V3_GROOM_INTENT = writeV3('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')]);
 
 test('§27.12 v2.201 — a stalled goal session shows how to get it going, and the session it resumes stops its auto step for a human when it is blocked', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-stallv3-', {
@@ -7936,7 +7908,7 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stallv3-bin-', { realCommitOps: true });
   // The groom goal says nothing until the operator tells it to write its turn-done file; it then reports itself blocked.
   const blocked = `mkdir -p .agent-terminal/loop; printf '{"leg": 1, "status": "blocked", "blocked": "The ticket asks for two exports."}\\n' > "$gp"; mkdir -p .agent-terminal/loop; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  seedV3GoalAgent(binDir, 'fake-agent', {}, { 'groom-intent': V3_GROOM_INTENT }, [`    *"write the turn-done file now"*) ${blocked} ;;\n`]);
+  seedGoalSessionAgent(binDir, 'fake-agent', { work: { 'groom-intent': [V3_GROOM_INTENT] }, extra: [`    *"write the turn-done file now"*) ${blocked} ;;\n`] });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '4000', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -7985,7 +7957,7 @@ for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detec
   mkdirSync(join(codexHome, 'agents'));
   for (const agent of planReviewerAgents(join(process.cwd(), 'example', 'loops-v2'), CODEX_REVIEWER_AGENT)) writeFileSync(join(codexHome, 'agents', agent.rel), agent.bytes());
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-codexv3-bin-', { realCommitOps: true });
-  seedV3GoalAgent(binDir, 'codex-impl', {}, { 'groom-intent': V3_GROOM_INTENT });
+  seedGoalSessionAgent(binDir, 'codex-impl', { work: { 'groom-intent': [V3_GROOM_INTENT] } });
   // Laid out as an npm install: `codex` runs the package's entry script under node, which runs the agent.
   const entry = join(binDir, 'lib', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
   mkdirSync(dirname(entry), { recursive: true });
@@ -8046,26 +8018,32 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   const finish = (step: string, cmd: string): string => `${cmd}; ${report(step)}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
   const result = (outcome: Parameters<typeof examplePhaseResult>[0], path: string, build?: 'built'): string =>
     writePhaseResultSh(path, examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
-  seedV3GoalAgent(
-    binDir,
-    'fake-agent',
-    {
+  const checkpoint = goalProgressCmd('checkpoint');
+  const planned = `printf %s '${b64(`# plan\n\n${exampleSlicePlan(2)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-report.md', ['## Needs your call', 'None.', '## Planner decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
+  // A slice sent back to RED runs again, so each run adds its own test and changes the code anew.
+  const red = finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.json`)}`);
+  const green = finish('green', `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${result('passed', `${V3_ART}/green-result.json`, 'built')}`);
+  const refactor = finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/'); ${result('passed', '"$rr"')}`);
+  const integration = finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`);
+  const implApprove = `${report('impl-approve')}; ${writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')])}`;
+  // The slice runs twice: once from the plan, once more after the operator sends it back to RED.
+  seedGoalSessionAgent(binDir, 'fake-agent', {
+    goal: {
       // The plan session's first leg runs out of passes; the leg after the compact writes a plan of 2 impl-slices.
-      plan: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else printf %s '${b64(`# plan\n\n${exampleSlicePlan(2)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-report.md', ['## Needs your call', 'None.', '## Planner decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}; fi`,
-      infra: finish('infra', `printf '%s\\n' 'export const infra = 1;' > infra.ts`),
-      // A slice sent back to RED runs again, so each run adds its own test and changes the code anew.
-      red: finish('red', `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${result('failed-assertion', `${V3_ART}/red-result.json`)}`),
-      // GREEN's first leg runs out of passes; the leg after the compact finishes it.
-      green: `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${finish('green', `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${result('passed', `${V3_ART}/green-result.json`, 'built')}`)}; fi`,
-      refactor: finish('refactor', `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/'); ${result('passed', '"$rr"')}`),
-      'integration-slice': finish('integration-slice', `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`),
+      plan: [checkpoint, planned],
+      infra: [finish('infra', `printf '%s\\n' 'export const infra = 1;' > infra.ts`)],
+      red: [red, red],
+      // Each GREEN session's first leg runs out of passes; the leg after the compact finishes it.
+      green: [checkpoint, green, checkpoint, green],
+      refactor: [refactor, refactor],
+      'integration-slice': [integration, integration],
     },
-    {
+    work: {
       // The operator narrows the plan to 1 impl-slice in the approval session, so approving it re-sources the count.
-      'plan-approve': `printf %s '${b64(`# plan\n\n${exampleSlicePlan(1)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')])}`,
-      'impl-approve': `${report('impl-approve')}; ${writeV3('impl-summary.md', ['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
+      'plan-approve': [`printf %s '${b64(`# plan\n\n${exampleSlicePlan(1)}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ${writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')])}`],
+      'impl-approve': [implApprove, implApprove],
     },
-  );
+  });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
@@ -8144,6 +8122,7 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');
   expect(gitIn(repo, 'log', '--format=%s', `-${gitCount(repo) - before}`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'integration', 'refactor', 'GREEN', 'RED', 'infra']);
+  expect(goalAgentOverruns(binDir)).toEqual([]);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

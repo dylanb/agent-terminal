@@ -25,6 +25,8 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import type { StepSpan } from '../shared/flowStepSpan';
+import type { BenchAppEnding } from '../shared/benchLaunch';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -733,6 +735,13 @@ export type TerminateResult =
 /** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
+/** #180 — the span a repo's flow is held inside: `spanFor` names it for a repo key (null → no span, today's
+ *  behaviour), and `ended` hears the move that left it or the completion that ended it. */
+export interface FlowSpanPort {
+  spanFor(repoKey: string): StepSpan | null;
+  ended(repoKey: string, ending: Extract<BenchAppEnding, 'left span' | 'completed'>): void;
+}
+
 export interface FlowManagerDeps {
   /** Global fallback dir for the DEFINITION only (§18.1); STATE is never global. */
   globalDir: string;
@@ -744,6 +753,7 @@ export interface FlowManagerDeps {
    *  renders no loop view. A `legacy`-marked step never reaches this — its marked-binding error view (AC 4)
    *  is produced in the machine. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
+  span?: FlowSpanPort;
 }
 
 function displaySafeHold(hold: HeldRunView): HeldRunView {

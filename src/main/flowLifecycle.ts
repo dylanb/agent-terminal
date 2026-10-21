@@ -24,6 +24,8 @@ export interface FlowLifecycleDeps {
   /** §27.9.1 — end the engine-held run: called on every reset of the run to not_started. */
   endRun(repoKey: string): void;
   recordTerminate(repoKey: string): void;
+  /** #180 — the run's span ended with a terminate. */
+  spanTerminated?(repoKey: string): void;
   clearTodos(repoKey: string): void;
   clearSliceBrief(repoKey: string): void;
   clearMonitor(): void;

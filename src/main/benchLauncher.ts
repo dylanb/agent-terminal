@@ -48,3 +48,5 @@ export function createBenchLauncher(invocation: LaunchInvocation, env: NodeJS.Pr
       }),
   };
 }
+
+export { setupBenchLaunch } from './benchSpan';
