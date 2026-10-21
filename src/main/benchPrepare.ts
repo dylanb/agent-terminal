@@ -8,6 +8,7 @@ import type { BenchGithub } from './benchGithub';
 import type { BenchAccepted } from './benchRefusals';
 import { createActiveFlowGate } from './activeFlowGate';
 import { runAppCommand } from './appCommand';
+import { recordBaselineCommit } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { readConfinedTree } from './benchTree';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
@@ -44,7 +45,7 @@ export interface BenchPrepareRequest {
 }
 
 export type BenchPrepared =
-  | { ok: true; runFolder: string; launch: BenchLaunch }
+  | { ok: true; runFolder: string; launch: BenchLaunch; branch: string; issueCopy: number }
   /** `runFolder` is null when the run's folder could not be made. */
   | { ok: false; code: BenchPrepareFailure; runFolder: string | null; reason: string };
 
@@ -104,7 +105,7 @@ function installFlow(accepted: BenchAccepted, workingFolder: string, appHome: st
   }
 }
 
-function seed(request: BenchPrepareRequest, workingFolder: string, copy: number): void {
+function seed(request: BenchPrepareRequest, workingFolder: string, branch: string, copy: number): void {
   const pointer = createActiveFlowGate(createWorktreeLock({ lockRoot: worktreeLockRoot(request.appHome) })).set(workingFolder, BENCH_FLOW_ID);
   if (!pointer.ok) throw new PrepareError('prepare-failed', pointer.reason);
   const { fixture, ticketInput } = request.accepted;
@@ -114,6 +115,7 @@ function seed(request: BenchPrepareRequest, workingFolder: string, copy: number)
     inputs: { ...fixture.inputs, ...(ticketInput === null ? {} : { [ticketInput]: String(copy) }) },
     repeatCounts: fixture.repeat_counts,
   });
+  if (fixture.phase_baseline !== undefined) recordBaselineCommit(workingFolder, branch, fixture.phase_baseline);
 }
 
 export async function prepareBenchRun(request: BenchPrepareRequest): Promise<BenchPrepared> {
@@ -126,7 +128,8 @@ export async function prepareBenchRun(request: BenchPrepareRequest): Promise<Ben
   }
   try {
     const worktree = path.join(runFolder, `bench-${stamp}-run-${run}`);
-    await runAppCommand('git', ['worktree', 'add', '-q', '-b', `bench/${stamp}/run-${run}`, worktree, request.accepted.fixture.commit], request.invokingRepo);
+    const branch = `bench/${stamp}/run-${run}`;
+    await runAppCommand('git', ['worktree', 'add', '-q', '-b', branch, worktree, request.accepted.fixture.commit], request.invokingRepo);
     // The app's launch root and repo keys are real paths, so the launch names the worktree by its own.
     const workingFolder = realpathSync(worktree);
     restoreArtifacts(request.fixtureDir, workingFolder);
@@ -138,13 +141,15 @@ export async function prepareBenchRun(request: BenchPrepareRequest): Promise<Ben
       throw new PrepareError('issue-copy-failed', errMsg(e));
     }
     try {
-      seed(request, workingFolder, copy);
+      seed(request, workingFolder, branch, copy);
     } catch (e) {
       throw new PrepareError(e instanceof PrepareError ? e.code : 'prepare-failed', `${errMsg(e)} (issue copy #${copy} was created)`);
     }
     return {
       ok: true,
       runFolder,
+      branch,
+      issueCopy: copy,
       launch: { schema_version: BENCH_LAUNCH_SCHEMA, workingFolder, span: request.span, spanEndFile: path.join(runFolder, SPAN_END_FILE) },
     };
   } catch (e) {

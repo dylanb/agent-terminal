@@ -28,6 +28,8 @@ podman build -t "$IMAGE" -f e2e/Containerfile .
 
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
+# ELECTRON_DISABLE_SANDBOX: the container runs as root, which Electron refuses without --no-sandbox; Playwright's
+# launches pass that flag, but an app the bench runner spawns itself (tests/e2e/bench.spec.ts) does not.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
 tty=()
 [ -t 0 ] && tty=(-it)
@@ -39,6 +41,7 @@ podman run --rm ${tty[@]+"${tty[@]}"} \
   -v "$VOLUME":/work/node_modules \
   -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
+  -e ELECTRON_DISABLE_SANDBOX=1 \
   -e E2E_GREP="$FILTER" \
   -e "E2E_IO_DIR=${E2E_IO_DIR:-}" \
   "$IMAGE"
