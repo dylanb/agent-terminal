@@ -13,15 +13,16 @@ export function registerControllerTerminal(
   onRegistered: () => void = () => {},
 ): () => void {
   let canceled = false;
-  let registered = false;
+  let started = false;
   let socket: Socket | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
   const scheduleRetry = () => {
-    if (!canceled && !registered) retry = setTimeout(attempt, CONTROLLER_RETRY_DELAY_MS);
+    if (!canceled) retry = setTimeout(attempt, CONTROLLER_RETRY_DELAY_MS);
   };
   const attempt = () => {
     if (canceled) return;
+    let registered = false;
     let current: Socket;
     try { current = connect(resolveControllerEndpoint(appHome)); }
     catch { scheduleRetry(); return; }
@@ -44,7 +45,10 @@ export function registerControllerTerminal(
           if (!registered && message.type === 'registered') {
             registered = true;
             clearTimeout(deadline);
-            onRegistered();
+            if (!started) {
+              started = true;
+              onRegistered();
+            }
           } else if (registered && message.type === 'activate') {
             const outcome = activate();
             current.write(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome }));

@@ -94,14 +94,17 @@ for (const outage of ['quit', 'crash'] as const) {
   });
 }
 
-for (const restart of [false, true]) {
-  test(restart
+for (const mode of ['direct', 'replay', 'reconnect'] as const) {
+  const restart = mode !== 'direct';
+  test(mode === 'reconnect'
+    ? 'automatic reconnection after controller crash routes to both original same-directory PTYs'
+    : restart
     ? 'replayed registration after controller restart routes to both original same-directory terminals'
     : 'same-directory panes restore and route desktop keyboard input to both original terminals', { tag: '@ownapp' }, async () => {
   test.setTimeout(120_000);
   const h = await createControllerDesktopHarness();
-  const controllerHome = restart ? join(h.fixture.root, 'routing-controller') : h.fixture.home;
-  const relay = restart ? await createControllerRegistrationRelay(h.fixture.home, controllerHome) : undefined;
+  const controllerHome = mode === 'replay' ? join(h.fixture.root, 'routing-controller') : h.fixture.home;
+  const relay = mode === 'replay' ? await createControllerRegistrationRelay(h.fixture.home, controllerHome) : undefined;
   try {
     h.fixture.env.APP_HOME_DIR = controllerHome;
     let controller = await h.launch(controllerTarget, h.fixture.nonGit);
@@ -122,7 +125,7 @@ for (const restart of [false, true]) {
       h.fixture.env.APP_HOME_DIR = controllerHome;
       controller = await h.launch(controllerTarget, h.fixture.nonGit);
       h.fixture.env.APP_HOME_DIR = h.fixture.home;
-      await relay!.replayRegistrations();
+      await relay?.replayRegistrations();
     }
     const panes = controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false });
     await expect(panes).toHaveCount(2, { timeout: RECOVERY_BOUND_MS });
@@ -145,6 +148,8 @@ for (const restart of [false, true]) {
       }
     }
     expect(delivered.sort()).toEqual([0, 1]);
+    await expect(panes).toHaveCount(2);
+    expect(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
   } finally {
     try { await h.dispose(); }
     finally { await relay?.dispose(); }
