@@ -10,11 +10,13 @@ import { createFakeBenchGithub, FAKE_FIRST_COPY } from '../helpers/benchFakeGith
 import { createFakeLauncher } from '../helpers/benchFakeLauncher';
 import { runRequest } from '../helpers/benchRunSetup';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
-import { b64, exampleConfigDir, GOAL_CHECK_CMD, goalAgentOverruns, goalProgressCmd, seedFakeGhGit, seedFakeGhIssue, seedGoalSessionAgent, type GoalSessionScript } from './fakeTools';
+import { b64, exampleConfigDir, GOAL_CHECK_CMD, goalAgentOverruns, goalProgressCmd, readFakeGhIssue, seedFakeGhGit, seedFakeGhIssue, seedGoalSessionAgent, type FakeGhIssue, type GoalSessionScript } from './fakeTools';
 import { BENCH_ENTRY } from '../../src/main/benchMain';
 import { benchAppTarget, benchLaunchEnv } from '../../src/main/benchLauncher';
 import { captureFixture } from '../../src/main/benchCapture';
 import { runBench } from '../../src/main/benchRun';
+import { BENCH_RUN_LABEL, createBenchGithub } from '../../src/main/benchGithub';
+import type { AppLauncher } from '../../src/main/benchLauncher';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { BENCH_LAUNCH_ENV, BENCH_LAUNCH_SCHEMA, encodeBenchLaunch, parseBenchSpanEnd, type BenchLaunch } from '../../src/shared/benchLaunch';
 import { BENCH_FIXTURE_MANIFEST, parseBenchFixture, type BenchFixtureRead } from '../../src/shared/benchFixture';
@@ -387,6 +389,103 @@ test('span groom..groom-approve ends when the operator approves groom-approve: t
   expect.soft(flowStateOf(wf)).toContain('step: groom-approve\n');
   const calls = readIf(run.logFile);
   expect.soft({ pushed: calls.includes('git push'), prCreated: calls.includes('gh pr create') }).toEqual({ pushed: false, prCreated: false });
+});
+
+const SOURCE_ISSUE: FakeGhIssue = {
+  number: 180,
+  title: 'Bench-1: re-run a span',
+  body: 'The intent.\n\nSee #178.\n',
+  labels: ['agent-loop/ready', 'area/bench'],
+  comments: [{ author: 'octocat', createdAt: '2026-01-02T03:04:05Z', body: 'A comment.\nSecond line.' }],
+};
+
+/** The issue numbers each logged `gh issue|pr` write names as a positional; every flag the app and the runner pass
+ *  takes a value, and no title or value here is a bare number. */
+function issuesWritten(calls: string[]): number[] {
+  return calls.flatMap((call) => {
+    const [, kind, sub, ...rest] = call.split(' ');
+    if ((kind !== 'issue' && kind !== 'pr') || sub === 'view' || sub === 'list') return [];
+    return rest.filter((t, i) => /^\d+$/.test(t) && !rest[i - 1]?.startsWith('-')).map(Number);
+  });
+}
+
+const ghCalls = (logFile: string): string[] => readIf(logFile).split('\n').filter((l) => l.startsWith('gh '));
+
+test('two runs of span groom..groom-approve from one fixture each work their own issue copy: every gh write of run k names run k\'s copy, the source is unchanged, and both runs read the same ticket text', { tag: '@ownapp' }, async () => {
+  test.setTimeout(330_000);
+  b = createBenchFixtureBuilder();
+  roots = createBenchRoots();
+  const { dir: repo } = b.makeRepository('bench-e2e-two');
+  b.seedFlow(repo, 'feature-dev-v3', V3_FLOW);
+  createFlowStateStore(repo).write({ step: 'groom', status: 'not_started', inputs: { ticket: '180' } });
+  b.writeArtifacts(repo, { 'groom-intent.md': GROOMED['groom-intent.md'] });
+  const { binDir, ghOnlyBinDir, logFile } = seedFakeGhGit('bench-e2e-two-bin-', { realCommitOps: true });
+  dirs.push(binDir);
+  seedFakeGhIssue(logFile, SOURCE_ISSUE);
+  const fixture = join(temp('bench-e2e-two-fx'), 'fx');
+
+  const savedPath = process.env.PATH;
+  const savedLog = process.env.FAKE_GHGIT_LOG;
+  const runs: { launch: BenchLaunch; copy: number; groomed: string; callsBefore: number; callsAfter: number; overruns: string[] }[] = [];
+  const launcher: AppLauncher = {
+    async open(launch) {
+      const callsBefore = runs.at(-1)?.callsAfter ?? 0;
+      const copy = Number(createFlowStateStore(launch.workingFolder).read()?.inputs?.ticket);
+      const groomed = `# Groomed ticket, run ${runs.length + 1}\n${completionMarker('groom')}\n`;
+      const agentDir = temp('bench-e2e-two-agent');
+      const groom = `printf %s '${b64(groomed)}' | base64 -d > ${ART}/groomed-ticket.md; ` +
+        `${writeArt('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
+      const summary = writeArt('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')]);
+      seedGoalSessionAgent(agentDir, 'fake-agent', { goal: { groom: [groom] }, work: { 'groom-approve': [summary] }, recordTicket: true });
+      const { closed } = await openLaunched({ launch, binDir, logFile }, { PATH: `${agentDir}:${binDir}:${savedPath}` });
+
+      await startWith('fake-agent');
+      await expect.poll(() => runStateOf(launch.workingFolder), { timeout: 90_000 }).toMatch(/step: groom-approve[\s\S]*verdict: clean/);
+      if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+      await loopPanel().locator('[data-gate-option="approve"]').click();
+      await until(closed, 60_000);
+      if (!closed()) await app?.close();
+      app = undefined;
+      runs.push({ launch, copy, groomed, callsBefore, callsAfter: ghCalls(logFile).length, overruns: goalAgentOverruns(agentDir) });
+    },
+  };
+
+  // The runner's gh is the gh-only fake over the same store and log; its git stays real.
+  let result: Awaited<ReturnType<typeof runBench>>;
+  try {
+    process.env.PATH = `${ghOnlyBinDir}:${savedPath}`;
+    process.env.FAKE_GHGIT_LOG = logFile;
+    const captured = await captureFixture({ workingFolder: repo, fixtureDir: fixture, appHome: roots.appHome, github: createBenchGithub() });
+    if (!captured.ok) throw new Error(`setup: capture refused (${captured.code})`);
+    result = await runBench(runRequest({ repo, fixture }, roots, { span: { first: 'groom', last: 'groom-approve' }, runs: '2' }, { github: createBenchGithub(), launcher }));
+  } finally {
+    process.env.PATH = savedPath;
+    if (savedLog === undefined) delete process.env.FAKE_GHGIT_LOG;
+    else process.env.FAKE_GHGIT_LOG = savedLog;
+  }
+
+  const calls = ghCalls(logFile);
+  const ticketSeen = runs.map(({ launch }) => readIf(join(launch.workingFolder, '.agent-terminal', 'ticket-seen.groom.txt')));
+  const copies = runs.map(({ copy }) => readFakeGhIssue(logFile, copy));
+  expect.soft({ ok: result.ok, runs: runs.length, distinctCopies: new Set(runs.map((r) => r.copy)).size }).toEqual({ ok: true, runs: 2, distinctCopies: 2 });
+  expect.soft(runs.map(({ launch, overruns }) => ({ ending: spanEnding(launch), overruns }))).toEqual([
+    { ending: 'left span', overruns: [] },
+    { ending: 'left span', overruns: [] },
+  ]);
+  expect.soft(readFakeGhIssue(logFile, SOURCE_ISSUE.number)).toEqual(SOURCE_ISSUE);
+  expect.soft(issuesWritten(calls)).not.toContain(SOURCE_ISSUE.number);
+  for (const [k, run] of runs.entries()) {
+    const written = issuesWritten(calls.slice(run.callsBefore, run.callsAfter));
+    expect.soft({ run: k + 1, writes: written.length > 0, others: written.filter((n) => n !== run.copy) }).toEqual({ run: k + 1, writes: true, others: [] });
+    const copied = copies[k];
+    expect.soft({ title: copied?.title, body: copied?.body, labels: copied?.labels }).toEqual({ title: SOURCE_ISSUE.title, body: run.groomed, labels: ['area/bench', BENCH_RUN_LABEL] });
+    const [author, ...text] = (copied?.comments[0]?.body ?? '').split('\n');
+    expect.soft({ comments: copied?.comments.length, namesAuthor: author.includes(SOURCE_ISSUE.comments[0].author) && author.includes(SOURCE_ISSUE.comments[0].createdAt), mentions: author.includes('@'), verbatim: text.join('\n').endsWith(SOURCE_ISSUE.comments[0].body) })
+      .toEqual({ comments: 1, namesAuthor: true, mentions: false, verbatim: true });
+  }
+  expect.soft(ticketSeen[0]).toContain(SOURCE_ISSUE.body);
+  expect.soft(ticketSeen[0]).toContain(SOURCE_ISSUE.comments[0].body);
+  expect.soft(ticketSeen[1]).toBe(ticketSeen[0]);
 });
 
 test('a launched run the operator terminates makes the app exit on its own, the span terminated', { tag: '@ownapp' }, async () => {
