@@ -93,6 +93,7 @@ describe('flow-state keeps the run identity Start wrote (#137, §25)', () => {
       decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
       askAgentWhy: () => {},
       withdrawAgentQuestion: () => {},
+      currentSlice: () => 1,
     });
     const flowStart = composeStartTransition({
       autoGate: gate,

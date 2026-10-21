@@ -17,10 +17,13 @@ repository's own rules for evidence of a clean test run.
 
 Grade whether the GREEN implementation satisfies the intent of the RED tests, not merely their letter.
 No vacuous green — reject any trivially-true assertion slipped in only to pass, and in a refactor confirm
-the change is behavior-preserving and no assertion was weakened. Read the machine's changed-test flag
-(§28.5.3):
-when a test-glob file changed since the RED commit, judge whether it was a legitimate RED correction or a
-weakening, and recommend a course of action to the human at the gate. The machine proves which files
+the change is behavior-preserving and no assertion was weakened. For each test GREEN added, confirm it weakens no other test: no shared
+setup, hook, mock or skip it adds may change what another test checks. Confirm too that it tests observable
+behavior, not the implementation, and was seen failing before the code it covers. When GREEN changed or
+removed a line of a test RED wrote, it logs the change under `### RED test changes`. For each change to a RED
+test, judge whether it corrects a wrong test or weakens a right one, and confirm every acceptance criterion the
+test checked is still checked by some test. Read the machine's changed-test flag (§28.5.3): a changed test file
+the flag lists that `### RED test changes` does not explain is a finding. The machine proves which files
 changed; you judge why.
 
 A green is vacuous too when it was never run:

@@ -206,6 +206,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
     askAgentWhy: (question) => void asked.push(question),
     withdrawAgentQuestion: () => {},
+    currentSlice: () => 1,
   });
   const preparerResolve = composeLoopBindingResolve(gate, composeObservedResolveDef(ctxFor));
   flow = createFlowManager({

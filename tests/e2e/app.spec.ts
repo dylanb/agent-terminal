@@ -7374,6 +7374,17 @@ async function passAutoGate(home: string, repo: string, step: string, consumes?:
   expect(deciders, step).toEqual(['engine']);
 }
 
+/** Pass one shipped-chain step's gate: an `auto` step passes on its own; a human step is approved in the loop panel. */
+async function approveChainStep(home: string, repo: string, step: string): Promise<void> {
+  if (FEATURE_DEV_AUTO_STEPS.has(step)) return passAutoGate(home, repo, step);
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 90_000 }).toContain('verdict: clean');
+  if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  const approveBtn = loopPanel().locator('[data-gate-option="approve"]');
+  await expect(approveBtn).toBeVisible({ timeout: 30_000 });
+  await approveBtn.click();
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 30_000 }).not.toContain(`step: ${step}\n`);
+}
+
 test('§28.10 S7 — the shipped feature-dev flow runs end-to-end: groom → plan-bundle → plan-polish → infra → red → green → refactor → integration-slice, each loop consuming the prior loop’s artifact, the five phase commits landing on one branch and the published PR body carrying the chained plan', { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(8));
   const repo = seedFullTddChainRepo('agent-term-e2e-fulltdd-');
@@ -7503,6 +7514,76 @@ test('§28.4 D1+D2+D3 — the polished plan sources the impl-slice count, and th
   // #126 — the per-slice artifact is surfaced in the loop viewer's tree.
   await page.locator('[data-viewbtn="2"]').click();
   await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'red-result.slice-2.json' })).toHaveCount(1, { timeout: 30_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.1/§28.5.3 — a RED that finds a dependent increment the plan left inside its slice splits the slice in the
+// plan, and approving RED re-sources the count from that plan, so the run loops back for the extra slice instead
+// of ending one slice short. Wiring: RED gate approve → sourceSliceCount (red-loop declares the `plan` output) →
+// flow.resolveInputs; then the refactor loop-back reads the new count.
+test('§28.5.3 — a RED that splits its slice in the plan raises the slice count on approve, and the run loops back for the extra slice', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(10));
+  const repo = seedFullTddChainRepo('agent-term-e2e-redsplit-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redsplit-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redsplit-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir, { implSlices: 1, redPlan: `# plan\n\n${exampleSlicePlan(2)}\n`, verdicts: { red: ['clean', 'stop for a human'] } });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  for (const step of ['groom', 'plan-bundle', 'plan-polish', 'infra']) await approveChainStep(home, repo, step);
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
+  await approveChainStep(home, repo, 'red');
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
+  await approveChainStep(home, repo, 'green');
+  await approveChainStep(home, repo, 'refactor');
+
+  const artifacts = join(repo, '.agent-terminal', 'loop', 'artifacts');
+  await expect.poll(() => existsSync(join(artifacts, 'red-result.slice-2.json')), { timeout: 90_000 }).toBe(true);
+  expect(readIf(appFlowState(repo))).toContain('step: red\n');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.1 — the RED gate re-sources the count, so a plan RED left malformed must not cut the run short: the count
+// already sourced stands rather than falling to 1.
+test('§28.4.1 — a RED that leaves the plan malformed keeps the slice count already sourced', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(6));
+  const repo = seedFullTddChainRepo('agent-term-e2e-redkeep-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redkeep-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redkeep-bin-', { realCommitOps: true });
+  seedFullTddChainAgent(binDir, { implSlices: 1, polishedSlices: 2, redPlan: '# plan\n\n## Impl-slices\n\n### Impl-slice 1 — no acceptance line\n', verdicts: { green: ['stop for a human'] } });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  for (const step of ['groom', 'plan-bundle', 'plan-polish', 'infra']) await approveChainStep(home, repo, step);
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
+  await approveChainStep(home, repo, 'red');
+  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -7939,6 +8020,45 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
   await expect(loopPanel()).toContainText('The ticket asks for two exports.', { timeout: 30_000 });
   expect(readIf(appFlowState(repo))).toContain('step: groom\n');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('§27.3 v2.207 — once the operator resolves a blocked goal session in the session, its rewritten done-signal takes the step on through its auto gate', { tag: '@ownapp' }, async () => {
+  const { dir: repo } = seedFlowRepoBase('agent-term-e2e-unblock-', {
+    flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
+    flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-unblock-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-unblock-bin-', { realCommitOps: true });
+  // The groom goal blocks on a question; once the operator answers it in the session, it finishes the goal and
+  // rewrites its progress file and then its turn-done file.
+  const blocked = `printf '{"leg": 1, "status": "blocked", "blocked": "The ticket asks for two exports."}\\n' > "$gp"`;
+  const resolved =
+    `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
+    `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
+    `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'groom-intent');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toMatch(/verdict: stop for a human[\s\S]*verdict_reason: The ticket asks for two exports\./);
+
+  await typeCommand('Ship one export. Carry on.');
+  await passAutoGate(home, repo, 'groom');
+  expect(readIf(appFlowState(repo))).toContain('step: groom-approve\n');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

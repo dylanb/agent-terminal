@@ -34,11 +34,11 @@ describe('changedTestPathsFromCapabilities (§28.5.1 + §28.5.4 composed)', () =
     repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a\n');
     const baseline = repos.commitAll(dir, 'seed (RED baseline)');
     repos.writeRepoFile(dir, 'tests/foo.test.ts', 'a2\n'); // uncommitted working-tree edit
-    repos.writeRepoFile(dir, 'tests/new.test.ts', 'n\n'); // untracked add
+    repos.writeRepoFile(dir, 'tests/new.test.ts', 'n\n'); // untracked add, not a frozen change
 
     await expect(changedTestPathsFromCapabilities({ repoDir: dir, baseline })).resolves.toEqual({
       ok: true,
-      paths: ['tests/foo.test.ts', 'tests/new.test.ts'],
+      paths: ['tests/foo.test.ts'],
     });
   });
 

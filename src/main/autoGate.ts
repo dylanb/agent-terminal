@@ -6,7 +6,7 @@ import type { FlowLike } from '../shared/audit';
 import { autoHaltAuditCmd } from '../shared/audit';
 import { failedEffectNotice, type AutoHaltReason, type FailedEffectState } from '../shared/gateAuthority';
 import { composeGateQuestion, type GateStop } from '../shared/gateQuestion';
-import { displaySafeEcho, MAX_ECHOED_PATH_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { reportNeedsAHuman } from '../shared/roundReport';
 import type { FlowDefinition } from './flow';
 import type { ApproveClaim, ApproveDecider, GateApproveOutcome } from './appGateDecision';
@@ -15,11 +15,13 @@ import type { DispositionRead } from './resolveRunDefinition';
 import type { LoopDefV2Result } from './loopDefV2';
 import { clearInterrupt, type FlagProbe, isPolishActiveForStep, probeArmedInterrupt, readAppLoopState, readArmedInterrupt, recordChangedTests } from './appLoopState';
 import { approveTimeFrozenCheck, type ApproveTimeFrozenCheck } from './frozenTests';
+import { recordRedTestChanges } from './redTestChanges';
 import { inProgressRunIdentity, readGateRunState, sameRun, writeGateRunState, type RelaunchHalt, type RunIdentity } from './gateRunState';
 import { errMsg } from './errno';
 
 export interface DefResolution {
   completion?: 'red' | 'green' | 'refactor';
+  frozenCheck?: true;
 }
 
 export interface StartRun {
@@ -50,6 +52,7 @@ export interface AutoGateDeps {
   askAgentWhy: (question: string) => void;
   /** §27.9.1 N9b.10 */
   withdrawAgentQuestion: () => void;
+  currentSlice: (repoDir: string) => number;
 }
 
 export interface AutoGate {
@@ -75,7 +78,10 @@ export interface AutoGate {
 /** The `DefResolution` the controller reads off a def resolution. */
 export function defResolutionOf(r: LoopDefV2Result): DefResolution | null {
   if (!r.ok) return null;
-  return r.def.work.completion ? { completion: r.def.work.completion } : {};
+  return {
+    ...(r.def.work.completion ? { completion: r.def.work.completion } : {}),
+    ...(r.def.work.frozenCheck ? { frozenCheck: true as const } : {}),
+  };
 }
 
 type Reason = { reason: AutoHaltReason; detail?: string };
@@ -357,7 +363,7 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     } catch {
       res = null;
     }
-    return res === null || isFrozenCheckCompletion(res.completion);
+    return res === null || isFrozenCheckCompletion(res.completion) || res.frozenCheck === true;
   };
 
   /** An unreadable or absent run-state has not left the gate: the check's result still decides it. */
@@ -397,18 +403,20 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
     });
   };
 
-  /** §27.9.1 N9b.6(d)–(e), N9b.7(d) */
+  /** §27.9.1 N9b.6(e), N9b.7(d) */
   const frozenCheckReasons = (repoDir: string, step: string, result: ApproveTimeFrozenCheck): Reason[] => {
     if (!result.ok) return [{ reason: 'frozen-check-unavailable', detail: result.detail }];
-    const changed = result.paths.length > 0;
-    const echoed = displaySafeEcho(result.paths.join(', '), MAX_ECHOED_PATH_LENGTH);
     try {
       recordChangedTests(repoDir, step, result.paths);
     } catch (e) {
-      const unrecorded: Reason = { reason: 'frozen-check-unavailable', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` };
-      return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }, unrecorded] : [unrecorded];
+      return [{ reason: 'frozen-check-unavailable', detail: `changed-tests.yaml could not be written: ${errMsg(e)}` }];
     }
-    return changed ? [{ reason: 'frozen-tests-changed', detail: echoed }] : [];
+    try {
+      recordRedTestChanges(repoDir, { branch: result.branch, step, slice: deps.currentSlice(repoDir), paths: result.paths });
+    } catch (e) {
+      return [{ reason: 'frozen-check-unavailable', detail: `red-test-changes.yaml could not be written: ${errMsg(e)}` }];
+    }
+    return [];
   };
 
   const conclude = (repoDir: string, run: AutoRun, d: Deciding, reasons: Reason[]): void => {

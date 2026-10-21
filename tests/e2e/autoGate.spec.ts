@@ -10,6 +10,7 @@ import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
 import { readChangedTests, recordBaselineCommit, recordChangedTests } from '../../src/main/appLoopState';
+import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
@@ -281,26 +282,40 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a control
   expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
 });
 
-test('auto GREEN halts on frozen-test change and on unavailable check: a round that edited a test halts with (d) and the flag lists the file (AC12)', { tag: '@ownapp' }, async () => {
-  test.setTimeout(loopTestBudget(3, 0));
-  const { home, repo, baseline } = await startAutoGreen('agent-term-e2e-137-frozen-d-', greenAgent({ touchTest: true }));
+test('auto GREEN that changed a RED test is engine-approved, and the RED test change record lists the file under its step and slice (v2.210)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 1));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-red-change-', greenAgent({ touchTest: true }));
 
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
-  await openLoopPanel();
-  await expect(haltRows().first()).toBeVisible({ timeout: UI_MS });
-  expect(autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd))).toEqual([['frozen-tests-changed']]);
-  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-tests-changed"]')).toBeVisible();
-  expect(readChangedTests(repo)?.paths).toContain('tests/frozen.test.ts');
-  expect(flowState(repo)).toMatch(/^step: green$/m);
-  expect(gitIn(repo, 'rev-parse', 'HEAD')).toBe(baseline);
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
+    .toMatch(/^step: done$/m)
+    .catch(failWithDiagnosis(home, repo));
+  expect(autoHaltsAt(home, repo, 'green')).toEqual([]);
+  expect(readRedTestChanges(repo)?.changes).toEqual([{ step: 'green', slice: 1, paths: ['tests/frozen.test.ts'] }]);
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toContain('tests/frozen.test.ts');
+});
+
+test('auto GREEN that only adds tests is engine-approved, and its commit carries a new test file and a test appended to a RED test file', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(2, 1));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-green-adds-', greenAgent({ addTest: true }));
+
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS + APPROVE_ADVANCE_MS })
+    .toMatch(/^step: done$/m)
+    .catch(failWithDiagnosis(home, repo));
+  expect(autoHaltsAt(home, repo, 'green')).toEqual([]);
+  expect(readChangedTests(repo)?.paths).toEqual([]);
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toEqual(
+    expect.arrayContaining(['tests/frozen.test.ts', 'tests/green_added.test.ts']),
+  );
 });
 
 // §27.9.1 N9b.10
 const injectedLog = (repo: string): string => readIf(join(repo, '.agent-terminal', 'injected-log'));
 
-test('a gate that stops for the operator asks the agent why: an `auto` (d) halt names the reason and the changed test, in the agent and the panel', { tag: '@ownapp' }, async () => {
+test('a gate that stops for the operator asks the agent why: an `auto` (e) halt names the reason and its detail, in the agent and the panel', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 0));
-  const { home, repo } = await startAutoGreen('agent-term-e2e-why-d-', greenAgent({ touchTest: true, logInjected: true }));
+  const { home, repo } = await startAutoGreen('agent-term-e2e-why-e-', greenAgent({ logInjected: true, extraShell: { consolidate: ['rm -f loop-capabilities.yaml'] } }));
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await expect
@@ -308,10 +323,10 @@ test('a gate that stops for the operator asks the agent why: an `auto` (d) halt 
     .toContain('Why does this gate need me?')
     .catch(failWithDiagnosis(home, repo));
   const log = injectedLog(repo);
-  expect(log).toContain('(d) frozen tests changed: tests/frozen.test.ts');
+  expect(log).toMatch(/\(e\) frozen check unavailable: loop-capabilities\.yaml/);
   expect(log.split('Why does this gate need me?')).toHaveLength(2);
   await openLoopPanel();
-  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-tests-changed"]')).toContainText('tests/frozen.test.ts', { timeout: UI_MS });
+  await expect(loopPanel().locator('[data-auto-halt-reason="frozen-check-unavailable"]')).toContainText('loop-capabilities.yaml', { timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: green$/m);
 });
 
