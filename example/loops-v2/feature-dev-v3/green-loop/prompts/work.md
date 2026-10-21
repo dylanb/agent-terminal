@@ -1,7 +1,7 @@
 # green-loop — work turn
 
-Implement the smallest change that makes the slice's RED test pass per `CLAUDE.md`. Never change or remove a
-line of a test RED wrote; that is RED's job. You may add new tests, in new test files or added to RED's files
+Implement the smallest change that makes the slice's RED test pass per `CLAUDE.md`. Change a line of a test
+RED wrote only when that test is wrong, as your decision boundary says. You may add new tests, in new test files or added to RED's files
 without editing their lines, when your change needs coverage RED's tests do not give, such as a branch or
 failure path your design introduces. Each added test must test observable behaviour, never the
 implementation, and must not weaken any other test: no shared setup, hook, mock or skip it adds may change

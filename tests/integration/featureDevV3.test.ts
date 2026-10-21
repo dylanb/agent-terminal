@@ -9,6 +9,7 @@ import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan } from '../../src/sha
 import { exampleSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
 import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
+import { redTestChangesArtifact } from '../../src/main/redTestChanges';
 
 // feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
@@ -172,27 +173,46 @@ describe('each implementation step is a goal session that reviews its own work (
     }
   });
 
-  it('the green goal names the frozen-tests bar the gate checks: no line of a RED test changed or removed', () => {
+  it('the green goal no longer bars a change to a RED test: it requires each one logged', () => {
     const goal = loop('green-loop').work.goal ?? '';
-    expect(goal).not.toContain('the RED tests unchanged');
-    expect(goal).toContain('no line of a RED test changed or removed');
+    expect(goal).not.toContain('no line of a RED test changed or removed');
+    expect(goal).toContain('every change to a line of a RED test is logged under `### RED test changes`');
   });
 
-  it('green may add tests that test behaviour and weaken no other test, seen failing first, but never edits a RED test', () => {
+  it('green may add tests that test behaviour and weaken no other test, seen failing first', () => {
     const work = flat(text(loop('green-loop').work.recipe));
-    expect(work).toMatch(/Never change or remove a line of a test RED wrote/);
     expect(work).toMatch(/You may add new tests/);
     expect(work).toMatch(/must test observable behaviour, never the implementation, and must not weaken any other test/);
     expect(work).toMatch(/run it to see it fail/);
-    const boundary = flat(brief(loop('green-loop')));
-    expect(boundary).toContain('a change to or removal of a line of a test RED wrote');
-    expect(boundary).not.toContain('an edit to a test that is frozen at this point');
   });
 
-  it('green\'s regression-guard reviewer grades the tests GREEN added', () => {
+  it.each(['green-loop', 'refactor-loop', 'integration-slice-loop'])('%s decides a change to a RED test itself and logs it, unless it leaves an acceptance criterion untested', (name) => {
+    const p = flat(prompt(loop(name)));
+    expect(p).not.toContain('Never change or remove a line of a test RED wrote');
+    expect(p).not.toContain('a change to or removal of a line of a test RED wrote');
+    expect(p).not.toContain('an edit to a test that is frozen at this point');
+    expect(p).toContain('A change to a line of a test RED wrote is yours to decide');
+    expect(p).toContain('a change to a RED test that leaves an acceptance criterion with no test that checks it');
+    expect(p).toContain('### RED test changes');
+    expect(p).toMatch(/`### RED test changes` — each test file whose RED lines you changed or removed: what changed, why, and why every acceptance criterion it checked is still checked/);
+  });
+
+  it('green\'s regression-guard reviewer grades the tests GREEN added and every RED test change it logged', () => {
     const charter = flat(text(loop('green-loop').reviewers.find((r) => r.persona === 'impl-review-regression-guard')!.charter));
     expect(charter).toMatch(/For each test GREEN added, confirm it weakens no other test/);
     expect(charter).toMatch(/tests observable behavior, not the implementation, and was seen failing before the code it covers/);
+    expect(charter).toMatch(/For each change to a RED test, judge whether it corrects a wrong test or weakens a right one/);
+    expect(charter).toMatch(/a changed test file the flag lists that `### RED test changes` does not explain is a finding/);
+  });
+
+  it.each(['refactor-loop', 'integration-slice-loop'])('%s\'s tests reviewer grades every RED test change the step logged', (name) => {
+    const charter = flat(text(loop(name).reviewers.find((r) => r.persona === 'impl-review-tests')!.charter));
+    expect(charter).toMatch(/For each change to a RED test, judge whether it corrects a wrong test or weakens a right one/);
+  });
+
+  it('integration-slice runs the engine\'s frozen check at its approve, as GREEN and refactor do', () => {
+    expect(loop('integration-slice-loop').work.frozenCheck).toBe(true);
+    expect(loop('green-loop').work.frozenCheck).toBeUndefined();
   });
 
   it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {
@@ -235,6 +255,18 @@ describe('each implementation step is a goal session that reviews its own work (
     expect(approve.inputs.map((i) => i.id)).toEqual(expect.arrayContaining(['groom-intent', 'plan', 'impl-report']));
     const present = prompt(approve);
     for (const heading of ['## Needs your call', '## Decisions', '## Review history', '## Test evidence']) expect(present).toContain(heading);
+  });
+
+  it('the final approval lists every RED test change the engine recorded, with the step\'s reason or marked unexplained', () => {
+    const approve = loop('impl-approve-loop');
+    const record = approve.inputs.find((i) => i.id === 'red-test-changes');
+    expect(record?.path).toBe(redTestChangesArtifact(REPO_DIR));
+    const present = flat(prompt(approve));
+    expect(present).toContain('## RED test changes');
+    expect(present).toMatch(/every path in the `red-test-changes` input/);
+    expect(present).toContain('**Unexplained**');
+    expect(present.indexOf('## RED test changes')).toBeLessThan(present.indexOf('## What was built'));
+    expect(present.indexOf('## Needs your call')).toBeLessThan(present.indexOf('## RED test changes'));
   });
 
   it('the groom goal session also runs in legs of 3 review passes', () => {
@@ -307,6 +339,9 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     expect(flat(text(loop('plan-goal-loop').work.recipe))).toMatch(rule);
     const slicer = loop('plan-goal-loop').reviewers.find((r) => r.persona === 'review-plan-tracer-slicer');
     expect(flat(text(slicer!.charter))).toMatch(/edit to or deletion of an existing test that a slice needs belongs in that slice's RED step[\s\S]*? Any such edit scheduled in a GREEN or refactor step is a finding/);
+    for (const t of [text(slicer!.charter), text(loop('plan-goal-loop').work.recipe), text(loop('integration-slice-loop').reviewers.find((r) => r.persona === 'review-plan-tracer-slicer')?.charter ?? slicer!.charter)]) {
+      expect(flat(t)).not.toMatch(/engine halts an `auto` GREEN or refactor gate/);
+    }
   });
 
   it('the plan step re-reviews only the reviewers a fix concerns, and every reviewer only when a fix changes the plan\'s scope', () => {
