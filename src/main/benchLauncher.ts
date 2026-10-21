@@ -24,8 +24,7 @@ export function benchAppTarget(execPath: string, mainDir: string): BenchAppTarge
   };
 }
 
-/** The env the app is launched with: the runner's own, out of plain-Node mode, opening the launch's working folder
- *  (§23.4) and carrying `launch`. */
+/** §23.4 */
 export function benchLaunchEnv(env: NodeJS.ProcessEnv, launch: BenchLaunch): NodeJS.ProcessEnv {
   const { ELECTRON_RUN_AS_NODE: _plainNode, ...rest } = env;
   return { ...rest, [APP_LAUNCH_DIR_ENV]: launch.workingFolder, [BENCH_LAUNCH_ENV]: encodeBenchLaunch(launch) };

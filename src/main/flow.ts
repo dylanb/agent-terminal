@@ -472,7 +472,7 @@ export function createFlowMachine(
 
   const current = (): FlowStepDef => steps[index];
 
-  // A span the definition cannot resolve holds no index, so it takes no step-changing move and reports no refusal.
+  // §18.7.8
   const spanRange = span ? resolveStepSpan(names, span.span) : undefined;
   const holds = (target: number): boolean =>
     spanRange === undefined || (spanRange.ok && spanRange.firstIndex <= target && target <= spanRange.lastIndex);
@@ -651,7 +651,7 @@ export function createFlowMachine(
       // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
       // navigated, so a mismatch is inert rather than an unhandled rejection (§27).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
-      // A rollback is not a move out of the span, so a refused one ends nothing.
+      // §18.7.8
       if (!holds(index - 1)) return view();
       if (index > 0) index -= 1;
       else {

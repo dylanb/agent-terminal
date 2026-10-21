@@ -1125,7 +1125,7 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
-  // §18.7.8 — a close the shell's exit or a quit causes is not the operator closing the window, so it ends no span.
+  // §18.7.8
   let closedByApp = false;
   const markQuitting = (): void => {
     closedByApp = true;
