@@ -38,8 +38,9 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     const host = document.createElement('main');
     document.body.append(host);
     const activated: string[] = [];
-    const controller: ControllerApi = {
+    const controller: ControllerApi & { dismissTerminal(id: string): Promise<void> } = {
       subscribeTerminals(listener) { listener(items); return () => {}; },
+      async dismissTerminal() {},
       async activateTerminal(id) { activated.push(id); return 'activated'; },
     };
     return { host, activated, component: createControllerPanes(host, { controller }) };
@@ -63,6 +64,26 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
       expect.soft(contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind)).toBeGreaterThanOrEqual(4.5);
       expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
       probe.remove();
+    } finally { component.dispose(); }
+  });
+
+  it.each([320, 900])('paints an accessible dismiss control and keyboard focus in a %ipx host', async width => {
+    const { host, component } = mount([{ ...terminals[0], status: 'disconnected' }]);
+    host.style.width = `${width}px`;
+    try {
+      await userEvent.tab();
+      const button = [...host.querySelectorAll('button')].find(item => /dismiss/i.test(item.getAttribute('aria-label') ?? item.textContent ?? ''));
+      const style = button ? getComputedStyle(button) : undefined;
+      const box = button?.getBoundingClientRect();
+      const hostBox = host.getBoundingClientRect();
+      const behind = button ? background(button) : undefined;
+      const ringBehind = button ? background(button.parentElement!) : undefined;
+      expect.soft(Boolean(button && box && box.width > 0 && box.height > 0 &&
+        box.left >= hostBox.left && box.right <= hostBox.right && readable(host, button.textContent ?? '') &&
+        style && behind && contrastRatio(ringOver(style.color, opacity(button), behind), behind) >= 4.5), 'dismiss control is painted, readable and fits its host').toBe(true);
+      expect.soft(Boolean(button && document.activeElement === button && style && ringBehind &&
+        style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0 &&
+        contrastRatio(ringOver(style.outlineColor, opacity(button), ringBehind), ringBehind) >= 3), 'dismiss control has visible keyboard focus').toBe(true);
     } finally { component.dispose(); }
   });
 

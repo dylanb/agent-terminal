@@ -6,10 +6,11 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 
 ### Separate controller surface (§23.6, #217)
 
-The controller preload exposes only `window.controller`, with the typed `ControllerApi` and channel names defined in `src/shared/ipc.ts`. Terminal windows retain their existing preload surfaces. The controller main process accepts subscription and activation requests only from its own window.
+The controller preload exposes only `window.controller`, with the typed `ControllerApi` and channel names defined in `src/shared/ipc.ts`. Terminal windows retain their existing preload surfaces. The controller main process accepts subscription, activation and dismissal requests only from its own window.
 
 | Channel | Direction | Payload | Meaning |
 |---|---|---|---|
+| `controller:dismiss` | renderer → main | `{sessionId, id}` | Remove only the targeted disconnected occurrence. Unknown, live and replaced identities are harmless no-ops; never stop terminal work or prevent registration. |
 | `controller:subscribe` | renderer → main | `{sessionId}` | Request the current live and retained-disconnected terminal snapshot. |
 | `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Live and retained-disconnected identities, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, nullable `repositoryRoot`, and optional `status` (`connected` or `disconnected`; absent means connected). Disconnected identities have no live activation route. |
 | `controller:activate` | renderer → main (invoke) | `{sessionId, id} → 'activated' \| 'unavailable'` | Activate only the live connection named by `id`; no shell input or flow operation is accepted. |

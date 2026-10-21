@@ -403,3 +403,5 @@
 
 ---
 
+
+**#218 slice 4 — disconnected pane dismissal and replacement:** occurrence-targeted dismissal crosses the controller IPC boundary, preserves usable focus and exposes connection guidance when empty. Registration replaces stale entries by fixed launch directory while preserving live peers and other directories.
