@@ -25,7 +25,7 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
-import type { StepSpan } from '../shared/flowStepSpan';
+import { resolveStepSpan, type StepSpan } from '../shared/flowStepSpan';
 import type { BenchAppEnding } from '../shared/benchLaunch';
 
 /**
@@ -373,6 +373,15 @@ export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) 
  *  omitted in tests, where a loop step then renders no loop view. */
 export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
+/** #180 — how a held span ended: a move out of it, or the flow completing inside it. */
+export type FlowSpanEnding = Extract<BenchAppEnding, 'left span' | 'completed'>;
+
+/** #180 — the span one repo's flow is held inside, and where its ending is reported. */
+export interface MachineSpan {
+  span: StepSpan;
+  ended(ending: FlowSpanEnding): void;
+}
+
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -380,6 +389,7 @@ export function createFlowMachine(
   store?: Omit<FlowStateStore, 'clearProgression'>,
   onEnter?: FlowEnterStep,
   readAppLoopView?: FlowReadAppLoopView,
+  span?: MachineSpan,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): MachineView => {
@@ -461,6 +471,15 @@ export function createFlowMachine(
   hydrate();
 
   const current = (): FlowStepDef => steps[index];
+
+  // A span the definition cannot resolve holds no index, so it takes no step-changing move and reports no refusal.
+  const spanRange = span ? resolveStepSpan(names, span.span) : undefined;
+  const holds = (target: number): boolean =>
+    spanRange === undefined || (spanRange.ok && spanRange.firstIndex <= target && target <= spanRange.lastIndex);
+  const leaveSpan = (): MachineView => {
+    if (spanRange?.ok) span?.ended('left span');
+    return view();
+  };
 
   // Own-property lookup only (§24.2.3 T7): an input named `__proto__` must not resolve a ref off the
   // prototype chain.
@@ -594,6 +613,7 @@ export function createFlowMachine(
         const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
         const backIndex = names.indexOf(step.repeat.backTo);
         if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+          if (!holds(backIndex)) return leaveSpan();
           repeatCounts[step.id] = completed + 1;
           index = backIndex;
           persist();
@@ -601,16 +621,19 @@ export function createFlowMachine(
         }
       }
       if (index < steps.length - 1) {
+        if (!holds(index + 1)) return leaveSpan();
         index += 1;
         persist();
         return enter(view());
       }
       status = 'done';
       persist();
+      span?.ended('completed');
       return view();
     },
     restart: () => {
       requireStatus('done', 'restart');
+      if (!holds(0)) return leaveSpan();
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
@@ -628,6 +651,8 @@ export function createFlowMachine(
       // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
       // navigated, so a mismatch is inert rather than an unhandled rejection (§27).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
+      // A rollback is not a move out of the span, so a refused one ends nothing.
+      if (!holds(index - 1)) return view();
       if (index > 0) index -= 1;
       else {
         // §18.7.4 (v2.161)
@@ -647,6 +672,7 @@ export function createFlowMachine(
       const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
       const target = backTo ? names.indexOf(backTo) : -1;
       if (target < 0 || target > index) return view();
+      if (!holds(target)) return leaveSpan();
       index = target;
       persist();
       return enter(view()); // re-enter RED so its work turn re-runs
@@ -739,7 +765,7 @@ export type ResolvedDefinition = ResolvedRunDefinition;
  *  behaviour), and `ended` hears the move that left it or the completion that ended it. */
 export interface FlowSpanPort {
   spanFor(repoKey: string): StepSpan | null;
-  ended(repoKey: string, ending: Extract<BenchAppEnding, 'left span' | 'completed'>): void;
+  ended(repoKey: string, ending: FlowSpanEnding): void;
 }
 
 export interface FlowManagerDeps {
@@ -773,6 +799,10 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
+  const spanOf = (repoKey: string): MachineSpan | undefined => {
+    const held = deps.span?.spanFor(repoKey) ?? null;
+    return held === null ? undefined : { span: held, ended: (ending) => deps.span?.ended(repoKey, ending) };
+  };
   const machineFor = (repoKey: string, run?: StartRunDefinition): { machine: FlowMachine; binding?: DispositionRead } => {
     const live = loadDef(repoKey, deps.globalDir);
     // §27.9.1 — a Start acts on the one resolution it was handed, never a second live read.
@@ -791,6 +821,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       makeStore(repoKey),
       deps.onEnterStep,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
+      spanOf(repoKey),
     );
     cache.set(repoKey, { sig, machine });
     return { machine, binding: resolved.binding };
@@ -853,7 +884,9 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       // would reset a different machine.
       const { machine } = machineFor(k);
       const at = machine.state();
-      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId) {
+      // A first-step rollback's target lies before the flow, outside every span, so under one the machine refuses it
+      // and the record must stay.
+      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId || spanOf(k) !== undefined) {
         return viewOf(k, (m) => m.revertStep(fromStepId));
       }
       const record = readRunBinding(k);

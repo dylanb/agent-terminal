@@ -128,6 +128,8 @@ import { userConfigAgentsDir, userConfigRoot } from './userConfig';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
+import { setupBenchLaunch } from './benchSpan';
+import { BENCH_LAUNCH_ENV } from '../shared/benchLaunch';
 import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
@@ -167,6 +169,17 @@ import {
 import { createRealAppBootstrapPorts } from './appBootstrapPorts';
 
 async function createWindow(): Promise<void> {
+  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
+  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
+  const encodedLaunch = process.env[BENCH_LAUNCH_ENV];
+  delete process.env[BENCH_LAUNCH_ENV];
+  const bench = setupBenchLaunch(encodedLaunch, launchRoot, () => app.quit());
+  if (!bench.ok) {
+    console.error(`agent-terminal: the bench launch value is refused: ${bench.error}`);
+    app.exit(1);
+    return;
+  }
+  const benchPorts = bench.ports;
   const iconLoc: BundleLocation = app.isPackaged
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
@@ -188,8 +201,6 @@ async function createWindow(): Promise<void> {
   installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
-  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
-  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   const resolveExampleInstallDestinations = (): InstallDestination[] =>
     exampleInstallDirs(iconLoc, { flowGlobalDir, codexHome: codexHome() });
   const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
@@ -660,6 +671,7 @@ async function createWindow(): Promise<void> {
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
       provideAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor, (n) => observedResolveDef(repoKey, n)),
+    ...(benchPorts ? { span: benchPorts.span } : {}),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
@@ -890,6 +902,7 @@ async function createWindow(): Promise<void> {
     },
     endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    ...(benchPorts ? { spanTerminated: (repoKey: string) => benchPorts.terminated(repoKey) } : {}),
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
@@ -921,7 +934,7 @@ async function createWindow(): Promise<void> {
   // their own bodies because their readiness/notice handling diverges.
   const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
-    const after = inTransition(repoKey, appLoopEntryFor(kind), mutate);
+    const after = inTransition(repoKey, appLoopEntryFor(kind, benchPorts?.startEntryFor(repoKey)), mutate);
     recordFlowTransition(repoKey, kind, before, after);
     return trackLoop(repoKey, withDerived(repoKey, after));
   };
@@ -1100,7 +1113,7 @@ async function createWindow(): Promise<void> {
       const r = resolveRun(repoKey);
       return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
-    start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
+    start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start', benchPorts?.startEntryFor(repoKey)), () => flow.start(repoKey, opts)),
     now: () => Date.now(),
     record: recordFlowTransition,
   });
@@ -1111,11 +1124,17 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
+  // #180 — a close the shell's exit causes is not the operator closing the window, so it ends no span.
+  let shellClosedWindow = false;
+  win.on('close', () => {
+    if (!shellClosedWindow) benchPorts?.windowClosed();
+  });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
   ptyProcess.onExit(({ exitCode }) => {
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
+      shellClosedWindow = true;
       win.close();
     }
   });

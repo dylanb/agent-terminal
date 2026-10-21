@@ -64,6 +64,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
     bestEffort(() => deps.endRun(repoKey));
     bestEffort(() => deps.releaseLoopTurn(repoKey));
     bestEffort(() => deps.recordTerminate(repoKey));
+    bestEffort(() => deps.spanTerminated?.(repoKey));
     bestEffort(() => deps.clearTodos(repoKey));
     bestEffort(() => deps.clearSliceBrief(repoKey));
     bestEffort(() => deps.clearMonitor());
