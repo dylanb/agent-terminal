@@ -33,10 +33,11 @@ describe('install examples view — renders the flow-catalog result group (§18.
     overwritten: [],
     skipped: [],
     notInstalled: [],
+    removed: [],
   };
   const deps: InstallExamplesDeps = {
     preview: vi.fn(
-      async (): Promise<InstallExamplesPreview> => ({ ok: true, previewId: PREVIEW_ID, destinations: [] }),
+      async (): Promise<InstallExamplesPreview> => ({ ok: true, previewId: PREVIEW_ID, destinations: [], retired: [] }),
     ),
     apply: vi.fn(async (): Promise<InstallExamplesResult> => catalogResult),
   };

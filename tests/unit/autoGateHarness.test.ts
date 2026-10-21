@@ -50,7 +50,7 @@ describe('autoGateFlowYaml', () => {
 });
 
 describe('loopRoster', () => {
-  it.each<AutoGateLoop>(['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'red-loop', 'green-loop', 'refactor-loop'])(
+  it.each<AutoGateLoop>(['groom-loop', 'red-loop', 'green-loop', 'refactor-loop'])(
     'matches the reviewer personas the shipped %s declares',
     (loop) => {
       const def = load(readFileSync(join(bundledLoopDir(loop), `${loop}.yaml`), 'utf8')) as { reviewers: { persona: string }[] };

@@ -77,7 +77,7 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
 
   // A lens whose subject the change lacks costs a full review for nothing, and green's catalog runs it every
   // round 1 (§27.4). Each scoped lens's canonical charter tells the reviewer to return clean when its subject
-  // is absent; the per-loop byte-copies are pinned to these sources by s7ChainWiring.
+  // is absent.
   for (const lane of ['accessibility', 'security', 'taint']) {
     it(`integration-slice-loop ${lane} charter returns clean when the change lacks its subject`, () => {
       const body = readFileSync(join(bundledLoopDir('integration-slice-loop'), 'charter', `${lane}.md`), 'utf8');

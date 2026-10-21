@@ -9,6 +9,7 @@ import {
   type InstallExamplesResult,
   type InstallExamplesReport,
   type InstallPreviewId,
+  type RetiredExample,
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
@@ -18,6 +19,7 @@ export interface InstallExamplesDeps {
   apply(
     previewId: InstallPreviewId,
     replace: InstallDestinationId[],
+    removeRetired: boolean,
   ): Promise<InstallExamplesResult>;
 }
 
@@ -43,7 +45,15 @@ function total(groups: InstallDestinationFiles[]): number {
 }
 
 function counts(report: Report): string {
-  return `created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}.`;
+  const removed = report.removed.length > 0 ? `, removed ${report.removed.length}` : '';
+  return `created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}${removed}.`;
+}
+
+function retiredList(retired: RetiredExample[]): string {
+  return INSTALL_DESTINATION_IDS.flatMap((id) => {
+    const rels = retired.filter((r) => r.destination === id).map((r) => r.rel);
+    return rels.length > 0 ? [`${DESTINATION_LABEL[id]}: ${rels.join(', ')}`] : [];
+  }).join('; ');
 }
 
 function summarize(report: Report): string {
@@ -67,14 +77,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'sub',
-      'Install the bundled feature-dev-v2 flow, its app loop definitions, and commands so a new instance can render and run them.',
+      'Install the bundled feature-dev-v3 flow, its app loop definitions, and commands so a new instance can render and run them.',
     ),
   );
 
   const card = el('div', 'kprofile');
   const txt = el('div');
   txt.append(
-    el('div', 'kp-label', 'feature-dev-v2 flow'),
+    el('div', 'kp-label', 'feature-dev-v3 flow'),
     el(
       'div',
       'kp-help',
@@ -83,7 +93,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   );
   const btn = el('button', 'pill signal', 'Install examples');
   btn.type = 'button';
-  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev-v2 flow');
+  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev-v3 flow');
   card.append(txt, btn);
 
   const status = el('div', 'cli-status');
@@ -132,6 +142,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         const files = groups.find((g) => g.destination === id)?.files ?? [];
         if (files.length > 0) lines.push(`${label} ${files.length}: ${files.join(', ')}`);
       }
+      const removed = report.removed.filter((r) => r.destination === id).map((r) => r.rel);
+      if (removed.length > 0) lines.push(`removed ${removed.length}: ${removed.join(', ')}`);
       const absent = report.notInstalled.find((n) => n.destination === id);
       if (absent !== undefined) lines.push(`not installed: ${absent.root} does not exist`);
       if (lines.length === 0) continue;
@@ -157,12 +169,13 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   async function install(
     previewId: InstallPreviewId,
     replace: InstallDestinationId[],
+    removeRetired: boolean,
     returnFocus: () => void,
   ): Promise<void> {
     setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
-      const res = await deps.apply(previewId, replace);
+      const res = await deps.apply(previewId, replace, removeRetired);
       renderReport(res);
       // The failure arm carries the same report, and this is the branch where the user most needs it: a
       // partial install is not rolled back (§18.1), so the alert has to say what landed, not just what broke
@@ -182,6 +195,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   function promptReplace(
     previewId: InstallPreviewId,
     conflicts: Conflict[],
+    retired: RetiredExample[],
     returnFocus: () => void,
   ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
@@ -191,56 +205,90 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const h3 = d.createElement('h3');
       h3.className = 'serif';
       h3.id = titleId;
-      h3.textContent = 'Replace existing files?';
+      h3.textContent = conflicts.length > 0 ? 'Replace existing files?' : 'Remove retired examples?';
       const p = d.createElement('p');
       p.className = 'ph';
       p.id = describedById;
-      p.textContent =
-        'Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.';
+      p.textContent = [
+        ...(conflicts.length > 0
+          ? ['Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.']
+          : []),
+        ...(retired.length > 0
+          ? ['The retired feature-dev and feature-dev-v2 flows left files behind. They are kept unless you choose to remove them.']
+          : []),
+      ].join(' ');
       cardEl.append(h3, p);
 
       // Not a <fieldset>: Chromium renders its children in an anonymous content box, so it can be neither a
       // scroll box nor a shrinkable flex column. WAI-ARIA `group` + aria-labelledby, on a box that can be.
-      const group = d.createElement('div');
-      group.className = 'install-consent';
-      group.setAttribute('role', 'group');
-      const groupLabelId = `${titleId}-consent-group-label`;
-      group.setAttribute('aria-labelledby', groupLabelId);
-      const groupLabel = d.createElement('span');
-      groupLabel.className = 'ic-group-label';
-      groupLabel.id = groupLabelId;
-      groupLabel.textContent = 'Replace files in';
-      const rows = d.createElement('div');
-      rows.className = 'install-consent-rows';
-      group.append(groupLabel, rows);
-
-      const boxes = new Map<InstallDestinationId, HTMLInputElement>();
-      for (const conflict of conflicts) {
-        // accname 1.2 step 2D folds the WHOLE label subtree into the control's name, so the file manifest
-        // has to sit OUTSIDE the label and attach as a description — otherwise the checkbox announces
-        // dozens of paths before the user hears which destination it is (WCAG 4.1.2).
+      const body = d.createElement('div');
+      body.className = 'install-consent-body';
+      const consentGroup = (key: string, labelText: string): HTMLDivElement => {
+        const group = d.createElement('div');
+        group.className = 'install-consent';
+        group.setAttribute('role', 'group');
+        const groupLabelId = `${titleId}-${key}-group-label`;
+        group.setAttribute('aria-labelledby', groupLabelId);
+        const groupLabel = d.createElement('span');
+        groupLabel.className = 'ic-group-label';
+        groupLabel.id = groupLabelId;
+        groupLabel.textContent = labelText;
+        const rows = d.createElement('div');
+        rows.className = 'install-consent-rows';
+        group.append(groupLabel, rows);
+        body.append(group);
+        return rows;
+      };
+      // accname 1.2 step 2D folds the WHOLE label subtree into the control's name, so the file manifest
+      // has to sit OUTSIDE the label and attach as a description — otherwise the checkbox announces
+      // dozens of paths before the user hears which choice it is (WCAG 4.1.2).
+      const option = (rows: HTMLElement, key: string, nameText: string, filesText: string): HTMLInputElement => {
         const row = d.createElement('div');
         row.className = 'install-consent-opt';
         const label = d.createElement('label');
         label.className = 'ic-label';
         const box = d.createElement('input');
         box.type = 'checkbox';
-        box.setAttribute('data-destination', conflict.destination);
-        const filesId = `${titleId}-${conflict.destination}-files`;
+        const filesId = `${titleId}-${key}-files`;
         box.setAttribute('aria-describedby', filesId);
         const name = d.createElement('span');
         name.className = 'ic-name';
-        name.textContent = `${DESTINATION_LABEL[conflict.destination]} — ${conflict.files.length} file${conflict.files.length === 1 ? '' : 's'}`;
+        name.textContent = nameText;
         label.append(box, name);
         const files = d.createElement('span');
         files.className = 'ic-files';
         files.id = filesId;
-        files.textContent = conflict.files.join(', ');
+        files.textContent = filesText;
         row.append(label, files);
         rows.append(row);
-        boxes.set(conflict.destination, box);
+        return box;
+      };
+
+      const boxes = new Map<InstallDestinationId, HTMLInputElement>();
+      if (conflicts.length > 0) {
+        const rows = consentGroup('consent', 'Replace files in');
+        for (const conflict of conflicts) {
+          const box = option(
+            rows,
+            conflict.destination,
+            `${DESTINATION_LABEL[conflict.destination]} — ${conflict.files.length} file${conflict.files.length === 1 ? '' : 's'}`,
+            conflict.files.join(', '),
+          );
+          box.setAttribute('data-destination', conflict.destination);
+          boxes.set(conflict.destination, box);
+        }
       }
-      cardEl.append(group);
+      let retiredBox: HTMLInputElement | null = null;
+      if (retired.length > 0) {
+        retiredBox = option(
+          consentGroup('retired', 'Retired examples'),
+          'retired',
+          `Remove ${retired.length} retired item${retired.length === 1 ? '' : 's'}, whatever they hold`,
+          `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
+        );
+        retiredBox.setAttribute('data-retired', '');
+      }
+      cardEl.append(body);
 
       const foot = d.createElement('div');
       foot.className = 'mfoot';
@@ -256,13 +304,13 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       confirm.addEventListener('click', () => {
         const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
         accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
-        void install(previewId, replace, returnFocus);
+        void install(previewId, replace, retiredBox?.checked ?? false, returnFocus);
       });
       foot.append(cancel, confirm);
       cardEl.append(foot);
 
       // The body slots are declared on the contract (UI §5.7); the shell applies them.
-      return { card: cardEl, initialFocus: boxes.values().next().value ?? confirm, describedById, grow: group, scroll: rows };
+      return { card: cardEl, initialFocus: boxes.values().next().value ?? retiredBox ?? confirm, describedById, grow: body, scroll: body.querySelector<HTMLElement>('.install-consent-rows') ?? body };
     });
   }
 
@@ -292,12 +340,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     const conflicts = preview.destinations.flatMap((d) =>
       d.conflict ? [d] : [],
     );
-    if (conflicts.length === 0) {
-      await install(preview.previewId, [], returnFocus);
+    if (conflicts.length === 0 && preview.retired.length === 0) {
+      await install(preview.previewId, [], false, returnFocus);
       return;
     }
     setBusy(false);
-    promptReplace(preview.previewId, conflicts, returnFocus);
+    promptReplace(preview.previewId, conflicts, preview.retired, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());

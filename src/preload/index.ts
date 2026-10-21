@@ -10,6 +10,7 @@ import {
   type ExamplesApi,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallExamplesApplyMsg,
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
@@ -213,12 +214,13 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (previewId, replace) =>
+  apply: (previewId, replace, removeRetired) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
       replace,
-    }) as Promise<InstallExamplesResult>,
+      removeRetired,
+    } satisfies InstallExamplesApplyMsg) as Promise<InstallExamplesResult>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

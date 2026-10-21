@@ -1018,6 +1018,7 @@ export type InstallExamplesPreview =
       ok: true;
       previewId: InstallPreviewId;
       destinations: InstallDestinationPreview[];
+      retired: RetiredExample[];
     }
   | { ok: false; error: string };
 
@@ -1026,6 +1027,13 @@ export interface InstallExamplesApplyMsg {
   sessionId: SessionId;
   previewId: InstallPreviewId;
   replace: InstallDestinationId[];
+  removeRetired: boolean;
+}
+
+/** §18.1 v2.212. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
+export interface RetiredExample {
+  destination: InstallDestinationId;
+  rel: DestRelativePath;
 }
 
 /** A file's path relative to the root of the destination it installs under. A plain `string` is not
@@ -1059,6 +1067,7 @@ export interface InstallDestinationNotInstalled {
 
 export interface InstallExamplesReport extends InstallExamplesWritten {
   notInstalled: InstallDestinationNotInstalled[];
+  removed: RetiredExample[];
 }
 
 /** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same report:
@@ -1270,6 +1279,7 @@ export interface ExamplesApi {
   apply(
     previewId: InstallPreviewId,
     replace: InstallDestinationId[],
+    removeRetired: boolean,
   ): Promise<InstallExamplesResult>;
 }
 

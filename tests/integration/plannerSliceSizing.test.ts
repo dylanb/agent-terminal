@@ -17,8 +17,8 @@ const DEPENDENCY_LIMIT_MARKER = 'more than 10 dependency-ordered slices';
 const DEPENDENCY_LIMIT_OF_5 = /more than 5 dependency-ordered/;
 const ONLY_SPLIT_EXCEEDS_TARGET = /only the dependency split[^.]*past 5[^.]*10/;
 
-const PLANNERS = ['plan-loop', 'plan-bundle-loop', 'plan-goal-loop'];
-const SLICING_REVIEWERS = ['plan-bundle-loop', 'plan-polish-loop', 'plan-goal-loop'].map((loop) => `${loop}/charter/tracer-slicer.md`);
+const PLANNERS = ['plan-loop', 'plan-goal-loop'];
+const SLICING_REVIEWERS = ['plan-goal-loop'].map((loop) => `${loop}/charter/tracer-slicer.md`);
 const charters = (loop: string): string[] =>
   readdirSync(bundledPath(`${loop}/charter`)).map((f) => `${loop}/charter/${f}`);
 
@@ -37,7 +37,7 @@ describe('planner slice sizing (planning-agent-only guidance)', () => {
   }
 
   it('the tracer-slicer reviewer is told slice count and size are not a finding', () =>
-    expect(read('plan-bundle-loop/charter/tracer-slicer.md')).toContain(NOT_A_FINDING_MARKER));
+    expect(read('plan-goal-loop/charter/tracer-slicer.md')).toContain(NOT_A_FINDING_MARKER));
 });
 
 // A RED step must see every test in its slice fail at its own check before any of the slice's production code
@@ -77,7 +77,7 @@ describe('the RED step splits its own slice at a dependency the plan missed', ()
   const NO_AC_LOST_MARKER = 'every acceptance criterion of the slice lands in exactly one of the new entries';
   const LATER_TESTS_OUT_MARKER = 'tests that belong to a later entry leave this change';
 
-  it('covers every bundled red-loop brief', () => expect(RED_BRIEFS.length).toBeGreaterThanOrEqual(2));
+  it('covers every bundled red-loop brief', () => expect(RED_BRIEFS.length).toBeGreaterThanOrEqual(1));
 
   for (const f of RED_BRIEFS) {
     const rel = f.slice(BUNDLED_LOOPS_ROOT.length + 1);

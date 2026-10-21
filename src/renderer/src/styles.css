@@ -171,6 +171,12 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
    L3 §3) — and a focus ring is ink outside the control's border box, so the rows carry the side padding the
    ring paints into rather than leaving a checkbox flush against the clip edge (WCAG 1.4.11). */
 .install-consent-rows { padding:0 12px; }
+/* §18.1 v2.212: the replacement and retired-leftover groups share the card's column, so each shrinks and scrolls
+   its own list; the floor keeps a group's checkbox paintable however short the column (WCAG 2.2 SC 2.4.11), and
+   when the two floors outgrow the column the body scrolls rather than paint over the footer (WCAG 1.4.10). */
+.install-consent-body { overflow-y:auto; }
+.install-consent-body > .install-consent { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.install-consent-body .install-consent-rows { flex:1 1 auto; min-height:3rem; overflow-y:auto; scroll-padding:var(--focus-ring-extent); }
 .install-consent-opt { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:4px 8px; padding:6px 0; }
 .install-consent-opt .ic-label { display:contents; cursor:pointer; }
 .install-consent-opt input[type="checkbox"] { width:24px; height:24px; margin:0; accent-color:var(--signal); }
