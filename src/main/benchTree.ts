@@ -6,7 +6,7 @@ import { readDirEntries } from './dirEntries';
 export type ConfinedTree = { ok: true; files: Map<string, Buffer> } | { ok: false };
 
 /** Every file under `jail`, relative path → bytes, each entry confined to `jail` (CWE-22/59); empty when `jail`
- *  is absent. `jail` comes from `resolveJail`, so a link at its own last segment is refused, never followed. */
+ *  is absent. */
 export function readConfinedTree(jail: string | null): ConfinedTree {
   if (jail === null) return { ok: false };
   const files = new Map<string, Buffer>();

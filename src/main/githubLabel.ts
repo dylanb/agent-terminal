@@ -1,5 +1,3 @@
-// An existing label is never changed.
-
 /** Runs `gh <args>` pinned to one repository, throwing an error that starts with `failure`. */
 export type PinnedGh = (args: string[], failure: string) => Promise<string>;
 

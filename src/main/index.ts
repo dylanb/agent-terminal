@@ -608,7 +608,7 @@ async function createWindow(): Promise<void> {
     }),
     // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
     // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
-    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc)),
+    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc, userConfigRoot())),
   });
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
