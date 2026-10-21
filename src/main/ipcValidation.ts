@@ -34,6 +34,7 @@ import {
   type FlowClearActiveFlowMsg,
   type FlowListCatalogMsg,
   type FlowRebindHeldRunMsg,
+  type FlowConfirmRunPickupMsg,
   type RebindChoice,
   type StepMissingConsent,
   CATALOG_ORIGINS,
@@ -244,6 +245,25 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
     isSafeRepoKey(m.repoKey) &&
     isValidRebindChoice(m.choice) &&
     isValidStepMissingConsent(m.ifStepMissing)
+  );
+}
+
+const isPositiveSafeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+
+/** flow:confirmRunPickup (§27.13 v2.211, §6) */
+export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPickupMsg {
+  return (
+    isRecord(m) &&
+    hasExactKeys(m, ['sessionId', 'repoKey', 'run', 'pr', 'ticket']) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isRecord(m.run) &&
+    hasExactKeys(m.run, ['flow', 'startedAt']) &&
+    typeof m.run.flow === 'string' &&
+    typeof m.run.startedAt === 'number' &&
+    Number.isFinite(m.run.startedAt) &&
+    isPositiveSafeInt(m.pr) &&
+    isPositiveSafeInt(m.ticket)
   );
 }
 

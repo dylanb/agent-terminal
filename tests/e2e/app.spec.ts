@@ -3366,6 +3366,101 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   rmSync(binDir, { recursive: true, force: true });
 });
 
+async function launchGateFlowApp(home: string, repo: string, binDir: string, logFile: string, env: Record<string, string> = {}): Promise<void> {
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile, ...env },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+}
+
+/** Start the seeded plan flow, let its pickup open PR 4242 and its loop reach the clean gate, then close the app. */
+async function pickUpAndCloseAtGate(home: string, repo: string, binDir: string, logFile: string): Promise<void> {
+  await launchGateFlowApp(home, repo, binDir, logFile);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+  await app.close();
+}
+
+test('the PR pickup opened is still the one approve acts on after the app relaunches at the gate (§27.10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-relaunch-pr-', null);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-relaunch-pr-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-relaunch-pr-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  try {
+    await pickUpAndCloseAtGate(home, repo, binDir, logFile);
+    await launchGateFlowApp(home, repo, binDir, logFile);
+    await typeCommand('fake-agent');
+    await loopReadout().click({ timeout: 10_000 });
+    await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
+
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
+    expect(readGhLog(logFile)).toContain('gh pr ready 4242');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test('a relaunched run past its pickup with no saved pickup is held until the operator confirms the ticket and PR found for its branch (§27.10)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(2 * WINDOW_TIMEOUT_MS + 150_000);
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-confirm-pickup-', null);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-confirm-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-confirm-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  const confirmDialog = () => page.getByRole('alertdialog').filter({ hasText: 'ticket and pull request' });
+  try {
+    await pickUpAndCloseAtGate(home, repo, binDir, logFile);
+    rmSync(join(repo, '.agent-terminal', 'loop', 'run-pickup.yaml'));
+
+    await launchGateFlowApp(home, repo, binDir, logFile, { FAKE_GH_BRANCH_PR: '4242' });
+    await expect(confirmDialog()).toBeVisible({ timeout: 15_000 });
+    await expect(confirmDialog().getByRole('textbox', { name: 'Pull request' })).toHaveValue('4242');
+    await expect(confirmDialog().getByRole('textbox', { name: 'Ticket' })).toHaveValue('176');
+    await expect(confirmDialog()).toContainText('plan-loop/issue-176');
+
+    await confirmDialog().getByRole('button', { name: 'Not now' }).click();
+    await typeCommand('fake-agent');
+    await loopReadout().click({ timeout: 10_000 });
+    await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
+    await expect(page.getByRole('alertdialog').filter({ hasText: 'Confirm the run' })).toBeVisible({ timeout: 10_000 });
+    expect(readIf(appFlowState(repo))).toContain('step: plan');
+    expect(readGhLog(logFile)).not.toContain('gh pr ready');
+    await page.keyboard.press('Escape');
+
+    const notices = await page.evaluate(async (repoKey) => [
+      (await window.flow.advance(repoKey, 'plan')).notice,
+      (await window.flow.undo(repoKey)).notice,
+      (await window.flow.provideInput(repoKey, 'plan', { ticket: '176' })).notice,
+    ], repo);
+    expect(notices).toEqual([0, 1, 2].map(() => expect.stringContaining('Confirm the run')));
+    const runStateBefore = readIf(appRunState(repo));
+    await page.evaluate((repoKey) => window.flow.appRouteOut(repoKey, 'plan', 'consolidate-plan', 'retry'), repo);
+    await expect(page.getByRole('alertdialog').filter({ hasText: 'Confirm the run' })).toBeVisible({ timeout: 10_000 });
+    await page.keyboard.press('Escape');
+    expect(readIf(appRunState(repo))).toBe(runStateBefore);
+    expect(readIf(appFlowState(repo))).toContain('step: plan');
+
+    await page.getByRole('button', { name: 'Confirm ticket and PR' }).click();
+    await confirmDialog().getByRole('button', { name: 'Confirm' }).click();
+    await expect(confirmDialog()).toBeHidden({ timeout: 15_000 });
+    await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
+    expect(readGhLog(logFile)).toContain('gh pr ready 4242');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
 // §27.10/§27.9 / N6 (sub-ticket 1) — a pre-bootstrapped two-`app`-loop flow: an app plan-loop step (declaring a
 // `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app infra-loop step,
 // which declares its `plan` artifact as a typed input (§27.10). plan-loop writes plan.md at the very path
@@ -5059,9 +5154,10 @@ test('a §27 polish stands the orchestrator down, survives a relaunch, and appro
   expect(existsSync(polishFile)).toBe(true); // still standing down
 
   // AC6 — approve ends polish: it clears the stand-down, runs the loop's gh side-effect (plan → PR non-draft
-  // flip), reaches the terminal accept, and the flow advances off the loop step.
+  // flip) on the PR this run's pickup opened, which the relaunch kept (§27.13 v2.211), reaches the terminal
+  // accept, and the flow advances off the loop step.
   await loopPanel().locator('[data-gate-option="approve"]').click();
-  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
   await expect.poll(() => existsSync(polishFile), { timeout: 10_000 }).toBe(false); // polish ended
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step

@@ -403,11 +403,11 @@ const bootstrapFileOf = (repoDir: string): string | null => {
   return file;
 };
 
-function isPositiveInt(v: unknown): v is number {
+export function isPositiveInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 }
 
-function isNonBlank(v: unknown): v is string {
+export function isNonBlank(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0;
 }
 

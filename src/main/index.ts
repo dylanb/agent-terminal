@@ -11,6 +11,7 @@ import {
   type ChannelPayloads,
   type FlowCatalogListResult,
   type RebindResult,
+  type ConfirmRunPickupResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -43,6 +44,7 @@ import {
   isValidFlowClearActiveFlow,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
+  isValidFlowConfirmRunPickup,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -79,7 +81,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
+import { createFlowManager, deriveFlowView, type FlowLoad, type FlowStepDef } from './flow';
 import { createRunResolver } from './runResolver';
 import { createActiveFlowGate, selectIfUnlocked } from './activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
@@ -129,9 +131,13 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { createTrustedPickups } from './trustedPickups';
+import { inProgressRunIdentity, type RunIdentity } from './gateRunState';
+import { awaitingPickupConfirm, createRunPickupConfirmations, PICKUP_CONFIRM_FIRST } from './runPickupConfirm';
+import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import type { LoopDefV2Context } from './loopDefV2';
+import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
@@ -680,13 +686,65 @@ async function createWindow(): Promise<void> {
   });
   const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
 
-  // Security limitation (§27.12), tracked in #155: this map is runtime-seeded only, so after a relaunch
-  // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
-  // naive re-seed from the repo-scoped persisted bootstrap could retarget a destructive `gh pr ready`.
-  const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
+  const trustedAppBootstraps = createTrustedPickups({
+    currentRun: inProgressRunIdentity,
+    persistFailed: (repoDir, reason) => {
+      audit.recordCommand(repoDir, 'pickup', `§27 pickup could not be saved for a relaunch: ${reason}`, 1);
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's pull request could not be saved, so a relaunch will not know it: ${reason}` });
+    },
+  });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
+  // §27.13 v2.211 — the pickup contract of the step that picked this run up, and whether that step is the current one.
+  const reachedPickup = (repoKey: string): { contract: PickupContractV2; current: boolean } | null => {
+    const load = resolveActiveDefinition(repoKey);
+    if (!load.ok) return null;
+    const reached = load.definition.steps.slice(0, flow.state(repoKey).position);
+    const contractOf = (step: FlowStepDef): PickupContractV2 | null => {
+      if (step.kind !== 'loop' || step.loop === undefined) return null;
+      const resolved = observedResolveDef(repoKey, step.loop);
+      return resolved.ok ? resolved.def.pickup : null;
+    };
+    for (const [i, step] of reached.entries()) {
+      const contract = contractOf(step);
+      if (contract !== null) return { contract, current: i === reached.length - 1 };
+    }
+    return null;
+  };
+  const pickupHeldRun = (repoKey: string): RunIdentity | null => {
+    const run = inProgressRunIdentity(repoKey);
+    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
+    const reached = reachedPickup(repoKey);
+    const refs = flow.state(repoKey).refs;
+    return awaitingPickupConfirm({
+      run,
+      pickupInFlight: pickupInFlight?.repoKey === repoKey,
+      pickupStep: reached === null ? 'none' : reached.current ? 'current' : 'behind',
+      runBegunHere: pickupRecordPredatesRun.has(repoKey),
+      flowNamesTicketAndPr: refs?.ticket !== undefined && refs.pr !== undefined,
+      record: readPickupRecord(repoKey).kind,
+    });
+  };
+  const pickupConfirmations = createRunPickupConfirmations({
+    heldRun: pickupHeldRun,
+    evidence: (repoKey) => {
+      const branch = currentGitBranch(repoKey);
+      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, record: readPickupRecord(repoKey) };
+    },
+    lookup: createRealPullRequestLookup,
+    initialStatus: (repoKey) => {
+      const record = readPickupRecord(repoKey);
+      if (record.kind === 'complete' && record.bootstrap.initialStatus !== undefined) return record.bootstrap.initialStatus;
+      return reachedPickup(repoKey)?.contract.initialStatus ?? 'planning';
+    },
+    trust: (repoKey, pickup) => {
+      trustedAppBootstraps.set(repoKey, pickup);
+      pickupRecordPredatesRun.delete(repoKey);
+    },
+    changed: () => pushFlowChanged(),
+  });
+  const pickupHoldRefusal = (repoKey: string): string | null => (pickupConfirmations.held(repoKey) ? PICKUP_CONFIRM_FIRST : null);
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
     const existing = appBootstrapSessions.get(repoDir);
@@ -878,7 +936,12 @@ async function createWindow(): Promise<void> {
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
     const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity);
     const activity = loopActivityFor(repoKey);
-    return activity ? { ...base, loopActivity: activity } : base;
+    const pickupConfirm = pickupConfirmations.view(repoKey);
+    return {
+      ...base,
+      ...(activity ? { loopActivity: activity } : {}),
+      ...(pickupConfirm !== undefined ? { pickupConfirm } : {}),
+    };
   };
 
   lifecycle = createFlowLifecycle({
@@ -1082,11 +1145,18 @@ async function createWindow(): Promise<void> {
     const load = resolveActiveDefinition(repoKey);
     return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
   };
-  const runAppGateDecision = createGuardedGateDecision({
+  const refuseGateDecision = (reason: string): void => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason });
+  const guardedGateDecision = createGuardedGateDecision({
     bindingOf: gateBindingOf,
-    refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    refuse: refuseGateDecision,
     run: runAppGateDecisionRaw,
   });
+  const runAppGateDecision: typeof guardedGateDecision = (repoKey, ...rest) => {
+    const held = pickupHoldRefusal(repoKey);
+    if (held === null) return guardedGateDecision(repoKey, ...rest);
+    refuseGateDecision(held);
+    return Promise.resolve(false);
+  };
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
@@ -1168,6 +1238,11 @@ async function createWindow(): Promise<void> {
       // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) {
+          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: held });
+          return;
+        }
         if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
@@ -1311,6 +1386,8 @@ async function createWindow(): Promise<void> {
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = humanRunners.advance(m.repoKey, m.step);
         if (view === null) {
@@ -1328,10 +1405,12 @@ async function createWindow(): Promise<void> {
           recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)),
         );
       },
-      [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) && knownRepoKeys.has(m.repoKey)
-          ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey))
-          : flowRequestError(),
+      [CH.flowUndo]: (_e, m) => {
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: held });
+        return recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey));
+      },
       // Terminate (#26, §18.7.2 AC6): the flow manager refuses it, writing nothing, unless the run has begun.
       // The audit write is best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per
       // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
@@ -1344,6 +1423,8 @@ async function createWindow(): Promise<void> {
       [CH.flowProvideInput]: (_e, m) => {
         if (!isValidFlowProvideInput(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const current = flow.state(m.repoKey);
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, current), notice: held });
         if (current.status !== 'in_progress' || current.stepName !== m.step) {
           return trackLoop(m.repoKey, withDerived(m.repoKey, current));
         }
@@ -1384,6 +1465,10 @@ async function createWindow(): Promise<void> {
           listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
         );
       },
+      [CH.flowConfirmRunPickup]: (_e, m): Promise<ConfirmRunPickupResult> =>
+        isValidFlowConfirmRunPickup(m) && knownRepoKeys.has(m.repoKey)
+          ? pickupConfirmations.confirm(m.repoKey, m.run, m.pr, m.ticket)
+          : Promise.resolve({ ok: false, reason: 'invalid flow:confirmRunPickup request' }),
       [CH.flowRebindHeldRun]: (_e, m): RebindResult => {
         if (!isValidFlowRebindHeldRun(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:rebindHeldRun request' };
