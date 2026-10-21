@@ -31,6 +31,35 @@ AC: the only way an AC leaves scope is explicit, prior operator permission — a
 ticket or plan, or a split into an already-filed sub-ticket of the same epic. There is no excuse for
 deferring a valid AC that would ever be accepted after the fact, so never leave one for "a later slice".
 
+## When this slice hides a dependent increment
+
+The plan should give every RED/GREEN dependency its own impl-slice, but a plan can miss one. You find it when a
+test in this slice can reach its own check only once production code that another of this slice's tests drives
+exists — a command-line flag, a transport, a service the slice has yet to build — so no stub short of building
+that code lets the check fail for the right reason. Do not stop over it, and do not bring production code into
+this RED: split this slice in the plan, then write the RED for the first part only. The split changes how the
+plan orders the work, not what it delivers, so it is yours to make.
+
+Edit only the `## Impl-slices` block of the `plan` input:
+
+- Replace this slice's `### Impl-slice <n> — <title>` entry with dependency-ordered entries: `<n>` for the
+  prerequisite increment, `<n+1>` for the work that depends on it, and more only if the chain has more links.
+  Each entry keeps that heading form and its own `Acceptance criteria:` line, and every acceptance criterion of
+  the slice lands in exactly one of the new entries: none dropped, none added, no contract or scope changed. An
+  acceptance criterion moved to a new entry is not deferred, because the run goes on to that entry.
+- Number every later entry up by the same amount, and update the slice numbers in their text, such as "depends
+  on slice 5". Never renumber or edit an impl-slice before this one: it has already run, and its results and
+  report sections are filed under its number.
+- Keep the plan at 10 impl-slices or fewer. A split that would take it past 10 is a decision for the operator:
+  do not split; report it as a finding for the operator instead.
+
+Then finish this RED for the new slice `<n>` alone. Any tests that belong to a later entry leave this change,
+because they are that entry's RED to write, against the production code its earlier entries build: say in that
+entry what they must cover, so its RED writes them. Record the split in your report: the dependency that forced it, the new entries,
+and the acceptance criteria each one carries. When this step is approved, the app reads the slice count from the
+plan again, so the new entries run. It ignores a block that is malformed, or that has fewer entries than this
+slice's number, and keeps the old count, so keep the heading and `Acceptance criteria:` forms exactly.
+
 Do not add a TODO or FIXME comment for any work in scope of the current ticket — do the work. Such a comment
 is allowed ONLY when it references an already-filed future ticket of the same epic and the work is
 demonstrably and unambiguously part of that other ticket. These are cross-repo defaults: where the

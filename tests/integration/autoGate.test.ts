@@ -43,7 +43,6 @@ import { writeLoopCapabilities } from '../helpers/loopCapabilities';
 import { installPathGitStub } from '../helpers/pathGitStub';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { MAX_CAPABILITIES_BYTES } from '../../src/shared/loopCapabilities';
-import { MAX_ECHOED_PATH_LENGTH } from '../../src/shared/controlChars';
 import { createRealAppGateCommit } from '../../src/main/appGateCommit';
 import { migrateBundledLoopDefOnEntry } from '../../src/main/migrateLoopDef';
 import { createGitRepoFixture } from '../helpers/gitRepo';
@@ -63,6 +62,7 @@ import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import { AUTO_GATE_DECISION_DEFAULT_MS, resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { readRedTestChanges, recordRedTestChanges, redTestChangesArtifact } from '../../src/main/redTestChanges';
 
 // §27.9.1 N9b.4–N9b.6, N9b.9 — Impl-slice 1 of #137: the engine-held gate controller driven at its own
 // boundary (the approve operation it invokes, the §25 entries it writes, the view it feeds the strip, panel and
@@ -138,6 +138,7 @@ let repoDir: string;
 let repoB: string;
 let current: StartRun;
 let defNow: DefResolution | null;
+let sliceNow = 1;
 
 const tiers = (): LoopDefV2Tiers => ({ operator: null, appBundled: join(appDir, 'loops-v2'), retired: null });
 
@@ -219,6 +220,7 @@ function makeRig(opts: { approveAttached?: boolean; auditThrows?: boolean; defTh
     decisionBoundMs: resolveRuntimeConfig(opts.env ?? {}).autoGateDecisionMs,
     askAgentWhy: (question: string) => void asked.push(question),
     withdrawAgentQuestion: () => void (withdrawn += 1),
+    currentSlice: () => sliceNow,
   } as AutoGateDeps);
   if (opts.approveAttached !== false) gate.attachApprove((dir, step, turnKey, decider) => {
     const a: Approval = { repoDir: dir, step, turnKey, decider: decider.kind };
@@ -292,6 +294,7 @@ beforeEach(() => {
   repoDir = mkdtempSync(join(tmpdir(), 'autogate-repo-'));
   repoB = mkdtempSync(join(tmpdir(), 'autogate-repoB-'));
   defNow = OPERATOR_DEF;
+  sliceNow = 1;
   plantDef();
 });
 afterEach(() => {
@@ -1714,6 +1717,7 @@ describe('autoGate — the S1 composition, built in order (#137 S1)', () => {
       decisionBoundMs: resolveRuntimeConfig({}).autoGateDecisionMs,
       askAgentWhy: () => {},
       withdrawAgentQuestion: () => {},
+      currentSlice: () => 1,
     });
     const observed = composeObservedResolveDef((dir) => ({ tiers: tiers(), repoDir: dir }));
     const record = composeRecordFlowTransition({ recordTransition: () => {} }, gate);
@@ -2534,24 +2538,58 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readChangedTests(repoDir)).toEqual({ step: STEP, paths: [] });
   });
 
-  it.each(['green', 'refactor'] as const)('(d): a clean %s gate whose round edited a committed test halts, records the flag naming it, and runs no approve', async (completion) => {
+  it.each(['green', 'refactor'] as const)('a clean %s gate whose round changed a RED test is approved by the engine, and the change is recorded under its step and slice', async (completion) => {
     defNow = { ...OPERATOR_DEF, completion };
+    sliceNow = 2;
     const rig = makeRig();
     startTrusted(rig);
     editFrozenTest();
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toEqual(['frozen-tests-changed']);
-    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['frozen-tests-changed']]);
-    expect(rig.view().humanNeeded).toBe(true);
+    expect(autoHalts(rig)).toEqual([]);
+    expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
+    expect(rig.asked).toEqual([]);
     expect(readChangedTests(repoDir)).toEqual({ step: STEP, paths: [FROZEN] });
-    expect(rig.view().autoGate?.haltReasons).toEqual([{ reason: 'frozen-tests-changed', detail: FROZEN }]);
-    expect(rig.asked).toHaveLength(1);
-    expect(rig.asked[0]).toContain(`(d) frozen tests changed: ${FROZEN}`);
+    expect(readRedTestChanges(repoDir)).toEqual({ branch: 'main', changes: [{ step: STEP, slice: 2, paths: [FROZEN] }] });
   });
 
-  it('(d): a long list of changed tests is echoed to the panel and the question cut to the echo bound, while the flag records every path', async () => {
+  it('a step that declares the frozen check with no frozen-check completion (integration-slice) records its RED test change and is approved', async () => {
+    defNow = { ...OPERATOR_DEF, frozenCheck: true };
+    const rig = makeRig();
+    startTrusted(rig);
+    editFrozenTest();
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(autoHalts(rig)).toEqual([]);
+    expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
+    expect(readRedTestChanges(repoDir)?.changes).toEqual([{ step: STEP, slice: 1, paths: [FROZEN] }]);
+  });
+
+  it('a clean gate whose round changed no RED test records that nothing changed for its step and slice', async () => {
+    recordRedTestChanges(repoDir, { branch: 'main', step: STEP, slice: 1, paths: [FROZEN] });
+    const rig = makeRig();
+    startTrusted(rig);
+    editSource();
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
+    expect(readRedTestChanges(repoDir)).toEqual({ branch: 'main', changes: [] });
+  });
+
+  it('(e): a RED test change record that cannot be written halts with a detail naming it, and runs no approve', async () => {
+    mkdirSync(redTestChangesArtifact(repoDir), { recursive: true });
+    editFrozenTest();
+    const rig = makeRig();
+    startTrusted(rig);
+    await reachGate(rig, 'clean');
+    await settled(rig);
+    expect(engineApprovals(rig)).toEqual([]);
+    const rows = rig.view().autoGate?.haltReasons ?? [];
+    expect(rows.map((r) => r.reason)).toEqual(['frozen-check-unavailable']);
+    expect(rows[0]?.detail ?? '').toMatch(/red-test-changes/);
+  });
+
+  it('a long list of changed tests is recorded in full in the flag and the record', async () => {
     const rig = makeRig();
     startTrusted(rig);
     const added = Array.from({ length: 40 }, (_, i) => `tests/a-long-descriptive-name-for-added-test-${String(i).padStart(2, '0')}.test.ts`);
@@ -2561,11 +2599,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(readChangedTests(repoDir)?.paths).toHaveLength(added.length);
-    const detail = rig.view().autoGate?.haltReasons?.find((r) => r.reason === 'frozen-tests-changed')?.detail ?? '';
-    expect(detail.startsWith(added[0])).toBe(true);
-    expect(detail.length).toBe(MAX_ECHOED_PATH_LENGTH);
-    expect(rig.asked[0]).toContain(detail);
-    expect(rig.asked[0]).not.toContain(added[added.length - 1]);
+    expect(readRedTestChanges(repoDir)?.changes[0].paths).toHaveLength(added.length);
+    expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
   });
 
   it('a new untracked test file is not a detection, and the gate is approved', async () => {
@@ -2579,16 +2614,15 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readChangedTests(repoDir)?.paths).toEqual([]);
   });
 
-  it('(d): a `changed-tests.yaml` already holding `paths: []` is not read as the result', async () => {
+  it('a `changed-tests.yaml` already holding `paths: []` is not read as the result', async () => {
     recordChangedTests(repoDir, STEP, []);
     const rig = makeRig();
     startTrusted(rig);
     editFrozenTest();
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toEqual(['frozen-tests-changed']);
     expect(readChangedTests(repoDir)?.paths).toEqual([FROZEN]);
+    expect(readRedTestChanges(repoDir)?.changes[0].paths).toEqual([FROZEN]);
   });
 
   it('the working tree\'s `test_globs` are the ones read: globs narrowed to exclude an edited test leave it undetected, and the gate is approved', async () => {
@@ -2691,7 +2725,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(rows[0]?.detail ?? '').toMatch(/changed-tests/);
   });
 
-  it('(d) and (e): a changed test whose flag cannot be written still halts naming the change and its path', async () => {
+  it('(e): a changed test whose flag cannot be written halts with (e) alone', async () => {
     mkdirSync(loopAreaFile(repoDir, 'changed-tests.yaml')!, { recursive: true });
     editFrozenTest();
     const rig = makeRig();
@@ -2699,28 +2733,26 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect([...letters(rig)].sort()).toEqual(['frozen-check-unavailable', 'frozen-tests-changed']);
-    expect([...autoHalts(rig).flatMap((c) => parseAutoHaltReasons(c))].sort()).toEqual(['frozen-check-unavailable', 'frozen-tests-changed']);
-    const rows = rig.view().autoGate?.haltReasons ?? [];
-    expect(rows.map((r) => r.detail ?? '').join('\n')).toContain(FROZEN);
+    expect(letters(rig)).toEqual(['frozen-check-unavailable']);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['frozen-check-unavailable']]);
   });
 
   it.each([
     ['could not be resolved', {}, (): void => void (defNow = null)],
     ['threw', { defThrows: (): boolean => true }, (): void => {}],
-  ] as const)('an `auto` step whose def %s at the gate is still frozen-checked: a changed test halts with (d) (N9b.7(c))', async (_label, rigOpts, plant) => {
+  ] as const)('an `auto` step whose def %s at the gate is still frozen-checked: a changed test is recorded (N9b.7(c))', async (_label, rigOpts, plant) => {
     editFrozenTest();
     plant();
     const rig = makeRig(rigOpts);
     startTrusted(rig);
     await reachGate(rig, 'clean');
     await settled(rig);
-    expect(engineApprovals(rig)).toEqual([]);
-    expect(letters(rig)).toContain('frozen-tests-changed');
+    expect(letters(rig)).not.toContain('frozen-tests-changed');
     expect(readChangedTests(repoDir)?.paths).toEqual([FROZEN]);
+    expect(readRedTestChanges(repoDir)?.changes[0].paths).toEqual([FROZEN]);
   });
 
-  it('a `red`-completion step with a changed test path runs no check: approved, no (d), no flag written', async () => {
+  it('a `red`-completion step with a changed test path runs no check: approved, no flag or record written', async () => {
     defNow = { ...OPERATOR_DEF, completion: 'red' };
     editFrozenTest();
     const rig = makeRig();
@@ -2730,6 +2762,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(autoHalts(rig)).toEqual([]);
     expect(engineApprovals(rig).map((a) => a.step)).toEqual([STEP]);
     expect(readChangedTests(repoDir)).toBeNull();
+    expect(readRedTestChanges(repoDir)).toBeNull();
   });
 
   it('an `auto` step with no completion (groom) and a stale `baseline-commit.yaml` runs no check and is approved', async () => {
@@ -3032,7 +3065,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 
-  it('an interrupt armed before the gate survives a detection: (c) and (d) in one entry, no engine approve', async () => {
+  it('an interrupt armed before the gate halts a gate whose RED test change is recorded: (c) alone, no engine approve', async () => {
     editFrozenTest();
     armInterrupt(repoDir, STEP);
     const rig = makeRig();
@@ -3040,7 +3073,8 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     await reachGate(rig, 'clean');
     await settled(rig);
     expect(engineApprovals(rig)).toEqual([]);
-    expect(autoHalts(rig).map((c) => [...(parseAutoHaltReasons(c) ?? [])].sort())).toEqual([['frozen-tests-changed', 'interrupt-armed']]);
+    expect(autoHalts(rig).map((c) => parseAutoHaltReasons(c))).toEqual([['interrupt-armed']]);
+    expect(readRedTestChanges(repoDir)?.changes[0].paths).toEqual([FROZEN]);
     expect(readArmedInterrupt(repoDir)).toBeNull();
   });
 

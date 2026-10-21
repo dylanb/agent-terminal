@@ -10,6 +10,7 @@ import {
   type LoopDefV2Result,
 } from '../../src/main/loopDefV2';
 import { BUNDLED_LOOPS_ROOT, bundledFlowOf, bundledLoopDir } from '../helpers/bundledLoops';
+import { defResolutionOf } from '../../src/main/autoGate';
 
 // §28.4/§28.5.5 — the work.completion discriminator: an additive, closed-set field naming which machine
 // completion predicate a work turn uses (`red` in S3; extends to green/refactor in S4/S5). Parsed by resolving
@@ -134,5 +135,29 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
     const r = resolvePatched((y) => y.replace(ARTIFACT_LINE, '  artifact: no-such-binding\n  completion: refactor\n'));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.work.completion).toBe('refactor');
+  });
+});
+
+// §28.5.1 (v2.210) — a loop with no frozen-check completion opts its `auto` approve into the engine's frozen check.
+describe('work.frozen_check', () => {
+  const addFrozenCheck = (value: string) => (y: string): string => y.replace(ARTIFACT_LINE, `${ARTIFACT_LINE}  frozen_check: ${value}\n`);
+
+  it('parses `frozen_check: true` onto the def, and the gate reads it', () => {
+    const r = resolvePatched(addFrozenCheck('true'));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.work.frozenCheck).toBe(true);
+    expect(defResolutionOf(r)).toEqual({ frozenCheck: true });
+  });
+
+  it('is absent unless declared', () => {
+    const r = resolveBundled();
+    expect(r.ok && r.def.work.frozenCheck).toBeFalsy();
+    expect(defResolutionOf(r)).toEqual({});
+  });
+
+  it.each(['false', 'yes', '"true"', '1'])('rejects `frozen_check: %s`', (value) => {
+    const r = resolvePatched(addFrozenCheck(value));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/frozen_check/);
   });
 });

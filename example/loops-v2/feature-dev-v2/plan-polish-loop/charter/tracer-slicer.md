@@ -41,8 +41,8 @@ runs a single slice regardless of the breakdown. The **epic** plan is the except
 impl-slice block.
 
 Check where the plan puts each test edit. An edit to or deletion of an existing test that a slice needs belongs
-in that slice's RED step, because the engine halts an `auto` GREEN or refactor gate on any test file changed since
-RED (§27.9.1 N9b.7), even one the plan asked for. Any such edit scheduled in a GREEN or refactor step is a finding.
+in that slice's RED step, so the edited test is seen failing before the code it covers: a later step changes a
+RED test only to correct one it finds wrong (§28.5.1). Any such edit scheduled in a GREEN or refactor step is a finding.
 
 Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
 else here: label a finding a NIT when it meets that definition, and the fixer makes the call.

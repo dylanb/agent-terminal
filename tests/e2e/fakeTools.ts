@@ -498,6 +498,7 @@ export function seedFullTddChainAgent(
   opts: {
     implSlices?: number;
     polishedSlices?: number;
+    redPlan?: string;
     logInjected?: boolean;
     verdicts?: Partial<Record<string, ConsolidatorVerdict[]>>;
     issues?: Partial<Record<(typeof CHAIN_STEPS)[number], ScriptedIssue[]>>;
@@ -530,7 +531,8 @@ export function seedFullTddChainAgent(
       : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
     infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
     // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
-    red: `mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; ${writePhaseResultSh('"${RES:-' + art + '/red-result.json}"', examplePhaseResult('failed-assertion'), exampleCapturedOutput('failed-assertion'))}; ${done('work-red')}`,
+    // §28.5.3 — with `redPlan` the first RED work turn rewrites the approved plan, as a RED that splits its slice does.
+    red: `${opts.redPlan !== undefined ? `[ "$(turn_count red-plan)" = 1 ] && ${decode(b64(opts.redPlan), `${art}/plan.md`)}; ` : ''}mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; ${writePhaseResultSh('"${RES:-' + art + '/red-result.json}"', examplePhaseResult('failed-assertion'), exampleCapturedOutput('failed-assertion'))}; ${done('work-red')}`,
     // GREEN and refactor write content that differs per turn, so slice 2's approve has something to commit.
     green: `n=$(turn_count work-green); printf '%s\\n' "export const feat = $n;" > feature.ts; ${writePhaseResultSh('"${RES:-' + art + '/green-result.json}"', examplePhaseResult('passed', { build: 'built' }))}; ${done('work-green')}`,
     refactor: done('work-refactor'),
