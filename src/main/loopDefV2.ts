@@ -103,6 +103,8 @@ export interface WorkRecipe {
   goal?: string;
   /** §27.3 */
   checkpoint?: { passes: number };
+  /** §28.5.1 */
+  frozenCheck?: true;
 }
 
 /** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
@@ -236,6 +238,19 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
 
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
 
+export type ArtifactLocation = { kind: 'file'; path: string; rel: string } | { kind: 'unresolvable-area' | 'escapes' | 'is-area' };
+
+/** The one resolver for a file in the loop artifacts subtree: a def's input and output bindings, and an engine
+ *  writer whose file a def reads as an input. */
+export function artifactLocation(repoDir: string, pattern: string): ArtifactLocation {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
+  if (jail === null) return { kind: 'unresolvable-area' };
+  const confined = confinedRealPath(jail, path.resolve(jail, pattern));
+  if (confined === null) return { kind: 'escapes' };
+  if (confined === jail) return { kind: 'is-area' };
+  return { kind: 'file', path: confined, rel: [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/') };
+}
+
 /** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
@@ -244,12 +259,11 @@ function confineArtifact(repoDir: string, pattern: string, what: string): { path
   // The composed `rel` is interpolated into the agent-facing work prompt, where a control character would
   // break the line it is named on and leave the remainder standing as its own instruction (CWE-74).
   if (CONTROL_CHAR.test(pattern)) fail(`${what} path contains a control character`);
-  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
-  if (jail === null) fail(`${what} loop area is unresolvable`);
-  const confined = confinedRealPath(jail, path.resolve(jail, pattern));
-  if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
-  if (confined === jail) fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
-  const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
+  const located = artifactLocation(repoDir, pattern);
+  if (located.kind === 'unresolvable-area') fail(`${what} loop area is unresolvable`);
+  if (located.kind === 'escapes') fail(`${what} path escapes the artifacts subtree: ${pattern}`);
+  if (located.kind !== 'file') fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
+  const { path: confined, rel } = located;
   // `rel` is composed from the POST-realpath location, whose segment names are repo working-tree content
   // rather than def content (§27.8) — a symlink to a name carrying a control character passes the check above.
   if (CONTROL_CHAR.test(rel)) fail(`${what} path resolves through a name containing a control character`);
@@ -404,6 +418,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     if (!isWorkCompletion(c)) fail(`unknown work completion: ${c}`);
     workCompletion = c;
   }
+  if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
+  const workFrozenCheck = work.frozen_check === true;
 
   let workGoal: string | undefined;
   if (work.goal !== undefined) {
@@ -469,6 +485,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
       ...(workCompletion !== undefined ? { completion: workCompletion } : {}),
       ...(workGoal !== undefined ? { goal: workGoal } : {}),
       ...(workCheckpoint !== undefined ? { checkpoint: workCheckpoint } : {}),
+      ...(workFrozenCheck ? { frozenCheck: true as const } : {}),
     },
     reviewers,
     rounds,

@@ -398,6 +398,7 @@ async function createWindow(): Promise<void> {
       autoGateTimers.delete(h.id);
     },
     decisionBoundMs: config.autoGateDecisionMs,
+    currentSlice: (repoDir) => flow.currentSlice(repoDir),
     askAgentWhy: (question) => agentQuestion.ask(question),
     withdrawAgentQuestion: () => agentQuestion.withdraw(),
   });

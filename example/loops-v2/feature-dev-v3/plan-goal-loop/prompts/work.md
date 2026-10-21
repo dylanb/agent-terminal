@@ -40,8 +40,8 @@ scriptable per turn.
 
 Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.
 Schedule every edit to or deletion of an existing test that a slice needs in that slice's RED step, never its GREEN
-or refactor step: the engine halts an `auto` GREEN or refactor gate on any test file changed since RED, even one the
-plan asked for.
+or refactor step, so the edited test is seen failing before the code it covers: a later step changes a RED test only
+to correct one it finds wrong.
 Size the slices before enumerating them (see **Slice sizing** above), then enumerate the impl-slices in the
 `## Impl-slices` block under **Machine-read plan blocks** above.
 

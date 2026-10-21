@@ -251,7 +251,7 @@ export async function changedTestPathsFromCapabilities(query: {
   return { ok: true, paths };
 }
 
-export type ApproveTimeFrozenCheck = { ok: true; paths: string[] } | { ok: false; detail: string };
+export type ApproveTimeFrozenCheck = { ok: true; branch: string; paths: string[] } | { ok: false; detail: string };
 
 /** §27.9.1 N9b.7 — the engine's own frozen check at an `auto` approve: the working tree's globs, the working tree
  *  against the recorded phase baseline. Every way it cannot run is a detail, never "unchanged". */
@@ -263,7 +263,7 @@ export async function approveTimeFrozenCheck(repoDir: string, signal: AbortSigna
   const baseline = baselineForBranch(readBaselineCommit(repoDir), branch.branch);
   if (baseline === null) return { ok: false, detail: 'no phase baseline is recorded for this branch (baseline-commit.yaml is absent, unreadable, from another branch, or HEAD is detached)' };
   try {
-    return { ok: true, paths: await changedTestPaths({ repoDir, baseline: baseline.sha, testGlobs: capabilities.value.testGlobs, signal }) };
+    return { ok: true, branch: baseline.branch, paths: await changedTestPaths({ repoDir, baseline: baseline.sha, testGlobs: capabilities.value.testGlobs, signal }) };
   } catch (e) {
     return { ok: false, detail: `the git read against the baseline failed: ${errMsg(e)}` };
   }
