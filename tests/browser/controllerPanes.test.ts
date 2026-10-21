@@ -57,7 +57,8 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
       probe.style.color = 'var(--danger)';
       host.append(probe);
       expect.soft(getComputedStyle(label).color).toBe(getComputedStyle(probe).color);
-      expect.soft(host.textContent).toMatch(/disconnected/i);
+      expect.soft(readable(host, disconnected.launchDirectory), 'disconnected identity is visible, nonzero and unclipped').toBe(true);
+      expect.soft(readable(host, 'Disconnected: terminal unavailable'), 'disconnected error is visible, nonzero and unclipped').toBe(true);
       const behind = background(label);
       expect.soft(contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind)).toBeGreaterThanOrEqual(4.5);
       expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
@@ -92,29 +93,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     host.style.width = `${width}px`;
     try {
       const hostBox = host.getBoundingClientRect();
-      const readable = (text: string) => {
-        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const start = node.textContent?.indexOf(text) ?? -1;
-          if (start < 0) continue;
-          const range = document.createRange();
-          range.setStart(node, start);
-          range.setEnd(node, start + text.length);
-          const boxes = [...range.getClientRects()];
-          return boxes.length > 0 && boxes.every(box => box.width > 0 && box.height > 0
-            && box.left >= hostBox.left && box.right <= hostBox.right
-            && box.top >= hostBox.top && box.bottom <= hostBox.bottom
-            && [...ancestors(node.parentElement!)].every(parent => {
-              const style = getComputedStyle(parent);
-              const clip = parent.getBoundingClientRect();
-              return style.visibility === 'visible' && Number(style.opacity) > 0
-                && (style.overflowX === 'visible' || (box.left >= clip.left && box.right <= clip.right))
-                && (style.overflowY === 'visible' || (box.top >= clip.top && box.bottom <= clip.bottom));
-            }));
-        }
-        return false;
-      };
-      for (const terminal of terminals) expect.soft(readable(terminal.launchDirectory)).toBe(true);
+      for (const terminal of terminals) expect.soft(readable(host, terminal.launchDirectory)).toBe(true);
       const buttons = [...host.querySelectorAll('button')];
       expect.soft(buttons).toHaveLength(2);
       for (const [index, button] of buttons.entries()) {
@@ -158,6 +137,30 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     } finally { component.dispose(); }
   });
 });
+
+function readable(host: HTMLElement, text: string): boolean {
+  const hostBox = host.getBoundingClientRect();
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const start = node.textContent?.indexOf(text) ?? -1;
+    if (start < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + text.length);
+    const boxes = [...range.getClientRects()];
+    return boxes.length > 0 && boxes.every(box => box.width > 0 && box.height > 0
+      && box.left >= hostBox.left && box.right <= hostBox.right
+      && box.top >= hostBox.top && box.bottom <= hostBox.bottom
+      && [...ancestors(node.parentElement!)].every(parent => {
+        const style = getComputedStyle(parent);
+        const clip = parent.getBoundingClientRect();
+        return style.visibility === 'visible' && Number(style.opacity) > 0
+          && (style.overflowX === 'visible' || (box.left >= clip.left && box.right <= clip.right))
+          && (style.overflowY === 'visible' || (box.top >= clip.top && box.bottom <= clip.bottom));
+      }));
+  }
+  return false;
+}
 
 function* ancestors(element: Element): Generator<Element> {
   for (let current: Element | null = element; current; current = current.parentElement) yield current;

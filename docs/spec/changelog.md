@@ -1,3 +1,5 @@
+> **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Dismissal/replacement follows in slice 4.
+
 > **#218 slice 2:** Established connections recover automatically within the initial-registration timing bounds, preserving work and human gates. Controller restart restores distinct live terminals and their original activation targets; closing a terminal cancels recovery. Retained errors and dismissal remain slices 3–4.
 
 > **#218 timing clarification (operator decision 2026-10-20):** Compare observed retry gaps with the 5–8 second bounds after rounding each elapsed interval to the nearest millisecond. Nominal retry scheduling and registration deadlines are unchanged.

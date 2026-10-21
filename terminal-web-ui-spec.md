@@ -1,3 +1,5 @@
+> **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Dismissal/replacement follows in slice 4.
+
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
 **Document status:** Draft v2.207 + #218 registration and recovery

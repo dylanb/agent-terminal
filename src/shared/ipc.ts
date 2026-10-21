@@ -1288,6 +1288,7 @@ declare global {
   }
 }
 export interface ControllerTerminal {
+  status?: 'connected' | 'disconnected';
   id: string;
   launchDirectory: string;
   repositoryRoot: string | null;

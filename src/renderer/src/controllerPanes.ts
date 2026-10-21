@@ -19,6 +19,14 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
     const restoreFocus = captureSubtreeFocus(list);
     const focusedId = (host.ownerDocument.activeElement as HTMLElement | null)?.dataset.terminalId;
     list.replaceChildren(...terminals.map(terminal => {
+      if (terminal.status === 'disconnected') {
+        const description = document.createElement('p');
+        description.className = 'controller-disconnected';
+        description.dataset.terminalId = terminal.id;
+        description.tabIndex = -1;
+        description.textContent = terminal.launchDirectory + (terminal.repositoryRoot ? ` Repository: ${terminal.repositoryRoot}` : '') + ' — Disconnected: terminal unavailable';
+        return description;
+      }
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.terminalId = terminal.id;
@@ -36,7 +44,7 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
       empty.tabIndex = -1;
       list.append(empty);
     }
-    restoreFocus(() => [...list.querySelectorAll('button')].find(button => button.dataset.terminalId === focusedId) ?? list.querySelector<HTMLElement>('button, p'));
+    restoreFocus(() => [...list.querySelectorAll<HTMLElement>('[data-terminal-id]')].find(element => element.dataset.terminalId === focusedId) ?? list.querySelector<HTMLElement>('button, p'));
   });
   return { dispose() { disposed = true; unsubscribe(); host.replaceChildren(); host.classList.remove('controller-panes'); } };
 }

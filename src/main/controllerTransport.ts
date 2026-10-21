@@ -27,15 +27,19 @@ export async function startControllerTransport(appHome: string): Promise<{
   if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
   const registrations = new Map<Socket, ControllerTerminal>();
+  const retained = new Map<string, ControllerTerminal>();
+  const snapshot = () => [...retained.values(), ...registrations.values()];
   const pending = new Map<string, { socket: Socket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
-  const notify = () => { for (const listener of listeners) listener([...registrations.values()]); };
+  const notify = () => { for (const listener of listeners) listener(snapshot()); };
   const server = createServer(socket => {
     sockets.add(socket);
     const decoder = createControllerDecoder();
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
       sockets.delete(socket);
+      const terminal = registrations.get(socket);
+      if (terminal) retained.set(terminal.id, { ...terminal, status: 'disconnected' });
       registrations.delete(socket);
       for (const request of pending.values()) if (request.socket === socket) request.finish('unavailable');
       notify();
@@ -93,10 +97,10 @@ export async function startControllerTransport(appHome: string): Promise<{
     throw error;
   }
   return {
-    terminals: () => [...registrations.values()],
+    terminals: snapshot,
     subscribeTerminals(listener) {
       listeners.add(listener);
-      listener([...registrations.values()]);
+      listener(snapshot());
       return () => { listeners.delete(listener); };
     },
     async activate(id) {

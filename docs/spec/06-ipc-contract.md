@@ -10,8 +10,8 @@ The controller preload exposes only `window.controller`, with the typed `Control
 
 | Channel | Direction | Payload | Meaning |
 |---|---|---|---|
-| `controller:subscribe` | renderer → main | `{sessionId}` | Request the current connected-terminal snapshot. |
-| `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Current connections, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, and nullable `repositoryRoot`. |
+| `controller:subscribe` | renderer → main | `{sessionId}` | Request the current live and retained-disconnected terminal snapshot. |
+| `controller:terminals` | main → renderer | `{sessionId, terminals: ControllerTerminal[]}` | Live and retained-disconnected identities, also pushed when registrations change. Each terminal carries an opaque `id`, fixed `launchDirectory`, nullable `repositoryRoot`, and optional `status` (`connected` or `disconnected`; absent means connected). Disconnected identities have no live activation route. |
 | `controller:activate` | renderer → main (invoke) | `{sessionId, id} → 'activated' \| 'unavailable'` | Activate only the live connection named by `id`; no shell input or flow operation is accepted. |
 
 `subscribeTerminals(listener)` delivers terminal snapshots and returns an unsubscribe function; `activateTerminal(id)` returns the activation outcome. Directory labels are display data, not routing authority. A confirmed activation remains completed if the connection later closes; disconnection before confirmation or expiry returns unavailable. Late responses cannot change a completed outcome or target a replacement terminal. A timeout alone does not remove a connected pane.
