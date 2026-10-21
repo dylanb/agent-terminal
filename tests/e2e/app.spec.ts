@@ -8041,7 +8041,7 @@ test('§27.3 v2.207 — once the operator resolves a blocked goal session in the
     `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
     `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. one export', '## Review history', 'no findings'])}; ` +
     `${goalProgressCmd('done')}; printf '%s' 'work-groom' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  seedV3GoalAgent(binDir, 'fake-agent', { groom: blocked }, { 'groom-intent': V3_GROOM_INTENT }, [`    *"Ship one export"*) ${resolved} ;;\n`]);
+  seedGoalSessionAgent(binDir, 'fake-agent', { goal: { groom: [blocked] }, work: { 'groom-intent': [V3_GROOM_INTENT] }, extra: [`    *"Ship one export"*) ${resolved} ;;\n`] });
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
