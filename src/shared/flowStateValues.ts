@@ -6,7 +6,7 @@ export const isStringValue = (v: unknown): v is string => typeof v === 'string';
 /** §28.4 */
 export const isRepeatCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
 
-/** The whole number a flow input holds (trimmed, digits only), or undefined. */
+/** The whole number a flow input holds, or undefined. */
 export function readWholeNumber(raw: string | undefined): number | undefined {
   return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
 }

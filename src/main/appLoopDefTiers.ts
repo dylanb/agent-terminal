@@ -7,8 +7,7 @@ import { userConfigLoopsDir, userConfigLoopsV2Dir } from './userConfig';
  *  tier and the retired-schema tier are each derived from their OWN user-config resolver — never a sibling path
  *  literal — so a CLAUDE_CONFIG_DIR redirect can never move one without the other, and the retired leg feeds
  *  AC 5's no-tier-answers reason enrichment (a def name absent from every surviving tier, with the operator's
- *  own retired-schema def still present, names why it stopped resolving). `configRoot` is the user-config root
- *  to derive both from — none when null (a refused root). */
+ *  own retired-schema def still present, names why it stopped resolving). */
 export function resolveAppLoopDefTiers(iconLoc: BundleLocation, configRoot: string | null): LoopDefV2Tiers {
   return {
     operator: configRoot === null ? null : userConfigLoopsV2Dir(configRoot),

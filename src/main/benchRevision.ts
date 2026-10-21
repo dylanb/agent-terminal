@@ -14,7 +14,7 @@ export interface PromptRevisionQuery {
   definition: FlowDefinition;
   span: BenchSpan;
   appBundle: BundleLocation;
-  /** The user-config root loop defs resolve their operator tier under; none when null. */
+  /** The user-config root loop defs resolve their operator tier under. */
   userConfigRoot: string | null;
   /** The working folder whose repo tier the loop defs resolve through. */
   repoDir: string;
@@ -35,14 +35,12 @@ function bytesHash(file: string): string {
   }
 }
 
-/** One line per file — loop, role, path relative to the def's folder, the bytes' hash — so the tier a byte-identical
- *  copy sits in is not hashed. */
+/** Paths are relative to the def's folder so the tier a byte-identical copy sits in is not hashed. */
 function loopLines(loop: string, defDir: string, files: { role: string; file: string }[]): string[] {
   const base = realpathSync(defDir);
   return files.map(({ role, file }) => JSON.stringify([loop, role, path.relative(base, file).split(path.sep).join('/'), bytesHash(file)]));
 }
 
-/** A file the app could not load counts as what it is, absent or unreadable, as the app would meet it at that step. */
 export function promptRevision(query: PromptRevisionQuery): string {
   const { definition, span } = query;
   const range = resolveStepSpan(

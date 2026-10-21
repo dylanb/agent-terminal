@@ -43,7 +43,7 @@ export interface BenchRunRequest {
   runs: string;
   invokingRepo: string;
   appHome: string;
-  /** The user-config root loop defs resolve their operator tier under; none when null. */
+  /** The user-config root loop defs resolve their operator tier under. */
   userConfigRoot: string | null;
   /** Called with each run folder the moment it exists, so an interrupted command has already named it. */
   reportRunFolder(folder: string): void;

@@ -35,7 +35,6 @@ export interface BenchPrepareRequest {
   /** This command's folder under the app home, as a real path. */
   stampDir: string;
   stamp: string;
-  /** 1-based. */
   run: number;
   github: BenchGithub;
 }

@@ -20,7 +20,7 @@ export interface BenchOutcome {
   output: string;
 }
 
-/** `execPath` and `mainDir` are the runner's own Electron binary and built main directory; `now` is epoch ms. */
+/** `execPath` and `mainDir` are the runner's own Electron binary and built main directory. */
 export function realBenchDeps(execPath: string, mainDir: string, env: NodeJS.ProcessEnv, now: () => number): BenchDeps {
   const target = benchAppTarget(execPath, mainDir);
   return {
