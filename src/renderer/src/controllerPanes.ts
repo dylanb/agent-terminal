@@ -54,7 +54,7 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
       empty.tabIndex = -1;
       list.append(empty);
     }
-    restoreFocus(() => [...list.querySelectorAll<HTMLElement>('[data-terminal-id]')].find(element => element.dataset.terminalId === focusedId) ?? list.querySelector<HTMLElement>('button, p'));
+    restoreFocus(() => [...list.querySelectorAll<HTMLButtonElement>('button[data-terminal-id]')].find(element => element.dataset.terminalId === focusedId) ?? list.querySelector('button') ?? list.querySelector('p'));
   });
   return { dispose() { disposed = true; unsubscribe(); host.replaceChildren(); host.classList.remove('controller-panes'); } };
 }
