@@ -35,3 +35,6 @@ inputs:
 outputs:
   - id: red-result
     path: red-result.json
+  # §28.4.1/§28.5.3 — a RED may split its own slice in the plan; declaring it re-sources `slices` on approve.
+  - id: plan
+    path: plan.md
