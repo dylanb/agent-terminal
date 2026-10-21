@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTrustedPickups } from '../../src/main/trustedPickups';
+import { clearAppLoopBootstrap, writeAppLoopBootstrap, writeAppLoopBootstrapIntent } from '../../src/main/appLoopState';
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
 import { inProgressRunIdentity, type RunIdentity } from '../../src/main/gateRunState';
 
@@ -11,6 +12,7 @@ import { inProgressRunIdentity, type RunIdentity } from '../../src/main/gateRunS
 
 const PICKUP: AppLoopBootstrap = { pr: 233, branch: 'plan-loop/issue-218', issue: 218, initialStatus: 'planning' };
 const RUN: RunIdentity = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
+const asRoot = process.getuid?.() === 0;
 
 let repo: string;
 let current: RunIdentity | null;
@@ -149,39 +151,82 @@ describe('the persisted record fails closed', () => {
     expect(app.get(repo)).toEqual(PICKUP);
   });
 
-  it('a delete that cannot remove the file is reported, does not throw, and this app stops trusting the pickup', () => {
+  it('a delete that removes the file says so, and reports nothing', () => {
     const app = relaunch();
     app.set(repo, PICKUP);
-    rmSync(file());
-    mkdirSync(join(file(), 'in-the-way'), { recursive: true });
-    expect(() => app.delete(repo)).not.toThrow();
-    expect(forgetFailures).toHaveLength(1);
-    expect(app.get(repo)).toBeUndefined();
+    expect(app.delete(repo)).toBe(true);
+    expect(existsSync(file())).toBe(false);
+    expect(forgetFailures).toEqual([]);
   });
 
-  it('a restore puts back a pickup a failed transition deleted, for this app and a relaunched one, and reports nothing', () => {
+  it.skipIf(asRoot)('a delete that cannot remove a still-readable file says so, does not throw, and this app never trusts that run’s pickup again', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    const loop = join(repo, '.agent-terminal', 'loop');
+    chmodSync(loop, 0o555);
+    try {
+      expect(app.delete(repo)).toBe(false);
+      expect(forgetFailures).toHaveLength(1);
+      expect(readFileSync(file(), 'utf8')).toContain('pr: 233');
+      expect(app.get(repo)).toBeUndefined();
+    } finally {
+      chmodSync(loop, 0o755);
+    }
+  });
+
+  it.skipIf(asRoot)('a delete made once the run has finished still keeps that run’s pickup out when the same run resumes, as a Restart does', () => {
+    relaunch().set(repo, PICKUP);
+    const app = relaunch();
+    current = null;
+    const loop = join(repo, '.agent-terminal', 'loop');
+    chmodSync(loop, 0o555);
+    try {
+      expect(app.delete(repo)).toBe(false);
+      current = RUN;
+      expect(app.get(repo)).toBeUndefined();
+    } finally {
+      chmodSync(loop, 0o755);
+    }
+  });
+
+  it('a set after a delete is trusted again', () => {
     const app = relaunch();
     app.set(repo, PICKUP);
     app.delete(repo);
-    app.restore(repo, PICKUP);
-    expect(app.get(repo)).toEqual(PICKUP);
-    expect(relaunch().get(repo)).toEqual(PICKUP);
-    expect(failures).toEqual([]);
+    app.set(repo, { ...PICKUP, pr: 240 });
+    expect(app.get(repo)).toEqual({ ...PICKUP, pr: 240 });
   });
 
-  it('a restore with no run in progress keeps the pickup in this app only, and reports nothing', () => {
-    current = null;
+  it('a pickup this app trusted is not trusted once a different run is in progress', () => {
     const app = relaunch();
-    app.restore(repo, PICKUP);
+    app.set(repo, PICKUP);
+    current = { ...RUN, startedAt: RUN.startedAt + 1 };
+    expect(app.get(repo)).toBeUndefined();
+    current = RUN;
     expect(app.get(repo)).toEqual(PICKUP);
-    expect(failures).toEqual([]);
-    expect(existsSync(file())).toBe(false);
   });
 
   it('a set of a pickup the reader would refuse is reported as not saved', () => {
     relaunch().set(repo, { ...PICKUP, branch: ' ' });
     expect(failures).toHaveLength(1);
     expect(existsSync(file())).toBe(false);
+  });
+
+  it('is a file of its own: writing or clearing bootstrap.yaml leaves it byte-for-byte unchanged, and its set and delete leave bootstrap.yaml unchanged', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    const saved = readFileSync(file(), 'utf8');
+    writeAppLoopBootstrapIntent(repo, { branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
+    writeAppLoopBootstrap(repo, { pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
+    clearAppLoopBootstrap(repo);
+    expect(readFileSync(file(), 'utf8')).toBe(saved);
+
+    writeAppLoopBootstrap(repo, { pr: 301, branch: 'plan-loop/issue-300', issue: 300, initialStatus: 'planning' });
+    const record = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+    const recorded = readFileSync(record, 'utf8');
+    app.set(repo, { ...PICKUP, pr: 240 });
+    app.delete(repo);
+    expect(readFileSync(record, 'utf8')).toBe(recorded);
   });
 
   it('never writes a .gitignore, and leaves an existing one byte-for-byte unchanged (§19.1/§25)', () => {

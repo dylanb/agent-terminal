@@ -79,7 +79,7 @@ function isLiveSession(m: Record<string, unknown>): boolean {
 }
 
 function isPositiveInt(n: unknown): n is number {
-  return typeof n === 'number' && Number.isInteger(n) && n > 0;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 }
 
 export function isValidInput(m: unknown): m is PtyInputMsg {
@@ -249,8 +249,6 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
   );
 }
 
-const isPositiveSafeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
-
 /** flow:confirmRunPickup (§27.13 v2.211, §6) */
 export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPickupMsg {
   return (
@@ -263,8 +261,8 @@ export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPick
     typeof m.run.flow === 'string' &&
     typeof m.run.startedAt === 'number' &&
     Number.isFinite(m.run.startedAt) &&
-    isPositiveSafeInt(m.pr) &&
-    isPositiveSafeInt(m.ticket)
+    isPositiveInt(m.pr) &&
+    isPositiveInt(m.ticket)
   );
 }
 

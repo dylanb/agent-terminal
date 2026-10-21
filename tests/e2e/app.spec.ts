@@ -3533,6 +3533,42 @@ test('a run rebound after a relaunch, onto a flow that names no PR, is held unti
   }
 });
 
+test('a Restart whose saved pickup cannot be removed is refused with the reason, and goes ahead once it can be (§27.13)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 120_000);
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-restart-pickup-', null);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-restart-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-restart-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  const saved = join(repo, '.agent-terminal', 'loop', 'run-pickup.yaml');
+  try {
+    await launchGateFlowApp(home, repo, binDir, logFile);
+    await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+    await typeCommand('fake-agent');
+    await flowControl().click();
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+    await loopReadout().click({ timeout: 10_000 });
+    await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
+    await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: done');
+    await page.evaluate((repoKey) => window.flow.advance(repoKey, 'done'), repo);
+    await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
+
+    rmSync(saved);
+    mkdirSync(join(saved, 'in-the-way'), { recursive: true });
+    const refused = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
+    expect(refused.notice).toContain('Not restarted');
+    await expect(flowControl()).toHaveText('Restart');
+
+    rmSync(saved, { recursive: true, force: true });
+    const restarted = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
+    expect(restarted.notice ?? '').not.toContain('Not restarted');
+    expect(restarted.status).toBe('in_progress');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
 test('Terminate still ends a run held for its ticket and PR (§27.13)', { tag: '@ownapp' }, async () => {
   test.setTimeout(2 * WINDOW_TIMEOUT_MS + 120_000);
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-held-terminate-', null);

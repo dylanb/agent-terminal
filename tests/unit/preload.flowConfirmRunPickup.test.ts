@@ -54,6 +54,7 @@ describe('flow:confirmRunPickup payload validation (§6 — renderer-supplied in
     ['a run with an extra key', { run: { ...RUN, step: 'plan' } }],
     ['a zero PR', { pr: 0 }],
     ['a fractional PR', { pr: 2.5 }],
+    ['a PR beyond the safe integers', { pr: 2 ** 53 }],
     ['a string ticket', { ticket: '218' }],
     ['a negative ticket', { ticket: -1 }],
     ['an extra key', { branch: 'main' }],

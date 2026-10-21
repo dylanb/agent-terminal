@@ -134,7 +134,7 @@ import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
-import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, type HeldPickupRun } from './runPickupConfirm';
+import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
@@ -692,12 +692,16 @@ async function createWindow(): Promise<void> {
       audit.recordCommand(repoDir, 'pickup', `§27 pickup could not be saved for a relaunch: ${reason}`, 1);
       send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's pull request could not be saved, so a relaunch will not know it: ${reason}` });
     },
-    forgetFailed: (repoDir, reason) => audit.recordCommand(repoDir, 'pickup', `§27 an ended run's saved pickup could not be removed: ${reason}`, 1),
+    forgetFailed: (repoDir, reason) => {
+      audit.recordCommand(repoDir, 'pickup', `§27 a forgotten run pickup could not be removed: ${reason}`, 1);
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove .agent-terminal/loop/run-pickup.yaml.` });
+    },
   });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
-  // §27.13 v2.211
+  // §27.13 v2.211 — Start and Restart (beginRunHere) mark a run begun here. Terminate and a §18.7.3 rebind forget the
+  // pickup through forgetRunEntry and never mark it: a run rebound after a relaunch must still be held.
   const runsBegunHere = new Set<string>();
   const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
     const run = inProgressRunIdentity(repoKey);
@@ -957,17 +961,14 @@ async function createWindow(): Promise<void> {
     presentView: (repoKey, view) => trackLoop(repoKey, withDerived(repoKey, view)),
   });
 
-  const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
-    const previous = trustedAppBootstraps.get(repoKey);
+  const beginRunHere = <T>(repoKey: string, transition: () => T): T => {
     const predated = pickupRecordPredatesRun.has(repoKey);
     const begunHere = runsBegunHere.has(repoKey);
-    trustedAppBootstraps.delete(repoKey);
     pickupRecordPredatesRun.add(repoKey);
     runsBegunHere.add(repoKey);
     try {
       return transition();
     } catch (e) {
-      if (previous !== undefined) trustedAppBootstraps.restore(repoKey, previous);
       if (!predated) pickupRecordPredatesRun.delete(repoKey);
       if (!begunHere) runsBegunHere.delete(repoKey);
       throw e;
@@ -1367,7 +1368,11 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
         const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          withoutTrustedBootstrap(m.repoKey, () => trackLoop(m.repoKey, withDerived(m.repoKey, flowStartTransition(m.repoKey)))),
+          beginRunHere(m.repoKey, () => {
+            const started = flowStartTransition(m.repoKey);
+            trustedAppBootstraps.delete(m.repoKey);
+            return trackLoop(m.repoKey, withDerived(m.repoKey, started));
+          }),
         );
         if (started.ok) return started.value;
         return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
@@ -1393,9 +1398,12 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowRestart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        return withoutTrustedBootstrap(m.repoKey, () =>
-          recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)),
-        );
+        // §27.13 — a Restart keeps the run's identity, so a saved pickup it cannot forget would be trusted again. Only a
+        // done run restarts (flow.restart); any other Restart is refused there and must not cost the run its pickup.
+        if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.delete(m.repoKey)) {
+          return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP });
+        }
+        return beginRunHere(m.repoKey, () => recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)));
       },
       [CH.flowUndo]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();

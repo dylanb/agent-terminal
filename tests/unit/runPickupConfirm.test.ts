@@ -297,6 +297,7 @@ describe('which runs wait for a confirm', () => {
   it('a run whose flow inputs name a PR the pickup record contradicts still waits', () => {
     expect(awaitingPickupConfirm(facts({ flowRefs: { ticket: 176, pr: 77 }, bootstrapRecord: complete(4242, 176) }))).toEqual(RUN);
     expect(awaitingPickupConfirm(facts({ flowRefs: { ticket: 176, pr: 77 }, bootstrapRecord: { kind: 'pending' } }))).toEqual(RUN);
+    expect(awaitingPickupConfirm(facts({ flowRefs: { ticket: 176, pr: 4242 }, bootstrapRecord: complete(4242, 999) }))).toEqual(RUN);
   });
 
   it('at the pickup step, a resumed run waits only on evidence that its own pickup began', () => {

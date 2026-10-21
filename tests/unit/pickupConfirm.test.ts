@@ -122,6 +122,15 @@ describe('the confirm dialog', () => {
     expect(dialog()!.querySelector('[role="alert"]')?.textContent).not.toBe('');
   });
 
+  it('refuses a number too large to be a pull request or ticket, without asking main', async () => {
+    push('/repo', view(proposed()));
+    field('Pull request').value = '99999999999999999999';
+    button(dialog()!, 'Confirm').click();
+    await flush();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(dialog()!.querySelector('[role="alert"]')?.textContent).toContain('as numbers');
+  });
+
   it('“Not now” closes it, leaves a way back to it, and later views of the same run do not reopen it', () => {
     push('/repo', view(proposed()));
     button(dialog()!, 'Not now').click();
@@ -232,6 +241,26 @@ describe('the dialog’s accessibility (UI-STANDARDS §4.5–§4.6, §5; WCAG 2.
     button(host, 'Confirm ticket and PR').focus();
     push('/repo', view(proposed()));
     expect(document.activeElement).toBe(button(host, 'Confirm ticket and PR'));
+  });
+
+  it('a dialog opened from the side-panel button returns focus to it after a refresh lands while the dialog is open', () => {
+    push('/repo', view(proposed()));
+    button(dialog()!, 'Not now').click();
+    const opener = button(host, 'Confirm ticket and PR');
+    opener.focus();
+    opener.click();
+    push('/repo', view(proposed()));
+    dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.activeElement).toBe(button(host, 'Confirm ticket and PR'));
+    expect(focusLost).toBe(0);
+  });
+
+  it('the side-panel button opens the dialog for the latest proposal', () => {
+    push('/repo', view(proposed()));
+    button(dialog()!, 'Not now').click();
+    push('/repo', view(proposed({ pr: 240 })));
+    button(host, 'Confirm ticket and PR').click();
+    expect(field('Pull request').value).toBe('240');
   });
 
   it('clearing the side-panel line while focus is on it hands focus to the fallback', () => {

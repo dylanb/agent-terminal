@@ -22,6 +22,9 @@ export function reachedPickupStep<S, C>(steps: readonly S[], position: number, c
   return null;
 }
 
+export const RESTART_KEEPS_PICKUP =
+  'Not restarted: the run’s saved pull request could not be removed, and the restarted run would trust it again. Remove .agent-terminal/loop/run-pickup.yaml and Restart, or Terminate and Start.';
+
 export interface PickupHoldFacts {
   run: RunIdentity | null;
   pickupInFlight: boolean;
@@ -157,7 +160,7 @@ export function createRunPickupConfirmations(deps: RunPickupConfirmDeps): RunPic
       if (heldAs(repoKey, run) === null) return { ok: false, reason: NO_LONGER_WAITING };
       const { branch, flowTicket } = deps.evidence(repoKey);
       if (flowTicket !== null && ticket !== flowTicket) {
-        return { ok: false, reason: `This run is for ticket #${flowTicket}; Restart the run to work on a different ticket.` };
+        return { ok: false, reason: `This run is for ticket #${flowTicket}; Terminate the run and Start it again to work on a different ticket.` };
       }
       const refusal = await verifyRunPickup(deps.lookup(repoKey), { branch, pr, ticket });
       if (refusal !== null) return { ok: false, reason: refusal };

@@ -15,9 +15,8 @@ const RUN_PICKUP_FILE = 'run-pickup.yaml';
 export interface TrustedPickups {
   get(repoDir: string): AppLoopBootstrap | undefined;
   set(repoDir: string, pickup: AppLoopBootstrap): void;
-  delete(repoDir: string): void;
-  /** Undo a `delete` whose transition threw: the run is the one that owned the pickup, or none. */
-  restore(repoDir: string, pickup: AppLoopBootstrap): void;
+  /** Whether the saved file is gone; this app trusts the forgotten run's pickup no more either way. */
+  delete(repoDir: string): boolean;
 }
 
 export interface TrustedPickupsDeps {
@@ -27,20 +26,29 @@ export interface TrustedPickupsDeps {
 }
 
 export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
-  const loaded = new Map<string, AppLoopBootstrap>();
+  /** A pickup trusted while no run identity was readable stays trusted by this app alone. */
+  const loaded = new Map<string, { run: RunIdentity | null; pickup: AppLoopBootstrap }>();
+  const forgotten = new Map<string, RunIdentity>();
   return {
     get(repoDir) {
-      const cached = loaded.get(repoDir);
-      if (cached !== undefined) return cached;
       const run = deps.currentRun(repoDir);
-      const persisted = run === null ? null : readRunPickup(repoDir);
-      if (run === null || persisted === null || !sameRun(persisted.run, run)) return undefined;
-      loaded.set(repoDir, persisted.pickup);
+      const cached = loaded.get(repoDir);
+      if (cached !== undefined) {
+        if (cached.run === null || (run !== null && sameRun(cached.run, run))) return cached.pickup;
+        loaded.delete(repoDir);
+      }
+      if (run === null) return undefined;
+      const lost = forgotten.get(repoDir);
+      if (lost !== undefined && sameRun(lost, run)) return undefined;
+      const persisted = readRunPickup(repoDir);
+      if (persisted === null || !sameRun(persisted.run, run)) return undefined;
+      loaded.set(repoDir, persisted);
       return persisted.pickup;
     },
     set(repoDir, pickup) {
-      loaded.set(repoDir, pickup);
       const run = deps.currentRun(repoDir);
+      loaded.set(repoDir, { run, pickup });
+      forgotten.delete(repoDir);
       try {
         if (run === null) throw new Error('no run is in progress');
         writeRunPickup(repoDir, run, pickup);
@@ -49,22 +57,16 @@ export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
       }
     },
     delete(repoDir) {
+      const run = loaded.get(repoDir)?.run ?? readRunPickup(repoDir)?.run ?? deps.currentRun(repoDir);
       loaded.delete(repoDir);
+      if (run !== null) forgotten.set(repoDir, run);
       try {
         const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
         if (file !== null) rmSync(file, { force: true });
+        return true;
       } catch (e) {
         deps.forgetFailed(repoDir, errMsg(e));
-      }
-    },
-    restore(repoDir, pickup) {
-      loaded.set(repoDir, pickup);
-      const run = deps.currentRun(repoDir);
-      if (run === null) return;
-      try {
-        writeRunPickup(repoDir, run, pickup);
-      } catch (e) {
-        deps.persistFailed(repoDir, errMsg(e));
+        return false;
       }
     },
   };

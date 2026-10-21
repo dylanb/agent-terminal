@@ -21,7 +21,10 @@ export interface PickupConfirm {
 }
 
 const runKey = (repoKey: string, run: RunIdentity): string => JSON.stringify([repoKey, runKeyOf(run)]);
-const parseNumber = (text: string): number | null => (/^\d+$/.test(text.trim()) && Number(text) > 0 ? Number(text) : null);
+const parseNumber = (text: string): number | null => {
+  const n = /^\d+$/.test(text.trim()) ? Number(text) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+};
 
 export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps): PickupConfirm {
   const doc = host.ownerDocument;
@@ -137,6 +140,16 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
   };
 
   /** Empties the host when no run is held, handing focus to `onFocusLost` if it was on the line (UI §4.5). */
+  // Built once so a dialog opened from it can return focus to it across refreshes (WCAG 2.4.3).
+  let shown: { repoKey: string; held: Proposed } | null = null;
+  const reopen = doc.createElement('button');
+  reopen.className = 'pill';
+  reopen.textContent = 'Confirm ticket and PR…';
+  reopen.setAttribute('aria-haspopup', 'dialog');
+  reopen.addEventListener('click', () => {
+    if (shown !== null) openDialog(shown.repoKey, shown.held, reopen);
+  });
+
   const render = (...[repoKey, view]: FlowViewArgs): void => {
     const focusWasHere = host.contains(doc.activeElement);
     const restoreFocus = captureSubtreeFocus(host);
@@ -158,11 +171,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
       return;
     }
     status.textContent = 'This run is waiting for you to confirm its ticket and pull request.';
-    const reopen = doc.createElement('button');
-    reopen.className = 'pill';
-    reopen.textContent = 'Confirm ticket and PR…';
-    reopen.setAttribute('aria-haspopup', 'dialog');
-    reopen.addEventListener('click', () => openDialog(repoKey, held, reopen));
+    shown = { repoKey, held };
     host.append(status, reopen);
     restoreFocus(() => reopen);
     if (!offered.has(key)) {
