@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
@@ -140,6 +140,73 @@ describe('the prompt revision', () => {
       repoEditCounts: repoEdited !== copied,
       shadowedEditIgnored: shadowedEdited === repoEdited,
     }).toEqual({ copiedUnchanged: true, repoEditCounts: true, shadowedEditIgnored: true });
+  });
+});
+
+describe('the prompt revision over what the app cannot load', () => {
+  /** A working folder whose repository tier names a `red-loop` def that `spoil` keeps from resolving. */
+  function unresolvableIn(spoil: (defFile: string) => void): string {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-revision-unresolved-'));
+    const def = join(dir, 'loops', 'red-loop', 'red-loop.yaml');
+    cpSync(bundledLoop('feature-dev-v3', 'red-loop'), dirname(def), { recursive: true });
+    writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  red-loop: loops/red-loop/red-loop.yaml\n');
+    spoil(def);
+    return dir;
+  }
+
+  it.each([
+    { cause: 'a def that does not parse', spoil: (def: string) => writeFileSync(def, 'not: [a def\n') },
+    { cause: 'an override escaping the repository', spoil: (def: string) => writeFileSync(join(dirname(def), '..', '..', '.agent-loop.yaml'), 'loops:\n  red-loop: ../elsewhere.yaml\n') },
+  ])('counts a span loop unresolved by $cause as unresolved: other than the resolved revision, and one revision in any working folder', ({ spoil }) => {
+    fresh();
+    const span = { first: 'red', last: 'red' };
+    const resolved = promptRevision(query(V3_FLOW_FILE, span));
+    const folders = [unresolvableIn(spoil), unresolvableIn(spoil)];
+    try {
+      const [a, b] = folders.map((dir) => promptRevision({ ...query(V3_FLOW_FILE, span), repoDir: dir }));
+
+      expect({ differsFromResolved: a !== resolved, sameInEachFolder: a === b }).toEqual({ differsFromResolved: true, sameInEachFolder: true });
+    } finally {
+      for (const dir of folders) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('counts an unreadable span loop def as unresolved, one revision in any working folder though the error names the folder', () => {
+    fresh();
+    const span = { first: 'red', last: 'red' };
+    const folders = [unresolvableIn((def) => chmodSync(def, 0o000)), unresolvableIn((def) => chmodSync(def, 0o000))];
+    try {
+      const [a, b] = folders.map((dir) => promptRevision({ ...query(V3_FLOW_FILE, span), repoDir: dir }));
+
+      expect({ differsFromResolved: a !== promptRevision(query(V3_FLOW_FILE, span)), sameInEachFolder: a === b }).toEqual({ differsFromResolved: true, sameInEachFolder: true });
+    } finally {
+      for (const dir of folders) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tells an absent charter from an empty one', () => {
+    fresh();
+    const q = query(V3_FLOW_FILE, { first: 'red', last: 'red' });
+    const charter = join(bundledLoop('feature-dev-v3', 'red-loop'), 'charter', 'tests.md');
+    writeFileSync(charter, '');
+    const empty = promptRevision(q);
+    rmSync(charter);
+
+    expect(promptRevision(q)).not.toBe(empty);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('tells an unreadable charter from an absent one and from an empty one', () => {
+    fresh();
+    const q = query(V3_FLOW_FILE, { first: 'red', last: 'red' });
+    const charter = join(bundledLoop('feature-dev-v3', 'red-loop'), 'charter', 'tests.md');
+    writeFileSync(charter, '');
+    const empty = promptRevision(q);
+    chmodSync(charter, 0o000);
+    const unreadable = promptRevision(q);
+    rmSync(charter);
+    const absent = promptRevision(q);
+
+    expect(new Set([empty, unreadable, absent]).size).toBe(3);
   });
 });
 

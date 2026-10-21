@@ -189,7 +189,10 @@ test('run through the built entry opens the app at the prepared folder, waits fo
       await new Promise((r) => setTimeout(r, 250));
       launched = appsLaunchedUnder(appHome).filter(({ args }) => args.includes(BUILT_APP_MAIN));
     }
-    runnerWaiting = launched.length > 0 && runnerExit === undefined;
+    // An app that dies at startup can still be caught by one poll, so it must be running a poll later.
+    await new Promise((r) => setTimeout(r, 250));
+    const running = appsLaunchedUnder(appHome).map(({ pid }) => pid);
+    runnerWaiting = launched.length > 0 && launched.every(({ pid }) => running.includes(pid)) && runnerExit === undefined;
     for (const { pid } of launched) signal(pid, 'SIGTERM');
     exit = await Promise.race([exited, new Promise<'still running'>((r) => setTimeout(() => r('still running'), 20_000))]);
   } finally {

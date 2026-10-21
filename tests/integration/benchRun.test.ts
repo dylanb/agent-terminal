@@ -787,3 +787,62 @@ describe("the fixture's phase baseline", () => {
     expect({ with: seen.with?.baseline, without: seen.without?.baseline }).toEqual({ with: { branch: seen.with?.branch, sha: s.commit }, without: null });
   });
 });
+
+describe('a run whose outputs cannot be written', () => {
+  /** Run 1's app writes its §25 audit log; `brk` then spoils its run folder before the app exits. */
+  async function brokenOutputs(brk: (runFolder: string, auditDir: string) => void): Promise<{ result: BenchRunResult; launches: number; recordPresent: boolean; runFolder: string; branch: string }> {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const auditRoot = auditRootDir(roots.appHome);
+    const recorder = createAuditRecorder({ root: auditRoot, now: () => new Date('2026-10-20T12:00:00.000Z'), flowName: () => 'feature-dev-v3' });
+    let branch = '';
+    const launcher = createFakeLauncher({
+      scripts: [{}, {}],
+      inspect: (launch) => {
+        recorder.recordTransition(launch.workingFolder, 'start', { status: 'not_started', stepName: 'red' }, { status: 'in_progress', stepName: 'red' });
+        branch = b.git(launch.workingFolder, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        brk(dirname(launch.workingFolder), auditRepoDir(auditRoot, launch.workingFolder));
+      },
+    });
+
+    const result = await runBench(runRequest(s, roots, { runs: '2' }, { launcher }));
+
+    const runFolder = dirname(launcher.launches[0]?.workingFolder ?? '');
+    return { result, launches: launcher.launches.length, recordPresent: existsSync(join(runFolder, BENCH_RUN_RECORD_FILE)), runFolder, branch };
+  }
+
+  it.each([
+    { what: 'a file where the run folder\'s audit copy goes', brk: (runFolder: string) => writeFileSync(join(runFolder, BENCH_RUN_AUDIT_DIR), 'in the way\n') },
+    { what: 'a link out of the run\'s audit log', brk: (_: string, auditDir: string) => symlinkSync(b.outsideDir('bench-audit-elsewhere'), join(auditDir, 'escape')) },
+  ])('stops with output-failed for $what, naming its run folder, issue copy and branch, writing no record and preparing no next run', async ({ brk }) => {
+    const { result, launches, recordPresent, runFolder, branch } = await brokenOutputs(brk);
+
+    expect({
+      code: codeOf(result),
+      runFolders: result.runFolders,
+      namesCopyAndBranch: !result.ok && (result.reason ?? '').includes(`#${FAKE_FIRST_COPY}`) && (result.reason ?? '').includes(branch),
+      recordPresent,
+      launches,
+    }).toEqual({ code: 'output-failed', runFolders: [runFolder], namesCopyAndBranch: true, recordPresent: false, launches: 1 });
+  });
+
+  it('stops with output-failed when the record itself cannot be written, preparing no next run', async () => {
+    const { result, launches, runFolder } = await brokenOutputs((folder) => mkdirSync(join(folder, BENCH_RUN_RECORD_FILE)));
+
+    expect({ code: codeOf(result), runFolders: result.runFolders, launches }).toEqual({ code: 'output-failed', runFolders: [runFolder], launches: 1 });
+  });
+});
+
+describe("the run record's wall-clock time", () => {
+  it('is 0, and still read by its reader, when the clock steps back while the app is open', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const clock = createFakeBenchClock();
+    const launcher = createFakeLauncher({ clock, scripts: [{ durationMs: -5_000 }] });
+
+    const result = await runBench(runRequest(s, roots, {}, { launcher, clock }));
+
+    const record = result.runFolders[0] === undefined ? null : recordIn(result.runFolders[0]);
+    expect(record !== null && 'wallClockMs' in record ? record.wallClockMs : record).toBe(0);
+  });
+});

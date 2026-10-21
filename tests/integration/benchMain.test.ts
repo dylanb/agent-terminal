@@ -299,6 +299,23 @@ describe('bench run through the entry', () => {
     });
   });
 
+  it("prints the kept run folder, then the code, when a run's record cannot be written", async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '2'];
+    const launcher = createFakeLauncher({ scripts: [{}, {}], inspect: (launch) => mkdirSync(join(dirname(launch.spanEndFile), BENCH_RUN_RECORD_FILE)) });
+
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher });
+
+    const lines = output.split('\n').filter((l) => l.length > 0);
+    expect({ failed: exitCode !== 0, folders: lines.slice(0, -1), last: lines.at(-1) }).toEqual({
+      failed: true,
+      folders: launcher.launches.map((l) => dirname(l.spanEndFile)),
+      last: expect.stringMatching(/^bench run refused \(output-failed\)/),
+    });
+  });
+
   it("exits non-zero and prints the refusal's code when run is refused, creating no run folder", async () => {
     b = createBenchFixtureBuilder();
     roots = createBenchRoots();

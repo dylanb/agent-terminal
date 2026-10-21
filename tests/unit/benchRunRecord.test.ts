@@ -18,7 +18,26 @@ describe('reading a run record', () => {
     ['no prompt revision', { ...EXAMPLE_BENCH_RUN_RECORD, promptRevision: undefined }],
     ['a wall-clock time that is not a number', { ...EXAMPLE_BENCH_RUN_RECORD, wallClockMs: '42' }],
     ['an issue copy number that is not an integer', { ...EXAMPLE_BENCH_RUN_RECORD, issueCopy: { number: 1.5 } }],
+    ['a flow with no id', { ...EXAMPLE_BENCH_RUN_RECORD, flow: { definitionRevision: EXAMPLE_BENCH_RUN_RECORD.flow.definitionRevision } }],
+    ['no fixture', { ...EXAMPLE_BENCH_RUN_RECORD, fixture: undefined }],
+    ['a span with no last step', { ...EXAMPLE_BENCH_RUN_RECORD, span: { first: 'plan' } }],
+    ['a fixture issue numbered 0', { ...EXAMPLE_BENCH_RUN_RECORD, fixtureIssue: { ...EXAMPLE_BENCH_RUN_RECORD.fixtureIssue, number: 0 } }],
+    ['a blank branch', { ...EXAMPLE_BENCH_RUN_RECORD, branch: ' ' }],
+    ['a negative wall-clock time', { ...EXAMPLE_BENCH_RUN_RECORD, wallClockMs: -1 }],
   ])('refuses the canonical record with %s', (_, record) => {
     expect(parseBenchRunRecord(JSON.stringify(record)).ok).toBe(false);
+  });
+
+  it.each([
+    ['text that is not JSON', '{ "schema_version": 1, '],
+    ['a JSON array', JSON.stringify([EXAMPLE_BENCH_RUN_RECORD])],
+  ])('refuses %s', (_, text) => {
+    expect(parseBenchRunRecord(text).ok).toBe(false);
+  });
+
+  it('reads a wall-clock time of 0', () => {
+    const record = { ...EXAMPLE_BENCH_RUN_RECORD, wallClockMs: 0 };
+
+    expect(parseBenchRunRecord(JSON.stringify(record))).toEqual({ ok: true, record });
   });
 });
