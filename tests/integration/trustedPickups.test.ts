@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createTrustedPickups } from '../../src/main/trustedPickups';
+import { createTrustedPickups, runPickupRel } from '../../src/main/trustedPickups';
 import { clearAppLoopBootstrap, writeAppLoopBootstrap, writeAppLoopBootstrapIntent } from '../../src/main/appLoopState';
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
 import { inProgressRunIdentity, type RunIdentity } from '../../src/main/gateRunState';
@@ -189,12 +189,38 @@ describe('the persisted record fails closed', () => {
     }
   });
 
-  it('a set after a delete is trusted again', () => {
+  it('a set after a delete is trusted again, from its saved file as well as from memory', () => {
     const app = relaunch();
     app.set(repo, PICKUP);
     app.delete(repo);
     app.set(repo, { ...PICKUP, pr: 240 });
+    current = { ...RUN, startedAt: RUN.startedAt + 1 };
+    expect(app.get(repo)).toBeUndefined();
+    current = RUN;
     expect(app.get(repo)).toEqual({ ...PICKUP, pr: 240 });
+  });
+
+  it('forgetting only if the file can be removed forgets it when it can', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    expect(app.forgetIfRemovable(repo)).toBe(true);
+    expect(existsSync(file())).toBe(false);
+    expect(app.get(repo)).toBeUndefined();
+  });
+
+  it('forgetting only if the file can be removed changes nothing when it cannot, and reports nothing', () => {
+    const app = relaunch();
+    app.set(repo, PICKUP);
+    rmSync(file());
+    mkdirSync(join(file(), 'in-the-way'), { recursive: true });
+    expect(app.forgetIfRemovable(repo)).toBe(false);
+    expect(forgetFailures).toEqual([]);
+    expect(app.get(repo)).toEqual(PICKUP);
+  });
+
+  it('names its file by the path it is saved at', () => {
+    relaunch().set(repo, PICKUP);
+    expect(existsSync(join(repo, runPickupRel()))).toBe(true);
   });
 
   it('a pickup this app trusted is not trusted once a different run is in progress', () => {

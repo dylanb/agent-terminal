@@ -132,7 +132,7 @@ import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
-import { createTrustedPickups } from './trustedPickups';
+import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
@@ -694,14 +694,13 @@ async function createWindow(): Promise<void> {
     },
     forgetFailed: (repoDir, reason) => {
       audit.recordCommand(repoDir, 'pickup', `§27 a forgotten run pickup could not be removed: ${reason}`, 1);
-      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove .agent-terminal/loop/run-pickup.yaml.` });
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove ${runPickupRel()}.` });
     },
   });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
-  // §27.13 v2.211 — Start and Restart (beginRunHere) mark a run begun here. Terminate and a §18.7.3 rebind forget the
-  // pickup through forgetRunEntry and never mark it: a run rebound after a relaunch must still be held.
+  // §27.13 v2.211
   const runsBegunHere = new Set<string>();
   const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
     const run = inProgressRunIdentity(repoKey);
@@ -1400,7 +1399,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         // §27.13 — a Restart keeps the run's identity, so a saved pickup it cannot forget would be trusted again. Only a
         // done run restarts (flow.restart); any other Restart is refused there and must not cost the run its pickup.
-        if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.delete(m.repoKey)) {
+        if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.forgetIfRemovable(m.repoKey)) {
           return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP });
         }
         return beginRunHere(m.repoKey, () => recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)));

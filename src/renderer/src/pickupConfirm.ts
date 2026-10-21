@@ -139,8 +139,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
     }, opener);
   };
 
-  /** Empties the host when no run is held, handing focus to `onFocusLost` if it was on the line (UI §4.5). */
-  // Built once so a dialog opened from it can return focus to it across refreshes (WCAG 2.4.3).
+  // WCAG 2.4.3
   let shown: { repoKey: string; held: Proposed } | null = null;
   const reopen = doc.createElement('button');
   reopen.className = 'pill';
@@ -150,6 +149,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
     if (shown !== null) openDialog(shown.repoKey, shown.held, reopen);
   });
 
+  /** Empties the host when no run is held, handing focus to `onFocusLost` if it was on the line (UI §4.5). */
   const render = (...[repoKey, view]: FlowViewArgs): void => {
     const focusWasHere = host.contains(doc.activeElement);
     const restoreFocus = captureSubtreeFocus(host);

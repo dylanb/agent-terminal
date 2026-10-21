@@ -21,6 +21,7 @@ function githubState(
     branch: 'plan-loop/issue-78',
     state: 'OPEN',
     closingIssues: [78],
+    crossRepository: false,
   },
 ): { state: GitHubState; github: AppGateGitHubOperations } {
   const state: GitHubState = {
@@ -123,6 +124,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       branch: 'tampered',
       state: 'CLOSED',
       closingIssues: [],
+      crossRepository: false,
     });
     const bodyFile =
       '/repo/.agent-terminal/loop/artifacts/groomed-ticket.md';
@@ -236,12 +238,26 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     );
   });
 
+  it('refuses a bootstrap PR opened from a fork before mutation', async () => {
+    const g = githubState({ number: 42, branch: 'plan-loop/issue-78', state: 'OPEN', closingIssues: [78], crossRepository: true });
+    await expect(
+      createAppGateGitHub(g.github)('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: { pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
+      }),
+    ).rejects.toThrow(/pull request #42 is from another repository/);
+    expect(g.state.ready).toEqual(new Set());
+  });
+
   it('refuses a tampered persisted bootstrap identity before mutation', async () => {
     const g = githubState({
       number: 42,
       branch: 'other/branch',
       state: 'OPEN',
       closingIssues: [999],
+      crossRepository: false,
     });
     await expect(
       createAppGateGitHub(g.github)('mark-ready', {

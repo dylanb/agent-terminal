@@ -6,6 +6,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { APP_LOOP_STATE_SCHEMA, isNonBlank, isPositiveInt, loopAreaFile, type AppLoopBootstrap } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { isRecord } from './yamlRecord';
 import { errMsg } from './errno';
@@ -17,6 +18,12 @@ export interface TrustedPickups {
   set(repoDir: string, pickup: AppLoopBootstrap): void;
   /** Whether the saved file is gone; this app trusts the forgotten run's pickup no more either way. */
   delete(repoDir: string): boolean;
+  /** Forget the pickup only once its saved file is gone; when it cannot be removed, nothing changes. */
+  forgetIfRemovable(repoDir: string): boolean;
+}
+
+export function runPickupRel(): string {
+  return [...APP_LOOP_DIR_SEGMENTS, RUN_PICKUP_FILE].join('/');
 }
 
 export interface TrustedPickupsDeps {
@@ -26,9 +33,10 @@ export interface TrustedPickupsDeps {
 }
 
 export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
-  /** A pickup trusted while no run identity was readable stays trusted by this app alone. */
   const loaded = new Map<string, { run: RunIdentity | null; pickup: AppLoopBootstrap }>();
   const forgotten = new Map<string, RunIdentity>();
+  const forgottenRun = (repoDir: string): RunIdentity | null =>
+    loaded.get(repoDir)?.run ?? readRunPickup(repoDir)?.run ?? deps.currentRun(repoDir);
   return {
     get(repoDir) {
       const run = deps.currentRun(repoDir);
@@ -57,19 +65,31 @@ export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
       }
     },
     delete(repoDir) {
-      const run = loaded.get(repoDir)?.run ?? readRunPickup(repoDir)?.run ?? deps.currentRun(repoDir);
+      const run = forgottenRun(repoDir);
       loaded.delete(repoDir);
       if (run !== null) forgotten.set(repoDir, run);
-      try {
-        const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
-        if (file !== null) rmSync(file, { force: true });
-        return true;
-      } catch (e) {
-        deps.forgetFailed(repoDir, errMsg(e));
-        return false;
-      }
+      const removed = remove(repoDir);
+      if (!removed.ok) deps.forgetFailed(repoDir, removed.reason);
+      return removed.ok;
+    },
+    forgetIfRemovable(repoDir) {
+      const run = forgottenRun(repoDir);
+      if (!remove(repoDir).ok) return false;
+      loaded.delete(repoDir);
+      if (run !== null) forgotten.set(repoDir, run);
+      return true;
     },
   };
+}
+
+function remove(repoDir: string): { ok: true } | { ok: false; reason: string } {
+  try {
+    const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
+    if (file !== null) rmSync(file, { force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: errMsg(e) };
+  }
 }
 
 function writeRunPickup(repoDir: string, run: RunIdentity, pickup: AppLoopBootstrap): void {

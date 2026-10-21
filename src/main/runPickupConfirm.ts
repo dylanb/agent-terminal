@@ -4,6 +4,7 @@
 import { errMsg } from './errno';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { pickupMismatch, type PullRequestLookup } from './pullRequestLookup';
+import { runPickupRel } from './trustedPickups';
 import type { AppLoopBootstrap, PickupRecord } from './appLoopState';
 import type { ConfirmRunPickupResult, PickupConfirmView } from '../shared/ipc';
 
@@ -22,8 +23,7 @@ export function reachedPickupStep<S, C>(steps: readonly S[], position: number, c
   return null;
 }
 
-export const RESTART_KEEPS_PICKUP =
-  'Not restarted: the run’s saved pull request could not be removed, and the restarted run would trust it again. Remove .agent-terminal/loop/run-pickup.yaml and Restart, or Terminate and Start.';
+export const RESTART_KEEPS_PICKUP = `Not restarted: the run’s saved pull request could not be removed, and the restarted run would trust it again. Remove ${runPickupRel()} and Restart, or Terminate and Start.`;
 
 export interface PickupHoldFacts {
   run: RunIdentity | null;

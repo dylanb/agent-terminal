@@ -15,7 +15,7 @@ import type { RunIdentity } from '../../src/main/gateRunState';
 // the app worked out from the branch, GitHub and the flow's ticket input.
 
 const BRANCH = 'plan-loop/issue-218';
-const open233: PullRequest = { number: 233, branch: BRANCH, state: 'OPEN', closingIssues: [218] };
+const open233: PullRequest = { number: 233, branch: BRANCH, state: 'OPEN', closingIssues: [218], crossRepository: false };
 
 function lookup(prs: PullRequest[], opts: { failList?: string; failView?: string } = {}): PullRequestLookup {
   return {
@@ -103,6 +103,7 @@ describe('verifying what the operator confirms', () => {
     ['a PR on another branch', [{ ...open233, branch: 'other' }], { pr: 233, ticket: 218 }, /other/],
     ['a PR that does not close the ticket', [open233], { pr: 233, ticket: 300 }, /#300/],
     ['a PR GitHub does not know', [open233], { pr: 999, ticket: 218 }, /#999/],
+    ['a PR from a fork', [{ ...open233, crossRepository: true }], { pr: 233, ticket: 218 }, /another repository/],
   ])('refuses %s, saying why', async (_name, prs, picked, reason) => {
     expect(await verifyRunPickup(lookup(prs), { branch: BRANCH, ...picked })).toMatch(reason);
   });

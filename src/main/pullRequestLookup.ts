@@ -11,6 +11,7 @@ export interface PullRequest {
   branch: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   closingIssues: number[];
+  crossRepository: boolean;
 }
 
 export interface PullRequestLookup {
@@ -22,6 +23,7 @@ export interface PullRequestLookup {
 /** §27.10 — why `pr` is not the pull request a run's pickup opened, or null when it is. */
 export function pickupMismatch(pr: PullRequest, pickup: { pr: number; branch: string; issue: number }): string | null {
   if (pr.number !== pickup.pr) return `GitHub answered for #${pr.number}, not #${pickup.pr}`;
+  if (pr.crossRepository) return `pull request #${pr.number} is from another repository`;
   if (pr.state !== 'OPEN') return `pull request #${pr.number} is not open (${pr.state.toLowerCase()})`;
   if (pr.branch !== pickup.branch) return `pull request #${pr.number} is on ${pr.branch}, not ${pickup.branch}`;
   if (!pr.closingIssues.includes(pickup.issue)) return `pull request #${pr.number} does not close ticket #${pickup.issue}`;
@@ -35,7 +37,7 @@ export function createRealPullRequestLookup(repoDir: string): PullRequestLookup 
       const identity = await repositorySource.resolve();
       const viewed = await runAppCommand(
         'gh',
-        ['pr', 'view', String(number), '--repo', identity.selector, '--json', 'number,url,headRefName,state,closingIssuesReferences'],
+        ['pr', 'view', String(number), '--repo', identity.selector, '--json', 'number,url,headRefName,state,closingIssuesReferences,isCrossRepository'],
         repoDir,
       );
       return parsePullRequest(parseJson(viewed, 'invalid GitHub pull request identity'), number, identity);
@@ -80,7 +82,8 @@ function parsePullRequest(value: unknown, expectedNumber: number, repository: Gi
     !matchesGitHubRepositoryUrl(value.url, repository, 'pull', expectedNumber) ||
     typeof value.headRefName !== 'string' ||
     (value.state !== 'OPEN' && value.state !== 'CLOSED' && value.state !== 'MERGED') ||
-    !Array.isArray(value.closingIssuesReferences)
+    !Array.isArray(value.closingIssuesReferences) ||
+    typeof value.isCrossRepository !== 'boolean'
   ) {
     throw new Error('invalid GitHub pull request identity');
   }
@@ -96,5 +99,5 @@ function parsePullRequest(value: unknown, expectedNumber: number, repository: Gi
     }
     return entry.number as number;
   });
-  return { number: expectedNumber, branch: value.headRefName, state: value.state, closingIssues };
+  return { number: expectedNumber, branch: value.headRefName, state: value.state, closingIssues, crossRepository: value.isCrossRepository };
 }
