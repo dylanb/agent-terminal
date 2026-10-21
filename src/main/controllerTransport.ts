@@ -10,13 +10,15 @@ import { isErrno } from './errno';
 
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
-export async function startControllerTransport(appHome: string): Promise<{
+export interface ControllerRegistry {
   terminals(): ControllerTerminal[];
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
   dismiss(id: string): void;
   dispose(): Promise<void>;
-}> {
+}
+
+export async function startControllerTransport(appHome: string): Promise<ControllerRegistry> {
   const endpoint = resolveControllerEndpoint(appHome);
   const directory = dirname(endpoint);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -29,7 +31,7 @@ export async function startControllerTransport(appHome: string): Promise<{
   const sockets = new Set<Socket>();
   const registrations = new Map<Socket, ControllerTerminal>();
   const retained = new Map<string, ControllerTerminal>();
-  const snapshot = () => [...retained.values(), ...registrations.values()];
+  const snapshot = () => [...retained.values(), ...registrations.values()].map(terminal => ({ ...terminal }));
   const pending = new Map<string, { socket: Socket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
   const notify = () => { for (const listener of listeners) listener(snapshot()); };

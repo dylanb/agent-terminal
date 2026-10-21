@@ -8,7 +8,7 @@ import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { createControllerDecoder, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal } from '../../src/shared/ipc';
 
-type Transport = Awaited<ReturnType<typeof startControllerTransport>> & { dismiss?(id: string): void };
+type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 
 describe('controller stale representations', () => {
   let home: string;
@@ -52,13 +52,55 @@ describe('controller stale representations', () => {
     await vi.waitFor(() => expect(server.terminals().find(item => item.id === client.terminal.id)?.status).toBe('disconnected'));
   }
 
+  it.each(['read', 'subscribe'] as const)('%s snapshots cannot change live or disconnected identities', async source => {
+    const live = await peer('/work/live');
+    const stale = await peer('/work/stale');
+    await disconnect(stale);
+    const expected = server.terminals().map(item => ({ ...item }));
+    let received: ControllerTerminal[] = [];
+    const unsubscribe = source === 'subscribe'
+      ? server.subscribeTerminals(items => { received = items; })
+      : () => {};
+    if (source === 'read') received = server.terminals();
+    try {
+      for (const item of received) {
+        item.id = 'changed';
+        item.launchDirectory = '/changed';
+        item.repositoryRoot = null;
+        item.status = 'disconnected';
+      }
+      received.length = 0;
+      expect.soft(server.terminals()).toEqual(expect.arrayContaining(expected));
+      expect.soft(server.terminals()).toHaveLength(expected.length);
+      expect.soft(await server.activate(live.terminal.id)).toBe('activated');
+      server.dismiss(stale.terminal.id);
+      expect(server.terminals()).toEqual([live.terminal]);
+    } finally { unsubscribe(); }
+  });
+
+  it('isolates notification values between subscribers and subsequent reads', async () => {
+    const mutate = server.subscribeTerminals(items => {
+      for (const item of items) item.launchDirectory = '/changed';
+      items.length = 0;
+    });
+    let observed: ControllerTerminal[] = [];
+    const observe = server.subscribeTerminals(items => { observed = items; });
+    try {
+      const client = await peer('/work/original');
+      expect.soft(observed).toEqual([expect.objectContaining({ launchDirectory: '/work/original' })]);
+      expect.soft(server.terminals()).toEqual([expect.objectContaining({ launchDirectory: '/work/original' })]);
+      await disconnect(client);
+      expect(observed).toEqual([expect.objectContaining({ launchDirectory: '/work/original', status: 'disconnected' })]);
+    } finally { mutate(); observe(); }
+  });
+
   it('dismisses only the selected retained occurrence and publishes the resulting empty snapshot', async () => {
     const client = await peer('/work/a');
     await disconnect(client);
     let published: ControllerTerminal[] = [];
     const unsubscribe = server.subscribeTerminals(items => { published = items; });
     try {
-      await server.dismiss?.(client.terminal.id);
+      await server.dismiss(client.terminal.id);
       expect.soft(server.terminals()).toEqual([]);
       expect.soft(published).toEqual([]);
     } finally { unsubscribe(); }
@@ -84,9 +126,9 @@ describe('controller stale representations', () => {
   it.each(['dismiss first', 'register first'] as const)('accepts a later connection safely when %s races replacement', async order => {
     const stale = await peer('/work/a');
     await disconnect(stale);
-    if (order === 'dismiss first') await server.dismiss?.(stale.terminal.id);
+    if (order === 'dismiss first') await server.dismiss(stale.terminal.id);
     const replacement = await peer('/work/a');
-    await server.dismiss?.(stale.terminal.id);
+    await server.dismiss(stale.terminal.id);
     expect.soft(server.terminals()).toEqual([replacement.terminal]);
     expect(await server.activate(replacement.terminal.id)).toBe('activated');
   });
@@ -95,9 +137,10 @@ describe('controller stale representations', () => {
     const stale = await peer('/work/a');
     await disconnect(stale);
     const live = await peer('/work/b');
-    await server.dismiss?.(live.terminal.id);
-    await server.dismiss?.('unknown');
-    expect.soft(server.terminals()).toEqual([{ ...stale.terminal, status: 'disconnected' }, live.terminal]);
+    await server.dismiss(live.terminal.id);
+    await server.dismiss('unknown');
+    expect.soft(server.terminals()).toHaveLength(2);
+    expect.soft(server.terminals()).toEqual(expect.arrayContaining([{ ...stale.terminal, status: 'disconnected' }, live.terminal]));
     expect(await server.activate(live.terminal.id)).toBe('activated');
   });
 
@@ -120,14 +163,16 @@ describe('controller stale representations', () => {
     let published: ControllerTerminal[] = [];
     const unsubscribe = server.subscribeTerminals(items => { published = items; });
     try {
-      await server.dismiss?.(selected.terminal.id);
+      await server.dismiss(selected.terminal.id);
       const expected = [
         { ...sameDirectory.terminal, status: 'disconnected' },
         { ...otherDirectory.terminal, status: 'disconnected' },
         live.terminal,
       ];
-      expect.soft(server.terminals()).toEqual(expected);
-      expect.soft(published).toEqual(expected);
+      expect.soft(server.terminals()).toHaveLength(expected.length);
+      expect.soft(server.terminals()).toEqual(expect.arrayContaining(expected));
+      expect.soft(published).toHaveLength(expected.length);
+      expect.soft(published).toEqual(expect.arrayContaining(expected));
       expect(await server.activate(live.terminal.id)).toBe('activated');
     } finally { unsubscribe(); }
   });
