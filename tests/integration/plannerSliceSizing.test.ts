@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
-import { bundledPath } from '../helpers/bundledLoops';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { BUNDLED_LOOPS_ROOT, bundledPath } from '../helpers/bundledLoops';
 
 // Slice sizing is planning-agent-only guidance: the planner's briefs carry it, no reviewer charter grades it,
 // and the slicing reviewer is told it is not a finding — so a plan that merges small slices is not re-litigated.
@@ -61,5 +62,31 @@ describe('planner splits impl-slices at every RED/GREEN dependency', () => {
   for (const f of SLICING_REVIEWERS) {
     it(`${f} grades a slice that hides a dependent increment as a finding`, () =>
       expect(read(f)).toContain(SPLIT_FINDING_MARKER));
+  }
+});
+
+// A plan approved with a dependent increment still inside one impl-slice is caught by the RED step that cannot
+// reach a check: it splits that slice in the plan itself rather than stopping, and the RED gate re-sources the
+// count (§28.4.1), so the extra slice runs.
+describe('the RED step splits its own slice at a dependency the plan missed', () => {
+  const RED_BRIEFS = readdirSync(BUNDLED_LOOPS_ROOT)
+    .map((flow) => join(BUNDLED_LOOPS_ROOT, flow, 'red-loop', 'prompts', 'brief.md'))
+    .filter((f) => existsSync(f));
+  const SPLIT_IN_RED_MARKER = 'split this slice in the plan';
+  const EARLIER_SLICES_UNTOUCHED_MARKER = 'Never renumber or edit an impl-slice before this one';
+  const NO_AC_LOST_MARKER = 'every acceptance criterion of the slice lands in exactly one of the new entries';
+  const LATER_TESTS_OUT_MARKER = 'tests that belong to a later entry leave this change';
+
+  it('covers every bundled red-loop brief', () => expect(RED_BRIEFS.length).toBeGreaterThanOrEqual(2));
+
+  for (const f of RED_BRIEFS) {
+    const rel = f.slice(BUNDLED_LOOPS_ROOT.length + 1);
+    it(`${rel} tells the RED worker to split the slice instead of stopping`, () => {
+      const brief = readFileSync(f, 'utf8').replace(/\s+/g, ' ');
+      expect(brief).toContain(SPLIT_IN_RED_MARKER);
+      expect(brief).toContain(EARLIER_SLICES_UNTOUCHED_MARKER);
+      expect(brief).toContain(NO_AC_LOST_MARKER);
+      expect(brief).toContain(LATER_TESTS_OUT_MARKER);
+    });
   }
 });

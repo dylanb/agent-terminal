@@ -1,6 +1,6 @@
 // §28.4.1 — the impl-slice grammar: the plan-bundle's slice-plan enumerates the RED/GREEN impl-slices of ONE
-// ticket, and each planning approve gate (plan-bundle, then plan-polish) sources their COUNT into the `slices`
-// flow input the refactor step's loop-back reads (§28.4.1). An impl-slice is a RED/GREEN unit inside one
+// ticket, and each approve gate that declares the plan output (the planning gates, and RED, which may split its
+// own slice, §28.5.3) sources their COUNT into the `slices` flow input the refactor step's loop-back reads. An impl-slice is a RED/GREEN unit inside one
 // ticket's slice-plan (§28.2 P2a) — DISTINCT from an epic-slice (a sub-ticket, §28.7). CLAUDE.md
 // composed-prompt-is-a-writer: writers (the plan-bundle recipe, and the plan-polish recipe that must keep its
 // tokens) and readers (the gate-time derivation, the tests) share this one definition, so a token change moves
@@ -90,15 +90,6 @@ export function slicePlanWellFormed(planText: string): boolean {
   );
 }
 
-/** The impl-slice count each planning approve gate sources into the `slices` input (§28.4.1). A well-formed
- *  slice-plan yields its entry count; an absent or malformed block yields 1 — a single-slice run as before, so a
- *  plan that never authored the block (or authored it wrongly) never drives a half-working multi-slice chain
- *  (the flow additionally clamps to [1, MAX_SLICES], CWE-770). The integration slice runs once AFTER the loop
- *  as its own flow step and is deliberately NOT part of this count. */
-export function implSliceCount(planText: string): number {
-  return slicePlanWellFormed(planText) ? parseSlicePlan(planText).implSlices.length : 1;
-}
-
 /** The one canonical example the predicate test, the fake-agent output, and the recipe few-shot all reference,
  *  so they cannot drift (§93). Asserted `slicePlanWellFormed` by its test. */
 export function exampleSlicePlan(n = 2): string {
@@ -113,4 +104,14 @@ export function exampleSlicePlan(n = 2): string {
     );
   }
   return lines.join('\n');
+}
+
+/** The count an approve gate sources into `slices` (§28.4.1), or null to leave the count already sourced — or the
+ *  flow's single-slice default — standing: a plan whose block is absent or malformed, or that has fewer slices than
+ *  the one the run is on, cannot carry the run. The integration slice runs once AFTER the loop as its own flow step
+ *  and is deliberately NOT part of this count. */
+export function sliceCountToSource(planText: string, currentSlice: number): number | null {
+  if (!slicePlanWellFormed(planText)) return null;
+  const count = parseSlicePlan(planText).implSlices.length;
+  return count >= currentSlice ? count : null;
 }
