@@ -35,6 +35,25 @@ describe('controller panes', () => {
     } finally { component.dispose(); }
   });
 
+  it.each(['aside', 'main'])('retains an accessible disconnected identity and unavailable action in %s', async tag => {
+    const host = document.createElement(tag);
+    document.body.append(host);
+    const s = service();
+    const component = createControllerPanes(host, { controller: s.api });
+    try {
+      const disconnected = { ...terminal, status: 'disconnected' as const };
+      s.publish([disconnected]);
+      expect.soft(host.textContent).toContain(terminal.launchDirectory);
+      expect.soft(host.textContent).toContain(terminal.repositoryRoot);
+      expect.soft(host.textContent).toMatch(/disconnected/i);
+      expect.soft(host.textContent).not.toMatch(/no terminals connected/i);
+      const activation = [...host.querySelectorAll('button')].find(button => button.textContent?.includes(terminal.launchDirectory));
+      activation?.click();
+      await Promise.resolve();
+      expect.soft(s.activated).toEqual([]);
+    } finally { component.dispose(); }
+  });
+
   it('renders a non-Git launch as directory data', () => {
     const host = document.createElement('section');
     const directory = '/tmp/<img src=x onerror=alert(1)>';
@@ -75,7 +94,7 @@ describe('controller panes', () => {
     } finally { component.dispose(); }
   });
 
-  it('explains the empty state after the last connection ends', () => {
+  it('explains the empty state when no terminal has registered', () => {
     const host = document.createElement('section');
     const s = service();
     const component = createControllerPanes(host, { controller: s.api });
@@ -86,16 +105,20 @@ describe('controller panes', () => {
     } finally { component.dispose(); }
   });
 
-  it('keeps keyboard focus reachable after its focused pane disconnects', () => {
+  it.each([true, false])('keeps a usable focus target when the focused pane disconnects (live peer: %s)', livePeer => {
     const host = document.createElement('section');
     document.body.append(host);
     const survivor = { ...terminal, id: 'survivor', launchDirectory: '/right/project' };
-    const s = service([terminal, survivor]);
+    const s = service(livePeer ? [terminal, survivor] : [terminal]);
     const component = createControllerPanes(host, { controller: s.api });
     try {
       host.querySelector('button')!.focus();
-      s.publish([survivor]);
-      expect(host.contains(document.activeElement)).toBe(true);
+      const disconnected = { ...terminal, status: 'disconnected' as const };
+      s.publish(livePeer ? [disconnected, survivor] : [disconnected]);
+      const focused = document.activeElement as HTMLElement;
+      expect.soft(host.contains(focused)).toBe(true);
+      expect.soft(focused.matches(':disabled, [aria-disabled="true"]')).toBe(false);
+      expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(livePeer ? /disconnected|dismiss|\/right\/project/i : /disconnected|dismiss/i);
     } finally { component.dispose(); }
   });
 

@@ -169,7 +169,7 @@ test('terminals continue real PTY work after the controller explicitly quits', {
   } finally { await h.dispose(); }
 });
 
-test('controller removes only the disconnected terminal and explains the final empty state', { tag: '@ownapp' }, async () => {
+test('controller retains disconnected identities while another terminal remains activatable', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
@@ -177,7 +177,8 @@ test('controller removes only the disconnected terminal and explains the final e
       h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory)));
     await expect.soft(controller.page.getByRole('button')).toHaveCount(2);
     await terminals[0].app.close();
-    await expect.soft(controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false })).toHaveCount(0);
+    await expect.soft(controller.page.locator('body')).toContainText(h.fixture.repositories[0]);
+    await expect.soft(controller.page.locator('body')).toContainText(/disconnected/i);
     await expect.soft(controller.page.getByRole('button', { name: h.fixture.repositories[1], exact: false })).toHaveCount(1);
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
@@ -188,9 +189,8 @@ test('controller removes only the disconnected terminal and explains the final e
     await terminals[1].page.keyboard.press('Enter');
     await expect(terminals[1].page.locator('.xterm-rows')).toContainText('SURVIVOR_ALIVE');
     await terminals[1].app.close();
-    await expect.soft(controller.page.getByRole('button')).toHaveCount(0);
-    await expect.soft(controller.page.locator('body')).toContainText(/no terminals (?:are )?connected/i);
-    await expect.soft(controller.page.locator('body')).toContainText(/launch.*terminal.*controller.*running/i);
+    await expect.soft(controller.page.locator('body')).toContainText(h.fixture.repositories[1]);
+    await expect.soft(controller.page.locator('body')).not.toContainText(/no terminals (?:are )?connected/i);
   } finally { await h.dispose(); }
 });
 

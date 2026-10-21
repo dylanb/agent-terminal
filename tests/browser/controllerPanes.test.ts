@@ -33,17 +33,37 @@ afterEach(() => {
 });
 
 describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
-  function mount() {
+  function mount(items: ControllerTerminal[] = terminals) {
     document.documentElement.setAttribute('data-theme', theme);
     const host = document.createElement('main');
     document.body.append(host);
     const activated: string[] = [];
     const controller: ControllerApi = {
-      subscribeTerminals(listener) { listener(terminals); return () => {}; },
+      subscribeTerminals(listener) { listener(items); return () => {}; },
       async activateTerminal(id) { activated.push(id); return 'activated'; },
     };
     return { host, activated, component: createControllerPanes(host, { controller }) };
   }
+
+  it.each([320, 900])('paints a readable error state distinct from a live pane in a %ipx host', width => {
+    const disconnected = { ...terminals[0], status: 'disconnected' as const };
+    const { host, component } = mount([disconnected, terminals[1]]);
+    host.style.width = `${width}px`;
+    try {
+      const labels = [...host.querySelectorAll<HTMLElement>('*')].filter(element =>
+        element.childElementCount === 0 && element.textContent?.includes(disconnected.launchDirectory));
+      const label = labels[0] ?? host;
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--danger)';
+      host.append(probe);
+      expect.soft(getComputedStyle(label).color).toBe(getComputedStyle(probe).color);
+      expect.soft(host.textContent).toMatch(/disconnected/i);
+      const behind = background(label);
+      expect.soft(contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind)).toBeGreaterThanOrEqual(4.5);
+      expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
+      probe.remove();
+    } finally { component.dispose(); }
+  });
 
   it('reflows the activation controls as the host narrows', () => {
     const { host, component } = mount();
