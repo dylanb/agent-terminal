@@ -9,6 +9,7 @@ import { capturedSetup, V3_FLOW_FILE } from '../helpers/benchRunSetup';
 import type { BenchDeps } from '../../src/main/benchMain';
 import { benchMain } from '../../src/main/benchMain';
 import { BENCH_FIXTURE_MANIFEST } from '../../src/shared/benchFixture';
+import { BENCH_RUN_RECORD_FILE, parseBenchRunRecord } from '../../src/shared/benchRunRecord';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 
@@ -312,5 +313,19 @@ describe('bench run through the entry', () => {
       appHome: [],
       output: expect.any(String),
     });
+  });
+
+  it('leaves in the printed run folder a run record its reader reads, naming the fixture by the absolute path its relative argument resolved to', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'red..refactor', '--fixture', relative(s.repo, s.fixture), '--runs', '1'];
+
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, deps());
+
+    const [folder] = output.split('\n').filter((l) => l.length > 0);
+    const file = join(folder ?? '', BENCH_RUN_RECORD_FILE);
+    const read = existsSync(file) ? parseBenchRunRecord(readFileSync(file, 'utf8')) : null;
+    expect({ exitCode, fixture: read?.ok ? read.record.fixture : null }).toEqual({ exitCode: 0, fixture: s.fixture });
   });
 });

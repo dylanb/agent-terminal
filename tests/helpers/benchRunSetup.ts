@@ -37,8 +37,10 @@ export interface BenchRunSetup {
 }
 
 /** An invoking repository and a fixture captured from it with the real capture. */
-export async function capturedSetup(b: BenchFixtureBuilder, roots: BenchRoots, prefix = 'bench-run'): Promise<BenchRunSetup> {
-  const { dir, commit } = b.makeRepository(prefix);
+export async function capturedSetup(b: BenchFixtureBuilder, roots: BenchRoots, prefix = 'bench-run', commitBeforeCapture?: (dir: string) => void): Promise<BenchRunSetup> {
+  const { dir } = b.makeRepository(prefix);
+  commitBeforeCapture?.(dir);
+  const commit = b.git(dir, ['rev-parse', 'HEAD']);
   b.seedFlow(dir, 'feature-dev-v3', V3_FLOW);
   createFlowStateStore(dir).write({ step: 'red', status: 'not_started', inputs: { ticket: '180', ...FIXTURE_INPUTS }, repeatCounts: FIXTURE_REPEAT_COUNTS });
   b.writeArtifacts(dir, FIXTURE_ARTIFACTS);

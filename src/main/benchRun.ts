@@ -12,6 +12,8 @@ import { errMsg, isErrno } from './errno';
 import type { BenchSpan } from '../shared/benchLaunch';
 
 export type { BenchFlowRef } from './benchRefusals';
+export { flowDefinitionRevision, promptRevision } from './benchRevision';
+export type { BenchRunRecord } from '../shared/benchRunRecord';
 
 export interface BenchClock {
   now(): number;

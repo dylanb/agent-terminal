@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
-import { createFakeBenchGithub, FAKE_BENCH_REPOSITORY, FAKE_LABEL_FAILURE } from '../helpers/benchFakeGithub';
+import { createFakeBenchGithub, FAKE_BENCH_REPOSITORY, FAKE_FIRST_COPY, FAKE_LABEL_FAILURE } from '../helpers/benchFakeGithub';
 import { createFakeBenchClock, createFakeLauncher } from '../helpers/benchFakeLauncher';
 import {
   capturedSetup,
@@ -20,10 +20,18 @@ import {
   type PreparedState,
 } from '../helpers/benchRunSetup';
 import { runBench, type BenchFlowRef, type BenchRunResult } from '../../src/main/benchRun';
+import { flowDefinitionRevision, promptRevision } from '../../src/main/benchRevision';
+import { createAuditRecorder } from '../../src/main/auditRecorder';
+import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
+import { baselineForBranch, readBaselineCommit } from '../../src/main/appLoopState';
+import { currentGitBranch } from '../../src/main/gitBranch';
+import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
+import { BENCH_RUN_AUDIT_DIR, BENCH_RUN_RECORD_FILE, BENCH_RUN_RECORD_SCHEMA, parseBenchRunRecord, type BenchRunRecord } from '../../src/shared/benchRunRecord';
 import { benchRootDir } from '../../src/main/benchPrepare';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createFlowStateStore } from '../../src/main/flowState';
-import { catalogEntryDefFile, FLOWS_CATALOG_SUBDIR } from '../../src/main/flow';
+import { catalogEntryDefFile, FLOWS_CATALOG_SUBDIR, readUntrustedFlowDefinition } from '../../src/main/flow';
 import { FLOW_HOME_SUBDIR } from '../../src/main/flowHome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import { loadTodoTemplateFile, todoTemplateFile, todoTemplatesDir } from '../../src/main/todoTemplate';
@@ -517,5 +525,265 @@ describe('N runs', () => {
 
     await expect(run).rejects.toThrow();
     expect({ copies: copies(github.writes), launches: launcher.launches.length, home: entries() }).toEqual({ copies: [], launches: 0, home: before });
+  });
+});
+
+/** The run record in `runFolder` as its reader reads it; null when there is none. */
+function recordIn(runFolder: string): BenchRunRecord | { unparsable: string } | null {
+  const file = join(runFolder, BENCH_RUN_RECORD_FILE);
+  if (!existsSync(file)) return null;
+  const read = parseBenchRunRecord(readFileSync(file, 'utf8'));
+  return read.ok ? read.record : { unparsable: read.reason };
+}
+
+const recordedFlow = (runFolder: string | undefined): BenchRunRecord['flow'] | null => {
+  const record = runFolder === undefined ? null : recordIn(runFolder);
+  return record !== null && 'flow' in record ? record.flow : null;
+};
+
+const promptRevisionOf = (record: BenchRunRecord | { unparsable: string } | null): string | null => (record !== null && 'promptRevision' in record ? record.promptRevision : null);
+
+describe('the run record', () => {
+  it.each([
+    { script: 'left span', ending: 'left span' },
+    { script: 'completed', ending: 'completed' },
+    { script: 'terminated', ending: 'terminated' },
+    { script: 'window closed', ending: 'window closed' },
+    { script: undefined, ending: 'app exited' },
+    { script: 'unparsable', ending: 'app exited' },
+  ] as const)('names the ending $ending for a span-end file $script, and the flow, revisions, fixture, span, issues, branch and the app\'s own wall-clock time', async ({ script, ending }) => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const clock = createFakeBenchClock(['s1']);
+    // Preparation moves the clock too, by a different amount, so a time that counts it shows.
+    const github = createFakeBenchGithub({ onCopy: () => clock.advance(7_000) });
+    const launcher = createFakeLauncher({ clock, scripts: [{ ending: script, durationMs: 42_000 }] });
+
+    const result = await runBench(runRequest(s, roots, {}, { github, launcher, clock }));
+
+    const wf = launcher.launches[0]?.workingFolder ?? '';
+    const { load } = readUntrustedFlowDefinition(V3_FLOW_FILE);
+    if (!load.ok) throw new Error('setup: feature-dev-v3 does not load');
+    expect(result.runFolders.map(recordIn)).toEqual([
+      {
+        schema_version: BENCH_RUN_RECORD_SCHEMA,
+        flow: { id: 'feature-dev-v3', definitionRevision: flowDefinitionRevision(V3_FLOW) },
+        promptRevision: promptRevision({ definition: load.definition, span: { first: 'red', last: 'refactor' }, appBundle: roots.bundle, userConfigRoot: roots.configDir, repoDir: wf }),
+        fixture: s.fixture,
+        span: { first: 'red', last: 'refactor' },
+        fixtureIssue: { repository: FAKE_BENCH_REPOSITORY, number: 180 },
+        issueCopy: { number: 501 },
+        branch: b.git(wf, ['rev-parse', '--abbrev-ref', 'HEAD']),
+        ending,
+        wallClockMs: 42_000,
+      },
+    ]);
+  });
+
+  it("names the flow's id and one flow-definition revision whether the flow is named by catalog id or by the path it resolved to, and another revision for other bytes", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const edited = join(b.outsideDir('bench-flow-revision'), 'flow.yaml');
+    writeFileSync(edited, EDITED_V3_FLOW);
+    const forms: [string, BenchFlowRef][] = [
+      ['id', { kind: 'id', id: 'feature-dev-v3' }],
+      ['path', { kind: 'path', file: catalogEntryDefFile(s.repo, 'feature-dev-v3') }],
+      ['edited', { kind: 'path', file: edited }],
+    ];
+    const flows: Record<string, BenchRunRecord['flow'] | null> = {};
+    for (const [name, flow] of forms) {
+      const result = await runBench(runRequest(s, roots, { flow }, { clock: createFakeBenchClock([name]) }));
+      flows[name] = recordedFlow(result.runFolders[0]);
+    }
+
+    expect({ flows, distinctRevisions: new Set(Object.values(flows).map((f) => f?.definitionRevision)).size }).toEqual({
+      flows: {
+        id: { id: 'feature-dev-v3', definitionRevision: flowDefinitionRevision(V3_FLOW) },
+        path: { id: 'feature-dev-v3', definitionRevision: flowDefinitionRevision(V3_FLOW) },
+        edited: { id: 'feature-dev-v3', definitionRevision: flowDefinitionRevision(EDITED_V3_FLOW) },
+      },
+      distinctRevisions: 2,
+    });
+  });
+
+  it('gives two commands from one fixture equal prompt revisions with no edit between them and different ones after a charter edit, the flow-definition revision equal throughout', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const command = async (stamp: string): Promise<BenchRunRecord | { unparsable: string } | null> => {
+      const result = await runBench(runRequest(s, roots, {}, { clock: createFakeBenchClock([stamp]) }));
+      return result.runFolders[0] === undefined ? null : recordIn(result.runFolders[0]);
+    };
+    const first = await command('first');
+    const unedited = await command('unedited');
+    appendFileSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop', 'charter', 'tests.md'), '\n<!-- edited -->\n');
+    const edited = await command('edited');
+
+    const records = [first, unedited, edited];
+    expect({
+      recorded: records.map((r) => promptRevisionOf(r) !== null),
+      uneditedEqual: promptRevisionOf(unedited) === promptRevisionOf(first),
+      editedEqual: promptRevisionOf(edited) === promptRevisionOf(unedited),
+      definitionRevisions: new Set(records.map((r) => (r !== null && 'flow' in r ? r.flow.definitionRevision : null))).size,
+    }).toEqual({ recorded: [true, true, true], uneditedEqual: true, editedEqual: false, definitionRevisions: 1 });
+  });
+
+  it("follows the operator-tier copy of a span loop the app resolves: an edit to it between two commands changes the prompt revision, an edit to the shadowed shipped copy does not", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const shipped = join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop');
+    const operator = join(userConfigLoopsV2Dir(roots.configDir) ?? '', 'feature-dev-v3', 'red-loop');
+    mkdirSync(dirname(operator), { recursive: true });
+    cpSync(shipped, operator, { recursive: true });
+    const command = async (stamp: string): Promise<BenchRunRecord | { unparsable: string } | null> => {
+      const result = await runBench(runRequest(s, roots, {}, { clock: createFakeBenchClock([stamp]) }));
+      return result.runFolders[0] === undefined ? null : recordIn(result.runFolders[0]);
+    };
+    const first = await command('first');
+    appendFileSync(join(operator, 'charter', 'tests.md'), '\n<!-- edited -->\n');
+    const operatorEdited = await command('operator-edited');
+    appendFileSync(join(shipped, 'charter', 'tests.md'), '\n<!-- edited -->\n');
+    const shadowedEdited = await command('shadowed-edited');
+
+    const records = [first, operatorEdited, shadowedEdited];
+    expect({
+      recorded: records.map((r) => promptRevisionOf(r) !== null),
+      operatorEditCounts: promptRevisionOf(operatorEdited) !== promptRevisionOf(first),
+      shadowedEditIgnored: promptRevisionOf(shadowedEdited) === promptRevisionOf(operatorEdited),
+      definitionRevisions: new Set(records.map((r) => (r !== null && 'flow' in r ? r.flow.definitionRevision : null))).size,
+    }).toEqual({ recorded: [true, true, true], operatorEditCounts: true, shadowedEditIgnored: true, definitionRevisions: 1 });
+  });
+
+  it("resolves the repository tier in the run's working folder: an override of a span loop only in the invoking repository leaves the prompt revision equal", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const command = async (stamp: string): Promise<BenchRunRecord | { unparsable: string } | null> => {
+      const result = await runBench(runRequest(s, roots, {}, { clock: createFakeBenchClock([stamp]) }));
+      return result.runFolders[0] === undefined ? null : recordIn(result.runFolders[0]);
+    };
+    const first = await command('first');
+    const override = join(s.repo, 'loops', 'red-loop');
+    cpSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop'), override, { recursive: true });
+    appendFileSync(join(override, 'charter', 'tests.md'), '\n<!-- edited -->\n');
+    writeFileSync(join(s.repo, '.agent-loop.yaml'), 'loops:\n  red-loop: loops/red-loop/red-loop.yaml\n');
+    const invokingOverridden = await command('invoking-overridden');
+    appendFileSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop', 'charter', 'tests.md'), '\n<!-- edited -->\n');
+    const shippedEdited = await command('shipped-edited');
+
+    expect({
+      recorded: [first, invokingOverridden, shippedEdited].map((r) => promptRevisionOf(r) !== null),
+      invokingOverrideIgnored: promptRevisionOf(invokingOverridden) === promptRevisionOf(first),
+      shippedEditCounts: promptRevisionOf(shippedEdited) !== promptRevisionOf(invokingOverridden),
+    }).toEqual({ recorded: [true, true, true], invokingOverrideIgnored: true, shippedEditCounts: true });
+  });
+
+  it("resolves the repository tier in the run's working folder: an override of a span loop the fixture commit carries is the copy the prompt revision covers", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots, 'bench-run', (dir) => {
+      const override = join(dir, 'loops', 'red-loop');
+      cpSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop'), override, { recursive: true });
+      appendFileSync(join(override, 'charter', 'tests.md'), '\n<!-- edited -->\n');
+      writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  red-loop: loops/red-loop/red-loop.yaml\n');
+      b.git(dir, ['add', '-A']);
+      b.git(dir, ['commit', '-q', '-m', 'override red-loop']);
+    });
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { launcher }));
+
+    const wf = launcher.launches[0]?.workingFolder ?? '';
+    const { load } = readUntrustedFlowDefinition(V3_FLOW_FILE);
+    if (!load.ok) throw new Error('setup: feature-dev-v3 does not load');
+    const revisionIn = (repoDir: string): string =>
+      promptRevision({ definition: load.definition, span: { first: 'red', last: 'refactor' }, appBundle: roots.bundle, userConfigRoot: roots.configDir, repoDir });
+    const recorded = promptRevisionOf(result.runFolders[0] === undefined ? null : recordIn(result.runFolders[0]));
+    expect({
+      workingFolderCarriesOverride: existsSync(join(wf, '.agent-loop.yaml')),
+      recordedIsWorkingFolders: recorded === revisionIn(wf),
+      overrideCounts: revisionIn(wf) !== revisionIn(b.outsideDir('bench-run-no-repo-tier')),
+    }).toEqual({ workingFolderCarriesOverride: true, recordedIsWorkingFolders: true, overrideCounts: true });
+  });
+
+  it("writes run k's record after its app exits and before run k+1 is prepared", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const seen: string[] = [];
+    // Run k's folder holds its working folder, so the launch names it however the runner reports folders.
+    const recorded = (k: number): boolean => {
+      const launch = launcher.launches[k - 1];
+      if (launch === undefined) throw new Error(`run ${k} was not launched`);
+      return existsSync(join(dirname(launch.workingFolder), BENCH_RUN_RECORD_FILE));
+    };
+    const github = createFakeBenchGithub({
+      onCopy: () => {
+        // Run k+1's issue is copied after app k opened and before app k+1 does.
+        const k = launcher.launches.length;
+        if (k > 0) seen.push(`copy ${k + 1}: record ${k} ${recorded(k)}`);
+      },
+    });
+    const launcher = createFakeLauncher({ scripts: [{ holdMs: 50 }, { holdMs: 50 }], inspect: (_, k) => seen.push(`open ${k}: record ${k} ${recorded(k)}`) });
+
+    await runBench(runRequest(s, roots, { runs: '2' }, { github, launcher }));
+
+    expect({ seen, lastRecorded: recorded(2) }).toEqual({
+      seen: ['open 1: record 1 false', 'copy 2: record 1 true', 'open 2: record 2 false'],
+      lastRecorded: true,
+    });
+  });
+});
+
+describe("each run's own outputs", () => {
+  it('leaves in each of three run folders its own record and only its own audit log; a run whose span ended before Start has no audit log and still a record', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const auditRoot = auditRootDir(roots.appHome);
+    const recorder = createAuditRecorder({ root: auditRoot, now: () => new Date('2026-10-20T12:00:00.000Z'), flowName: () => 'feature-dev-v3' });
+    // Runs 1 and 2 are Started in their app, which opens their §25 audit log; run 3's app is closed before Start.
+    const launcher = createFakeLauncher({
+      scripts: [{}, {}, {}],
+      inspect: (launch, k) => {
+        if (k < 3) recorder.recordTransition(launch.workingFolder, 'start', { status: 'not_started', stepName: 'red' }, { status: 'in_progress', stepName: 'red' });
+      },
+    });
+
+    const result = await runBench(runRequest(s, roots, { runs: '3' }, { launcher }));
+
+    const ownLogs = launcher.launches.map((l) => readTree(auditRepoDir(auditRoot, l.workingFolder)));
+    expect({
+      ownLogFiles: ownLogs.map((log) => Object.keys(log).length),
+      runs: result.runFolders.map((folder) => {
+        const record = recordIn(folder);
+        const parsed = record !== null && 'issueCopy' in record ? record : null;
+        return { issueCopy: parsed?.issueCopy.number ?? null, branch: parsed?.branch ?? null, audit: readTree(join(folder, BENCH_RUN_AUDIT_DIR)) };
+      }),
+    }).toEqual({
+      ownLogFiles: [1, 1, 0],
+      runs: ownLogs.map((log, i) => ({
+        issueCopy: FAKE_FIRST_COPY + i,
+        branch: b.git(launcher.launches[i]?.workingFolder ?? '', ['rev-parse', '--abbrev-ref', 'HEAD']),
+        audit: log,
+      })),
+    });
+  });
+});
+
+describe("the fixture's phase baseline", () => {
+  it("is what the app's baseline reader returns for the run's own branch, and nothing when the fixture has none", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const withBaseline = join(b.outsideDir('bench-baseline'), 'fx');
+    b.writeHandFixture(withBaseline, { ...handFields(s.commit), phase_baseline: s.commit }, FIXTURE_ARTIFACTS);
+    const seen: Record<string, { branch: string | null; baseline: unknown }> = {};
+    for (const [name, fixture] of [['with', withBaseline], ['without', s.fixture]] as const) {
+      const launcher = createFakeLauncher({
+        inspect: (launch) => {
+          const read = currentGitBranch(launch.workingFolder);
+          const branch = read.ok ? read.branch : null;
+          seen[name] = { branch, baseline: baselineForBranch(readBaselineCommit(launch.workingFolder), branch) };
+        },
+      });
+      await runBench(runRequest({ repo: s.repo, fixture }, roots, {}, { launcher, clock: createFakeBenchClock([name]) }));
+    }
+
+    expect({ with: seen.with?.baseline, without: seen.without?.baseline }).toEqual({ with: { branch: seen.with?.branch, sha: s.commit }, without: null });
   });
 });
