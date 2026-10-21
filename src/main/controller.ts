@@ -35,10 +35,15 @@ void app.whenReady().then(async () => {
       if (event.sender !== window.webContents || payload?.sessionId !== SESSION_ID || typeof payload.id !== 'string') return 'unavailable';
       return transport.activate(payload.id);
     });
+    ipcMain.handle(CONTROLLER_CH.dismiss, (event, payload: ControllerActivation) => {
+      if (event.sender !== window.webContents || payload?.sessionId !== SESSION_ID || typeof payload.id !== 'string') return;
+      transport.dismiss(payload.id);
+    });
     window.once('closed', () => {
       unsubscribe();
       ipcMain.removeListener(CONTROLLER_CH.subscribe, subscribe);
       ipcMain.removeHandler(CONTROLLER_CH.activate);
+      ipcMain.removeHandler(CONTROLLER_CH.dismiss);
       void transport.dispose().catch(error => console.error(errMsg(error)));
     });
     if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/controller.html`);

@@ -25,7 +25,17 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
         description.dataset.terminalId = terminal.id;
         description.tabIndex = -1;
         description.textContent = terminal.launchDirectory + (terminal.repositoryRoot ? ` Repository: ${terminal.repositoryRoot}` : '') + ' — Disconnected: terminal unavailable';
-        return description;
+        const pane = document.createElement('div');
+        const dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.dataset.terminalId = terminal.id;
+        dismiss.textContent = 'Dismiss';
+        dismiss.setAttribute('aria-label', `Dismiss disconnected terminal ${terminal.launchDirectory}`);
+        dismiss.addEventListener('click', () => {
+          void deps.controller.dismissTerminal(terminal.id).catch(announce);
+        });
+        pane.append(description, dismiss);
+        return pane;
       }
       const button = document.createElement('button');
       button.type = 'button';

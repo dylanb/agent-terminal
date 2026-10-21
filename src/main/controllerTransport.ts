@@ -14,6 +14,7 @@ export async function startControllerTransport(appHome: string): Promise<{
   terminals(): ControllerTerminal[];
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
+  dismiss(id: string): void;
   dispose(): Promise<void>;
 }> {
   const endpoint = resolveControllerEndpoint(appHome);
@@ -48,6 +49,9 @@ export async function startControllerTransport(appHome: string): Promise<{
       try {
         for (const message of decoder.push(chunk)) {
           if (message.type === 'register' && !registrations.has(socket)) {
+            for (const [id, terminal] of retained) {
+              if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
+            }
             registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
             notify();
             socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
@@ -102,6 +106,9 @@ export async function startControllerTransport(appHome: string): Promise<{
       listeners.add(listener);
       listener(snapshot());
       return () => { listeners.delete(listener); };
+    },
+    dismiss(id) {
+      if (retained.delete(id)) notify();
     },
     async activate(id) {
       const socket = [...registrations].find(([, terminal]) => terminal.id === id)?.[0];

@@ -1297,12 +1297,14 @@ export interface ControllerTerminal {
 export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
+  dismissTerminal(id: string): Promise<void>;
 }
 
 export const CONTROLLER_CH = {
   subscribe: 'controller:subscribe',
   terminals: 'controller:terminals',
   activate: 'controller:activate',
+  dismiss: 'controller:dismiss',
 } as const;
 export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
 
