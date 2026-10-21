@@ -1,5 +1,5 @@
 // The value rules of a flow's inputs and repeat counts, shared by the flow-state store, the flow machine and the
-// bench fixture (#180), so a value one format accepts the others cannot read differently.
+// bench fixture, so a value one format accepts the others cannot read differently.
 
 export const isStringValue = (v: unknown): v is string => typeof v === 'string';
 

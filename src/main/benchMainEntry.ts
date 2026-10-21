@@ -1,6 +1,3 @@
-// #180 — the standalone entry the build emits as `<BENCH_ENTRY>.js`; the `bench` script runs it under
-// ELECTRON_RUN_AS_NODE=1.
-
 import { homedir } from 'node:os';
 import { benchMain, realBenchDeps } from './benchMain';
 

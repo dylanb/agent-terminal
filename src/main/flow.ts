@@ -761,7 +761,7 @@ export type TerminateResult =
 /** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
-/** §18.7.8 — `spanFor` null is no span: today's behaviour. */
+/** §18.7.8 */
 export interface FlowSpanPort {
   spanFor(repoKey: string): StepSpan | null;
   ended(repoKey: string, ending: FlowSpanEnding): void;

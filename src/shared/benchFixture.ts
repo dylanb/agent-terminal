@@ -1,5 +1,4 @@
-// #180 — the bench fixture manifest (docs/bench.md): `bench capture` writes it, `bench run` reads it, and an
-// operator may write it by hand.
+// docs/bench.md
 
 import { isGitObjectId } from './appBootstrap';
 import { isRepeatCount, isStringValue } from './flowStateValues';

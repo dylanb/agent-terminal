@@ -38,7 +38,6 @@ export default defineConfig({
           index: path.resolve(__dirname, 'src/main/index.ts'),
           // §27.12 — the agent-runnable format checker, resolved at runtime by resolveArtifactCheckScript.
           [ARTIFACT_CHECK_ENTRY]: path.resolve(__dirname, 'src/main/artifactCheckMain.ts'),
-          // #180 — the bench runner, run by the `bench` script.
           [BENCH_ENTRY]: path.resolve(__dirname, 'src/main/benchMainEntry.ts'),
         },
       },

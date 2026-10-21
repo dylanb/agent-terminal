@@ -1,5 +1,4 @@
-// #180 — a span of a flow's steps, from `first` to `last` in the definition's step order: the one resolver the
-// bench runner's refusals and the app's span guard both decide membership through.
+// §18.7.8
 
 export interface StepSpan {
   first: string;

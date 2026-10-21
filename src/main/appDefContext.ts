@@ -1,5 +1,4 @@
-// §27.15 — the one def-resolution context the app, the bench runner's refusals and its prompt revision (#180)
-// resolve loop defs through, so all three read the same def from the same tiers.
+// §27.15
 
 import type { BundleLocation } from './bundleLocation';
 import type { LoopDefV2Context } from './loopDefV2';
