@@ -73,10 +73,8 @@ export function createTrustedPickups(deps: TrustedPickupsDeps): TrustedPickups {
       return removed.ok;
     },
     forgetIfRemovable(repoDir) {
-      const run = forgottenRun(repoDir);
       if (!remove(repoDir).ok) return false;
       loaded.delete(repoDir);
-      if (run !== null) forgotten.set(repoDir, run);
       return true;
     },
   };

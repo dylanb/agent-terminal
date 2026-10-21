@@ -27,6 +27,7 @@ function seedRepoWithGh(listJson: string): { repo: string; argsLog: string } {
     '#!/usr/bin/env bash\n' +
       `if [ "$1" = "repo" ]; then printf '%s\\n' '${REPO_VIEW}'; exit 0; fi\n` +
       `if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf '%s\\n' "$*" > '${argsLog}'; printf '%s\\n' '${listJson}'; exit 0; fi\n` +
+      `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf '%s\\n' "$*" > '${argsLog}.view'; printf '%s\\n' '{"number":233,"url":"https://github.com/owner/repository/pull/233","headRefName":"plan-loop/issue-218","state":"OPEN","closingIssuesReferences":[{"number":218,"url":"https://github.com/owner/repository/issues/218"}],"isCrossRepository":false}'; exit 0; fi\n` +
       'exit 1\n',
     { mode: 0o755 },
   );
@@ -56,5 +57,14 @@ describe('the open pull requests GitHub has for a branch', () => {
   it('refuses an answer that is not a list of pull requests', async () => {
     const { repo } = seedRepoWithGh('{"oops":true}');
     await expect(createRealPullRequestLookup(repo).openForBranch('plan-loop/issue-218')).rejects.toThrow();
+  });
+});
+
+describe('a pull request GitHub is asked about by number', () => {
+  it('asks for every field the identity check reads, and reads them back', async () => {
+    const { repo, argsLog } = seedRepoWithGh('[]');
+    expect(await createRealPullRequestLookup(repo).pullRequest(233)).toEqual({ number: 233, branch: 'plan-loop/issue-218', state: 'OPEN', closingIssues: [218], crossRepository: false });
+    const fields = /--json (\S+)/.exec(readFileSync(`${argsLog}.view`, 'utf8'))?.[1].split(',') ?? [];
+    expect(fields).toEqual(expect.arrayContaining(['number', 'url', 'headRefName', 'state', 'closingIssuesReferences', 'isCrossRepository']));
   });
 });

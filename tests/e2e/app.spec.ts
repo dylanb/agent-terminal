@@ -3557,6 +3557,8 @@ test('a Restart whose saved pickup cannot be removed is refused with the reason,
     const refused = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
     expect(refused.notice).toContain('Not restarted');
     await expect(flowControl()).toHaveText('Restart');
+    // A refused Restart forgets nothing, so it raises no could-not-be-removed error of its own.
+    await expect(page.getByRole('alertdialog').filter({ hasText: 'could not be removed' })).toHaveCount(0);
 
     rmSync(saved, { recursive: true, force: true });
     const restarted = await page.evaluate((repoKey) => window.flow.restart(repoKey), repo);
