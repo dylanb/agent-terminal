@@ -267,6 +267,26 @@ describe('scripts/e2e-podman.sh and e2e/entrypoint.sh carry a red-check run (§2
     }
   });
 
+  it("builds into an out/ of the container's own, so a host build during a run never empties the bundle a booting Electron loads", () => {
+    const bin = fakeBin(['podman']);
+    try {
+      const r = spawnSync('bash', [join(ROOT, 'scripts', 'e2e-podman.sh')], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: `${bin.dir}:${process.env.PATH}` },
+      });
+      expect(r.status, r.stderr).toBe(0);
+      const runLine = readFileSync(bin.log, 'utf8').split('\n').find((l) => l.startsWith('podman [run]')) ?? '';
+      const mounts = [...runLine.matchAll(/\[-v\] \[([^\]]*)\]/g)].map((m) => m[1]);
+      const outMount = mounts.find((m) => m.split(':')[1] === '/work/out' || m === '/work/out');
+      expect(outMount, runLine).toBeDefined();
+      const source = outMount!.includes(':') ? outMount!.split(':')[0] : '';
+      expect(source.startsWith('/'), `out/ is bind-mounted from the host: ${outMount}`).toBe(false);
+    } finally {
+      rmSync(bin.dir, { recursive: true, force: true });
+    }
+  });
+
   it('mounts the node_modules cache volume E2E_NODE_MODULES_VOLUME names', () => {
     expect(podmanVolume(join(ROOT, 'scripts', 'e2e-podman.sh'), { E2E_NODE_MODULES_VOLUME: 'agent-terminal-e2e-node_modules-mine' })).toBe('agent-terminal-e2e-node_modules-mine');
   });

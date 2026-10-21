@@ -17,7 +17,7 @@ import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
 import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
-import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
+import { roundReportWithDisposition, roundReportWithIssues, roundReportWithStatuses, type ScriptedIssue } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
@@ -239,8 +239,8 @@ export interface StepScript {
   // Round-2 review report kind, default `full`.
   review2?: 'full' | 'failed';
   // Per-round override of the report kind (index = round-1): `needs-human` records the first persona's issue
-  // with the `needs a human` disposition.
-  reviews?: ('full' | 'needs-human')[];
+  // with the `needs a human` disposition; `{ issues }` has the first persona record exactly those issues.
+  reviews?: ('full' | 'needs-human' | { issues: ScriptedIssue[] })[];
   // The consolidator output per round (index = round-1), each the FULL verdict file content. Absent → every
   // round emits `verdict: clean`.
   verdicts?: string[];
@@ -347,7 +347,9 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   const notLoaded = b64(firstMarkedReport(sections, roster, 'not loaded'));
   const r1 = reviewKind === 'failed' ? failed : reviewKind === 'not-loaded' ? notLoaded : reviewKind === 'omit-persona' || reviewKind === 'omit-then-repair' ? omit : full;
   const r2 = (opts.review2 ?? 'full') === 'failed' ? failed : full;
-  const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${k === 'needs-human' ? needsHuman : full}' ;;`).join(' ');
+  const roundReport = (k: NonNullable<StepScript['reviews']>[number]): string =>
+    k === 'needs-human' ? needsHuman : k === 'full' ? full : b64(roundReportWithIssues(sections, roster, k.issues));
+  const roundCases = (opts.reviews ?? []).map((k, i) => `${i + 1}) RB='${roundReport(k)}' ;;`).join(' ');
   // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
   // reports/2.json, keeping the last-two-report window real (§27.6/AC2).
   const writeReportRoundAware =
@@ -489,16 +491,29 @@ export const CHAIN_ROSTERS: Record<string, string[]> = Object.fromEntries(CHAIN_
 // A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
 // loop's roster (§27.5); the phase loops classify their §28.5 result files. The n-th consolidate turn of a step
 // writes `verdicts[step][n-1]`, and `clean` when absent; on an all-`clean` chain the n-th red/green/refactor
-// consolidate is impl-slice n's. Per-step turn counts live under `binDir`, outside the worktree.
+// consolidate is impl-slice n's. A step `issues` names has its first roster persona raise those issues in every
+// round. Per-step turn counts live under `binDir`, outside the worktree.
 export function seedFullTddChainAgent(
   binDir: string,
-  opts: { implSlices?: number; polishedSlices?: number; redPlan?: string; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>>; runChecksFor?: string[] } = {},
+  opts: {
+    implSlices?: number;
+    polishedSlices?: number;
+    redPlan?: string;
+    logInjected?: boolean;
+    verdicts?: Partial<Record<string, ConsolidatorVerdict[]>>;
+    issues?: Partial<Record<(typeof CHAIN_STEPS)[number], ScriptedIssue[]>>;
+    runChecksFor?: string[];
+  } = {},
 ): void {
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const art = '.agent-terminal/loop/artifacts';
   const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
-  const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
+  const report = (step: (typeof CHAIN_STEPS)[number]): string => {
+    const sections = ['summary', 'findings', 'disposition'];
+    const issues = opts.issues?.[step];
+    return b64(issues ? roundReportWithIssues(sections, CHAIN_ROSTERS[step], issues) : exampleRoundReport({ sections, roster: CHAIN_ROSTERS[step] }));
+  };
   const check = (step: string): string =>
     opts.runChecksFor?.includes(step) ? `{ eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; ` : '';
   // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
@@ -523,7 +538,7 @@ export function seedFullTddChainAgent(
     refactor: done('work-refactor'),
     'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
   };
-  const reviewArm = (step: string): string => {
+  const reviewArm = (step: (typeof CHAIN_STEPS)[number]): string => {
     const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}`;
     // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
     return step === 'refactor'

@@ -39,6 +39,8 @@ Grade each capability that was built: it was shown failing on a violating exampl
 positives would not train implementers to ignore it, it runs from the repository's existing lint, test or
 build commands, and it is listed under `## Capabilities built` in `infra-capabilities.md`.
 
-Raise a finding only where a future reader pays for its absence. When the artifact is spec or plan prose,
-density a human cannot scan is itself the maintainability defect — never push the text toward more
-cross-references or finer precision no reader needs; an equal-quality wording is not a finding (§27.6).
+When the artifact is spec or plan prose, density a human cannot scan is itself the maintainability defect —
+never push the text toward more cross-references or finer precision no reader needs.
+
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.

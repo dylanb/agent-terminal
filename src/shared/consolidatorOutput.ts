@@ -6,6 +6,7 @@
 // the roster⊆catalog relationship, never the quality of the judgment (§27.6 Non-goals).
 
 import { readJsonObject } from './jsonArtifact';
+import { DOCUMENTATION_DISPOSITION, FIXED_DISPOSITION, NEEDS_HUMAN_DISPOSITION, NIT_DISPOSITION } from './roundReport';
 
 /** The closed set of verdicts the consolidator may emit (§27.6). Spelled once — the type, the parser, and
  *  the well-formedness predicate all derive from this one array so no side can admit a fourth value. */
@@ -19,8 +20,17 @@ export const CONSOLIDATOR_FIELDS = {
 } as const;
 
 const VERDICT_SET: ReadonlySet<string> = new Set(CONSOLIDATOR_VERDICTS);
+const CLEAN: ConsolidatorVerdict = 'clean';
 const ANOTHER_ROUND: ConsolidatorVerdict = 'another round';
 const STOP_FOR_A_HUMAN: ConsolidatorVerdict = 'stop for a human';
+
+/** §27.6 */
+export const CLEAN_RULE_LINES: readonly string[] = [
+  `A round whose issues are all dismissed or \`${DOCUMENTATION_DISPOSITION}\` is \`${CLEAN}\`: it changed nothing except`,
+  `documentation, and \`${NIT_DISPOSITION}\` counts as a dismissal. A round with any \`${FIXED_DISPOSITION}\` issue is`,
+  `\`${ANOTHER_ROUND}\`, however many NIT dismissals and documentation fixes it also records. A round that records a`,
+  `\`${NEEDS_HUMAN_DISPOSITION}\` issue is judged by the \`${STOP_FOR_A_HUMAN}\` rule.`,
+];
 
 /** The persisted verdict/`reason` gate (§27.6): a `reason` belongs to the output ONLY under
  *  `stop for a human`, mirroring the `error_reason` writer↔reader gate — defined once so the loop-state

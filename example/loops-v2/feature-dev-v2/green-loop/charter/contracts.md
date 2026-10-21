@@ -20,7 +20,5 @@ match on every surface, and cite both sites when they don't. Hold API/schema cha
 contract (Semver, OpenAPI/proto/GraphQL compatibility). A silent divergence between two surfaces of one
 contract is the defect.
 
-Raise a finding only where acting on it changes an observable outcome — a value that would not match at
-runtime, a shape two surfaces would read differently. A citation already correct where a more-precise one
-would not change the meaning, or an equal-quality rewording, is not a finding; flagging it only drives a
-rewrite that manufactures the next round's work (§27.6).
+Whether a finding is too minor to matter is judged by the NIT definition in your hand-off, and by nothing
+else here: label a finding a NIT when it meets that definition, and the fixer makes the call.

@@ -29,6 +29,8 @@ podman build -t "$IMAGE" -f e2e/Containerfile .
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
+# The anonymous /work/out volume keeps a host build during the run (which empties out/) away from the bundle
+# the booting Electrons load.
 tty=()
 [ -t 0 ] && tty=(-it)
 podman run --rm ${tty[@]+"${tty[@]}"} \
@@ -37,6 +39,7 @@ podman run --rm ${tty[@]+"${tty[@]}"} \
   --shm-size=1g \
   -v "$PWD":/work \
   -v "$VOLUME":/work/node_modules \
+  -v /work/out \
   -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \

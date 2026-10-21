@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from '../../src/main/consolidateTurn';
-import { CONSOLIDATOR_VERDICTS, consolidatorOutputWellFormed } from '../../src/shared/consolidatorOutput';
+import { CLEAN_RULE_LINES, CONSOLIDATOR_VERDICTS, consolidatorOutputWellFormed } from '../../src/shared/consolidatorOutput';
+import { sentenceStates, statesText } from '../helpers/statesText';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.6/§27.7 — the pure, data-driven pieces of the §27 consolidator turn: the pre-consolidate boundary
@@ -104,5 +105,40 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
     const prompt = composeConsolidatePrompt(req);
     expect(prompt).toContain('turn-done:consolidate-plan');
     expect(prompt).toContain(req.doneRelPath);
+  });
+});
+
+// #207 AC 6 — a round that changed only documentation is `clean`: each clause of the rule is asserted on the
+// composed prompt itself, so a shared clean rule missing one fails here.
+describe('composeConsolidatePrompt — the clean rule (#207 AC 6)', () => {
+  const prompt = (): string =>
+    composeConsolidatePrompt({
+      recipeBody: '# red-loop — consolidator',
+      catalog: ['review-plan-principal'],
+      reportRels: ['.agent-terminal/loop/reports/1.json'],
+      outputRel: '.agent-terminal/loop/consolidate/1.json',
+      round: 1,
+      turnKey: 'consolidate-red',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+    });
+
+  it('states the shared clean rule', () => {
+    expect(statesText(prompt(), CLEAN_RULE_LINES)).toBe(true);
+  });
+
+  it('counts `dismissed — nit` as a dismissal', () => {
+    expect(sentenceStates(prompt(), ['`dismissed — nit`', 'dismissal'])).toBe(true);
+  });
+
+  it('calls a round whose issues are all dismissed or `fixed — documentation` `clean`', () => {
+    expect(sentenceStates(prompt(), ['dismissed', '`fixed — documentation`', '`clean`'])).toBe(true);
+  });
+
+  it('calls a round with any `fixed` issue `another round` however many NIT dismissals and documentation fixes it records', () => {
+    expect(sentenceStates(prompt(), ['`fixed`', '`another round`', 'NIT dismissals', 'documentation fixes'])).toBe(true);
+  });
+
+  it('no longer calls every round that fixed something `another round`', () => {
+    expect(sentenceStates(prompt(), ['fixed something', '`another round`'])).toBe(false);
   });
 });

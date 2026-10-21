@@ -11,5 +11,6 @@ ends, deciding every question yourself as the brief says.
    criterion serve it. Test each criterion against the stated problem, and drop, narrow or split out to a
    follow-up ticket any the problem does not need, logging each as a decision.
 3. Review the ticket with the reviewers below, then fix or dismiss every finding, logging each in
-   `## Review history` and each decision a fix needs in `## Groomer decisions`.
+   `## Review history` and each decision a fix needs in `## Groomer decisions`. Never fix a NIT: log each NIT
+   as `dismissed — nit`, with its reason, in groom-report.md's review history.
 4. Repeat step 3 until the review ends, as the review rules in these instructions say.

@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { composeAppWorkPrompt } from '../../src/main/appWorkTurn';
-import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
-import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
+import {
+  catalogPersonas,
+  composeGoalReviewLines,
+  composeReviewAndFixPrompt,
+  fixCriterionLines,
+  preReviewBoundaryCommand,
+  REVIEWER_HANDOFF_BEGIN,
+  REVIEWER_HANDOFF_END,
+  reviewRoster,
+} from '../../src/main/reviewTurn';
+import { DOCUMENTATION_DEFINITION_LINES, NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
+import { sentenceStates, sentencesOf, statesText } from '../helpers/statesText';
+import { FLOOR_EXAMPLES, sendsToInvalid, statesFloorGate } from '../helpers/materialityFloor';
+import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
@@ -210,44 +222,117 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   });
 });
 
-// §27.6 — the materiality floor that lets the termination rule reach a fixed point on PROSE. §27.6's
-// convergence argument (a memory-less fixer "re-dismisses a settled judgment every round … the loop
-// terminates when a round produces no changes") holds only if an in-scope finding that changes no
-// observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
-// refinement is what manufactures the next round's findings. The composer must state that criterion.
-describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
-  const req = () => ({
-    roster: reviewRoster(def()),
-    sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.json',
-    round: 1,
-    turnKey: 'review-plan',
-    doneRelPath: '.agent-terminal/loop/turn-done',
-    agentKind: 'claude-code' as const,
+// #207 — the fixer applies one rule: the shared NIT definition replaces the §27.6 materiality floor.
+const TODAYS_FLOOR_SENTENCE =
+  `An in-scope finding that leaves every observable outcome unchanged — an equal-quality rewording, a citation already correct where a more-precise one would not change the meaning, a defensible authoring choice the ticket does not require — is \`${INVALID_DISPOSITION}\` (it is not a defect), NEVER \`${FIXED_DISPOSITION}\`.`;
+const KEPT_TEST_SUPPORT_RULE =
+  'A finding that it differs from the real tool, or that a branch of it has no test of its own, changes an observable outcome only when a test the ticket needs relies on that behaviour, so the gap would let that test pass over broken code or fail over correct code.';
+const doubleFidelityClause =
+  /(fake|stand-in|double)[\s\S]*only\s+when\s+a\s+test\s+the\s+ticket\s+needs\s+relies\s+on[\s\S]*`dismissed — invalid`/i;
+
+function splitHandoff(p: string): { handoff: string; rest: string } {
+  const start = p.indexOf(REVIEWER_HANDOFF_BEGIN);
+  const end = p.indexOf(REVIEWER_HANDOFF_END);
+  if (start === -1 || end < start) throw new Error('no hand-off block');
+  return { handoff: p.slice(start + REVIEWER_HANDOFF_BEGIN.length, end), rest: p.slice(0, start) + p.slice(end + REVIEWER_HANDOFF_END.length) };
+}
+
+const reviewReq = () => ({
+  roster: reviewRoster(def()),
+  sections: def().report.sections,
+  reportRel: '.agent-terminal/loop/reports/1.json',
+  round: 1,
+  turnKey: 'review-plan',
+  doneRelPath: '.agent-terminal/loop/turn-done',
+  agentKind: 'claude-code' as const,
+});
+const reviewPrompt = (): string => composeReviewAndFixPrompt(reviewReq());
+const goalPrompt = (): string => composeGoalReviewLines(reviewRoster(def()), { carried: [] }, undefined, 'claude-code').join('\n');
+
+describe('the materiality-floor check itself', () => {
+  it('finds the floor as a condition for fixing, in any case', () => {
+    expect(statesFloorGate('Fix an issue only when acting on it changes an OBSERVABLE\n  OUTCOME — correctness.')).toBe(true);
   });
 
-  it('tells the fixer to fix only an issue that changes an observable outcome', () => {
-    expect(composeReviewAndFixPrompt(req())).toContain('observable outcome');
+  it('passes the kept test-support-code rule, whose observable-outcome wording is not the floor', () => {
+    expect(statesFloorGate(KEPT_TEST_SUPPORT_RULE)).toBe(false);
   });
 
-  it('tells the fixer that an already-correct refinement is dismissed, not fixed (so a round can reach no-change)', () => {
-    const p = composeReviewAndFixPrompt(req());
-    expect(p.toLowerCase()).toContain('already correct');
-    // it names the dismissal disposition for such a refinement — never `fixed`
-    expect(p).toContain('dismissed — invalid');
+  it.each(FLOOR_EXAMPLES)('finds today\'s floor sending %s findings to `dismissed — invalid`', (_example, pattern) => {
+    expect(sendsToInvalid(TODAYS_FLOOR_SENTENCE, pattern)).toBe(true);
   });
 
-  const doubleFidelityClause =
-    /(fake|stand-in|double)[\s\S]*only\s+when\s+a\s+test\s+the\s+ticket\s+needs\s+relies\s+on[\s\S]*`dismissed — invalid`/i;
+  it('does not fire on the kept test-support-code rule', () => {
+    for (const [, pattern] of FLOOR_EXAMPLES) expect(sendsToInvalid(KEPT_TEST_SUPPORT_RULE, pattern)).toBe(false);
+  });
+});
 
-  it('dismisses a test double gap that no test the ticket needs relies on, for a commit loop', () => {
-    expect(composeReviewAndFixPrompt(req())).toMatch(doubleFidelityClause);
+describe.each([
+  ['the review-and-fix prompt', () => splitHandoff(reviewPrompt()).rest],
+  ['the goal self-review prompt', () => splitHandoff(goalPrompt()).rest],
+  ['the fixer criterion', () => fixCriterionLines().join('\n')],
+])('%s states the one fixer rule (#207 AC 3, AC 12)', (_surface, text) => {
+  it('states the NIT definition', () => {
+    expect(statesText(text(), NIT_DEFINITION_LINES)).toBe(true);
   });
 
-  it('dismisses a test double gap that no test the ticket needs relies on, for a document loop', () => {
-    expect(composeReviewAndFixPrompt({ ...req(), subjectRel: '.agent-terminal/loop/artifacts/plan.md' })).toMatch(
-      doubleFidelityClause,
-    );
+  it('states the definition of documentation', () => {
+    expect(statesText(text(), DOCUMENTATION_DEFINITION_LINES)).toBe(true);
+  });
+
+  it('records a NIT as `dismissed — nit` with a reason, never `fixed`', () => {
+    expect(sentenceStates(text(), ['NIT', '`dismissed — nit`', 'reason', 'never `fixed`'])).toBe(true);
+  });
+
+  it('sends any finding about the PR description to `dismissed — out of scope`', () => {
+    expect(sentenceStates(text(), ['PR description', '`dismissed — out of scope`'])).toBe(true);
+  });
+
+  it('records a fix whose changes are all documentation as `fixed — documentation` and any other fix as `fixed`', () => {
+    expect(sentenceStates(text(), ['documentation', '`fixed — documentation`', 'other', '`fixed`'])).toBe(true);
+  });
+
+  it('no longer makes changing an observable outcome the condition for fixing a finding', () => {
+    expect(statesFloorGate(text())).toBe(false);
+  });
+
+  it.each(FLOOR_EXAMPLES)('no longer sends %s findings to `dismissed — invalid`', (_example, pattern) => {
+    expect(sendsToInvalid(text(), pattern)).toBe(false);
+  });
+});
+
+describe.each([
+  ['the review-and-fix prompt', () => splitHandoff(reviewPrompt()).rest],
+  ['the goal self-review prompt', () => splitHandoff(goalPrompt()).rest],
+])('%s tells the fixer how to apply it (#207 AC 3)', (_surface, text) => {
+  it('judges each valid finding not out of scope, other than for polish deferral, against the NIT definition', () => {
+    expect(sentenceStates(text(), ['valid finding', 'out of scope', 'polish', 'NIT definition'])).toBe(true);
+  });
+
+  it("weighs a NIT label the reviewer gave", () => {
+    expect(sentenceStates(text(), ['weigh', 'NIT label', 'reviewer'])).toBe(true);
+  });
+
+  it('runs only the required tests that check documentation or non-code files when a round changed nothing else', () => {
+    expect(sentenceStates(text(), ['non-code', 'required tests', 'none'])).toBe(true);
+  });
+
+  it('still dismisses a test double gap that no test the ticket needs relies on', () => {
+    expect(text()).toMatch(doubleFidelityClause);
+  });
+});
+
+describe('composeReviewAndFixPrompt — the round report records what changed for both fixed dispositions (#207 AC 3)', () => {
+  it('asks for whatChanged on a `fixed — documentation` issue as on a `fixed` one', () => {
+    const p = reviewPrompt();
+    const unquoted = p.slice(p.indexOf('Then write the round report')).replace(/[`"]/g, '');
+    const sentence = sentencesOf(unquoted).find((s) => s.includes(REPORT_FIELDS.whatChanged)) ?? '';
+    expect.soft(sentence).toMatch(/fixed — documentation/);
+    expect.soft(sentence).toMatch(/\bfixed\b(?! — documentation)/);
+  });
+
+  it('still dismisses a test double gap for a document loop', () => {
+    expect(composeReviewAndFixPrompt({ ...reviewReq(), subjectRel: '.agent-terminal/loop/artifacts/plan.md' })).toMatch(doubleFidelityClause);
   });
 });
 
@@ -316,6 +401,24 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
   it('carries no deferral clause when the def fixes polish', () => {
     expect(composeReviewAndFixPrompt(req('fix'))).not.toMatch(deferClause);
     expect(composeReviewAndFixPrompt(req())).not.toMatch(deferClause);
+  });
+
+  // #207 AC 4 — the NIT test applies first: the lines `defer` adds say a NIT polish finding is `dismissed — nit` and
+  // only a polish finding that is not a NIT is deferred.
+  const deferBlock = (): string => {
+    const fix = new Set(composeReviewAndFixPrompt(req('fix')).split('\n'));
+    return composeReviewAndFixPrompt(req('defer'))
+      .split('\n')
+      .filter((l) => !fix.has(l))
+      .join('\n');
+  };
+
+  it('dismisses a polish finding that is a NIT as `dismissed — nit`', () => {
+    expect(sentenceStates(deferBlock(), ['polish finding', 'NIT', '`dismissed — nit`'])).toBe(true);
+  });
+
+  it('defers as `dismissed — out of scope` only a polish finding that is not a NIT', () => {
+    expect(sentenceStates(deferBlock(), ['polish finding', 'not a NIT', '`dismissed — out of scope`'])).toBe(true);
   });
 });
 
@@ -516,6 +619,38 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
     expect(h).toMatch(/do not rate severity/i);
     expect(h).toContain('no findings');
     expect(h).toMatch(/do not change any file/i);
+  });
+});
+
+// #207 AC 5, AC 9 — reviewers judge with the same NIT definition the fixer applies, and never review the PR
+// description; the hand-off carries none of the retired materiality floor.
+describe.each([
+  ['a review round', () => splitHandoff(reviewPrompt()).handoff],
+  ['a goal self-review', () => splitHandoff(goalPrompt()).handoff],
+])('the reviewer hand-off of %s carries the NIT definition (#207 AC 5)', (_surface, handoff) => {
+  it('states the NIT definition', () => {
+    expect(statesText(handoff(), NIT_DEFINITION_LINES)).toBe(true);
+  });
+
+  it('says the reviewer may label a finding a NIT', () => {
+    expect(sentenceStates(handoff(), ['may label', 'NIT'])).toBe(true);
+  });
+
+  it('says the PR description is not under review', () => {
+    expect(sentenceStates(handoff(), ['PR description', 'not under review'])).toBe(true);
+  });
+
+  it('does not make changing an observable outcome the condition for raising or fixing a finding', () => {
+    expect(statesFloorGate(handoff())).toBe(false);
+  });
+
+  it.each(FLOOR_EXAMPLES)('does not send %s findings to `dismissed — invalid`', (_example, pattern) => {
+    expect(sendsToInvalid(handoff(), pattern)).toBe(false);
+  });
+
+  it('still asks for file:line, issue, consequence and fix with no severity', () => {
+    expect(handoff()).toMatch(/file:line, the issue, its concrete consequence, and the fix/);
+    expect(handoff()).toMatch(/do not rate severity/i);
   });
 });
 

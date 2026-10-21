@@ -33,8 +33,9 @@ starts. Do not stand in for a missing piece with something else.
 2. **Work.** If the definition has a brief, follow it for the whole loop, including every fix in step 3.
    Then do what its work recipe asks. A definition with no `consolidator` has no review rounds: the loop
    ends here. One with a `work.goal` runs step 3 itself, as its recipe says, and ends once the goal holds. It runs no review
-   when its work changed nothing but its own report and recorded test evidence, and stops reviewing after a pass
-   whose fixes changed nothing else (an edit to the plan, the ticket, code or tests is a change).
+   when its work changed nothing but its own report, recorded test evidence and documentation, and stops reviewing
+   after a pass whose fixes changed nothing else (an edit to the plan, the ticket, code or tests is a change, and a
+   comment-only edit to code or tests is documentation).
    A recipe that says its section file is named under REPORT SECTION in your turn instructions means a
    binding with a `sections_dir`: a hand run has no turn instructions, so the file is `<sections_dir>/<step>.md`
    for slice 1 and `<sections_dir>/<step>.slice-<n>.md` for a later slice, where `<step>` is the flow step's
@@ -98,15 +99,88 @@ starts. Do not stand in for a missing piece with something else.
    Do not run the full test suite or the end-to-end harness: read the test results the work recorded, and run only
    the targeted tests that checking a specific finding needs.
    Do not change any file: report your findings, and the fixer makes every change.
+   Judge each finding against this definition of a NIT, the one the fixer applies too:
+
+   A change is a NIT if it meets ALL of the following criteria:
+
+   1. **Behavioral Equivalence:** It produces identical runtime output, side effects, and control flow across all valid, invalid, and edge-case inputs.
+   2. **Zero Performance Impact:** It has no material impact on execution speed, memory footprint, I/O, concurrency, or resource consumption.
+   3. **Zero Future Debt:**
+      - It does not prevent future extensibility, refactoring, or API evolution.
+      - It does not violate any enforceable project-wide linting, formatting, typing, or CI/CD rules (if CI passes without it, it qualifies).
+      - It does not conceal logic in a way that makes bug diagnosis significantly harder.
+   4. **Preference-Driven:** It is rooted entirely in personal preference, alternative idiomatic phrasing, or subjective aesthetics where the existing implementation is already clear and standard.
+
+   **Classification Test (the "Safe-to-Ignore" Rule).** Evaluate the change against this question: "If this pull request is merged without this change, could any test fail, bug arise, security vulnerability open, system resource degrade, or future contributor be materially misled or blocked?"
+
+   - If the answer is "No" to all: the change is a NIT → Status: OPTIONAL / DO NOT IMPLEMENT.
+   - If the answer is "Yes" or "Maybe" to any: the change is NOT A NIT.
+
+   You may label a finding a NIT; the fixer weighs that label and makes the call.
+   The PR description is not under review: raise no finding about it.
    Return each finding with its file:line, the issue, its concrete consequence, and the fix. Do not rate severity.
    If you find nothing, return exactly: no findings
    ```
 
    Do not hand it a charter, a diff, a prior review, or other reviewers' findings: it pulls what it needs
-   with its tools. Take every finding into your own context, then fix it or dismiss it with a reason. A
-   finding only the user can settle is "needs a human".
+   with its tools. Take every finding into your own context, then fix or dismiss each by the same criterion
+   the engine gives its fixer:
+
+   ```fix-criterion
+
+   NITs — the reviewers and you judge findings by this one definition of a NIT:
+
+   A change is a NIT if it meets ALL of the following criteria:
+
+   1. **Behavioral Equivalence:** It produces identical runtime output, side effects, and control flow across all valid, invalid, and edge-case inputs.
+   2. **Zero Performance Impact:** It has no material impact on execution speed, memory footprint, I/O, concurrency, or resource consumption.
+   3. **Zero Future Debt:**
+      - It does not prevent future extensibility, refactoring, or API evolution.
+      - It does not violate any enforceable project-wide linting, formatting, typing, or CI/CD rules (if CI passes without it, it qualifies).
+      - It does not conceal logic in a way that makes bug diagnosis significantly harder.
+   4. **Preference-Driven:** It is rooted entirely in personal preference, alternative idiomatic phrasing, or subjective aesthetics where the existing implementation is already clear and standard.
+
+   **Classification Test (the "Safe-to-Ignore" Rule).** Evaluate the change against this question: "If this pull request is merged without this change, could any test fail, bug arise, security vulnerability open, system resource degrade, or future contributor be materially misled or blocked?"
+
+   - If the answer is "No" to all: the change is a NIT → Status: OPTIONAL / DO NOT IMPLEMENT.
+   - If the answer is "Yes" or "Maybe" to any: the change is NOT A NIT.
+
+   Judge against the NIT definition each valid finding that is not out of scope for a reason other than polish
+   deferral, and weigh any NIT label the reviewer gave it; the call is yours. A NIT is never implemented: record
+   it as `dismissed — nit` with a reason saying why it passes the Safe-to-Ignore test, never `fixed`.
+   Any finding about the PR description, whatever its content, is `dismissed — out of scope`.
+
+   What counts as documentation:
+
+   A change is documentation when it alters only prose documentation files, such as Markdown, the spec and
+   READMEs, or comments in code files, leaving every other token of the code unchanged. These are not
+   documentation: the loop's own flow documents under `.agent-terminal/loop/artifacts/` (the groomed ticket, the
+   plan, phase results), because in plan and groom loops they are the work under review; configuration, data and
+   build files; prompt, recipe and charter files an agent executes; and string literals, identifiers or anything
+   else the program reads at runtime. When unsure, the fix is `fixed`.
+
+   Record a fix whose changes are all documentation as `fixed — documentation`, and any other fix as `fixed`.
+   When every change the fixes made is documentation or in another non-code file, run only those of the
+   repository's required tests that check such files, and none if the repository has none. The required tests
+   are all the tests the repository requires to run and pass before the flow moves to its next phase; which of
+   them check documentation or non-code files is for the repository to define.
+
+   Dismiss what is out of scope or invalid; escalate to `needs a human` only what the loop is not entitled to decide.
+
+   Test-support code — a fake, stand-in, or double of a real tool, and the fixtures and helpers around it —
+   exists to serve the tests that use it. A finding that it differs from the real tool, or that a branch of it
+   has no test of its own, changes an observable outcome only when a test the ticket needs relies on that
+   behaviour, so the gap would let that test pass over broken code or fail over correct code. Otherwise it is
+   `dismissed — invalid`, never `fixed`: a double can always be made more faithful, so fixing such gaps never
+   runs out. A test written later that relies on the behaviour is reviewed in its own round.
+   ```
+
 4. **Judge the round.** Follow the definition's judging recipe. It decides between clean, another round with a
-   smaller roster, and stopping for a human. For another round, go back to step 3 with the roster it chose.
+   smaller roster, and stopping for a human, by this rule. A round whose issues are all dismissed or
+   `fixed — documentation` is `clean`: it changed nothing except documentation, and `dismissed — nit` counts
+   as a dismissal. A round with any `fixed` issue is `another round`, however many NIT dismissals and
+   documentation fixes it also records. A round that records a `needs a human` issue is judged by the
+   `stop for a human` rule. For another round, go back to step 3 with the roster it chose.
 
 ## Saying how you know
 

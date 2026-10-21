@@ -14,8 +14,10 @@ import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
-import { exampleRoundReport } from '../../src/shared/roundReport';
+import { GOAL_NO_CHANGE_CLAUSE, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
+import { exampleRoundReport, NIT_DISPOSITION } from '../../src/shared/roundReport';
+import { NIT_DEFINITION_LINES } from '../../src/shared/reviewJudgement';
+import { sentenceStates, statesText } from '../helpers/statesText';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
@@ -5692,9 +5694,9 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await inputModal().locator('.confirm').click();
   await expect(inputModal()).toHaveCount(0);
   // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .toContain('176');
+  const persistedTicket = (): unknown =>
+    (load(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')) as { inputs?: Record<string, unknown> } | null)?.inputs?.ticket;
+  await expect.poll(persistedTicket, { timeout: 10_000 }).toBe('176');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
@@ -5703,9 +5705,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
   await expect(flowStation(1).locator('.nm')).toHaveText('groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .not.toContain('176');
+  await expect.poll(persistedTicket, { timeout: 10_000 }).toBeUndefined();
 
   await flowControl().click(); // Advance → plan again: because the input was cleared, the modal re-prompts
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
@@ -7971,6 +7971,12 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   expect(checks).not.toContain('exit=1');
   expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
+  // #207 AC 8 — the goal stops on the shared no-change clause, and the session is told what a NIT is and where each
+  // NIT dismissal is logged.
+  const groomPrompt = readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'));
+  for (const goal of goals) expect.soft(statesText(goal, GOAL_NO_CHANGE_CLAUSE), goal).toBe(true);
+  expect.soft(statesText(groomPrompt, NIT_DEFINITION_LINES)).toBe(true);
+  expect.soft(sentenceStates(groomPrompt, [`\`${NIT_DISPOSITION}\``, 'groom-report.md', 'review history'], { ignoreCase: true })).toBe(true);
 
   // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: groom-approve[\s\S]*verdict: clean/);

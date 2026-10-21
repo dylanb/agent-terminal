@@ -3,11 +3,12 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
+import { CHAIN_ROSTERS, seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
 import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/roundReport';
 import { parseConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import type { ScriptedIssue } from '../helpers/roundReports';
 
 const dirs: string[] = [];
 const procs: ChildProcessWithoutNullStreams[] = [];
@@ -176,6 +177,28 @@ describe('the per-step fake agent', () => {
     expect(existsSync(join(repo, 'extra-a-1'))).toBe(true);
   });
 
+  it('writes a round report whose first persona raises exactly the issues scripted for that round', async () => {
+    const binDir = tmp('fake-agent-bin-');
+    const repo = tmp('fake-agent-repo-');
+    const roster = ['p-one', 'p-two'];
+    const sections = ['summary'];
+    const issues: ScriptedIssue[] = [
+      { issue: 'a wording preference', disposition: 'dismissed — invalid', reason: 'not a defect' },
+      { issue: 'a stale comment', disposition: 'fixed', reason: 'it misled the reader', whatChanged: 'rewrote the comment' },
+    ];
+    seedFakeAgentSteps(binDir, { s: { artifactRel: '.agent-terminal/loop/artifacts/s.md', work: 'complete', roster, sections, reviews: [{ issues }] } });
+    const send = agent(binDir, repo);
+
+    await turn(send, repo, 'review-s');
+    const report = readIf(join(repo, '.agent-terminal/loop/reports/1.json'));
+    expect(roundReportWellFormed(report, { sections, roster })).toBe(true);
+    const reviewers = (JSON.parse(report) as { reviewers: { persona: string; issues: unknown[] }[] }).reviewers;
+    expect(reviewers.map((r) => [r.persona, r.issues])).toEqual([
+      ['p-one', issues],
+      ['p-two', []],
+    ]);
+  });
+
   const holdAgent = (sentinel: string) => {
     const binDir = tmp('fake-agent-bin-');
     const repo = tmp('fake-agent-repo-');
@@ -260,5 +283,32 @@ describe('the full-TDD chain agent', () => {
     expect(verdict()).toBe('stop for a human');
     await turn('consolidate-refactor');
     expect(verdict()).toBe('clean');
+  });
+
+  it('writes the issues scripted for a step into its round report, and the default report for every other step', async () => {
+    const binDir = tmp('chain-agent-bin-');
+    const repo = tmp('chain-agent-repo-');
+    const nits: ScriptedIssue[] = [{ issue: 'rename `n`', disposition: 'dismissed — nit', reason: 'a preference' }];
+    seedFullTddChainAgent(binDir, { issues: { groom: nits } });
+    const p = spawn(join(binDir, 'fake-agent'), [], { cwd: repo });
+    procs.push(p);
+    const done = join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME);
+    const turn = async (key: string): Promise<void> => {
+      rmSync(done, { force: true });
+      p.stdin.write(`turn-done:${key}\n`);
+      await vi.waitFor(() => expect(readIf(done)).toBe(key), { timeout: 5000 });
+    };
+    const report = (): string => readIf(join(repo, '.agent-terminal/loop/reports/1.json'));
+    const firstIssues = (): unknown => (JSON.parse(report()) as { reviewers: { issues: unknown }[] }).reviewers[0]?.issues;
+
+    const sections = ['summary', 'findings', 'disposition'];
+
+    await turn('review-groom');
+    expect(firstIssues()).toEqual(nits);
+    expect(roundReportWellFormed(report(), { sections, roster: CHAIN_ROSTERS.groom })).toBe(true);
+
+    await turn('review-plan-bundle');
+    expect(firstIssues()).not.toEqual(nits);
+    expect(roundReportWellFormed(report(), { sections, roster: CHAIN_ROSTERS['plan-bundle'] })).toBe(true);
   });
 });

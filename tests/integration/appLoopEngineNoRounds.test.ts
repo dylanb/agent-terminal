@@ -6,6 +6,8 @@ import { exampleGoalProgress } from '../../src/shared/goalProgress';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { GOAL_NO_CHANGE_CLAUSE, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
+import { DOCUMENTATION_DISPOSITION } from '../../src/shared/roundReport';
+import { sentenceStates, statesText } from '../helpers/statesText';
 
 // §27.3 (v2.200) — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
 // and a goal work turn is submitted as one `/goal` command whose condition names the full work prompt, written
@@ -178,17 +180,19 @@ describe('a goal session reviews by the same rules as an engine round (§27.3/§
     expect(goalPrompt()).toMatch(/only disagrees with a decision you made and logged[^\n]*\n[^\n]*`dismissed — invalid`/);
   });
 
-  it('work that changed nothing runs no review, and a pass whose fixes changed nothing ends the review', () => {
+  it('work that changed nothing but documentation runs no review, and a pass whose fixes changed nothing else ends the review (#207)', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef());
     enterAndInjectWork(engine);
 
     const prompt = goalPrompt();
-    expect(prompt).toMatch(/When your work changed nothing but this step's report and its recorded test evidence, run no review at all/);
-    expect(prompt).toMatch(/when its fixes changed nothing but this step's report and its recorded test evidence[^.]*the review is done: do not\s+spawn the reviewers again/);
-    expect(prompt).toMatch(/An edit to the plan, the ticket, code or tests is a change\./);
+    expect(statesText(prompt, "When your work changed nothing but this step's report, its recorded test evidence and documentation, run no review at all")).toBe(true);
+    expect(sentenceStates(prompt, ["when its fixes changed nothing but this step's report, its recorded test evidence and documentation", `\`${DOCUMENTATION_DISPOSITION}\``, 'the review is done: do not spawn the reviewers again'])).toBe(true);
+    expect(statesText(prompt, 'An edit to the plan, the ticket, code or tests is a change, and a comment-only edit to code or tests is documentation.')).toBe(true);
     expect(prompt).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(GOAL_NO_CHANGE_CLAUSE).toContain('an edit to the plan, the ticket, code or tests is a change');
+    expect(statesText(GOAL_NO_CHANGE_CLAUSE, "changed nothing but this step's report, its recorded test evidence and documentation")).toBe(true);
+    expect(GOAL_NO_CHANGE_CLAUSE).toContain('a comment-only edit to code or tests is documentation');
   });
 
   it('a later pass re-runs only the reviewers a fix concerns, and all of them only when a fix changes the scope', () => {

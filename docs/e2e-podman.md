@@ -33,6 +33,8 @@ podman machine start
   two checkouts running the harness at the same time would collide installing into one; the first run in a new
   checkout installs from scratch. `E2E_NODE_MODULES_VOLUME=<name> ./scripts/e2e-podman.sh` names the volume
   instead.
+- `out/` is an anonymous volume the container builds into and discards on exit, so a host `pnpm run build`
+  or `pnpm run dev` during a run cannot empty the bundle the suite's Electrons are booting from.
 - The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
   `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
   exits and mask the result (see `e2e/entrypoint.sh`).
