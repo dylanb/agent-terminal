@@ -201,12 +201,12 @@ test('run through the built entry opens the app at the prepared folder, waits fo
   let runnerWaiting = false;
   let exit: number | null | 'still running';
   try {
-    for (const deadline = Date.now() + 20_000; launched.length === 0 && runnerExit === undefined && Date.now() < deadline; ) {
-      await new Promise((r) => setTimeout(r, 250));
+    await until(() => {
       launched = appsLaunchedUnder(appHome).filter(({ args }) => args.includes(BUILT_APP_MAIN));
-    }
+      return launched.length > 0 || runnerExit !== undefined;
+    }, 20_000);
     // An app that dies at startup can still be caught by one poll, so it must be running a poll later.
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, LAUNCH_POLL_MS));
     const running = appsLaunchedUnder(appHome).map(({ pid }) => pid);
     runnerWaiting = launched.length > 0 && launched.every(({ pid }) => running.includes(pid)) && runnerExit === undefined;
     for (const { pid } of launched) signal(pid, 'SIGTERM');
@@ -276,9 +276,11 @@ async function typeCommand(cmd: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
+const LAUNCH_POLL_MS = 250;
+
 /** Waits until `done()` holds or `ms` pass, whichever is first; the test's own checks then grade what happened. */
 async function until(done: () => boolean, ms: number): Promise<void> {
-  for (const end = Date.now() + ms; !done() && Date.now() < end; ) await new Promise((r) => setTimeout(r, 250));
+  for (const end = Date.now() + ms; !done() && Date.now() < end; ) await new Promise((r) => setTimeout(r, LAUNCH_POLL_MS));
 }
 
 /** The ending the span-end file names, `unparsable` when no reader reads it, null when there is none. */
