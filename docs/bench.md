@@ -31,8 +31,10 @@ Relative paths resolve against the directory `pnpm` was run from (`INIT_CWD`).
   The next run is prepared only after the previous run's app has exited and its record is written. The command
   prints each run's folder.
 
-Each refusal and failure prints a stable code (for example `fixture-unparsable`, `pr-acting-gate`,
-`label-failed`) and a sentence naming it, and exits non-zero. The PR-acting-gate check runs twice: once before
+Each refusal, and each failure of the label, a run's preparation or its output, prints a stable code (for example
+`fixture-unparsable`, `pr-acting-gate`, `label-failed`) and a sentence naming it, and exits non-zero. Any other
+failure, such as running outside a git repository, prints `bench <command> failed:` with its cause and exits
+non-zero. The PR-acting-gate check runs twice: once before
 anything else, over the invoking repository's loop defs, and again in each run's working folder before its issue
 is copied, because the app loads the fixture commit's own repository-tier loop overrides there. A hit in the
 working folder stops the command with `pr-acting-gate` and keeps that run's folder.
