@@ -1,5 +1,4 @@
-// #180 — the app side of the runner-to-app launch contract: from the launch value the runner set and the resolved
-// launch root, the ports that hold the launched folder's flow inside its span and end the app when the span ends.
+// §18.7.8
 
 import { writeFileSync } from 'node:fs';
 import type { AppLoopEntry } from './appLoopEngine';

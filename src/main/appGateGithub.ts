@@ -40,7 +40,7 @@ export interface AppGateGitHubOperations {
 }
 
 /** The `gh` gate actions that act on the pickup pull request, so the gate verifies the bootstrap's PR identity
- *  before each. The bench runner (#180) refuses a span holding one after pickup. */
+ *  before each. */
 export function actsOnPickupPullRequest(action: string): boolean {
   return action === 'mark-ready' || action === 'publish-pr-body';
 }

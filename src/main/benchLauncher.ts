@@ -1,6 +1,3 @@
-// #180 — the real AppLauncher: it opens this checkout's app at a prepared working folder and resolves once that
-// app has exited.
-
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { BundleLocation } from './bundleLocation';

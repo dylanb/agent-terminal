@@ -373,10 +373,10 @@ export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) 
  *  omitted in tests, where a loop step then renders no loop view. */
 export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
-/** #180 — how a held span ended: a move out of it, or the flow completing inside it. */
+/** §18.7.8 */
 export type FlowSpanEnding = Extract<BenchAppEnding, 'left span' | 'completed'>;
 
-/** #180 — the span one repo's flow is held inside, and where its ending is reported. */
+/** §18.7.8 */
 export interface MachineSpan {
   span: StepSpan;
   ended(ending: FlowSpanEnding): void;
@@ -761,8 +761,7 @@ export type TerminateResult =
 /** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
-/** #180 — the span a repo's flow is held inside: `spanFor` names it for a repo key (null → no span, today's
- *  behaviour), and `ended` hears the move that left it or the completion that ended it. */
+/** §18.7.8 — `spanFor` null is no span: today's behaviour. */
 export interface FlowSpanPort {
   spanFor(repoKey: string): StepSpan | null;
   ended(repoKey: string, ending: FlowSpanEnding): void;

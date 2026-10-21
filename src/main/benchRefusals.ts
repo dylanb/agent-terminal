@@ -1,5 +1,3 @@
-// #180 — every `bench run` refusal, decided before the label, any issue copy, any folder or any launch.
-
 import path from 'node:path';
 import type { BenchGithub } from './benchGithub';
 import type { BundleLocation } from './bundleLocation';
@@ -50,6 +48,9 @@ export interface BenchAccepted {
   runs: number;
   /** The flow's `github-ticket` input, which each run sets to its issue copy; none when the flow declares none. */
   ticketInput: string | null;
+  /** Whether the span starts after pickup and holds a gate acting on the pickup pull request, with each step's
+   *  loop def resolved over `repoDir`'s repository tier; null when one does not resolve. */
+  prActingIn(repoDir: string): boolean | null;
 }
 
 export type BenchRefusalCheck = { ok: true; accepted: BenchAccepted } | { ok: false; code: BenchRefusal };
@@ -87,8 +88,8 @@ async function commitPresent(repo: string, commit: string): Promise<boolean> {
 type LoopDefs = { ok: true; defs: (LoopDefV2 | null)[] } | { ok: false };
 
 /** Each step's §27 loop def, null for a step that binds none; resolved as the app resolves them. */
-function loopDefsOf(definition: FlowDefinition, request: BenchRefusalRequest): LoopDefs {
-  const ctx = appDefContext(request.appBundle, request.userConfigRoot, request.invokingRepo, definition.name);
+function loopDefsOf(definition: FlowDefinition, request: BenchRefusalRequest, repoDir: string): LoopDefs {
+  const ctx = appDefContext(request.appBundle, request.userConfigRoot, repoDir, definition.name);
   const defs: (LoopDefV2 | null)[] = [];
   for (const step of definition.steps) {
     if (step.kind !== 'loop' || step.loop === undefined || step.loopNamespace !== APP_LOOP_NAMESPACE) {
@@ -127,12 +128,15 @@ export async function checkBenchRefusals(request: BenchRefusalRequest): Promise<
   if (!(await commitPresent(request.invokingRepo, fixture.commit))) return refused('commit-absent');
   if (fixture.issue.repository !== (await request.github.repositoryOf(request.invokingRepo)).toLowerCase()) return refused('issue-other-repository');
 
-  const loopDefs = loopDefsOf(definition, request);
-  if (!loopDefs.ok) return refused('flow-unloadable');
-  const pickupIndex = loopDefs.defs.findIndex((def) => def !== null && def.pickup !== null);
-  if (pickupIndex >= 0 && span.firstIndex > pickupIndex && loopDefs.defs.slice(span.firstIndex, span.lastIndex + 1).some(actsOnPullRequest)) {
-    return refused('pr-acting-gate');
-  }
+  const prActingIn = (repoDir: string): boolean | null => {
+    const loopDefs = loopDefsOf(definition, request, repoDir);
+    if (!loopDefs.ok) return null;
+    const pickupIndex = loopDefs.defs.findIndex((def) => def !== null && def.pickup !== null);
+    return pickupIndex >= 0 && span.firstIndex > pickupIndex && loopDefs.defs.slice(span.firstIndex, span.lastIndex + 1).some(actsOnPullRequest);
+  };
+  const prActing = prActingIn(request.invokingRepo);
+  if (prActing === null) return refused('flow-unloadable');
+  if (prActing) return refused('pr-acting-gate');
 
-  return { ok: true, accepted: { definition, flowText: text, flowHome: path.dirname(file), fixture, runs, ticketInput } };
+  return { ok: true, accepted: { definition, flowText: text, flowHome: path.dirname(file), fixture, runs, ticketInput, prActingIn } };
 }

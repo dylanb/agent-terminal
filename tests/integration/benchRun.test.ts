@@ -703,6 +703,42 @@ describe('the run record', () => {
     }).toEqual({ workingFolderCarriesOverride: true, recordedIsWorkingFolders: true, overrideCounts: true });
   });
 
+  it("stops with the PR-acting code when the fixture commit's own override of a span loop holds a PR-acting gate the invoking repository's tree lacks, copying no issue and opening no app", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots, 'bench-run-pr-override', (dir) => {
+      const override = join(dir, 'loops', 'red-loop');
+      cpSync(join(resolveExampleLoopsV2Dir(roots.bundle), 'feature-dev-v3', 'red-loop'), override, { recursive: true });
+      const def = join(override, 'red-loop.yaml');
+      writeFileSync(def, readFileSync(def, 'utf8').replace('      - kind: commit\n        label: RED\n', '      - kind: commit\n        label: RED\n      - kind: gh\n        action: mark-ready\n'));
+      writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  red-loop: loops/red-loop/red-loop.yaml\n');
+      b.git(dir, ['add', '-A']);
+      b.git(dir, ['commit', '-q', '-m', 'override red-loop with a PR-acting gate']);
+    });
+    rmSync(join(s.repo, '.agent-loop.yaml'));
+    const github = createFakeBenchGithub();
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { github, launcher }));
+
+    expect({ code: codeOf(result), copies: copies(github.writes), launches: launcher.launches.length }).toEqual({ code: 'pr-acting-gate', copies: [], launches: 0 });
+  });
+
+  it("stops with the preparation code when the fixture commit's own override of a span loop does not resolve, copying no issue and opening no app", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots, 'bench-run-bad-override', (dir) => {
+      writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  red-loop: ../outside/red-loop.yaml\n');
+      b.git(dir, ['add', '-A']);
+      b.git(dir, ['commit', '-q', '-m', 'override red-loop outside the repository']);
+    });
+    rmSync(join(s.repo, '.agent-loop.yaml'));
+    const github = createFakeBenchGithub();
+    const launcher = createFakeLauncher();
+
+    const result = await runBench(runRequest(s, roots, {}, { github, launcher }));
+
+    expect({ code: codeOf(result), copies: copies(github.writes), launches: launcher.launches.length }).toEqual({ code: 'prepare-failed', copies: [], launches: 0 });
+  });
+
   it("writes run k's record after its app exits and before run k+1 is prepared", async () => {
     fresh();
     const s = await capturedSetup(b, roots);

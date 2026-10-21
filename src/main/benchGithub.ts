@@ -1,6 +1,3 @@
-// #180 — the bench runner's GitHub seam. Every value crosses to `gh` as an argv element or on stdin (CWE-78), and
-// every call is pinned to the repository it acts on with `--repo`.
-
 import { tmpdir } from 'node:os';
 import { runAppCommand } from './appCommand';
 import { EPIC_READY_LABEL } from './epicPromotion';

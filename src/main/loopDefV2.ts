@@ -196,7 +196,7 @@ export interface LoopDefPromptFile {
 }
 
 /** The def's prompt resources: the tier-root references it loads as prompts, never its `inputs`/`outputs`
- *  artifact bindings (#180's prompt revision). */
+ *  artifact bindings. */
 export function loopDefPromptFiles(def: LoopDefV2): LoopDefPromptFile[] {
   return [
     ...(def.brief !== undefined ? [{ role: 'brief', file: def.brief }] : []),

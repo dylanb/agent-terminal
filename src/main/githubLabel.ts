@@ -1,5 +1,4 @@
-// The one label check-and-create over a repository-pinned `gh` call, shared by epic promotion (§28.7) and the
-// bench runner (#180): an existing label is never changed.
+// An existing label is never changed.
 
 /** Runs `gh <args>` pinned to one repository, throwing an error that starts with `failure`. */
 export type PinnedGh = (args: string[], failure: string) => Promise<string>;

@@ -1,5 +1,4 @@
-// #180 — the run record (docs/bench.md): the runner writes one per run, and every later reader (Bench-1b,
-// Bench-1c, Bench-2) reads it through this module.
+// docs/bench.md
 
 import { BENCH_APP_ENDINGS } from './benchLaunch';
 import type { BenchSpan } from './benchLaunch';

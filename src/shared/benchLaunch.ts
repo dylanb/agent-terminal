@@ -1,5 +1,4 @@
-// #180 — the runner-to-app launch contract: the env value the runner launches the app with, the endings the app
-// observes, and the span-end file the app writes and the runner reads.
+// §18.7.8
 
 import type { StepSpan } from './flowStepSpan';
 

@@ -127,8 +127,7 @@ function isRealDir(p: string): boolean {
  *  planned source is a REGULAR file inside a REAL directory: a symlinked flow.yaml, or a symlinked
  *  todo-templates dir, is refused rather than read through (CWE-59). `null` when the flow-home dir is absent
  *  (a mispackaged bundle, not an empty tree). Shared by the global-fallback `flow` destination and each
- *  catalog entry, so a catalog flow home is read exactly as the fallback one is, and by the bench runner's flow
- *  install (#180), so a run installs the same flow-home file set. */
+ *  catalog entry, so a catalog flow home is read exactly as the fallback one is. */
 export function flowHomeRels(flowHomeBundleDir: string): DestRelativePath[] | null {
   if (absent(flowHomeBundleDir)) return null;
   const rels: DestRelativePath[] = [];

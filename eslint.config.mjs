@@ -58,8 +58,6 @@ export default [
     },
   },
   {
-    // #180: a bench runner module takes its env, roots, clock and randomness as arguments so its tests can fix
-    // them; only the side-effecting entry reads them from the process.
     files: ['src/main/bench*.ts'],
     ignores: ['src/main/benchMainEntry.ts'],
     rules: {

@@ -32,7 +32,10 @@ Relative paths resolve against the directory `pnpm` was run from (`INIT_CWD`).
   prints each run's folder.
 
 Each refusal and failure prints a stable code (for example `fixture-unparsable`, `pr-acting-gate`,
-`label-failed`) and a sentence naming it, and exits non-zero.
+`label-failed`) and a sentence naming it, and exits non-zero. The PR-acting-gate check runs twice: once before
+anything else, over the invoking repository's loop defs, and again in each run's working folder before its issue
+is copied, because the app loads the fixture commit's own repository-tier loop overrides there. A hit in the
+working folder stops the command with `pr-acting-gate` and keeps that run's folder.
 
 ## Fixture format
 
@@ -130,7 +133,7 @@ their records.
 - `fixture` — the absolute path of the fixture the runner read.
 - `ending` — how the span ended: `left span` (the flow would have moved to a step outside the span, and did
   not), `completed`, `terminated`, `window closed` (the operator closed the app's window), or `app exited` (the
-  app exited for any other reason, such as its shell exiting or a crash, before the span ended).
+  app exited for any other reason, such as its shell exiting, the operator quitting it, or a crash, before the span ended).
 - `wallClockMs` — from the runner starting the run's app to that app having exited, so it includes the app's
   start-up and its quit; preparing the run and writing its record are excluded.
 

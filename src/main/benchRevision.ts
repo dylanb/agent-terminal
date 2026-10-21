@@ -1,5 +1,3 @@
-// #180 — a run's two revisions: the flow-definition revision and the prompt revision (the ticket's Definitions).
-
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';

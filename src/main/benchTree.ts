@@ -1,6 +1,3 @@
-// #180 — a confined walk of a directory of flow documents, shared by `bench capture` (a working folder's loop
-// artifacts) and `bench run` (a fixture's artifacts).
-
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { confinedRealPathResult } from './confinedPath';

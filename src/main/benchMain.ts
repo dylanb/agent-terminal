@@ -1,6 +1,3 @@
-// #180 — the bench runner's pure entry: argv, env and the invoking directory in, an exit code and the printed
-// output out.
-
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { runAppCommand } from './appCommand';
@@ -65,7 +62,6 @@ const RUN_REFUSALS: Record<BenchRunRefusal, string> = {
 const RUN_FLAGS = ['--flow', '--span', '--fixture', '--runs'] as const;
 type RunFlag = (typeof RUN_FLAGS)[number];
 
-/** `run`'s flags, each given once with a value, and nothing else; null on anything else. */
 function parseRunFlags(args: string[]): Record<RunFlag, string> | null {
   const values: Partial<Record<RunFlag, string>> = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -79,7 +75,6 @@ function parseRunFlags(args: string[]): Record<RunFlag, string> | null {
 
 const isFlowPath = (value: string): boolean => value.includes('/') || value.endsWith('.yaml') || value.endsWith('.yml');
 
-/** Split at the first `..` only, so a value with more parts names no step and is refused, never cut short. */
 function parseSpan(value: string): BenchSpan {
   const at = value.indexOf('..');
   return at < 0 ? { first: value, last: value } : { first: value.slice(0, at), last: value.slice(at + 2) };

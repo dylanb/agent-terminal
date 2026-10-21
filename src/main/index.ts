@@ -1124,17 +1124,22 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
-  // #180 — a close the shell's exit causes is not the operator closing the window, so it ends no span.
-  let shellClosedWindow = false;
+  // §18.7.8 — a close the shell's exit or a quit causes is not the operator closing the window, so it ends no span.
+  let closedByApp = false;
+  const markQuitting = (): void => {
+    closedByApp = true;
+  };
+  app.on('before-quit', markQuitting);
+  win.once('closed', () => app.off('before-quit', markQuitting));
   win.on('close', () => {
-    if (!shellClosedWindow) benchPorts?.windowClosed();
+    if (!closedByApp) benchPorts?.windowClosed();
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
   ptyProcess.onExit(({ exitCode }) => {
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
-      shellClosedWindow = true;
+      closedByApp = true;
       win.close();
     }
   });

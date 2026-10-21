@@ -1,4 +1,4 @@
-// #180 — `bench capture`: a working folder of a real run becomes a fixture (docs/bench.md).
+// docs/bench.md
 
 import { lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -67,7 +67,6 @@ function ticketOf(dir: string, appHome: string, inputs: Record<string, string>):
   return isFixtureIssueNumber(number) ? { name: ticket.name, number } : null;
 }
 
-/** Removes a fixture folder it could not finish, so a failed write leaves no half-written fixture. */
 function writeFixture(fixtureDir: string, fixture: BenchFixture, artifacts: Map<string, Buffer>): BenchCaptureResult {
   mkdirSync(path.dirname(fixtureDir), { recursive: true });
   try {
@@ -90,7 +89,6 @@ function writeFixture(fixtureDir: string, fixture: BenchFixture, artifacts: Map<
   return { ok: true };
 }
 
-/** Writes nothing until every check has passed. */
 export async function captureFixture(request: BenchCaptureRequest): Promise<BenchCaptureResult> {
   const { workingFolder: dir, fixtureDir, appHome, github } = request;
   if (exists(fixtureDir)) return refused('fixture-exists');

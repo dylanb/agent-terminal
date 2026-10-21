@@ -1,7 +1,3 @@
-// #180 — one run's preparation: its folder, a worktree at the fixture's commit on the run's own branch, the
-// fixture's flow documents and the validated flow restored into it, the run's issue copy, and the flow state the
-// app opens on, seeded with the app's own writers.
-
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BenchGithub } from './benchGithub';
@@ -28,7 +24,7 @@ export const BENCH_FLOW_ID = 'bench-run-flow';
 const SPAN_END_FILE = 'span-end.json';
 
 /** `prepare-failed` is any other git or file-system failure. */
-export type BenchPrepareFailure = 'restore-escapes' | 'issue-copy-failed' | 'prepare-failed';
+export type BenchPrepareFailure = 'restore-escapes' | 'pr-acting-gate' | 'issue-copy-failed' | 'prepare-failed';
 
 export interface BenchPrepareRequest {
   invokingRepo: string;
@@ -74,7 +70,6 @@ function ownJail(jail: string | null, what: string): string {
   return jail;
 }
 
-/** Writes `bytes` at `rel` under `jail`, the destination confined before any directory is created. */
 function writeConfined(jail: string, rel: string, bytes: Buffer | string): void {
   const target = path.join(jail, rel);
   if (!confinedOk(jail, target)) throw new PrepareError('restore-escapes', `${rel} resolves outside the working folder`);
@@ -134,6 +129,10 @@ export async function prepareBenchRun(request: BenchPrepareRequest): Promise<Ben
     const workingFolder = realpathSync(worktree);
     restoreArtifacts(request.fixtureDir, workingFolder);
     installFlow(request.accepted, workingFolder, request.appHome);
+    // The app loads the fixture commit's repository tier, which the refusal over the invoking repository did not read.
+    const prActing = request.accepted.prActingIn(workingFolder);
+    if (prActing === null) throw new PrepareError('prepare-failed', "a span step's loop def does not resolve in the working folder");
+    if (prActing) throw new PrepareError('pr-acting-gate', "the fixture commit's loop defs put a gate acting on the pickup pull request in the span");
     let copy: number;
     try {
       copy = await request.github.copyIssue(request.accepted.fixture.issue);

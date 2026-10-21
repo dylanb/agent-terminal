@@ -519,6 +519,16 @@ test('the operator closing a launched app\'s window ends the span as window clos
   expect({ closed: closed(), ending: spanEnding(run.launch) }).toEqual({ closed: true, ending: 'window closed' });
 });
 
+test('a launched app the operator quits writes no span-end file, so the runner records app exited', { tag: '@ownapp' }, async () => {
+  const run = await preparedRun({ first: 'plan', last: 'plan' }, GROOMED, { realCommitOps: false });
+  const { closed } = await openLaunched(run);
+
+  await app!.evaluate(({ app: a }) => a.quit());
+  await until(closed, 30_000);
+
+  expect({ closed: closed(), ending: spanEnding(run.launch) }).toEqual({ closed: true, ending: null });
+});
+
 test('a launched app whose shell exits quits with no span-end file, so the runner records app exited', { tag: '@ownapp' }, async () => {
   const run = await preparedRun({ first: 'plan', last: 'plan' }, GROOMED, { realCommitOps: false });
   const { closed } = await openLaunched(run, { APP_STARTUP_EXIT_GRACE_MS: '1' });

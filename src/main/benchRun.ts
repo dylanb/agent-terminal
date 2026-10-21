@@ -1,6 +1,3 @@
-// #180 — `bench run`: the refusals, the `bench-run` label, then N runs one after another, each prepared from the
-// fixture, launched and waited for.
-
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BenchGithub } from './benchGithub';
@@ -25,8 +22,6 @@ export interface BenchClock {
   stamp(): string;
 }
 
-/** The production clock over `now`, the epoch-ms time source the entry supplies. The stamp is the UTC instant to
- *  the millisecond, `20261020T120000.001Z`. */
 export function createBenchClock(now: () => number): BenchClock {
   return { now, stamp: () => new Date(now()).toISOString().replace(/[-:]/g, '') };
 }
@@ -61,7 +56,6 @@ export type BenchRunResult = { ok: true; runFolders: string[] } | { ok: false; c
 
 const STAMP = /^[A-Za-z0-9._-]+$/;
 
-/** This command's folder, made with a mkdir that fails when it exists, so two commands never share runs. */
 function makeStampDir(appHome: string, stamp: string): string | null {
   if (!STAMP.test(stamp) || stamp === '.' || stamp === '..') throw new Error(`the clock's stamp is not one path segment: ${stamp}`);
   const root = benchRootDir(appHome);
