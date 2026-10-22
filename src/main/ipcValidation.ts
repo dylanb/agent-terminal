@@ -7,6 +7,7 @@ import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
+import { RUN_IDENTITY_KEYS } from '../shared/runIdentity';
 import {
   APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
@@ -34,6 +35,7 @@ import {
   type FlowClearActiveFlowMsg,
   type FlowListCatalogMsg,
   type FlowRebindHeldRunMsg,
+  type FlowConfirmRunPickupMsg,
   type RebindChoice,
   type StepMissingConsent,
   CATALOG_ORIGINS,
@@ -77,7 +79,7 @@ function isLiveSession(m: Record<string, unknown>): boolean {
 }
 
 function isPositiveInt(n: unknown): n is number {
-  return typeof n === 'number' && Number.isInteger(n) && n > 0;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 }
 
 export function isValidInput(m: unknown): m is PtyInputMsg {
@@ -244,6 +246,23 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
     isSafeRepoKey(m.repoKey) &&
     isValidRebindChoice(m.choice) &&
     isValidStepMissingConsent(m.ifStepMissing)
+  );
+}
+
+/** flow:confirmRunPickup (§27.13 v2.211, §6) */
+export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPickupMsg {
+  return (
+    isRecord(m) &&
+    hasExactKeys(m, ['sessionId', 'repoKey', 'run', 'pr', 'ticket']) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isRecord(m.run) &&
+    hasExactKeys(m.run, RUN_IDENTITY_KEYS) &&
+    typeof m.run.flow === 'string' &&
+    typeof m.run.startedAt === 'number' &&
+    Number.isFinite(m.run.startedAt) &&
+    isPositiveInt(m.pr) &&
+    isPositiveInt(m.ticket)
   );
 }
 

@@ -1,6 +1,7 @@
 // Typed IPC contract (§6) — single source of truth for channel names and payloads. Every payload
 // carries sessionId so multi-session support is additive later.
 
+import type { RunIdentity } from './runIdentity';
 import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
@@ -58,6 +59,7 @@ export const CH = {
   flowClearActiveFlow: 'flow:clearActiveFlow',
   flowListCatalog: 'flow:listCatalog',
   flowRebindHeldRun: 'flow:rebindHeldRun',
+  flowConfirmRunPickup: 'flow:confirmRunPickup',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -629,7 +631,26 @@ export interface FlowStateView {
   runStarted: StartednessSignal;
   /** §18.7.3 */
   runHold?: HeldRunView;
+  /** §27.13 v2.211 — present while the run is held for the operator to confirm its ticket and pull request. */
+  pickupConfirm?: PickupConfirmView;
 }
+
+
+/** §27.13 v2.211 */
+export type PickupConfirmView =
+  | { run: RunIdentity; state: 'looking' }
+  | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
+
+/** §6 — the run is named so a confirm can only release the hold the operator was shown. */
+export interface FlowConfirmRunPickupMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  run: RunIdentity;
+  pr: number;
+  ticket: number;
+}
+
+export type ConfirmRunPickupResult = { ok: true } | { ok: false; reason: string };
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
  *  (a todo mutated, the agent flipped active/quiet); the strip re-pulls `flow:state`. Carries no
@@ -1188,6 +1209,8 @@ export interface FlowApi {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** §18.7.3 */
   rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
+  /** §27.13 v2.211 */
+  confirmRunPickup(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;
