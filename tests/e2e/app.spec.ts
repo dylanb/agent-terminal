@@ -1,6 +1,7 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
@@ -577,6 +578,7 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
 });
 
 test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 60_000);
   // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session. Use a
   // tiny startup-exit grace so the post-grace path is deterministic: in a fast environment the shell
   // can exit only a few hundred ms after spawn, which under the default 1s grace would be treated as

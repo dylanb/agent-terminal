@@ -5,8 +5,8 @@ import { copyDevIcon } from './src/main/appIconBuild';
 import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2 } from './src/main/exampleAssetsBuild';
 import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
 
-// After the main bundle is written, copy build/icon.png and the example trees next to it so the
-// unpackaged runtime resolvers (app.getAppPath()/build/icon.png and .../example/{flows,loops-v2,commands})
+// After the main bundle is written, copy the app icons and the example trees next to it so the
+// unpackaged runtime resolvers (app.getAppPath()/build/{icon,controller-icon}.png and .../example/{flows,loops-v2,commands})
 // find them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
 // bundle to seed from.
 function copyDevAssetsPlugin(): Plugin {
@@ -19,7 +19,8 @@ function copyDevAssetsPlugin(): Plugin {
     closeBundle() {
       if (!outDir) return;
       const rootDir = path.resolve(outDir, '..', '..');
-      copyDevIcon(rootDir, outDir);
+      copyDevIcon(rootDir, outDir, 'terminal');
+      copyDevIcon(rootDir, outDir, 'controller');
       copyExampleFlows(rootDir, outDir);
       copyExampleLoopsV2(rootDir, outDir);
       copyExampleCommands(rootDir, outDir);
@@ -35,6 +36,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: path.resolve(__dirname, 'src/main/index.ts'),
+          controller: path.resolve(__dirname, 'src/main/controller.ts'),
           // §27.12 — the agent-runnable format checker, resolved at runtime by resolveArtifactCheckScript.
           [ARTIFACT_CHECK_ENTRY]: path.resolve(__dirname, 'src/main/artifactCheckMain.ts'),
         },
@@ -44,5 +46,8 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
   },
-  renderer: {},
+  renderer: { build: { rollupOptions: { input: {
+    index: path.resolve(__dirname, 'src/renderer/index.html'),
+    controller: path.resolve(__dirname, 'src/renderer/controller.html'),
+  } } } },
 });

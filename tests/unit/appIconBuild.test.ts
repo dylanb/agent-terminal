@@ -17,6 +17,7 @@ describe('copyDevIcon — places the icon where the unpackaged resolver reads it
     out = mkdtempSync(path.join(tmpdir(), 'icon-out-'));
     mkdirSync(path.join(root, 'build'), { recursive: true });
     writeFileSync(path.join(root, 'build', 'icon.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    writeFileSync(path.join(root, 'build', 'controller-icon.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 4, 5, 6]));
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
@@ -24,16 +25,22 @@ describe('copyDevIcon — places the icon where the unpackaged resolver reads it
   });
 
   it('copies build/icon.png to the path resolveWindowIconPath reads for that out dir', () => {
-    const dest = copyDevIcon(root, out);
+    const dest = copyDevIcon(root, out, 'terminal');
     // The destination IS the resolver's unpackaged path for appPath = out — they cannot drift.
-    expect(dest).toBe(resolveWindowIconPath({ packaged: false, appPath: out }));
+    expect(dest).toBe(resolveWindowIconPath({ packaged: false, appPath: out }, 'terminal'));
     expect(existsSync(dest)).toBe(true);
     expect(readFileSync(dest)).toEqual(readFileSync(path.join(root, 'build', 'icon.png')));
   });
 
+  it('copies build/controller-icon.png to the path the controller resolver reads', () => {
+    const dest = copyDevIcon(root, out, 'controller');
+    expect(dest).toBe(resolveWindowIconPath({ packaged: false, appPath: out }, 'controller'));
+    expect(readFileSync(dest)).toEqual(readFileSync(path.join(root, 'build', 'controller-icon.png')));
+  });
+
   it('creates the destination directory if it does not exist yet', () => {
     expect(existsSync(path.join(out, 'build'))).toBe(false);
-    copyDevIcon(root, out);
+    copyDevIcon(root, out, 'terminal');
     expect(existsSync(path.join(out, 'build', 'icon.png'))).toBe(true);
   });
 });

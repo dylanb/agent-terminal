@@ -171,17 +171,19 @@ import {
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
 import { createRealAppBootstrapPorts } from './appBootstrapPorts';
+import { registerControllerTerminal } from './controllerClient';
+import { captureControllerIdentity } from './controllerIdentity';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
   // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
-  applyDockIcon(app.dock, process.platform, iconLoc);
+  applyDockIcon(app.dock, process.platform, iconLoc, 'terminal');
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    icon: resolveWindowIconPath(iconLoc),
+    icon: resolveWindowIconPath(iconLoc, 'terminal'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -199,10 +201,41 @@ async function createWindow(): Promise<void> {
   const resolveExampleInstallDestinations = (): InstallDestination[] =>
     exampleInstallDirs(iconLoc, { flowGlobalDir, codexHome: codexHome() });
   const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
+  let releaseStartup!: () => void;
+  const startupReady = new Promise<void>(resolve => { releaseStartup = resolve; });
+  ipcMain.handle(CH.startupReady, (event, message) => {
+    if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
+    return startupReady;
+  });
+  let finishRegistration!: (accepted: boolean) => void;
+  const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
+  const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot), () => {
+    if (win.isDestroyed()) return 'unavailable';
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    return 'activated';
+  }, () => finishRegistration(true));
+  win.once('closed', () => {
+    unregisterController();
+    finishRegistration(false);
+    ipcMain.removeHandler(CH.startupReady);
+  });
+  const target = resolveRendererTarget({
+    isPackaged: app.isPackaged,
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+  });
+  if (target.kind === 'url') await win.loadURL(target.url);
+  else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
+  if (!await registration || win.isDestroyed()) return;
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
   });
+  if (win.isDestroyed()) {
+    ptyProcess.kill();
+    return;
+  }
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
   // PTY I/O after the shell exits is dropped, not driven into a dead master fd (§5; ptyIo.ts).
   const ptyIo = createPtyIo(ptyProcess);
@@ -1536,6 +1569,7 @@ async function createWindow(): Promise<void> {
     // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
     // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
     disposeAll([
+      unregisterController,
       () => disposeIpc(),
       () => ptyProcess.kill(),
       () => scanner.dispose(),
@@ -1551,14 +1585,12 @@ async function createWindow(): Promise<void> {
     ]);
   });
 
-  const target = resolveRendererTarget({
-    isPackaged: app.isPackaged,
-    rendererUrl: process.env.ELECTRON_RENDERER_URL,
-  });
-  if (target.kind === 'url') await win.loadURL(target.url);
-  else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
-
-  outputGate.open();
+  const rendererReady = (event: Electron.IpcMainEvent, message: { sessionId?: unknown }) => {
+    if (event.sender === win.webContents && message?.sessionId === SESSION_ID) outputGate.open();
+  };
+  ipcMain.on(CH.startupRendered, rendererReady);
+  win.once('closed', () => ipcMain.removeListener(CH.startupRendered, rendererReady));
+  releaseStartup();
 }
 
 app.whenReady().then(createWindow);

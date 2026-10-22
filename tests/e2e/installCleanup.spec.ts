@@ -1,8 +1,9 @@
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { electron } from './registeredElectron';
 
 // §18.1 v2.212 — Install examples offers, behind its own unchecked box, to remove what the retired feature-dev and
 // feature-dev-v2 flows left in an installation.

@@ -107,6 +107,12 @@ describe('committed icon artifacts', () => {
     const recorded = readFileSync(path.join(buildDir, 'icon.svg.sha256'), 'utf8').trim();
     expect(recorded).toBe(fingerprint(svg));
   });
+
+  it('records a build/controller-icon.svg.sha256 that matches the committed build/controller-icon.svg', () => {
+    const svg = readFileSync(path.join(buildDir, 'controller-icon.svg'));
+    const recorded = readFileSync(path.join(buildDir, 'controller-icon.svg.sha256'), 'utf8').trim();
+    expect(recorded).toBe(fingerprint(svg));
+  });
 });
 
 describe('package script wiring', () => {
