@@ -56,7 +56,7 @@ const temp = (prefix: string): string => {
 
 test('the bench script runs the built runner entry', { tag: '@ownapp' }, () => {
   const scripts = (JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { scripts: Record<string, string> }).scripts;
-  expect(scripts.bench ?? '').toContain(`out/main/${BENCH_ENTRY}.js`);
+  expect(scripts.bench ?? '').toContain(`ELECTRON_RUN_AS_NODE=1 electron out/main/${BENCH_ENTRY}.js`);
 });
 
 test('capture through the built entry writes a fixture the shared reader reads back', { tag: '@ownapp' }, () => {
@@ -449,6 +449,7 @@ test('two runs of span groom..groom-approve from one fixture each work their own
       if (!closed()) await app?.close();
       app = undefined;
       runs.push({ launch, copy, groomed, callsBefore, callsAfter: ghCalls(logFile).length, overruns: goalAgentOverruns(agentDir) });
+      return { started: true };
     },
   };
 

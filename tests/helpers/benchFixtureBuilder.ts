@@ -21,6 +21,9 @@ export interface BenchFixtureBuilder {
   makeRepository(prefix: string): { dir: string; commit: string };
   /** Install `flowYaml` as the repo-tier catalog entry `id` and point the active-flow pointer at it. */
   seedFlow(dir: string, id: string, flowYaml: string): void;
+  /** Install `flowYaml` as the global-tier catalog entry `id` under `globalRoot` only, and point the folder's
+   *  active-flow pointer at it. */
+  seedGlobalFlow(dir: string, globalRoot: string, id: string, flowYaml: string): void;
   /** Write each `relPath → contents` under the folder's loop artifacts directory. */
   writeArtifacts(dir: string, files: Record<string, string>): void;
   /** Commit `rel` as a symlink to `target`, forced past `.gitignore`; returns the new commit. */
@@ -61,6 +64,10 @@ export function createBenchFixtureBuilder(): BenchFixtureBuilder {
     },
     seedFlow(dir, id, flowYaml) {
       write(catalogEntryDefFile(dir, id), flowYaml);
+      writeActiveFlow(dir, id);
+    },
+    seedGlobalFlow(dir, globalRoot, id, flowYaml) {
+      write(catalogEntryDefFile(globalRoot, id), flowYaml);
       writeActiveFlow(dir, id);
     },
     writeArtifacts(dir, files) {

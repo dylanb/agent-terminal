@@ -3,7 +3,7 @@
 // that does not wait for one app to exit shows `open 1, open 2` before any exit.
 
 import { writeFileSync } from 'node:fs';
-import type { AppLauncher } from '../../src/main/benchLauncher';
+import type { AppLauncher, AppRun } from '../../src/main/benchLauncher';
 import type { BenchClock } from '../../src/main/benchRun';
 import { serializeBenchSpanEnd, type BenchAppEnding, type BenchLaunch } from '../../src/shared/benchLaunch';
 
@@ -31,6 +31,8 @@ export interface FakeLaunchScript {
   durationMs?: number;
   /** How long, in real time, the "app" stays open before it exits; 5 ms when absent. */
   holdMs?: number;
+  /** The "app" cannot be started, for this cause: it writes no span-end file. */
+  startError?: string;
 }
 
 export interface FakeLauncherOptions {
@@ -62,14 +64,19 @@ export function createFakeLauncher(opts: FakeLauncherOptions = {}): FakeLauncher
       }
       events.push(`open ${k}`);
       opts.inspect?.(launch, k);
-      return new Promise<void>((resolve) => {
+      return new Promise<AppRun>((resolve) => {
         setTimeout(() => {
           opts.clock?.advance(script.durationMs ?? 0);
+          if (script.startError !== undefined) {
+            events.push(`exit ${k}`);
+            resolve({ started: false, error: script.startError });
+            return;
+          }
           if (script.ending !== undefined) {
             writeFileSync(launch.spanEndFile, script.ending === 'unparsable' ? '{ not a span end' : serializeBenchSpanEnd(script.ending));
           }
           events.push(`exit ${k}`);
-          resolve();
+          resolve({ started: true });
         }, script.holdMs ?? 5);
       });
     },

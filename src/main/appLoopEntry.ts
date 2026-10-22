@@ -1,13 +1,11 @@
 import type { TransitionKind } from '../shared/audit';
 import type { AppLoopEntry } from './appLoopEngine';
 
-/** §18.7.8 */
-export function appLoopEntryFor(kind: TransitionKind, startEntry?: AppLoopEntry | null): AppLoopEntry {
+export function appLoopEntryFor(kind: TransitionKind): AppLoopEntry {
   switch (kind) {
     case 'advance':
       return 'chain-advance';
     case 'start':
-      return startEntry ?? 'fresh-run';
     case 'restart':
       return 'fresh-run';
     case 'undo':

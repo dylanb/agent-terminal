@@ -13,6 +13,11 @@ side parses** (CWE-78). Instances: paste-breakout sanitization at the injection 
 §23.5 launch target crossing the OS boundary as a distinct env value rather than spliced into a command
 line. When the boundary is a POSIX shell, the enforcement is the shell-quoting rule below.
 
+Main-process code reaches the OS without a shell at all: `execFile`/`execFileSync`/`spawn`/`spawnSync` with an
+argv array, never `exec`/`execSync` and never a `shell` option. `eslint.config.mjs` enforces this for
+`src/main/**` (pinned by `tests/unit/shellFreeSpawnLint.test.ts`), and the bench modules additionally refuse any
+property named `shell`.
+
 ## Shell quoting — `src/shared/shellQuote.ts`, never hand-rolled
 
 Any value placed into shell text is quoted through the one shared primitive — generated scripts,
@@ -282,7 +287,9 @@ shipped this way: `wipeConflict: true` deleted the branch (and closed its PR) re
 `on_conflict` was `wipe-and-retry`, because the policy was consulted only on the path that *asked*. The
 confirm-first rule for hard-to-reverse and outward-facing actions stands on top of this, not instead of it.
 
-## Every entry in the run log must be true
+## Every record people read as fact must be true
+
+The rule covers every record the app or its tooling writes for someone to read later as evidence of what happened — the run log (the §25 audit log), a bench run record, a report or fixture file. The run log is the main case and the examples below come from it; the bench run record is the case that showed the rule cannot stop at the run log (see the end of this section).
 
 The app keeps a running record of what it did during each task — the run log (we call it the §25 audit log). People read it afterwards to understand what actually happened, so every entry is a statement of fact: "we showed the user a confirmation," "we skipped this step," "this step failed." Those statements have to be accurate. A wrong entry isn't a cosmetic issue — it misleads whoever reads the log into believing something that never occurred: a confirmation the user was never shown, a failure that never happened, or a "success" that was really a cancellation.
 
@@ -298,6 +305,8 @@ A worked example: our epic-promotion gate used to return true/false, where "true
 Prove it with a test that would fail if the log lied, and check both directions: the entry shows up when the outcome happened, and does not show up when a different outcome happened. Checking only the first isn't enough — a bug that writes the entry every single time would still pass. So the "blocked" test confirms the block was recorded and that no "confirmation shown" entry appears; the cancellation tests confirm the cancellation was recorded and that no "success" entry appears.
 
 In the code: the gate returns `EpicGateOutcome` (not the old boolean). The "confirmation shown" entry, recorded only on the `preview-raised` outcome, is produced by the shared `gateDecisionAuditCmd` (`src/shared/audit.ts`); each block entry is the shared `epicPromotionAuditCmd('blocked', …)` (`src/shared/audit.ts`), a kind deliberately distinct from that preview entry so a block is never recorded as a confirmation.
+
+Beyond the run log (#180): the bench runner's launcher resolved on the child process's `exit` *or* its `error`, so an app that could not be started at all was recorded with the ending `app exited` — one ending for two outcomes, and a run reported as done that never ran. The launcher now returns `AppRun` (`{ started: true }` or `{ started: false; error }`), the record says `app did not start`, and the command stops with `app-did-not-start` and the cause.
 
 ## Comments state ONLY what the code cannot
 
@@ -387,6 +396,14 @@ flaky, and 0 failed — the green bar had been true and useless for as long as i
 The general form, and why it earns a standard rather than a code comment: **when a shared fixture is
 expensive and only *some* tests can use it, "provision it for everyone" is not the safe default — it is a
 load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-out, and pin the opt-out.
+
+## A pinning test counts only once it has been seen to fail
+
+TDD's RED is the evidence that a test can fail. A test written over code that already works — the pinning test a refactor starts from, or a test added at review for a branch that already behaves — never had a RED, so passing tells you nothing: it would pass just the same if it asserted nothing that the code decides. Manufacture the RED instead. Break the line the test guards (drop a check, return the other branch, skip the clean-up), run the test, and observe the assertion fail; then restore the file. Record each break and its result with the run's evidence.
+
+Make each break from a backup copy of the file and restore it by copying the backup back. `git checkout`/`git restore` on the file throws away every uncommitted edit in it, not only the break, which on a working branch is the real work.
+
+A test that survives a break has one of two meanings, and they need different responses: the test cannot fail (rewrite it), or the break could not misbehave because something else still guards the line (break that too, or pick a line that matters). In #180 the first break of the unknown-command check left the command guard in place, so the dispatch it changed was unreachable and the test rightly stayed green; with the guard removed as well, the test failed. A behaviour-preserving refactor whose guard is an existing test gets the same check before the change: break the behaviour, watch that test fail, restore, then refactor.
 
 ## One theme per PR
 

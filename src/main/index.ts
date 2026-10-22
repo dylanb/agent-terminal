@@ -1114,7 +1114,7 @@ async function createWindow(): Promise<void> {
       const r = resolveRun(repoKey);
       return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
-    start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start', benchPorts?.startEntryFor(repoKey)), () => flow.start(repoKey, opts)),
+    start: (repoKey, opts) => inTransition(repoKey, benchPorts?.startEntryFor(repoKey) ?? appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
     now: () => Date.now(),
     record: recordFlowTransition,
   });

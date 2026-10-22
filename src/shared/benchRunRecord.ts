@@ -10,7 +10,7 @@ export const BENCH_RUN_AUDIT_DIR = 'audit';
 
 export const BENCH_RUN_RECORD_SCHEMA = 1;
 
-export const BENCH_RUN_ENDINGS = [...BENCH_APP_ENDINGS, 'app exited'] as const;
+export const BENCH_RUN_ENDINGS = [...BENCH_APP_ENDINGS, 'app exited', 'app did not start'] as const;
 export type BenchRunEnding = (typeof BENCH_RUN_ENDINGS)[number];
 
 export interface BenchRunRecord {

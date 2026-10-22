@@ -37,9 +37,11 @@ const localPlugin = {
 };
 
 const AMBIENT = 'A bench module takes this as an argument; benchMainEntry.ts reads it from the process.';
-const SHELL = 'A bench module spawns with argv only, never shell text (CWE-78).';
+const SHELL = 'Spawn with argv only, never shell text (CWE-78).';
 const SHELL_IMPORTS = ['child_process', 'node:child_process'].map((name) => ({ name, importNames: ['default', 'exec', 'execSync'], message: SHELL }));
-const SHELL_SYNTAX = { selector: "Property:matches([key.name='shell'], [key.value='shell']):not([value.value=false])", message: SHELL };
+const SHELL_KEY = "Property:matches([key.name='shell'], [key.value='shell']):not([value.value=false])";
+const SHELL_OPTION = { selector: `CallExpression[callee.name=/^(spawn|spawnSync|execFile|execFileSync)$/] > ObjectExpression > ${SHELL_KEY}`, message: SHELL };
+const SHELL_SYNTAX = { selector: SHELL_KEY, message: SHELL };
 
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
@@ -50,7 +52,14 @@ export default [
     rules: { 'local/no-todo-comments': 'error' },
   },
   {
-    // A later block's options for the same rule replace these, so the ambient block below repeats them.
+    // A later block's options for the same rule replace these, so each block below repeats them.
+    files: ['src/main/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', ...SHELL_IMPORTS],
+      'no-restricted-syntax': ['error', SHELL_OPTION],
+    },
+  },
+  {
     files: ['src/main/bench*.ts'],
     rules: {
       'no-restricted-imports': ['error', ...SHELL_IMPORTS],

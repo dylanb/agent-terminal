@@ -56,6 +56,7 @@ const RUN_REFUSALS: Record<BenchRunRefusal, string> = {
   'restore-escapes': 'a fixture artifact, a flow-home file or a restore destination resolves outside its folder or cannot be resolved',
   'issue-copy-failed': "the fixture's issue could not be copied",
   'prepare-failed': "a run's working folder could not be prepared",
+  'app-did-not-start': "a run's app could not be started",
   'output-failed': "a run's record or audit log could not be written to its run folder",
 };
 

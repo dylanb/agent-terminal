@@ -85,6 +85,32 @@ describe('bench capture through the entry', () => {
       fixture: false,
     });
   });
+
+  it.each([
+    ['capture with no fixture folder', (wf: string): string[] => ['capture', wf]],
+    ['capture with an extra argument', (wf: string): string[] => ['capture', wf, 'fx', 'extra']],
+    ['an unknown command', (wf: string): string[] => ['nope', wf, 'fx']],
+  ])('prints the usage and exits non-zero for %s, writing no fixture', async (_case, argvOf) => {
+    const wf = runFolder();
+    const invoking = b.outsideDir('bench-invoking');
+
+    const { exitCode, output } = await main(argvOf(wf), roots.env(), invoking, deps());
+
+    expect({ failed: exitCode !== 0, usage: output.startsWith('usage:'), invoking: readdirSync(invoking) }).toEqual({ failed: true, usage: true, invoking: [] });
+  });
+
+  it('exits non-zero with a capture failure for a working folder that does not exist, writing no fixture', async () => {
+    runFolder();
+    const invoking = b.outsideDir('bench-invoking');
+
+    const { exitCode, output } = await main(['capture', join(invoking, 'missing'), 'fx'], roots.env(), invoking, deps());
+
+    expect({ failed: exitCode !== 0, failure: output.startsWith('bench capture failed:'), invoking: readdirSync(invoking) }).toEqual({
+      failed: true,
+      failure: true,
+      invoking: [],
+    });
+  });
 });
 
 /** An operator-tier `plan-approve-loop` under `configDir` whose gate does not mark the PR ready. */
@@ -313,6 +339,23 @@ describe('bench run through the entry', () => {
       failed: true,
       folders: launcher.launches.map((l) => dirname(l.spanEndFile)),
       last: expect.stringMatching(/^bench run refused \(output-failed\)/),
+    });
+  });
+
+  it('prints the run folder, then the code and the cause, when a run\'s app cannot be started', async () => {
+    b = createBenchFixtureBuilder();
+    roots = createBenchRoots();
+    const s = await capturedSetup(b, roots);
+    const argv = ['run', '--flow', 'feature-dev-v3', '--span', 'plan', '--fixture', s.fixture, '--runs', '2'];
+    const launcher = createFakeLauncher({ scripts: [{ startError: 'spawn electron ENOENT' }, {}] });
+
+    const { exitCode, output } = await main(argv, roots.env({ INIT_CWD: s.repo }), s.repo, { ...deps(), launcher });
+
+    const lines = output.split('\n').filter((l) => l.length > 0);
+    expect({ failed: exitCode !== 0, folders: lines.slice(0, -1), last: lines.at(-1) }).toEqual({
+      failed: true,
+      folders: launcher.launches.map((l) => dirname(l.spanEndFile)),
+      last: expect.stringMatching(/^bench run refused \(app-did-not-start\): .*spawn electron ENOENT/),
     });
   });
 

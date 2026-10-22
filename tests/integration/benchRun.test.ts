@@ -275,6 +275,17 @@ describe('the restore is confined to the run\'s working folder', () => {
         return { fixture, repo: dir, outside: () => readTree(outsideDir), outsideBefore: {} };
       },
     },
+    {
+      name: 'a fixture artifact in a subfolder that links to a file outside the fixture',
+      arrange: () => {
+        const { dir, commit } = b.makeRepository('bench-confine-f');
+        b.seedFlow(dir, 'feature-dev-v3', V3_FLOW);
+        const fixture = join(b.outsideDir('bench-confine-f-fx'), 'fx');
+        b.writeHandFixture(fixture, handFields(commit), FIXTURE_ARTIFACTS);
+        const { outsideFile, sentinel } = b.plantEscapeLink(join(fixture, 'artifacts', 'impl-report', 'escape.md'));
+        return { fixture, repo: dir, outside: () => readFileSync(outsideFile, 'utf8'), outsideBefore: sentinel };
+      },
+    },
   ];
 
   it.each(cases)('stops with the confinement code for $name, copying no issue, writing nothing outside and opening no app', async ({ arrange }) => {
@@ -866,6 +877,72 @@ describe('a run whose outputs cannot be written', () => {
     const { result, launches, runFolder } = await brokenOutputs((folder) => mkdirSync(join(folder, BENCH_RUN_RECORD_FILE)));
 
     expect({ code: codeOf(result), runFolders: result.runFolders, launches }).toEqual({ code: 'output-failed', runFolders: [runFolder], launches: 1 });
+  });
+});
+
+describe('a run of a flow that declares no github-ticket input', () => {
+  it("runs, opening on the fixture's inputs with no ticket input set to the issue copy", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const file = join(b.outsideDir('bench-no-ticket-flow'), 'flow.yaml');
+    writeFileSync(file, V3_FLOW.replace('type: github-ticket', 'type: text'));
+    const opened: unknown[] = [];
+    const launcher = createFakeLauncher({ inspect: (launch) => void opened.push(createFlowStateStore(launch.workingFolder).read()?.inputs) });
+
+    const result = await runBench(runRequest(s, roots, { flow: { kind: 'path', file } }, { launcher }));
+
+    expect({ code: codeOf(result), opened }).toEqual({ code: null, opened: [FIXTURE_INPUTS] });
+  });
+});
+
+describe("a run whose stamp folder cannot be made", () => {
+  // Root writes into a read-only folder, so the fault this injects cannot happen.
+  it.skipIf(process.getuid?.() === 0)("fails with the filesystem's error, copying no issue and launching nothing, when the bench root cannot be written", async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    const root = benchRootDir(roots.appHome);
+    mkdirSync(root, { recursive: true });
+    chmodSync(root, 0o555);
+    const github = createFakeBenchGithub();
+    const launcher = createFakeLauncher();
+
+    try {
+      const outcome = await runBench(runRequest(s, roots, {}, { github, launcher })).then(
+        () => 'resolved',
+        (e: unknown) => (e instanceof Error && 'code' in e ? e.code : String(e)),
+      );
+
+      expect({ outcome, copies: copies(github.writes), launches: launcher.launches.length }).toEqual({ outcome: 'EACCES', copies: [], launches: 0 });
+    } finally {
+      chmodSync(root, 0o755);
+    }
+  });
+});
+
+describe('a run whose app cannot be started', () => {
+  it('records the ending app did not start, then stops with app-did-not-start naming the cause, issue copy and branch, preparing no next run', async () => {
+    fresh();
+    const s = await capturedSetup(b, roots);
+    let branch = '';
+    const launcher = createFakeLauncher({
+      scripts: [{ startError: 'spawn electron ENOENT' }, {}],
+      inspect: (launch) => {
+        branch = b.git(launch.workingFolder, ['rev-parse', '--abbrev-ref', 'HEAD']);
+      },
+    });
+
+    const result = await runBench(runRequest(s, roots, { runs: '2' }, { launcher }));
+
+    const runFolder = dirname(launcher.launches[0]?.workingFolder ?? '');
+    const record = recordIn(runFolder);
+    const reason = result.ok ? '' : (result.reason ?? '');
+    expect({
+      code: codeOf(result),
+      runFolders: result.runFolders,
+      namesCauseCopyAndBranch: reason.includes('spawn electron ENOENT') && reason.includes(`#${FAKE_FIRST_COPY}`) && reason.includes(branch),
+      ending: record !== null && 'ending' in record ? record.ending : record,
+      launches: launcher.launches.length,
+    }).toEqual({ code: 'app-did-not-start', runFolders: [runFolder], namesCauseCopyAndBranch: true, ending: 'app did not start', launches: 1 });
   });
 });
 

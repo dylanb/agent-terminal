@@ -25,8 +25,9 @@ export function createBenchClock(now: () => number): BenchClock {
   return { now, stamp: () => new Date(now()).toISOString().replace(/[-:]/g, '') };
 }
 
-/** `output-failed` stops the command after its app ran, naming the run folder, like a preparation failure. */
-export type BenchRunRefusal = BenchRefusal | BenchPrepareFailure | 'label-failed' | 'stamp-exists' | 'output-failed';
+/** `app-did-not-start` and `output-failed` stop the command after its app was launched, naming the run folder, like
+ *  a preparation failure. */
+export type BenchRunRefusal = BenchRefusal | BenchPrepareFailure | 'label-failed' | 'stamp-exists' | 'app-did-not-start' | 'output-failed';
 
 export interface BenchRunDeps {
   github: BenchGithub;
@@ -116,9 +117,10 @@ export async function runBench(request: BenchRunRequest): Promise<BenchRunResult
     const definitionRevision = flowDefinitionRevision(accepted.flowText);
     const prompt = promptRevision({ definition: accepted.definition, span: request.span, appBundle: request.deps.appBundle, userConfigRoot: request.userConfigRoot, repoDir: launch.workingFolder });
     const startedAt = clock.now();
-    await launcher.open(launch);
+    const app = await launcher.open(launch);
     // Date.now() can step back; the record's reader refuses a negative duration.
     const wallClockMs = Math.max(0, clock.now() - startedAt);
+    const created = `(issue copy #${prepared.issueCopy} on branch ${prepared.branch} was created)`;
     try {
       copyAuditLog(request.appHome, launch.workingFolder, prepared.runFolder);
       writeFileSync(
@@ -132,13 +134,14 @@ export async function runBench(request: BenchRunRequest): Promise<BenchRunResult
           fixtureIssue: accepted.fixture.issue,
           issueCopy: { number: prepared.issueCopy },
           branch: prepared.branch,
-          ending: spanEnding(launch),
+          ending: app.started ? spanEnding(launch) : 'app did not start',
           wallClockMs,
         }),
       );
     } catch (e) {
-      return { ok: false, code: 'output-failed', runFolders, reason: `${errMsg(e)} (issue copy #${prepared.issueCopy} on branch ${prepared.branch} was created)` };
+      return { ok: false, code: 'output-failed', runFolders, reason: `${errMsg(e)} ${created}` };
     }
+    if (!app.started) return { ok: false, code: 'app-did-not-start', runFolders, reason: `${app.error} ${created}` };
   }
   return { ok: true, runFolders };
 }

@@ -135,7 +135,9 @@ their records.
 - `fixture` — the absolute path of the fixture the runner read.
 - `ending` — how the span ended: `left span` (the flow would have moved to a step outside the span, and did
   not), `completed`, `terminated`, `window closed` (the operator closed the app's window), or `app exited` (the
-  app exited for any other reason, such as its shell exiting, the operator quitting it, or a crash, before the span ended).
+  app exited for any other reason, such as its shell exiting, the operator quitting it, or a crash, before the span ended),
+  or `app did not start` (the app could not be started at all; the command then stops with `app-did-not-start`
+  and its cause, and prepares no further run).
 - `wallClockMs` — from the runner starting the run's app to that app having exited, so it includes the app's
   start-up and its quit; preparing the run and writing its record are excluded.
 

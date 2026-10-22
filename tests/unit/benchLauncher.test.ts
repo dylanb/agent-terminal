@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { benchLaunchEnv, createBenchLauncher } from '../../src/main/benchLauncher';
+import { benchLaunchEnv, createBenchLauncher, type AppRun } from '../../src/main/benchLauncher';
 import { APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 import { BENCH_LAUNCH_ENV, BENCH_LAUNCH_SCHEMA, decodeBenchLaunch, type BenchLaunch } from '../../src/shared/benchLaunch';
 
@@ -31,7 +31,7 @@ const WAIT_MS = 10_000;
 
 const RUNNER_ENV: NodeJS.ProcessEnv = { PATH: process.env.PATH, ELECTRON_RUN_AS_NODE: '1', BENCH_RUNNER_MARK: 'kept' };
 
-function standIn(): { dir: string; launch: BenchLaunch; open: () => Promise<void> } {
+function standIn(): { dir: string; launch: BenchLaunch; open: () => Promise<AppRun> } {
   const dir = mkdtempSync(join(tmpdir(), 'bench-launcher-'));
   dirs.push(dir);
   const script = join(dir, 'app.cjs');
@@ -65,11 +65,11 @@ describe('the real launcher', () => {
     expect({ atStart, afterExit: resolved }).toEqual({ atStart: { started: true, settled: false }, afterExit: true });
   }, 2 * WAIT_MS + 5_000);
 
-  it('resolves open(), never rejects, when the launched app exits with a failure code', async () => {
+  it('resolves open() as started, never rejects, when the launched app exits with a failure code', async () => {
     const { dir, open } = standIn();
-    let settled: 'resolved' | 'rejected' | null = null;
+    let settled: AppRun | 'rejected' | null = null;
     const opened = open().then(
-      () => (settled = 'resolved'),
+      (run) => (settled = run),
       () => (settled = 'rejected'),
     );
 
@@ -78,14 +78,17 @@ describe('the real launcher', () => {
     writeFileSync(join(dir, 'release'), '3');
     await Promise.race([opened, until(() => false)]);
 
-    expect({ atStart, afterExit: settled }).toEqual({ atStart: { started: true, settled: null }, afterExit: 'resolved' });
+    expect({ atStart, afterExit: settled }).toEqual({ atStart: { started: true, settled: null }, afterExit: { started: true } });
   }, 2 * WAIT_MS + 5_000);
 
-  it('resolves open(), never rejects, when the app cannot be started at all', async () => {
+  it('resolves open() as not started with the cause, never rejects, when the app cannot be started at all', async () => {
     const { dir, launch } = standIn();
     const launcher = createBenchLauncher({ execPath: join(dir, 'no-such-electron'), appArgs: [] }, RUNNER_ENV);
 
-    await expect(Promise.race([launcher.open(launch).then(() => 'resolved'), until(() => false).then(() => 'pending')])).resolves.toBe('resolved');
+    await expect(Promise.race([launcher.open(launch), until(() => false).then(() => 'pending')])).resolves.toEqual({
+      started: false,
+      error: expect.stringContaining('ENOENT'),
+    });
   }, WAIT_MS + 5_000);
 
   it("launches the app with the runner's env, the launch value and its working folder, not in plain-Node mode, and exactly as benchLaunchEnv composes it", async () => {

@@ -2,12 +2,15 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { BundleLocation } from './bundleLocation';
 import { resolveLaunchInvocation, type LaunchInvocation } from './cliShim';
+import { errMsg } from './errno';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { BENCH_LAUNCH_ENV, encodeBenchLaunch, type BenchLaunch } from '../shared/benchLaunch';
 
+export type AppRun = { started: true } | { started: false; error: string };
+
 export interface AppLauncher {
-  /** Resolves when the launched app process has exited, and never rejects: an app that fails to start has ended too. */
-  open(launch: BenchLaunch): Promise<void>;
+  /** Resolves when the launched app process has exited, or could not be started, and never rejects. */
+  open(launch: BenchLaunch): Promise<AppRun>;
 }
 
 export interface BenchAppTarget {
@@ -33,14 +36,14 @@ export function benchLaunchEnv(env: NodeJS.ProcessEnv, launch: BenchLaunch): Nod
 export function createBenchLauncher(invocation: LaunchInvocation, env: NodeJS.ProcessEnv): AppLauncher {
   return {
     open: (launch) =>
-      new Promise<void>((resolve) => {
+      new Promise<AppRun>((resolve) => {
         const child = spawn(invocation.execPath, invocation.appArgs, {
           cwd: launch.workingFolder,
           env: benchLaunchEnv(env, launch),
           stdio: ['ignore', 'ignore', 'inherit'],
         });
-        child.once('error', () => resolve());
-        child.once('exit', () => resolve());
+        child.once('error', (e) => resolve({ started: false, error: errMsg(e) }));
+        child.once('exit', () => resolve({ started: true }));
       }),
   };
 }

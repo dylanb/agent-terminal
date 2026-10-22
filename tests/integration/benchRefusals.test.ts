@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readdirSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
@@ -117,6 +117,41 @@ describe('bench run refusals', () => {
       name: "a fixture whose inputs hold the flow's ticket input",
       code: 'fixture-unparsable',
       over: (inv) => ({ fixtureDir: inv.fixture({ inputs: { slices: '2', ticket: '180' } }) }),
+    },
+    { name: 'a fixture input that is not a string', code: 'fixture-unparsable', over: (inv) => ({ fixtureDir: inv.fixture({ inputs: { slices: 2 } }) }) },
+    { name: 'fixture inputs that are not an object', code: 'fixture-unparsable', over: (inv) => ({ fixtureDir: inv.fixture({ inputs: ['slices'] }) }) },
+    { name: 'a fixture repeat count of 0', code: 'fixture-unparsable', over: (inv) => ({ fixtureDir: inv.fixture({ repeat_counts: { refactor: 0 } }) }) },
+    { name: 'a fixture repeat count that is not a whole number', code: 'fixture-unparsable', over: (inv) => ({ fixtureDir: inv.fixture({ repeat_counts: { refactor: 1.5 } }) }) },
+    {
+      name: 'a fixture folder with no fixture.json',
+      code: 'fixture-unparsable',
+      over: (inv) => {
+        const fx = inv.fixture();
+        rmSync(join(fx, BENCH_FIXTURE_MANIFEST));
+        return { fixtureDir: fx };
+      },
+    },
+    {
+      name: 'a fixture.json that is a link to a valid manifest',
+      code: 'fixture-unparsable',
+      over: (inv) => {
+        const fx = inv.fixture();
+        const real = join(b.outsideDir('bench-refusals-manifest'), BENCH_FIXTURE_MANIFEST);
+        writeFileSync(real, readFileSync(join(fx, BENCH_FIXTURE_MANIFEST)));
+        rmSync(join(fx, BENCH_FIXTURE_MANIFEST));
+        symlinkSync(real, join(fx, BENCH_FIXTURE_MANIFEST));
+        return { fixtureDir: fx };
+      },
+    },
+    {
+      name: 'a valid fixture.json padded past the size the reader reads',
+      code: 'fixture-unparsable',
+      over: (inv) => {
+        const fx = inv.fixture();
+        const manifest = join(fx, BENCH_FIXTURE_MANIFEST);
+        writeFileSync(manifest, `${readFileSync(manifest, 'utf8')}${' '.repeat(1024 * 1024)}`);
+        return { fixtureDir: fx };
+      },
     },
     { name: 'a fixture commit the invoking repository lacks', code: 'commit-absent', over: (inv) => ({ fixtureDir: inv.fixture({ commit: 'd'.repeat(40) }) }) },
     { name: 'a fixture commit that names a tree, not a commit', code: 'commit-absent', over: (inv) => ({ fixtureDir: inv.fixture({ commit: b.git(inv.repo, ['rev-parse', 'HEAD^{tree}']) }) }) },

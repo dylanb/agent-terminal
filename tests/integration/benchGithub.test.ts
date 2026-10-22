@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/benchFixtureBuilder';
 import { readFakeGhIssue, seedFakeGhGit, seedFakeGhIssue, seedFakeGhLabels, type FakeGhIssue } from '../e2e/fakeTools';
@@ -127,6 +128,17 @@ describe('the real BenchGithub', () => {
     const log = fakeGh();
 
     await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow();
+    expect(ghCalls(log).filter((c) => c.startsWith('gh issue create'))).toEqual([]);
+  });
+
+  it('refuses a source issue whose read is not JSON, creating no copy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-gh-issue-'));
+    dirs.push(dir);
+    const notJson = join(dir, 'issue.json');
+    writeFileSync(notJson, 'not json\n');
+    const log = fakeGh({ FAKE_GH_ISSUE_JSON: notJson, FAKE_GH_ISSUE_NUM: String(SOURCE.number) });
+
+    await expect(createBenchGithub().copyIssue({ repository: REPOSITORY, number: SOURCE.number })).rejects.toThrow('the source issue was not recognized');
     expect(ghCalls(log).filter((c) => c.startsWith('gh issue create'))).toEqual([]);
   });
 
