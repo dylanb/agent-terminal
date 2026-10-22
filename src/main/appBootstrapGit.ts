@@ -33,7 +33,7 @@ const NETWORK_OP_HARDENING_ARGS = [
 
 /** Every neutralizing `-c` arg prepended to each git invocation in the bootstrap wrapper: the shared
  *  local-exec hardening (single-sourced in gitHardening.ts) followed by the remote-op hardening. */
-function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
+export function bootstrapProtectedArgs(disabledHooksPath: string): string[] {
   return [...coreExecHardeningArgs(disabledHooksPath), ...NETWORK_OP_HARDENING_ARGS];
 }
 import {
@@ -47,7 +47,7 @@ import {
   type AppBootstrapGitFaults,
 } from './bootstrapPorts';
 
-function isApprovedGitRemote(url: string): boolean {
+export function isApprovedGitRemote(url: string): boolean {
   if (/[\0-\x1f\x7f]/.test(url)) return false;
   if (/^(?:https|ssh):\/\/\S+$/i.test(url)) return true;
   if (/^(?:[^@:/\s]+@)?[^:/\s]+:[^\r\n]+$/.test(url)) return true;

@@ -140,6 +140,7 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
+import { createRealAppGatePush } from './appGatePush';
 import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
@@ -1069,6 +1070,12 @@ async function createWindow(): Promise<void> {
     },
     runSideEffect: createRealAppGateGitHub(repoKey),
     runCommitSideEffect: createRealAppGateCommit(repoKey),
+    runPushSideEffect: createRealAppGatePush(repoKey),
+    // §27.9.1 N9b.1
+    failureHoldsGate: (repoDir, step) => {
+      const load = resolveActiveDefinition(repoDir);
+      return !load.ok || load.definition.steps.find((st) => st.id === step)?.gateAuthority !== 'auto';
+    },
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: (repoDir, report) => {
       assembleReportOnDisk(report, flow.state(repoDir).steps);

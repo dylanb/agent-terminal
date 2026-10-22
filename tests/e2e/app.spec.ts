@@ -5318,8 +5318,8 @@ test('a §27 polish stands the orchestrator down, survives a relaunch, and appro
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a failed §27 approve side-effect is surfaced and the flow still reaches its terminal accept — never a strand (AC3)', { tag: '@ownapp' }, async () => {
-  // No pr resolved → plan-loop's mark-ready has no PR to flip → the side-effect fails best-effort.
+test('a §27 approve side-effect with no PR to act on is skipped with a notice, and the human gate still reaches its terminal accept (§27.13 / AC3)', { tag: '@ownapp' }, async () => {
+  // No pr resolved → plan-loop's mark-ready has no PR to flip.
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approvefail-', null);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approvefail-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-approvefail-config-', (yaml) =>
@@ -5345,13 +5345,13 @@ test('a failed §27 approve side-effect is surfaced and the flow still reaches i
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
-  // AC3 — the failure is surfaced (the blocking loop-error dialog), yet the terminal accept is NOT aborted:
-  // the run reaches `accepted` and the flow advances, so the step is never stranded.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('side-effect failed');
+  const dialog = page.locator('#flow-error-host .flow-modal');
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog).toContainText('Notice');
+  await expect(dialog).toContainText('no PR to mark ready');
+  await expect(dialog).not.toContainText('Loop error');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced despite the failure
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
