@@ -210,7 +210,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const h3 = d.createElement('h3');
       h3.className = 'serif';
       h3.id = titleId;
-      h3.textContent = conflicts.length > 0 ? 'Replace existing files?' : 'Remove retired examples?';
+      h3.textContent = conflicts.length > 0 ? 'Replace existing files?' : 'Install examples?';
       const p = d.createElement('p');
       p.className = 'ph';
       p.id = describedById;
@@ -221,6 +221,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         ...(retired.length > 0
           ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind. They are kept unless you choose to remove them.`]
           : []),
+        ...(conflicts.length === 0 ? ['The bundled examples are installed either way; only the ticked option removes anything.'] : []),
       ].join(' ');
       cardEl.append(h3, p);
 

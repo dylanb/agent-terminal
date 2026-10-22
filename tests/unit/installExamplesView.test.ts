@@ -218,6 +218,12 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], true));
     });
 
+    it('with only leftovers to decide, says the install still happens and only the ticked option removes anything', async () => {
+      await openWithRetired([], vi.fn(async () => okResult()));
+      expect(prompt()?.querySelector('h3')?.textContent).toBe('Install examples?');
+      expect(prompt()?.textContent).toContain('The bundled examples are installed either way; only the ticked option removes anything.');
+    });
+
     it('names each retired flow as what left the files behind', async () => {
       await openWithRetired([], vi.fn(async () => okResult()));
       for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
