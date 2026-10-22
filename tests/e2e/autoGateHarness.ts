@@ -10,7 +10,7 @@ import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { exampleConfigDir, writeCatalogEntry } from './fakeTools';
 
-export type AutoGateLoop = 'groom-loop' | 'plan-bundle-loop' | 'plan-polish-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
+export type AutoGateLoop = 'groom-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
 export interface AutoGateStep {
   id: string;

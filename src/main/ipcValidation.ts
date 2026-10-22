@@ -126,7 +126,8 @@ export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApp
     typeof m.previewId !== 'string' ||
     m.previewId.length === 0 ||
     m.previewId.length > INSTALL_PREVIEW_ID_MAX ||
-    !Array.isArray(m.replace)
+    !Array.isArray(m.replace) ||
+    typeof m.removeRetired !== 'boolean'
   ) {
     return false;
   }

@@ -4,12 +4,9 @@ import { bundledPath, resolveBundledLoop } from '../helpers/bundledLoops';
 import { EPIC_GRAMMAR, POLISH_REPORT_HEADING } from '../../src/shared/epicPlan';
 import { SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 
-const LOOP = 'plan-bundle-loop';
-const POLISH_LOOP = 'plan-polish-loop';
+const LOOP = 'plan-goal-loop';
 const read = (rel: string): string => readFileSync(bundledPath(rel), 'utf8');
-const charters = [LOOP, POLISH_LOOP].flatMap((loop) =>
-  readdirSync(bundledPath(`${loop}/charter`)).map((f) => `${loop}/charter/${f}`),
-);
+const charters = readdirSync(bundledPath(`${LOOP}/charter`)).map((f) => `${LOOP}/charter/${f}`);
 const resolveDef = resolveBundledLoop;
 
 // Headings that appear only in the plan-polish method, so a recipe carrying all of them carries the method.
@@ -32,35 +29,12 @@ const ADVERSARY_MARKER = 'an attack outside that scope';
 const ALTITUDE_MARKER = 'contracts and intent';
 const ESSENTIAL_MARKER = "the repo's standards make essential to this change";
 const OPERATOR_DECISION = 'Operator decision (';
-const BUNDLE_ALTITUDE_MARKER = "this plan's own tests would catch";
-const OVERREACH_MARKER = 'no acceptance criterion names';
 const UNTESTABLE_MARKER = 'no test environment in the repository exercises';
-const SAME_GUARD_MARKER = 'another hole in the same';
 
-describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
+describe('planning-loop review discipline (plan-goal)', () => {
   for (const f of charters) {
     it(`${f} carries the materiality floor`, () => expect(read(f)).toContain(MATERIALITY_MARKER));
     it(`${f} treats additions beyond the ticket as a finding`, () => expect(read(f)).toContain(SCOPE_MARKER));
-  }
-
-  // §28.8.1 — the bundle review checks the draft is complete and well-sliced; a mechanism bug the plan's own
-  // tests would catch, or an addition no acceptance criterion names, is not work for that review to grow.
-  for (const f of charters.filter((c) => c.startsWith(`${LOOP}/`))) {
-    it(`${f} leaves mechanism defects to the implementation's tests`, () => expect(read(f)).toContain(BUNDLE_ALTITUDE_MARKER));
-    it(`${f} routes an addition no acceptance criterion names to a human`, () => {
-      expect(read(f)).toContain(OVERREACH_MARKER);
-      expect(read(f)).toContain('needs a human decision');
-    });
-  }
-
-  // #180 rounds 16–20: macOS-only and real-agent behaviour no repo test can reach kept review spinning, and each
-  // fix patched one more hole in the same PATH-shim guard without anyone questioning the guard.
-  for (const f of charters.filter((c) => c.startsWith(`${LOOP}/`))) {
-    it(`${f} routes behaviour no test environment can reach to the plan's assumptions, not to elaboration`, () => {
-      expect(read(f)).toContain(UNTESTABLE_MARKER);
-      expect(read(f)).toContain('Assumptions');
-    });
-    it(`${f} treats another hole in the same guard as a sign the mechanism is wrong`, () => expect(read(f)).toContain(SAME_GUARD_MARKER));
   }
 
   it('the work recipe asks for an Assumptions list of behaviour no test environment exercises, each with its real-run check', () => {
@@ -74,13 +48,13 @@ describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
     expect(read(`${LOOP}/prompts/brief.md`)).toContain(SCOPE_MARKER));
 
   it('the security charter bounds the adversary and routes a new attack class to a human', () => {
-    const security = read(`${POLISH_LOOP}/charter/security.md`);
+    const security = read(`${LOOP}/charter/security.md`);
     expect(security).toContain(ADVERSARY_MARKER);
     expect(security).toContain('needs a human');
   });
 
   it('the intent reviewer counts only what the ticket or a standard makes essential, not a general principle', () => {
-    for (const loop of ['plan-loop', LOOP, POLISH_LOOP]) {
+    for (const loop of ['plan-loop', LOOP]) {
       const intent = read(`${loop}/charter/intent.md`);
       expect(intent, loop).toContain(ESSENTIAL_MARKER);
       expect(intent, loop).toContain('a likely future need');
@@ -89,23 +63,15 @@ describe('planning-loop review discipline (plan-bundle + plan-polish)', () => {
 
   it('the plan is written at contract altitude, and maintainability no longer demands code-level detail', () => {
     expect(read(`${LOOP}/prompts/brief.md`)).toContain(ALTITUDE_MARKER);
-    const maintainability = read(`${POLISH_LOOP}/charter/maintainability.md`);
+    const maintainability = read(`${LOOP}/charter/maintainability.md`);
     expect(maintainability).toContain(ALTITUDE_MARKER);
     expect(maintainability).not.toContain('Layer-3 detail');
   });
-
-  it('plan-bundle defers polish and plan-polish fixes it', () => {
-    const bundle = resolveDef(LOOP);
-    const polish = resolveDef(POLISH_LOOP);
-    expect(bundle.ok && polish.ok).toBe(true);
-    if (bundle.ok) expect(bundle.def.report.polish).toBe('defer');
-    if (polish.ok) expect(polish.def.report.polish).toBe('fix');
-  });
 });
 
-describe('plan-polish work turn', () => {
+describe('plan-goal work turn carries the plan-polish method', () => {
   const recipe = (): string => {
-    const r = resolveDef(POLISH_LOOP);
+    const r = resolveDef(LOOP);
     if (!r.ok) throw new Error(r.reason);
     return `${readFileSync(r.def.brief!, 'utf8')}\n${readFileSync(r.def.work.recipe, 'utf8')}`;
   };
@@ -147,29 +113,11 @@ describe('plan-polish work turn', () => {
 
   it('treats an item the plan records as an operator decision as settled', () => expect(recipe()).toContain(OPERATOR_DECISION));
 
-  it('reads the ticket and the plan, and writes the plan', () => {
-    const r = resolveDef(POLISH_LOOP);
+  it('reads the ticket and its intent, and writes the plan and its report', () => {
+    const r = resolveDef(LOOP);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.def.inputs.map((i) => i.id).sort()).toEqual(['groomed-ticket', 'plan']);
-    expect(r.def.outputs.map((o) => o.id)).toEqual(['plan']);
-  });
-});
-
-describe('plan-polish consolidator', () => {
-  const consolidator = (): string => {
-    const r = resolveDef(POLISH_LOOP);
-    if (!r.ok) throw new Error(r.reason);
-    if (r.def.rounds.kind !== 'engine') throw new Error('plan-polish-loop runs no review rounds');
-    return readFileSync(r.def.rounds.consolidator, 'utf8');
-  };
-
-  it('reads the polish report, not only the round reports', () => expect(consolidator()).toContain(POLISH_REPORT_HEADING));
-
-  it('stops for a human on an overbuilt verdict or an undecided scope escalation or call, ahead of every other verdict', () => {
-    const body = consolidator();
-    for (const marker of ['Proportion: overbuilt', 'Scope escalations', 'Needs your call', OPERATOR_DECISION, 'takes precedence over `clean` and `another round`']) {
-      expect(body, marker).toContain(marker);
-    }
+    expect(r.def.inputs.map((i) => i.id).sort()).toEqual(['groom-intent', 'groomed-ticket']);
+    expect(r.def.outputs.map((o) => o.id)).toEqual(['plan', 'plan-report']);
   });
 });

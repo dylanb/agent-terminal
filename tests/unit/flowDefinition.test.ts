@@ -181,21 +181,23 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     }
   });
 
-  // #137 AC16
-  it('the shipped feature-dev flow declares the settled gate authorities: `human` at plan-polish and integration-slice, `auto` on every other loop step', () => {
-    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'));
+  it('the shipped feature-dev flow declares `human` only at its three operator approvals, `auto` on every other loop step', () => {
+    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'));
     expect(load.ok).toBe(true);
     if (!load.ok) return;
     expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
       preparation: null,
+      'groom-intent': 'auto',
       groom: 'auto',
-      'plan-bundle': 'auto',
-      'plan-polish': 'human',
+      'groom-approve': 'human',
+      plan: 'auto',
+      'plan-approve': 'human',
       infra: 'auto',
       red: 'auto',
       green: 'auto',
       refactor: 'auto',
-      'integration-slice': 'human',
+      'integration-slice': 'auto',
+      'impl-approve': 'human',
       finalize: null,
     });
   });
