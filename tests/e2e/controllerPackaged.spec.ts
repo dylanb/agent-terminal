@@ -1,8 +1,9 @@
 import { shellQuote } from '../../src/shared/shellQuote';
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { cpSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { resolveWindowIconPath } from '../../src/main/appIcon';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 
@@ -26,6 +27,16 @@ test('packaged controller identifies and activates independent packaged terminal
   try {
     const controllerExecutable = install('dist/controller', 'agent-terminal-controller');
     const terminalExecutable = install('dist', 'agent-terminal');
+    const resources = (executable: string) => process.platform === 'darwin'
+      ? resolve(executable, '..', '..', 'Resources')
+      : resolve(executable, '..', 'resources');
+    const committedIcon = readFileSync(resolveWindowIconPath({ packaged: false, appPath: process.cwd() }, 'controller'));
+    expect(readFileSync(resolveWindowIconPath({ packaged: true, resourcesPath: resources(controllerExecutable) }, 'controller')))
+      .toEqual(committedIcon);
+    if (process.platform === 'darwin') {
+      const bundleIcon = (executable: string) => readFileSync(join(resources(executable), 'icon.icns'));
+      expect(bundleIcon(controllerExecutable).equals(bundleIcon(terminalExecutable))).toBe(false);
+    }
     const controller = await h.launch({ kind: 'packaged', executablePath: controllerExecutable }, h.fixture.nonGit);
     const controllerArchive = await controller.app.evaluate(({ app }) => app.getAppPath());
     const terminals = await Promise.all(h.fixture.repositories.map(directory =>
