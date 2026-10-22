@@ -7,6 +7,7 @@ import { wireCrossHighlight } from './crossHighlight';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import type { FlowViewArgs } from './flowView';
 import { createFlowPicker } from './flowPicker';
+import { createPickupConfirm } from './pickupConfirm';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
@@ -67,8 +68,8 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
-  apply: (previewId, replace) =>
-    window.examples.apply(previewId, replace),
+  apply: (previewId, replace, removeRetired) =>
+    window.examples.apply(previewId, replace, removeRetired),
 });
 void window.monitor
   .getSettings()
@@ -270,6 +271,17 @@ if (flowStripHost) {
     clearSelection: (key) => window.flow.clearActiveFlow(key),
     rebindHeldRun: (key, choice, ifStepMissing) => window.flow.rebindHeldRun(key, choice, ifStepMissing),
     confirmEndRun: (key, proceed, restoreFocusTo) => requestTerminate?.(key, proceed, restoreFocusTo),
+  });
+  const pickupConfirmHost = document.getElementById('pickup-confirm');
+  const pickupConfirmModalHost = document.getElementById('pickup-confirm-modal-host');
+  if (pickupConfirmHost && pickupConfirmModalHost) createPickupConfirm(pickupConfirmHost, {
+    modalHost: pickupConfirmModalHost,
+    onView: (cb) => {
+      viewListeners.add(cb);
+      return () => viewListeners.delete(cb);
+    },
+    confirm: (key, run, pr, ticket) => window.flow.confirmRunPickup(key, run, pr, ticket),
+    onFocusLost: landFocus,
   });
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,

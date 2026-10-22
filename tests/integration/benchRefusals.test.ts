@@ -5,7 +5,7 @@ import { createBenchFixtureBuilder, type BenchFixtureBuilder } from '../helpers/
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
 import { createFakeBenchGithub } from '../helpers/benchFakeGithub';
 import { createFakeBenchClock, createFakeLauncher } from '../helpers/benchFakeLauncher';
-import { FIXTURE_ARTIFACTS, handFields, runRequest, V2_FLOW, V3_FLOW, worktreeCount } from '../helpers/benchRunSetup';
+import { FIXTURE_ARTIFACTS, handFields, runRequest, V3_FLOW, worktreeCount } from '../helpers/benchRunSetup';
 import { runBench, type BenchRunRequest } from '../../src/main/benchRun';
 import { BENCH_FIXTURE_MANIFEST } from '../../src/shared/benchFixture';
 import { clearActiveFlow } from '../../src/main/activeFlowPointer';
@@ -13,7 +13,7 @@ import type { BenchSpan } from '../../src/shared/benchLaunch';
 
 // #180 — every `bench run` refusal (AC 10): each returns its own code before the label is checked, any issue is
 // copied, any working folder is created or any app opens; and the PR-acting gate refusal holds for exactly the
-// four gates the ticket names (Outcome rule 6).
+// gates the ticket names (Outcome rule 6).
 
 let b: BenchFixtureBuilder;
 let roots: BenchRoots;
@@ -29,12 +29,11 @@ interface Invoking {
   fixture(fields?: Record<string, unknown>): string;
 }
 
-/** An invoking repository with both shipped feature-dev flows in its catalog and `active` the active one. */
+/** An invoking repository with `feature-dev-v3` in its catalog and `active` the active one. */
 function invoking(active: 'feature-dev-v3' | 'unset' = 'feature-dev-v3'): Invoking {
   b = createBenchFixtureBuilder();
   roots = createBenchRoots();
   const { dir, commit } = b.makeRepository('bench-refusals');
-  b.seedFlow(dir, 'feature-dev-v2', V2_FLOW);
   b.seedFlow(dir, 'feature-dev-v3', V3_FLOW);
   if (active === 'unset') clearActiveFlow(dir);
   const fixtures = b.outsideDir('bench-refusals-fx');
@@ -169,25 +168,20 @@ describe('bench run refusals', () => {
     expect(await refusalOf(inv, over(inv))).toEqual(refusedWith(code));
   });
 
-  const v2Rows: { name: string; span: BenchSpan }[] = [
-    { name: 'v2 plan-polish..plan-polish', span: span('plan-polish') },
-    { name: 'v2 infra..integration-slice', span: span('infra', 'integration-slice') },
+  const namedRows: { name: string; span: BenchSpan }[] = [
+    { name: 'v3 plan-approve..plan-approve', span: span('plan-approve') },
+    { name: 'v3 infra..impl-approve', span: span('infra', 'impl-approve') },
   ];
-  const actives = ['feature-dev-v3', 'unset'] as const;
 
-  it.each(actives.flatMap((active) => v2Rows.map((r) => ({ ...r, active }))))(
-    'refuses $name as a PR-acting gate with the invoking repository\'s active flow $active',
-    async ({ span: s, active }) => {
-      const inv = invoking(active);
-      expect(await refusalOf(inv, { flow: { kind: 'id', id: 'feature-dev-v2' }, span: s })).toEqual(refusedWith('pr-acting-gate'));
-    },
-  );
+  it.each(namedRows)('refuses $name named by id as a PR-acting gate with no active flow in the invoking repository', async ({ span: s }) => {
+    const inv = invoking('unset');
+    expect(await refusalOf(inv, { flow: { kind: 'id', id: 'feature-dev-v3' }, span: s })).toEqual(refusedWith('pr-acting-gate'));
+  });
 });
 
 describe('the PR-acting gate refusal', () => {
   const afterPickup: Record<string, Record<string, boolean>> = {
     'feature-dev-v3': { 'plan-approve': true, infra: false, red: false, green: false, refactor: false, 'integration-slice': false, 'impl-approve': true, finalize: false },
-    'feature-dev-v2': { 'plan-polish': true, infra: false, red: false, green: false, refactor: false, 'integration-slice': true, finalize: false },
   };
 
   it.each(Object.keys(afterPickup))('refuses the one-step span of exactly the PR-acting gates after %s\'s pickup step', async (flow) => {

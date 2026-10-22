@@ -10,6 +10,7 @@ import {
   type ExamplesApi,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallExamplesApplyMsg,
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
@@ -20,6 +21,7 @@ import {
   type ActiveFlowWriteResult,
   type FlowCatalogListResult,
   type RebindResult,
+  type ConfirmRunPickupResult,
   type GithubRef,
   type MonitorApi,
   type ViewerApi,
@@ -140,6 +142,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
   rebindHeldRun: (repoKey, choice, ifStepMissing) =>
     ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice, ifStepMissing }) as Promise<RebindResult>,
+  confirmRunPickup: (repoKey, run, pr, ticket) =>
+    ipcRenderer.invoke(CH.flowConfirmRunPickup, { sessionId: SESSION_ID, repoKey, run, pr, ticket }) as Promise<ConfirmRunPickupResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
@@ -213,12 +217,13 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (previewId, replace) =>
+  apply: (previewId, replace, removeRetired) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
       replace,
-    }) as Promise<InstallExamplesResult>,
+      removeRetired,
+    } satisfies InstallExamplesApplyMsg) as Promise<InstallExamplesResult>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

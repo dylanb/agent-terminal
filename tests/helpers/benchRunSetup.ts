@@ -14,9 +14,7 @@ import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopP
 import type { BenchRunDeps, BenchRunRequest } from '../../src/main/benchRun';
 
 export const V3_FLOW_FILE = join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml');
-export const V2_FLOW_FILE = join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml');
 export const V3_FLOW = readFileSync(V3_FLOW_FILE, 'utf8');
-export const V2_FLOW = readFileSync(V2_FLOW_FILE, 'utf8');
 
 /** The flow documents every fixture carries: one at the top and one in a subfolder. */
 export const FIXTURE_ARTIFACTS: Record<string, string> = {

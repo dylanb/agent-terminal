@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writ
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createBenchRoots, type BenchRoots } from '../helpers/benchRoots';
-import { V2_FLOW_FILE, V3_FLOW, V3_FLOW_FILE } from '../helpers/benchRunSetup';
+import { V3_FLOW, V3_FLOW_FILE } from '../helpers/benchRunSetup';
 import { flowDefinitionRevision, promptRevision, type PromptRevisionQuery } from '../../src/main/benchRevision';
 import { readUntrustedFlowDefinition, type FlowDefinition } from '../../src/main/flow';
 import { resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
@@ -53,7 +53,6 @@ describe('the prompt revision', () => {
     { what: 'brief', flowFile: V3_FLOW_FILE, flow: 'feature-dev-v3', file: 'prompts/brief.md' },
     { what: 'work recipe', flowFile: V3_FLOW_FILE, flow: 'feature-dev-v3', file: 'prompts/work.md' },
     { what: 'reviewer charter', flowFile: V3_FLOW_FILE, flow: 'feature-dev-v3', file: 'charter/tests.md' },
-    { what: 'consolidator recipe', flowFile: V2_FLOW_FILE, flow: 'feature-dev-v2', file: 'prompts/consolidate.md' },
   ])("changes when the span's loop step's $what changes", ({ flowFile, flow, file }) => {
     fresh();
     const q = query(flowFile, { first: 'red', last: 'red' });

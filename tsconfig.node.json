@@ -45,6 +45,7 @@
     "src/renderer/src/statusBar.ts",
     "src/renderer/src/loopReveal.ts",
     "src/renderer/src/flowInputModal.ts",
+    "src/renderer/src/pickupConfirm.ts",
     "src/renderer/src/feedbackComposer.ts",
     "src/renderer/src/redoComposer.ts",
     "src/renderer/src/wireAppBootstrapConflict.ts",

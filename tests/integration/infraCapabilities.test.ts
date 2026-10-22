@@ -11,7 +11,6 @@ const LARGE_HEADING = '## Large capabilities';
 const FOLLOW_UP_HEADING = '## Follow-up proposals';
 const OPERATOR_DECISION = 'Operator decision (';
 const USED_BY_THIS_TICKET = 'used by at least one slice of this ticket';
-const PRECEDENCE = 'takes precedence over `clean` and `another round`';
 
 const repoDir = resolve(__dirname, '..', '..');
 const bundle = resolveExampleLoopsV2Dir({ packaged: false, appPath: repoDir });
@@ -20,10 +19,6 @@ function infraDef(): LoopDefV2 {
   const r = resolveLoopDefV2('infra-loop', { tiers: { operator: null, appBundled: bundle, retired: null }, repoDir, flow: FEATURE_DEV_ID });
   if (!r.ok) throw new Error(r.reason);
   return r.def;
-}
-function engineConsolidator(def: LoopDefV2): string {
-  if (def.rounds.kind !== 'engine') throw new Error(`${def.name} runs no review rounds`);
-  return def.rounds.consolidator;
 }
 const flat = (path: string): string => readFileSync(path, 'utf8').replace(/\s+/g, ' ');
 const recipe = (): string => {
@@ -39,12 +34,11 @@ describe('infra adds proportionate deterministic capabilities and settles large 
     }
   });
 
-  it('the work turn interviews the operator in business language, with no question limit, before building a large one', () => {
+  it('the work turn routes every large capability and follow-up to the operator in business language, with full context', () => {
     const body = recipe();
-    for (const marker of ['interview the operator', 'plain business language', 'full context', 'no question limit']) {
+    for (const marker of ['Needs your call', 'plain business language', 'full context']) {
       expect(body, marker).toContain(marker);
     }
-    expect(body.indexOf('interview the operator')).toBeLessThan(body.indexOf('Then build'));
   });
 
   it('declares the record file as an output, so it lives among the flow documents', () => {
@@ -56,10 +50,5 @@ describe('infra adds proportionate deterministic capabilities and settles large 
       const charter = flat(rev.charter);
       for (const marker of [RECORD_FILE, USED_BY_THIS_TICKET, 'needs a human']) expect(charter, `${rev.persona}: ${marker}`).toContain(marker);
     }
-  });
-
-  it('the consolidator stops for a human on any undecided large capability or follow-up, ahead of every other verdict', () => {
-    const body = flat(engineConsolidator(infraDef()));
-    for (const marker of [RECORD_FILE, LARGE_HEADING, FOLLOW_UP_HEADING, OPERATOR_DECISION, PRECEDENCE]) expect(body, marker).toContain(marker);
   });
 });

@@ -13,10 +13,8 @@ import { isAutoHaltReason, type AutoHaltReason, type FailedEffectState } from '.
 
 const GATE_RUN_FILE = 'gate-run.yaml';
 
-export interface RunIdentity {
-  flow: string;
-  startedAt: number;
-}
+export { sameRun, type RunIdentity } from '../shared/runIdentity';
+import type { RunIdentity } from '../shared/runIdentity';
 
 export interface PersistedLoopRun {
   step: string;
@@ -56,7 +54,6 @@ export function inProgressRunIdentity(repoDir: string): RunIdentity | null {
   return { flow: persisted.flow, startedAt: persisted.startedAt };
 }
 
-export const sameRun = (a: RunIdentity, b: RunIdentity): boolean => a.flow === b.flow && a.startedAt === b.startedAt;
 
 /** Throws when the write cannot land. */
 export function writeGateRunState(repoDir: string, state: GateRunState): void {

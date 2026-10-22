@@ -11,7 +11,7 @@ import { GREEN_COMPLETING_BUILD_OUTCOME } from '../../src/shared/buildOutcome';
 import { composePhaseResultInstruction, readPhaseResult, PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 
 // §28.6 (P6b/P6c) — content-parity pins for the five new charters + work recipes S6 authors under
-// feature-dev-v2's folder of example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
+// feature-dev-v3's folder of example/loops-v2/. Authored content only: S7 wires the loop defs that consume them, so this file never
 // resolves a def (the §28.10 S6 / S7 boundary).
 
 const BUNDLE_TREE = resolveExampleLoopsV2Dir({ packaged: false, appPath: resolve(__dirname, '..', '..') });
@@ -23,7 +23,7 @@ const SOURCE_TREE = join(BUNDLE_TREE, FEATURE_DEV_ID);
 const SECTION = String.fromCharCode(0xa7);
 const DEAD_TOKENS = ['{{', `${SECTION}26`] as const;
 
-// The four planning artifacts the plan-bundle recipe produces as delimited sections (§28.8 P8.1: one loop,
+// The four planning artifacts the plan-goal recipe produces as delimited sections (§28.8 P8.1: one loop,
 // one work turn, all four files). One definition — authored as the recipe's headings and matched
 // heading-anchored — so pin and recipe cannot drift.
 const PLANNING_SECTIONS = ['test plan', 'technical plan', 'infrastructure plan', 'slice plan'] as const;
@@ -34,24 +34,24 @@ interface CharterRow {
   marker: string;
 }
 type RecipeRow =
-  | { kind: 'plan-bundle'; file: string; sections: readonly string[] }
+  | { kind: 'planning'; file: string; sections: readonly string[] }
   | { kind: 'phase'; file: string; completes: 'red' | 'green' }
   | { kind: 'plain'; file: string };
 
 const NEW_CHARTERS: readonly CharterRow[] = [
-  { file: 'plan-polish-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
-  { file: 'plan-polish-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
-  { file: 'plan-bundle-loop/charter/tracer-slicer.md', persona: 'review-plan-tracer-slicer', marker: 'Thin-but-complete' },
+  { file: 'plan-goal-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
+  { file: 'plan-goal-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
+  { file: 'plan-goal-loop/charter/tracer-slicer.md', persona: 'review-plan-tracer-slicer', marker: 'Thin-but-complete' },
   { file: 'red-loop/charter/red-authenticity.md', persona: 'impl-review-red-authenticity', marker: 'Fails for the right reason' },
   { file: 'green-loop/charter/regression-guard.md', persona: 'impl-review-regression-guard', marker: 'No vacuous green' },
 ];
 
 const isPlanningCharter = (c: CharterRow): boolean =>
-  c.file.startsWith('plan-bundle-loop/charter/') || c.file.startsWith('plan-polish-loop/charter/');
+  c.file.startsWith('plan-goal-loop/charter/');
 const isPhaseCharter = (c: CharterRow): boolean => c.persona.startsWith('impl-review-');
 
 const NEW_RECIPES: readonly RecipeRow[] = [
-  { kind: 'plan-bundle', file: 'plan-bundle-loop/prompts/work.md', sections: PLANNING_SECTIONS },
+  { kind: 'planning', file: 'plan-goal-loop/prompts/work.md', sections: PLANNING_SECTIONS },
   { kind: 'plain', file: 'infra-loop/prompts/work.md' },
   { kind: 'phase', file: 'red-loop/prompts/work.md', completes: 'red' },
   { kind: 'phase', file: 'green-loop/prompts/work.md', completes: 'green' },
@@ -87,15 +87,15 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
     }
   });
 
-  it('every recipe file is distinct and the plan-bundle sections are the shared constant', () => {
+  it('every recipe file is distinct and the planning sections are the shared constant', () => {
     const files = NEW_RECIPES.map((r) => r.file);
     expect(new Set(files).size).toBe(files.length);
-    const planBundle = NEW_RECIPES.find((r) => r.kind === 'plan-bundle');
-    expect(planBundle && planBundle.kind === 'plan-bundle' ? planBundle.sections : []).toEqual([...PLANNING_SECTIONS]);
+    const planning = NEW_RECIPES.find((r) => r.kind === 'planning');
+    expect(planning && planning.kind === 'planning' ? planning.sections : []).toEqual([...PLANNING_SECTIONS]);
   });
 
   it('the source-tree accessor resolves and read() works against the shipped tree', () => {
-    expect(read('plan-bundle-loop/plan-bundle-loop.yaml')).not.toBeNull();
+    expect(read('plan-goal-loop/plan-goal-loop.yaml')).not.toBeNull();
     expect(read('does-not-exist/nope.md')).toBeNull();
   });
 });
@@ -161,7 +161,7 @@ describe('loops-v2 content-parity — the four work recipes (§28.6 P6c)', () =>
         const body = read(row.file) ?? '';
         for (const token of DEAD_TOKENS) expect(body, `${row.file}: dead token ${token}`).not.toContain(token);
       });
-      if (row.kind === 'plan-bundle') {
+      if (row.kind === 'planning') {
         it('has a heading for each planning section', () => {
           const body = read(row.file) ?? '';
           for (const section of row.sections) {
@@ -228,10 +228,10 @@ describe('loops-v2 content-parity — S6 content stays present, a dir resolves o
   }
 });
 
-// §28.7 — the plan-bundle recipe is the WRITER of the epic-plan grammar, and its approve gate declares the
+// §28.7 — the plan-goal recipe is the WRITER of the epic-plan grammar, and its approve gate declares the
 // `promote` side-effect that fans an epic out. Both single-sourced from src/shared/epicPlan.ts (§28.5.5 /
 // composed-prompt-is-a-writer): the recipe embeds a canonical example asserted well-formed against the predicate.
-describe('plan-bundle epic classification content (§28.7)', () => {
+describe('plan-goal epic classification content (§28.7)', () => {
   const repoDir = resolve(__dirname, '..', '..');
   const tiers = { operator: null, appBundled: BUNDLE_TREE, retired: null };
 
@@ -240,7 +240,7 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   const fences = (recipe: string): string[] => [...recipe.matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1]);
 
   it('the brief embeds a canonical epic example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
+    const recipe = read('plan-goal-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(EPIC_GRAMMAR.subTicketsHeading));
     expect(example, 'the recipe must embed a fenced epic example').not.toBeUndefined();
     expect(isEpicPlan(example ?? '')).toBe(true);
@@ -251,7 +251,7 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   });
 
   it('§28.4.1 — the brief embeds a canonical impl-slices example the predicate accepts (writer↔predicate parity)', () => {
-    const recipe = read('plan-bundle-loop/prompts/brief.md') ?? '';
+    const recipe = read('plan-goal-loop/prompts/brief.md') ?? '';
     const example = fences(recipe).find((f) => f.includes(SLICE_GRAMMAR.implSlicesHeading));
     expect(example, 'the recipe must embed a fenced impl-slices example').not.toBeUndefined();
     expect(slicePlanWellFormed(example ?? '')).toBe(true);
@@ -265,15 +265,15 @@ describe('plan-bundle epic classification content (§28.7)', () => {
   // §93 / composed-prompt-is-a-writer) so a token rename moves the charter with it, and must not demand it of an
   // epic plan, which carries §28.7's `## Sub-tickets` instead.
   it('§28.4.1 — the tracer-slicer charter requires the impl-slices block, named from the shared grammar', () => {
-    const charter = read('plan-bundle-loop/charter/tracer-slicer.md') ?? '';
+    const charter = read('plan-goal-loop/charter/tracer-slicer.md') ?? '';
     expect(charter, 'the tracer-slicer charter must exist').not.toBe('');
     expect(charter).toContain(SLICE_GRAMMAR.implSlicesHeading); // '## Impl-slices'
     expect(charter).toContain(SLICE_GRAMMAR.implSlice); // '### Impl-slice'
     expect(charter).toContain(EPIC_GRAMMAR.subTicketsHeading); // '## Sub-tickets' — the epic exception
   });
 
-  it('the plan-polish approve gate declares the promote side-effect naming the plan artifact', () => {
-    const r = resolveLoopDefV2('plan-polish-loop', { tiers, repoDir, flow: FEATURE_DEV_ID });
+  it('the plan-approve gate declares the promote side-effect naming the plan artifact', () => {
+    const r = resolveLoopDefV2('plan-approve-loop', { tiers, repoDir, flow: FEATURE_DEV_ID });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const approve = r.def.gate.find((g) => g.option === 'approve');
@@ -293,7 +293,7 @@ describe('planning and phase work recipes carry every reviewer standard they are
   };
 
   const loops = [
-    ...['groom-loop', 'plan-bundle-loop', 'plan-polish-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((loop) => ({ flow: FEATURE_DEV_ID, loop })),
+    ...['groom-goal-loop', 'plan-goal-loop', 'infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'].map((loop) => ({ flow: FEATURE_DEV_ID, loop })),
     { flow: 'plan-only', loop: 'groom-loop' },
   ];
   for (const { flow, loop } of loops) {
@@ -319,8 +319,7 @@ describe('the standing rules every fix must also meet live in the brief, not the
   const AC_RULE = 'No acceptance criterion may be deferred';
   const TODO_RULE = 'Do not add a TODO or FIXME comment';
   const loops: { flow: string; loop: string; rules: string[] }[] = [
-    { flow: FEATURE_DEV_ID, loop: 'plan-bundle-loop', rules: [AC_RULE] },
-    { flow: FEATURE_DEV_ID, loop: 'plan-polish-loop', rules: [AC_RULE] },
+    { flow: FEATURE_DEV_ID, loop: 'plan-goal-loop', rules: [AC_RULE] },
     { flow: FEATURE_DEV_ID, loop: 'infra-loop', rules: [AC_RULE, TODO_RULE] },
     { flow: FEATURE_DEV_ID, loop: 'red-loop', rules: [AC_RULE, TODO_RULE] },
     { flow: FEATURE_DEV_ID, loop: 'green-loop', rules: [AC_RULE, TODO_RULE] },
