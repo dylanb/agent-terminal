@@ -578,6 +578,7 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
 });
 
 test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 60_000);
   // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session. Use a
   // tiny startup-exit grace so the post-grace path is deterministic: in a fast environment the shell
   // can exit only a few hundred ms after spawn, which under the default 1s grace would be treated as
