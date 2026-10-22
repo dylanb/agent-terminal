@@ -147,6 +147,16 @@ export function provideAppLoopView(
   resolveDef?: (name: string) => LoopDefV2Result,
 ): FlowLoopView {
   if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
+  return observeAppLoopView(engine, name, ctx, autoGateViewFor, resolveDef);
+}
+
+export function observeAppLoopView(
+  engine: Pick<AppLoopEngine, 'liveErrorFor'>,
+  name: string,
+  ctx: LoopDefV2Context,
+  autoGateViewFor?: AutoGateViewFor,
+  resolveDef?: (name: string) => LoopDefV2Result,
+): FlowLoopView {
   const view = deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir), resolveDef?.(name));
   const autoGate = view.appTurn ? autoGateViewFor?.(ctx.repoDir, view.appTurn.step, view.appTurn.turnKey) : haltAtForeignRunState(ctx.repoDir, autoGateViewFor);
   if (!autoGate) return view;

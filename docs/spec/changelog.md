@@ -1,3 +1,7 @@
+> **#219 slice 1:** Controller panes show live flow/step, issue number and title preview, independent assignment/activity, errors and authoritative human-needed reasons. Passive publication works while terminals are hidden, preserves notices and gate state, rejects obsolete title completions, and preserves full reasons. README and §23.6 describe availability, timing and activation without acknowledgement. Recovery strengthening remains slice 2.
+
+- **2026-10-22 — §23.6 bounded controller status (operator approved).** Limit snapshots to 1 MiB UTF-8 and 1,024 nonempty fragments; expire incomplete transfers after five seconds. Oversized publication shows an explicit unavailable state with access to the full reason in the terminal; normal status resumes automatically.
+
 > **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Dismissal/replacement follows in slice 4.
 
 > **#218 slice 2:** Established connections recover automatically within the initial-registration timing bounds, preserving work and human gates. Controller restart restores distinct live terminals and their original activation targets; closing a terminal cancels recovery. Retained errors and dismissal remain slices 3–4.

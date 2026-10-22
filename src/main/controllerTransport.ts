@@ -37,9 +37,10 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const notify = () => { for (const listener of listeners) listener(snapshot()); };
   const server = createServer(socket => {
     sockets.add(socket);
-    const decoder = createControllerDecoder();
+    const decoder = createControllerDecoder(() => socket.destroy());
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
+      decoder.dispose();
       sockets.delete(socket);
       const terminal = registrations.get(socket);
       if (terminal) retained.set(terminal.id, { ...terminal, status: 'disconnected' });
@@ -57,6 +58,9 @@ export async function startControllerTransport(appHome: string): Promise<Control
             registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
             notify();
             socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+          } else if (message.type === 'status' && registrations.has(socket)) {
+            registrations.get(socket)!.work = message.work;
+            notify();
           } else if (message.type === 'result') {
             const request = pending.get(message.requestId);
             if (request?.socket === socket) request.finish(message.outcome);

@@ -1287,7 +1287,23 @@ declare global {
     controller: ControllerApi;
   }
 }
+export type ControllerWorkStatus = {
+  unavailableReason?: 'message-too-large';
+  flow: { availability: 'loading' | 'unavailable' } | {
+    availability: 'known'; name: string; step: string;
+    assignment: 'unassigned' | 'assigned' | 'completed' | 'unavailable';
+  };
+  ticket: { availability: 'loading' | 'unavailable' | 'none' } | {
+    availability: 'known'; number: number;
+    title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
+  };
+  activity: 'active' | 'quiet' | 'unavailable';
+  attention: null | { status: string; reasons: string[] };
+  error: null | { reason: string };
+};
+
 export interface ControllerTerminal {
+  work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';
   id: string;
   launchDirectory: string;

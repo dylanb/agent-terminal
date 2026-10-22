@@ -1,3 +1,4 @@
+import type { ControllerWorkStatus } from '../shared/ipc';
 import { connect, type Socket } from 'node:net';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
@@ -11,6 +12,7 @@ export function registerControllerTerminal(
   identity: ControllerIdentity,
   activate: () => 'activated' | 'unavailable',
   onRegistered: () => void = () => {},
+  subscribeStatus?: (listener: (work: ControllerWorkStatus) => void) => () => void,
 ): () => void {
   let canceled = false;
   let started = false;
@@ -23,15 +25,35 @@ export function registerControllerTerminal(
   const attempt = () => {
     if (canceled) return;
     let registered = false;
+    let unsubscribe: (() => void) | undefined;
+    let waitingForDrain = false;
+    let pendingStatus: ControllerWorkStatus | undefined;
     let current: Socket;
     try { current = connect(resolveControllerEndpoint(appHome)); }
     catch { scheduleRetry(); return; }
     socket = current;
-    const decoder = createControllerDecoder();
+    const publishStatus = (work: ControllerWorkStatus) => {
+      if (canceled || current.destroyed) return;
+      if (waitingForDrain) {
+        pendingStatus = work;
+        return;
+      }
+      waitingForDrain = !current.write(encodeControllerMessage({ version: 1, type: 'status', work }));
+    };
+    current.on('drain', () => {
+      waitingForDrain = false;
+      const latest = pendingStatus;
+      pendingStatus = undefined;
+      if (latest) publishStatus(latest);
+    });
+    const decoder = createControllerDecoder(() => current.destroy());
     deadline = setTimeout(() => current.destroy(), CONTROLLER_REGISTRATION_DEADLINE_MS);
     current.on('error', () => current.destroy());
     current.once('close', () => {
+      decoder.dispose();
       clearTimeout(deadline);
+      unsubscribe?.();
+      pendingStatus = undefined;
       socket = undefined;
       scheduleRetry();
     });
@@ -45,6 +67,7 @@ export function registerControllerTerminal(
           if (!registered && message.type === 'registered') {
             registered = true;
             clearTimeout(deadline);
+            unsubscribe = subscribeStatus?.(publishStatus);
             if (!started) {
               started = true;
               onRegistered();

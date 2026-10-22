@@ -96,7 +96,9 @@ test('controller reflows real registered terminal controls when its window narro
     }
     const panes = controller.page.getByRole('button', { name: new RegExp(h.fixture.root) });
     await expect.soft(panes).toHaveCount(2);
-    const measure = () => panes.evaluateAll((elements, directories) => {
+    // Live snapshots can replace panes between locator resolution and evaluation; query and measure atomically.
+    const measure = () => controller.page.evaluate(directories => {
+      const elements = [...document.querySelectorAll('button')].filter(element => directories.some(directory => element.textContent?.includes(directory)));
       const boxes = elements.map(element => element.getBoundingClientRect());
       return {
         rows: new Set(boxes.map(box => Math.round(box.top))).size,
