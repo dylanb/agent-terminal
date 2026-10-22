@@ -340,7 +340,7 @@ test('a gate that stops for the operator asks the agent why: an `auto` (e) halt 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await expect
     .poll(() => injectedLog(repo), { timeout: UI_MS })
-    .toContain('(d) frozen tests changed: tests/frozen.test.ts')
+    .toMatch(/\(e\) frozen check unavailable: loop-capabilities\.yaml/)
     .catch(failWithDiagnosis(home, repo));
   const log = injectedLog(repo);
   expect(log).toMatch(/\(e\) frozen check unavailable: loop-capabilities\.yaml/);
