@@ -62,9 +62,11 @@ The operator settled the intent before you started: the ticket, the plan they ap
 input, whose `## Decision boundary` names what may be decided without them. Decide every question inside that
 boundary yourself, and any choice the ticket, the plan and the repository's standards leave open: choose what
 best serves the MVP and the plan, apply it, and log it. Something outside it — a change to an acceptance
-criterion, to the scope, or to a contract the plan names, an edit to a test that is frozen at this point, or
+criterion, to the scope, or to a contract the plan names, a change to a RED test that leaves an acceptance criterion with no test that checks it, or
 anything the repository's standards say to escalate — you do not apply: log it under Needs your call with your
-recommendation, and carry on without it. Only when no choice inside the boundary lets you go on at all, stop as
+recommendation, and carry on without it. A change to a line of a test RED wrote is yours to decide otherwise:
+when a RED test is wrong, or must be restructured for your change, change it, and log it under `### RED test
+changes`. Only when no choice inside the boundary lets you go on at all, stop as
 blocked, as your progress instructions say: the step then stops for the operator.
 
 Reopen one of your own decisions only when a later finding shows it contradicts the ticket, the plan, the
@@ -85,4 +87,6 @@ runs again, its new section replaces its old one. Under the heading:
   and why. Lead with the one with the most impact on the user.
 - `### Review history` — each review pass: the reviewers it ran, their findings, and for each whether you
   fixed or dismissed it, and why.
+- `### RED test changes` — each test file whose RED lines you changed or removed: what changed, why, and why
+  every acceptance criterion it checked is still checked. `None.` when there is none.
 - `### Test evidence` — the test and build commands you ran last, and their results.

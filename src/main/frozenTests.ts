@@ -1,9 +1,9 @@
 // §28.5.1/§28.5.2a — git-only test-path detection for the §28 completion predicates, in two modes, each with NO
 // knowledge of any test framework (the engine never runs the test command, §28.5.4; it only asks git):
-//   • changedTestPaths — which test-glob files CHANGED since the baseline: between two COMMITS (baseline↔head)
-//     for the commit↔commit frozen check (§28.5.1), or (head omitted) between the baseline and the WORKING TREE
-//     for the GREEN frozen check run at completion before the phase commit lands (§28.5.3). "Changed" is the
-//     right predicate for both — a deleted frozen test is a real change.
+//   • changedTestPaths — which test-glob files that existed at the baseline had a line CHANGED OR REMOVED, or
+//     were deleted: between two COMMITS (baseline↔head) for the commit↔commit frozen check (§28.5.1), or (head
+//     omitted) between the baseline and the WORKING TREE for the GREEN frozen check run at completion before the
+//     phase commit lands (§28.5.3). A test file added, or lines only added to one, is not a frozen change.
 //   • workingTreeTestPaths — which test-glob files this turn ADDED LINES to in the WORKING TREE vs HEAD: the RED
 //     "a failing test was authored" check (§28.5.2a), run before the RED commit; a deletion or a line-removal
 //     is deliberately NOT "added" (the intentional asymmetry with the frozen check above).
@@ -95,56 +95,71 @@ function isSafeRef(ref: string): boolean {
   return ref.length > 0;
 }
 
-/** The changed test-glob paths between `baseline` and (with `head`) another commit, or (head omitted) the
- *  WORKING TREE — sorted, deduped, never a non-test path. "Changed" is name-only: any change, INCLUDING a
- *  deletion (a removed frozen test is a real change — the deliberate asymmetry with the added-lines
- *  `workingTreeTestPaths`). Empty when nothing matching changed. Rejects on a git failure or an invalid
- *  baseline/head (fail toward firing, never reads as "∅"). */
+/** One `git diff --numstat -z --no-renames` record per path. A binary file's counts are `-`, read as NaN. */
+function parseNumstat(stdout: Buffer, what: string): { added: number; deleted: number; path: string }[] {
+  let text: string;
+  try {
+    text = decodeUtf8Strict(stdout);
+  } catch {
+    throw new Error(`${what}: git emitted non-UTF-8 path bytes`);
+  }
+  // The path is everything after the second tab (a tab CAN appear in a filename).
+  return text
+    .split('\0')
+    .filter((rec) => rec.length > 0)
+    .flatMap((rec) => {
+      const firstTab = rec.indexOf('\t');
+      const secondTab = rec.indexOf('\t', firstTab + 1);
+      if (firstTab < 0 || secondTab < 0) return [];
+      return [{ added: Number(rec.slice(0, firstTab)), deleted: Number(rec.slice(firstTab + 1, secondTab)), path: rec.slice(secondTab + 1) }];
+    });
+}
+
+/** The frozen test-glob paths between `baseline` and (with `head`) another commit, or (head omitted) the
+ *  WORKING TREE — sorted, deduped, never a non-test path: each file that existed at the baseline and lost or
+ *  changed a line (a binary change counts), or was deleted or changed type. A new test file, or a test file
+ *  that only gained lines, is not reported (§28.5.1). Empty when nothing matching changed. Rejects on a git
+ *  failure or an invalid baseline/head (fail toward firing, never reads as "∅"). */
 export async function changedTestPaths(query: FrozenTestsQuery): Promise<string[]> {
   const { repoDir, baseline, head, testGlobs, signal } = query;
   const options = { env: LOCK_FREE_GIT_READ_ENV, signal };
   if (testGlobs.length === 0) throw new Error('frozen-tests: testGlobs is empty');
   if (!isGitObjectId(baseline)) throw new Error('frozen-tests: baseline is not a git object id');
 
-  // Shared diff flags: names only (no patch → no textconv/external-diff), NUL-delimited raw pathname BYTES (git
-  // does not C-quote, decoded strictly), renames decomposed to delete+add (§28.5.1), a changed gitlink shown
-  // regardless of a repo-local diff.ignoreSubmodules, and the revision(s) neutralized against option-injection.
-  const diffFlags = ['diff', '--name-only', '-z', '--no-renames', '--ignore-submodules=none', '--end-of-options'];
-
+  // Shared diff flags: NUL-delimited raw pathname BYTES (git does not C-quote, decoded strictly), renames
+  // decomposed to delete+add (§28.5.1), a changed gitlink shown regardless of a repo-local diff.ignoreSubmodules,
+  // and the revision(s) neutralized against option-injection, with no textconv or external diff driver.
+  // `--numstat` finds lost or changed lines; `--diff-filter=DT` finds a deleted or retyped file, which has no
+  // line to lose when it was empty.
+  const shared = ['-z', '--no-renames', '--ignore-submodules=none', '--no-textconv', '--no-ext-diff'];
+  let revisions: string[];
   if (head === undefined) {
-    // §28.5.3 — baseline ↔ WORKING TREE (one revision). `git diff <baseline>` reports tracked changes but NEVER
-    // lists untracked files, so a brand-new test authored this turn would be missed — union `ls-files -o` to
-    // catch it.
-    const diffOut = await runBuffer(
-      'git',
-      [...diffFlags, `${baseline}^{commit}`],
-      repoDir,
-      'frozen-tests working-tree diff failed',
-      options,
-    );
-    const untrackedOut = await runBuffer(
-      'git',
-      ['ls-files', '-o', '--exclude-standard', '-z'],
-      repoDir,
-      'frozen-tests ls-files failed',
-      options,
-    );
-    return matchedTestPaths([...strictDecodeNulPaths(diffOut), ...strictDecodeNulPaths(untrackedOut)], testGlobs);
-  }
-
-  if (!isSafeRef(head)) throw new Error('frozen-tests: head is not a usable ref');
-  const stdout = await runBuffer(
-    'git',
-    [
-      ...diffFlags,
+    revisions = [`${baseline}^{commit}`];
+  } else {
+    if (!isSafeRef(head)) throw new Error('frozen-tests: head is not a usable ref');
+    revisions = [
       `${baseline}^{commit}`, // peel to a commit: git accepts a bare tree/blob object id as a diff operand, so a
       `${head}^{commit}`, //     non-commit operand would diff instead of failing toward the check firing
-    ],
+    ];
+  }
+  const numstatOut = await runBuffer(
+    'git',
+    ['diff', '--numstat', ...shared, '--end-of-options', ...revisions],
     repoDir,
     'frozen-tests diff failed',
     options,
   );
-  return matchedTestPaths(strictDecodeNulPaths(stdout), testGlobs);
+  const removedOut = await runBuffer(
+    'git',
+    ['diff', '--name-only', '--diff-filter=DT', ...shared, '--end-of-options', ...revisions],
+    repoDir,
+    'frozen-tests diff failed',
+    options,
+  );
+  const lostLines = parseNumstat(numstatOut, 'frozen-tests')
+    .filter((rec) => rec.deleted !== 0)
+    .map((rec) => rec.path);
+  return matchedTestPaths([...lostLines, ...strictDecodeNulPaths(removedOut)], testGlobs);
 }
 
 /** The changed test paths, sourcing the globs from the RED baseline's loop-capabilities.yaml (a git blob, so
@@ -236,7 +251,7 @@ export async function changedTestPathsFromCapabilities(query: {
   return { ok: true, paths };
 }
 
-export type ApproveTimeFrozenCheck = { ok: true; paths: string[] } | { ok: false; detail: string };
+export type ApproveTimeFrozenCheck = { ok: true; branch: string; paths: string[] } | { ok: false; detail: string };
 
 /** §27.9.1 N9b.7 — the engine's own frozen check at an `auto` approve: the working tree's globs, the working tree
  *  against the recorded phase baseline. Every way it cannot run is a detail, never "unchanged". */
@@ -248,7 +263,7 @@ export async function approveTimeFrozenCheck(repoDir: string, signal: AbortSigna
   const baseline = baselineForBranch(readBaselineCommit(repoDir), branch.branch);
   if (baseline === null) return { ok: false, detail: 'no phase baseline is recorded for this branch (baseline-commit.yaml is absent, unreadable, from another branch, or HEAD is detached)' };
   try {
-    return { ok: true, paths: await changedTestPaths({ repoDir, baseline: baseline.sha, testGlobs: capabilities.value.testGlobs, signal }) };
+    return { ok: true, branch: baseline.branch, paths: await changedTestPaths({ repoDir, baseline: baseline.sha, testGlobs: capabilities.value.testGlobs, signal }) };
   } catch (e) {
     return { ok: false, detail: `the git read against the baseline failed: ${errMsg(e)}` };
   }
@@ -293,28 +308,9 @@ export async function workingTreeTestPaths(query: {
     'working-tree tests: git ls-files failed',
   );
 
-  // `--numstat -z` records are `<added>\t<deleted>\t<path>` per NUL-terminated entry (no renames → no split
-  // record). The bytes are decoded strictly (a non-UTF-8 path rejects, never a lossy normalization — the same
-  // posture as strictDecodeNulPaths). Keep a tracked path only when its added-line count is a positive integer;
-  // a binary file's `-` count is NaN → excluded. The path is everything after the second tab (a tab CAN appear
-  // in a filename).
-  let trackedText: string;
-  try {
-    trackedText = decodeUtf8Strict(trackedOut);
-  } catch {
-    throw new Error('working-tree tests: git emitted non-UTF-8 path bytes');
-  }
-  const tracked = trackedText
-    .split('\0')
-    .filter((rec) => rec.length > 0)
-    .map((rec) => {
-      const firstTab = rec.indexOf('\t');
-      const secondTab = rec.indexOf('\t', firstTab + 1);
-      if (firstTab < 0 || secondTab < 0) return null;
-      const added = Number(rec.slice(0, firstTab));
-      return Number.isInteger(added) && added > 0 ? rec.slice(secondTab + 1) : null;
-    })
-    .filter((path): path is string => path !== null);
+  const tracked = parseNumstat(trackedOut, 'working-tree tests')
+    .filter((rec) => Number.isInteger(rec.added) && rec.added > 0)
+    .map((rec) => rec.path);
   const untracked = strictDecodeNulPaths(untrackedOut);
 
   return matchedTestPaths([...tracked, ...untracked], testGlobs);

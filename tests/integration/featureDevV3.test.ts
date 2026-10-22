@@ -9,8 +9,9 @@ import { EPIC_GRAMMAR, epicPlanWellFormed, exampleEpicPlan } from '../../src/sha
 import { exampleSlicePlan, slicePlanWellFormed, SLICE_GRAMMAR } from '../../src/shared/slicePlan';
 import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
 import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
+import { redTestChangesArtifact } from '../../src/main/redTestChanges';
 
-// feature-dev-v3 (v2.200, v2.201) — feature-dev-v2 with grooming split into three steps: an interview that settles
+// feature-dev-v3 (v2.200, v2.201) — grooming in three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
 // pass finds nothing, and a presentation the operator approves as is or fixes in that same session. Each
 // implementation step is then a goal session that reviews its own work and logs its decisions, and one final
@@ -18,19 +19,8 @@ import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 // reviews the plan, and a presentation the operator approves once.
 
 const FLOWS = resolveExampleFlowsDir({ packaged: false, appPath: REPO_DIR });
-const V2 = 'feature-dev-v2';
 const V3 = 'feature-dev-v3';
-const GROOM_STEPS = ['groom-intent', 'groom', 'groom-approve'];
-const V2_PLAN_STEPS = ['plan-bundle', 'plan-polish'];
-const PLAN_STEPS = ['plan', 'plan-approve'];
-const V3_STEPS = [...GROOM_STEPS, ...PLAN_STEPS, 'impl-approve'];
 const CODE_LOOPS = ['infra-loop', 'red-loop', 'green-loop', 'refactor-loop', 'integration-slice-loop'];
-
-function loopV2(name: string): LoopDefV2 {
-  const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: BUNDLED_LOOPS_ROOT, retired: null }, repoDir: REPO_DIR, flow: V2 });
-  if (!r.ok) throw new Error(r.reason);
-  return r.def;
-}
 
 function flow(id: string) {
   const r = loadUntrustedFlowDefinition(join(FLOWS, id, 'flow.yaml'));
@@ -50,14 +40,22 @@ const prompt = (def: LoopDefV2): string => `${brief(def)}\n${text(def.work.recip
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
 
 describe('feature-dev-v3 grooms in three steps, and approves the implementation once at the end', () => {
-  it('replaces v2\'s groom step with the three, its two planning steps with two, adds the implementation approval before finalize, and keeps v2\'s other steps', () => {
-    const v2 = flow(V2).steps;
-    const v3 = flow(V3).steps;
-    const expected = v2.flatMap((s) => (s.id === 'groom' ? GROOM_STEPS : s.id === 'plan-bundle' ? PLAN_STEPS : s.id === 'plan-polish' ? [] : [s.id]));
-    expected.splice(expected.indexOf('finalize'), 0, 'impl-approve');
-    expect(v3.map((s) => s.id)).toEqual(expected);
-    const asV2 = (s: (typeof v3)[number]) => (s.id === 'integration-slice' ? { ...s, gateAuthority: 'human' } : s);
-    expect(v3.filter((s) => !V3_STEPS.includes(s.id)).map(asV2)).toEqual(v2.filter((s) => s.id !== 'groom' && !V2_PLAN_STEPS.includes(s.id)));
+  it('runs the three groom steps, the two planning steps, the code steps, and the implementation approval before finalize', () => {
+    expect(flow(V3).steps.map((s) => [s.id, s.kind, s.kind === 'loop' ? s.loop : null])).toEqual([
+      ['preparation', 'manual', null],
+      ['groom-intent', 'loop', 'groom-intent-loop'],
+      ['groom', 'loop', 'groom-goal-loop'],
+      ['groom-approve', 'loop', 'groom-approve-loop'],
+      ['plan', 'loop', 'plan-goal-loop'],
+      ['plan-approve', 'loop', 'plan-approve-loop'],
+      ['infra', 'loop', 'infra-loop'],
+      ['red', 'loop', 'red-loop'],
+      ['green', 'loop', 'green-loop'],
+      ['refactor', 'loop', 'refactor-loop'],
+      ['integration-slice', 'loop', 'integration-slice-loop'],
+      ['impl-approve', 'loop', 'impl-approve-loop'],
+      ['finalize', 'manual', null],
+    ]);
   });
 
   it('leaves the operator only the groom approval, the plan approval and the implementation approval', () => {
@@ -74,10 +72,8 @@ describe('feature-dev-v3 grooms in three steps, and approves the implementation 
     expect(byId('groom-approve').gateAuthority).toBe('human');
   });
 
-  it('ships no copy of v2\'s planning loops, which no v3 step runs', () => {
+  it('ships exactly the loops its steps run', () => {
     const v3Loops = readdirSync(join(BUNDLED_LOOPS_ROOT, V3));
-    expect(v3Loops).not.toContain('plan-bundle-loop');
-    expect(v3Loops).not.toContain('plan-polish-loop');
     const run = flow(V3).steps.flatMap((s) => (s.kind === 'loop' ? [s.loop] : []));
     expect([...v3Loops].sort()).toEqual([...new Set(run)].sort());
   });
@@ -137,16 +133,38 @@ describe('the three groom loops', () => {
 });
 
 describe('each implementation step is a goal session that reviews its own work (v2.201)', () => {
-  it.each(CODE_LOOPS)('%s keeps v2\'s reviewers, charters, completion check and polish policy, and runs as a goal in legs of 3 review passes', (name) => {
+  const CODE_LOOP_SHAPE: Record<string, { completion: string | null; polish: string; personas: string[] }> = {
+    'infra-loop': {
+      completion: null,
+      polish: 'defer',
+      personas: [...['principal', 'tests', 'security', 'taint', 'reliability', 'maintainability', 'conventions', 'architecture'].map((l) => `impl-review-${l}`), 'review-plan-determinism'],
+    },
+    'red-loop': { completion: 'red', polish: 'defer', personas: ['impl-review-tests', 'impl-review-intent', 'impl-review-red-authenticity'] },
+    'green-loop': {
+      completion: 'green',
+      polish: 'defer',
+      personas: [...['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'accessibility', 'regression-guard'].map((l) => `impl-review-${l}`)],
+    },
+    'refactor-loop': { completion: 'refactor', polish: 'defer', personas: ['principal', 'tests', 'reliability', 'architecture'].map((l) => `impl-review-${l}`) },
+    'integration-slice-loop': {
+      completion: null,
+      polish: 'fix',
+      personas: [
+        ...['principal', 'tests', 'security', 'taint', 'reliability', 'architecture', 'contracts', 'intent', 'maintainability', 'conventions', 'accessibility', 'diagrams'].map((l) => `impl-review-${l}`),
+        'review-plan-tracer-slicer',
+      ],
+    },
+  };
+
+  it.each(CODE_LOOPS)('%s keeps its reviewers, completion check and polish policy, and runs as a goal in legs of 3 review passes', (name) => {
     const v3 = loop(name);
-    const v2 = loopV2(name);
+    const want = CODE_LOOP_SHAPE[name];
     expect(v3.rounds).toEqual({ kind: 'none' });
     expect(v3.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(v3.work.checkpoint).toEqual({ passes: 3 });
-    expect(v3.work.completion).toBe(v2.work.completion);
-    expect(v3.report.polish).toBe(v2.report.polish);
-    expect(v3.reviewers.map((r) => r.persona)).toEqual(v2.reviewers.map((r) => r.persona));
-    for (const [i, r] of v3.reviewers.entries()) expect(text(r.charter)).toBe(text(v2.reviewers[i].charter));
+    expect(v3.work.completion ?? null).toBe(want.completion);
+    expect(v3.report.polish).toBe(want.polish);
+    expect(v3.reviewers.map((r) => r.persona)).toEqual(want.personas);
     expect(v3.gate.map((g) => g.option)).not.toContain('request-changes');
   });
 
@@ -172,10 +190,46 @@ describe('each implementation step is a goal session that reviews its own work (
     }
   });
 
-  it('the green goal names the frozen-tests bar the gate checks: no test changed since RED', () => {
+  it('the green goal no longer bars a change to a RED test: it requires each one logged', () => {
     const goal = loop('green-loop').work.goal ?? '';
-    expect(goal).not.toContain('the RED tests unchanged');
-    expect(goal).toContain('no test changed since RED');
+    expect(goal).not.toContain('no line of a RED test changed or removed');
+    expect(goal).toContain('every change to a line of a RED test is logged under `### RED test changes`');
+  });
+
+  it('green may add tests that test behaviour and weaken no other test, seen failing first', () => {
+    const work = flat(text(loop('green-loop').work.recipe));
+    expect(work).toMatch(/You may add new tests/);
+    expect(work).toMatch(/must test observable behaviour, never the implementation, and must not weaken any other test/);
+    expect(work).toMatch(/run it to see it fail/);
+  });
+
+  it.each(['green-loop', 'refactor-loop', 'integration-slice-loop'])('%s decides a change to a RED test itself and logs it, unless it leaves an acceptance criterion untested', (name) => {
+    const p = flat(prompt(loop(name)));
+    expect(p).not.toContain('Never change or remove a line of a test RED wrote');
+    expect(p).not.toContain('a change to or removal of a line of a test RED wrote');
+    expect(p).not.toContain('an edit to a test that is frozen at this point');
+    expect(p).toContain('A change to a line of a test RED wrote is yours to decide');
+    expect(p).toContain('a change to a RED test that leaves an acceptance criterion with no test that checks it');
+    expect(p).toContain('### RED test changes');
+    expect(p).toMatch(/`### RED test changes` — each test file whose RED lines you changed or removed: what changed, why, and why every acceptance criterion it checked is still checked/);
+  });
+
+  it('green\'s regression-guard reviewer grades the tests GREEN added and every RED test change it logged', () => {
+    const charter = flat(text(loop('green-loop').reviewers.find((r) => r.persona === 'impl-review-regression-guard')!.charter));
+    expect(charter).toMatch(/For each test GREEN added, confirm it weakens no other test/);
+    expect(charter).toMatch(/tests observable behavior, not the implementation, and was seen failing before the code it covers/);
+    expect(charter).toMatch(/For each change to a RED test, judge whether it corrects a wrong test or weakens a right one/);
+    expect(charter).toMatch(/a changed test file the flag lists that `### RED test changes` does not explain is a finding/);
+  });
+
+  it.each(['refactor-loop', 'integration-slice-loop'])('%s\'s tests reviewer grades every RED test change the step logged', (name) => {
+    const charter = flat(text(loop(name).reviewers.find((r) => r.persona === 'impl-review-tests')!.charter));
+    expect(charter).toMatch(/For each change to a RED test, judge whether it corrects a wrong test or weakens a right one/);
+  });
+
+  it('integration-slice runs the engine\'s frozen check at its approve, as GREEN and refactor do', () => {
+    expect(loop('integration-slice-loop').work.frozenCheck).toBe(true);
+    expect(loop('green-loop').work.frozenCheck).toBeUndefined();
   });
 
   it.each(CODE_LOOPS)('%s never stops to ask: it decides inside the boundary and logs what it decided, found and ran', (name) => {
@@ -220,28 +274,46 @@ describe('each implementation step is a goal session that reviews its own work (
     for (const heading of ['## Needs your call', '## Decisions', '## Review history', '## Test evidence']) expect(present).toContain(heading);
   });
 
+  it('the final approval lists every RED test change the engine recorded, with the step\'s reason or marked unexplained', () => {
+    const approve = loop('impl-approve-loop');
+    const record = approve.inputs.find((i) => i.id === 'red-test-changes');
+    expect(record?.path).toBe(redTestChangesArtifact(REPO_DIR));
+    const present = flat(prompt(approve));
+    expect(present).toContain('## RED test changes');
+    expect(present).toMatch(/every path in the `red-test-changes` input/);
+    expect(present).toContain('**Unexplained**');
+    expect(present.indexOf('## RED test changes')).toBeLessThan(present.indexOf('## What was built'));
+    expect(present.indexOf('## Needs your call')).toBeLessThan(present.indexOf('## RED test changes'));
+  });
+
   it('the groom goal session also runs in legs of 3 review passes', () => {
     expect(loop('groom-goal-loop').work.checkpoint).toEqual({ passes: 3 });
   });
 });
 
 describe('planning is one goal session that reviews itself, approved once (#212)', () => {
-  const v2Bundle = () => loopV2('plan-bundle-loop');
-  const v2Polish = () => loopV2('plan-polish-loop');
-
-  it('the plan step is a goal session in legs of 3 that reviews with all 9 plan-polish reviewers', () => {
+  it('the plan step is a goal session in legs of 3 that reviews with all 9 plan reviewers', () => {
     const goal = loop('plan-goal-loop');
     expect(goal.rounds).toEqual({ kind: 'none' });
     expect(goal.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(goal.work.checkpoint).toEqual({ passes: 3 });
-    expect(goal.reviewers.map((r) => r.persona)).toEqual(v2Polish().reviewers.map((r) => r.persona));
-    for (const [i, r] of goal.reviewers.entries()) expect(text(r.charter)).toBe(text(v2Polish().reviewers[i].charter));
+    expect(goal.reviewers.map((r) => r.persona)).toEqual(
+      ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts', 'test-architect', 'determinism', 'tracer-slicer'].map((l) => `review-plan-${l}`),
+    );
     expect(goal.gate.map((g) => g.option)).not.toContain('request-changes');
   });
 
-  it('the plan step picks the ticket up as plan-bundle did, creating the branch and draft PR every later step uses', () => {
-    expect(loop('plan-goal-loop').pickup).toEqual(v2Bundle().pickup);
-    expect(loop('plan-goal-loop').pickup).not.toBeNull();
+  it('the plan step picks the ticket up, creating the branch and draft PR every later step uses', () => {
+    expect(loop('plan-goal-loop').pickup).toEqual({
+      initialStatus: 'planning',
+      branchTemplate: 'plan-loop/issue-{issue}',
+      initialLabels: [
+        { action: 'remove', target: 'issue', label: 'plan-loop/ready' },
+        { action: 'add', target: 'issue', label: 'plan-loop/in-progress' },
+        { action: 'add', target: 'pr', label: 'plan-loop/plan-draft' },
+      ],
+      wipe: { mode: 'wipe-and-retry' },
+    });
   });
 
   it('the plan step reads the groomed ticket and the intent, and writes the plan and its report', () => {
@@ -254,7 +326,6 @@ describe('planning is one goal session that reviews itself, approved once (#212)
   it('the plan step drafts the planning bundle, keeping every section and machine-read token the gates read', () => {
     const p = prompt(loop('plan-goal-loop'));
     for (const heading of ['## Test plan', '## Technical plan', '## Infrastructure plan', '## Slice plan', '## Complexity drivers', '### Slice sizing']) {
-      expect(text(v2Bundle().work.recipe) + brief(v2Bundle())).toContain(heading);
       expect(p, heading).toContain(heading);
     }
     for (const token of [...Object.values(EPIC_GRAMMAR), ...Object.values(SLICE_GRAMMAR)]) expect(p, token).toContain(token);
@@ -270,13 +341,6 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     expect(slices.trim()).toBe(exampleSlicePlan(2).trim());
   });
 
-  it('the plan step polishes its own draft with the plan-polish method, carried verbatim', () => {
-    const v2Recipe = text(v2Polish().work.recipe);
-    const method = v2Recipe.slice(v2Recipe.indexOf('# Plan Polish'));
-    expect(method.length).toBeGreaterThan(1000);
-    expect(prompt(loop('plan-goal-loop'))).toContain(method.trim());
-  });
-
   it('the plan step never stops to ask: it decides inside the boundary and lists the rest for the operator', () => {
     const p = prompt(loop('plan-goal-loop'));
     for (const heading of ['## Decision boundary', '## Needs your call', '## Planner decisions', '## Review history']) expect(p, heading).toContain(heading);
@@ -290,6 +354,9 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     expect(flat(text(loop('plan-goal-loop').work.recipe))).toMatch(rule);
     const slicer = loop('plan-goal-loop').reviewers.find((r) => r.persona === 'review-plan-tracer-slicer');
     expect(flat(text(slicer!.charter))).toMatch(/edit to or deletion of an existing test that a slice needs belongs in that slice's RED step[\s\S]*? Any such edit scheduled in a GREEN or refactor step is a finding/);
+    for (const t of [text(slicer!.charter), text(loop('plan-goal-loop').work.recipe), text(loop('integration-slice-loop').reviewers.find((r) => r.persona === 'review-plan-tracer-slicer')?.charter ?? slicer!.charter)]) {
+      expect(flat(t)).not.toMatch(/engine halts an `auto` GREEN or refactor gate/);
+    }
   });
 
   it('the plan step re-reviews only the reviewers a fix concerns, and every reviewer only when a fix changes the plan\'s scope', () => {
@@ -325,10 +392,9 @@ describe('planning is one goal session that reviews itself, approved once (#212)
     }
   });
 
-  it('approving the plan marks the PR ready and promotes the plan, as plan-polish did, and re-sources the slice count', () => {
+  it('approving the plan marks the PR ready and promotes the plan, and re-sources the slice count', () => {
     const effects = (def: LoopDefV2) => def.gate.find((g) => g.option === 'approve')?.sideEffects ?? [];
     const approve = loop('plan-approve-loop');
-    expect(effects(approve)).toEqual(effects(v2Polish()));
     expect(effects(approve)).toEqual([
       { kind: 'gh', args: { action: 'mark-ready' } },
       { kind: 'promote', args: { artifact: 'plan' } },

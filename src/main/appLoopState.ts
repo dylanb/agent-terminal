@@ -403,11 +403,11 @@ const bootstrapFileOf = (repoDir: string): string | null => {
   return file;
 };
 
-function isPositiveInt(v: unknown): v is number {
+export function isPositiveInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 }
 
-function isNonBlank(v: unknown): v is string {
+export function isNonBlank(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0;
 }
 
@@ -760,7 +760,7 @@ export interface ChangedTestsRecord {
  *  cap — a safety bound against a planted/pathological file (a real GREEN turn touches a handful of tests), not
  *  an expected operational case, so no `truncated` signal is carried; G5/G6 consumers treat an at-cap list as
  *  advisory. The cap is applied after dedupe+sort so the surviving set is deterministic across writer and reader. */
-function sanitizeChangedTestPaths(raw: unknown): string[] {
+export function sanitizeChangedTestPaths(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const valid = raw.filter(
     (p): p is string => typeof p === 'string' && p.trim().length > 0 && p.length <= MAX_CHANGED_TEST_PATH_LEN,

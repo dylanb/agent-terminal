@@ -10,7 +10,7 @@ import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
 import { exampleConfigDir, writeCatalogEntry } from './fakeTools';
 
-export type AutoGateLoop = 'groom-loop' | 'plan-bundle-loop' | 'plan-polish-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
+export type AutoGateLoop = 'groom-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
 export interface AutoGateStep {
   id: string;
@@ -60,6 +60,8 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
   git('config', 'user.name', 'T');
   writeFileSync(join(dir, '.gitignore'), '.agent-terminal/\n.agent-loop/\n');
   writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  mkdirSync(join(dir, 'tests'));
+  writeFileSync(join(dir, 'tests', 'frozen.test.ts'), 'test("baseline", () => {});\n');
   writeFileSync(join(dir, 'loop-capabilities.yaml'), AUTO_GATE_CAPABILITIES);
   const loopDir = join(dir, '.agent-terminal', 'loop');
   mkdirSync(join(loopDir, 'artifacts'), { recursive: true });

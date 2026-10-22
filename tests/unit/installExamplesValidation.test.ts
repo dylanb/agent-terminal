@@ -25,6 +25,7 @@ describe('isValidInstallExamplesApply', () => {
   const valid = {
     sessionId: SESSION_ID,
     previewId: 'preview-1',
+    removeRetired: false,
   };
 
   it('accepts a live-session request whose replace list is empty', () => {
@@ -51,6 +52,7 @@ describe('isValidInstallExamplesApply', () => {
       isValidInstallExamplesApply({
         sessionId: SESSION_ID,
         replace: [],
+        removeRetired: false,
       }),
     ).toBe(false);
     expect(
@@ -75,5 +77,13 @@ describe('isValidInstallExamplesApply', () => {
   it('rejects an unknown destination id rather than ignoring it', () => {
     expect(isValidInstallExamplesApply({ ...valid, replace: ['everything'] })).toBe(false);
     expect(isValidInstallExamplesApply({ ...valid, replace: ['flow', '../../etc'] })).toBe(false);
+  });
+
+  it('accepts either answer to removing the retired examples, and refuses a missing or non-boolean one', () => {
+    expect(isValidInstallExamplesApply({ ...valid, replace: [], removeRetired: true })).toBe(true);
+    const { removeRetired: _omitted, ...withoutAnswer } = valid;
+    expect(isValidInstallExamplesApply({ ...withoutAnswer, replace: [] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [], removeRetired: 'yes' })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [], removeRetired: 1 })).toBe(false);
   });
 });

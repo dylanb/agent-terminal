@@ -37,6 +37,17 @@ function bundledReviewers(root: string): BundledReviewer[] {
   return out;
 }
 
+/** A copy of the bundle with a second flow shipping the same green-loop, so one loop's persona is shipped twice.
+ *  Returns the twin flow's reviewers. */
+function bundleWithTwinFlow(bundle: string): BundledReviewer[] {
+  cpSync(BUNDLE_LOOPS, bundle, { recursive: true });
+  const source = bundledReviewers(bundle).find((r) => r.loop === 'green-loop');
+  if (source === undefined) throw new Error('no bundled flow ships green-loop');
+  const loopDir = path.dirname(path.dirname(source.charterPath));
+  cpSync(loopDir, path.join(bundle, 'twin-flow', 'green-loop'), { recursive: true });
+  return bundledReviewers(bundle).filter((r) => r.charterPath.startsWith(path.join(bundle, 'twin-flow') + path.sep));
+}
+
 function parseAgent(text: string): { front: Record<string, unknown>; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
   if (!m) throw new Error(`not a front-mattered agent file:\n${text.slice(0, 200)}`);
@@ -87,8 +98,7 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
   it('refuses, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
     const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-bundle-'));
     try {
-      cpSync(BUNDLE_LOOPS, bundle, { recursive: true });
-      const shared = bundledReviewers(bundle).filter((r, _i, all) => all.some((o) => o !== r && o.loop === r.loop && o.persona === r.persona));
+      const shared = bundleWithTwinFlow(bundle);
       expect(shared.length).toBeGreaterThan(0);
       writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
       const res = applyInstallExamples(dirs.map((d) => (d.id === 'agents' ? { ...d, bundleDir: bundle } : d)), []);
@@ -171,8 +181,8 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
   it('refuses, writing nothing, when two bundled flows ship different charters for one loop and persona', () => {
     const bundle = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-codex-bundle-'));
     try {
-      cpSync(BUNDLE_LOOPS, bundle, { recursive: true });
-      const shared = bundledReviewers(bundle).filter((r, _i, all) => all.some((o) => o !== r && o.loop === r.loop && o.persona === r.persona));
+      const shared = bundleWithTwinFlow(bundle);
+      expect(shared.length).toBeGreaterThan(0);
       writeFileSync(shared[0].charterPath, `${readFileSync(shared[0].charterPath, 'utf8')}\nA divergent line.\n`);
       mkdirSync(codexHome());
       const res = applyInstallExamples(dirs.map((d) => (d.id === 'codexAgents' ? { ...d, bundleDir: bundle } : d)), []);
@@ -187,7 +197,7 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
 describe('a reviewer runs only as the installed sub-agent carrying the charter this run resolved', () => {
   const agentsDir = (): string => path.join(configRoot, 'agents');
   const greenRoster = () => {
-    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v2' });
+    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v3' });
     if (!r.ok) throw new Error(r.reason);
     return reviewRoster(r.def);
   };
@@ -243,7 +253,7 @@ describe('a reviewer runs only as the installed sub-agent carrying the charter t
 describe('under Codex a reviewer runs only as the installed Codex agent carrying the charter this run resolved', () => {
   const codexAgents = (): string => path.join(home, '.codex', 'agents');
   const greenRoster = () => {
-    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v2' });
+    const r = resolveLoopDefV2('green-loop', { tiers: { operator: null, appBundled: BUNDLE_LOOPS, retired: null }, repoDir: home, flow: 'feature-dev-v3' });
     if (!r.ok) throw new Error(r.reason);
     return reviewRoster(r.def);
   };

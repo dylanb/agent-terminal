@@ -9,7 +9,9 @@ import type {
   InstallExamplesPreview,
   InstallExamplesResult,
   InstallPreviewId,
+  RetiredExample,
 } from '../../src/shared/ipc';
+import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
 
 // Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional per-destination
 // consent step → apply → destination-grouped result reporting. Tests assert the observable DOM + the
@@ -35,6 +37,8 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     ok: true,
     previewId: PREVIEW_ID,
     destinations: cleanDestinations,
+    retired: [],
+    retiredFallback: null,
   };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
@@ -42,7 +46,15 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     destinations: cleanDestinations.map((d) =>
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
+    retired: [],
+    retiredFallback: null,
   });
+  const RETIRED: RetiredExample[] = [
+    { destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath },
+    { destination: 'agents', rel: 'plan-polish-loop--review-plan-intent.md' as DestRelativePath },
+  ];
+  const withRetired = (preview: InstallExamplesPreview): InstallExamplesPreview =>
+    preview.ok ? { ...preview, retired: RETIRED } : preview;
 
   const okResult = (over: Partial<Extract<InstallExamplesResult, { ok: true }>> = {}): InstallExamplesResult => ({
     ok: true,
@@ -50,6 +62,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     overwritten: [],
     skipped: [],
     notInstalled: [],
+    removed: [],
     ...over,
   });
   const deps = (over: Partial<InstallExamplesDeps> = {}): InstallExamplesDeps => ({
@@ -118,7 +131,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []);
+    expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], false);
     expect(prompt()).toBeNull();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
@@ -147,7 +160,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     consentBox('commands').click();
     confirmBtn().click();
     await vi.waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, ['commands']),
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, ['commands'], false),
     );
   });
 
@@ -156,10 +169,95 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['appLoops'], { apply });
     confirmBtn().click();
     await vi.waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []),
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], false),
     );
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
     expect(prompt()).toBeNull();
+  });
+
+  describe('removing what the retired flows left behind (§18.1 v2.212)', () => {
+    const retiredBox = (): HTMLInputElement | null => host.querySelector('.flow-modal input[type="checkbox"][data-retired]');
+
+    async function openWithRetired(conflicts: InstallDestinationId[], apply: InstallExamplesDeps['apply']): Promise<void> {
+      createInstallExamples(host, deps({ preview: vi.fn(async () => withRetired(conflicting(...conflicts))), apply }));
+      button().click();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    }
+
+    it('asks before installing when only retired leftovers are found, offering their removal unchecked', async () => {
+      const apply = vi.fn(async () => okResult());
+      await openWithRetired([], apply);
+      expect(apply).not.toHaveBeenCalled();
+      expect(retiredBox()).not.toBeNull();
+      expect(retiredBox()?.checked).toBe(false);
+    });
+
+    it('names every leftover it would remove, outside the checkbox name (accname 1.2, WCAG 4.1.2)', async () => {
+      await openWithRetired([], vi.fn(async () => okResult()));
+      expect(prompt()?.textContent).toContain('feature-dev-v2');
+      expect(prompt()?.textContent).toContain('plan-polish-loop--review-plan-intent.md');
+      const box = retiredBox() as HTMLInputElement;
+      expect(box.closest('label')?.textContent).not.toContain('plan-polish-loop--review-plan-intent.md');
+      const described = host.querySelector(`#${box.getAttribute('aria-describedby')}`);
+      expect(described?.textContent).toContain('plan-polish-loop--review-plan-intent.md');
+    });
+
+    it('keeps the leftovers when the user installs without ticking the removal', async () => {
+      const apply = vi.fn(async () => okResult());
+      await openWithRetired([], apply);
+      confirmBtn().click();
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], false));
+    });
+
+    it('asks for the removal when the user ticks it, independently of any replacement', async () => {
+      const apply = vi.fn(async () => okResult());
+      await openWithRetired(['appLoops'], apply);
+      expect(consentBox('appLoops').checked).toBe(false);
+      (retiredBox() as HTMLInputElement).click();
+      confirmBtn().click();
+      await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], true));
+    });
+
+    it('with only leftovers to decide, says the install still happens and only the ticked option removes anything', async () => {
+      await openWithRetired([], vi.fn(async () => okResult()));
+      expect(prompt()?.querySelector('h3')?.textContent).toBe('Install examples?');
+      expect(prompt()?.textContent).toContain('The bundled examples are installed either way; only the ticked option removes anything.');
+    });
+
+    it('names each retired flow as what left the files behind', async () => {
+      await openWithRetired([], vi.fn(async () => okResult()));
+      for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
+    });
+
+    it('warns, beside the removal, that a fallback flow still on a retired flow may use what it removes, and to replace the flow home', async () => {
+      createInstallExamples(host, deps({ preview: vi.fn(async () => ({ ...withRetired(conflicting('flow')), retiredFallback: 'feature-dev-v2' }) as InstallExamplesPreview) }));
+      button().click();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      const described = host.querySelector(`#${(retiredBox() as HTMLInputElement).getAttribute('aria-describedby')}`);
+      expect(described?.textContent).toContain('Your fallback flow is still the retired feature-dev-v2, which may use what these remove');
+      expect(described?.textContent).toContain('Flow home');
+    });
+
+    it('gives no fallback warning when the fallback flow is not a retired one', async () => {
+      await openWithRetired(['flow'], vi.fn(async () => okResult()));
+      expect(prompt()?.textContent).not.toContain('fallback flow');
+    });
+
+    it('offers no removal when nothing retired was found', async () => {
+      await openConsent(['appLoops']);
+      expect(retiredBox()).toBeNull();
+    });
+
+    it('reports what it removed under the destination it was removed from', async () => {
+      const apply = vi.fn(async () => okResult({ removed: RETIRED }));
+      await openWithRetired([], apply);
+      (retiredBox() as HTMLInputElement).click();
+      confirmBtn().click();
+      await vi.waitFor(() => expect(reportGroup('agents')).not.toBeNull());
+      expect(reportGroup('agents')?.textContent).toContain('removed 1: plan-polish-loop--review-plan-intent.md');
+      expect(reportGroup('flowCatalog')?.textContent).toContain('removed 1: feature-dev-v2');
+      await vi.waitFor(() => expect(status().textContent).toContain('removed 2'));
+    });
   });
 
   it('gives the report list an accessible name so its purpose is announced (WCAG 1.3.1)', () => {
@@ -272,6 +370,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         overwritten: [],
         skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
         notInstalled: [],
+        removed: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -317,6 +416,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         overwritten: [{ destination: 'appLoops', files: rels('plan-loop.yaml') }],
         skipped: [],
         notInstalled: [],
+        removed: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -371,6 +471,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         overwritten: [],
         skipped: [{ destination: 'commands', files: rels('other-cmd.md') }],
         notInstalled: [],
+        removed: [],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -421,7 +522,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('announces an install error through the assertive alert region (WCAG 4.1.3)', async () => {
     const apply = vi.fn(
-      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [], skipped: [], notInstalled: [] }),
+      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();

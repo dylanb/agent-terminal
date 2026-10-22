@@ -138,7 +138,7 @@ describe('real app gate GitHub adapter', () => {
       join(bin, 'gh'),
       '#!/usr/bin/env bash\n' +
         'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
-        'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf \'%s\\n\' \'{"number":42,"url":"https://github.com/owner/repository/pull/42","headRefName":"plan-loop/issue-78","state":"OPEN","closingIssuesReferences":[{"number":78,"url":"https://github.com/other/repository/issues/78"}]}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf \'%s\\n\' \'{"number":42,"url":"https://github.com/owner/repository/pull/42","headRefName":"plan-loop/issue-78","state":"OPEN","closingIssuesReferences":[{"number":78,"url":"https://github.com/other/repository/issues/78"}],"isCrossRepository":false}\'; exit 0; fi\n' +
         'if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then touch "$FAKE_READY_MARKER"; exit 0; fi\n' +
         'exit 1\n',
       { mode: 0o755 },

@@ -30,6 +30,8 @@ inputs:
     sections_dir: impl-report
   - id: infra-capabilities
     path: infra-capabilities.md
+  - id: red-test-changes
+    path: red-test-changes.yaml
 outputs:
   - id: impl-summary
     path: impl-summary.md

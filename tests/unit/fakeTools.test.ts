@@ -3,10 +3,10 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedFakeAgentSteps, seedFakeGhGit, seedFullTddChainAgent } from '../e2e/fakeTools';
+import { seedFakeAgentSteps, seedFakeGhGit, seedV3GoalAgent, v3ImplGoals, writePromptedArtifact } from '../e2e/fakeTools';
 import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/roundReport';
-import { parseConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 const dirs: string[] = [];
@@ -230,35 +230,43 @@ describe('the per-step fake agent', () => {
   });
 });
 
-describe('the full-TDD chain agent', () => {
-  it('writes different GREEN and refactor content per slice and the scripted verdict per consolidate turn', async () => {
-    const binDir = tmp('chain-agent-bin-');
-    const repo = tmp('chain-agent-repo-');
-    seedFullTddChainAgent(binDir, { verdicts: { green: ['clean', 'stop for a human'] } });
+describe('the feature-dev-v3 goal agent', () => {
+  it('writes each run\'s result and report section where the goal prompt names them, and reports the configured run blocked', async () => {
+    const binDir = tmp('v3-goal-agent-bin-');
+    const repo = tmp('v3-goal-agent-repo-');
+    seedV3GoalAgent(binDir, 'fake-agent', v3ImplGoals({ blocked: { green: 1 } }));
     const p = spawn(join(binDir, 'fake-agent'), [], { cwd: repo });
     procs.push(p);
+    const art = '.agent-terminal/loop/artifacts';
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'goal.green.md'), `Write ${art}/green-result.slice-2.json and ${art}/impl-report/green.slice-2.md.\n`);
     const done = join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME);
-    const turn = async (key: string): Promise<void> => {
+    const progress = '.agent-terminal/loop/goal-progress.0123abcd.json';
+    const goal = async (leg: number): Promise<void> => {
       rmSync(done, { force: true });
-      p.stdin.write(`turn-done:${key}\n`);
-      await vi.waitFor(() => expect(readIf(done)).toBe(key), { timeout: 5000 });
+      p.stdin.write(`/goal follow .agent-terminal/goal.green.md for leg ${leg} recording ${progress} (turn-done:work-green)\n`);
+      await vi.waitFor(() => expect(readIf(done)).toBe('work-green'), { timeout: 5000 });
     };
-    const verdict = () => parseConsolidatorOutput(readIf(join(repo, '.agent-terminal/loop/consolidate/1.json')))?.verdict;
 
-    await turn('work-green');
-    const green1 = readIf(join(repo, 'feature.ts'));
-    await turn('review-refactor');
-    const refactor1 = readIf(join(repo, 'refactor.ts'));
-    await turn('consolidate-green');
-    expect(verdict()).toBe('clean');
+    await goal(1);
+    expect(readIf(join(repo, art, 'green-result.slice-2.json'))).toBe(examplePhaseResult('passed', { build: 'built' }));
+    expect(readIf(join(repo, art, 'impl-report', 'green.slice-2.md'))).toContain('run 1 of green');
+    expect(JSON.parse(readIf(join(repo, progress)))).toMatchObject({ leg: 1, status: 'blocked' });
 
-    await turn('work-green');
-    await turn('review-refactor');
-    expect(readIf(join(repo, 'feature.ts'))).not.toBe(green1);
-    expect(readIf(join(repo, 'refactor.ts'))).not.toBe(refactor1);
-    await turn('consolidate-green');
-    expect(verdict()).toBe('stop for a human');
-    await turn('consolidate-refactor');
-    expect(verdict()).toBe('clean');
+    await goal(1);
+    expect(readIf(join(repo, art, 'impl-report', 'green.slice-2.md'))).toContain('run 2 of green');
+    expect(JSON.parse(readIf(join(repo, progress)))).toEqual({ leg: 1, status: 'done' });
+  });
+
+  it('writes a plain work turn\'s artifact where its prompt names it', async () => {
+    const binDir = tmp('v3-work-agent-bin-');
+    const repo = tmp('v3-work-agent-repo-');
+    seedV3GoalAgent(binDir, 'fake-agent', {}, { 'impl-approve': writePromptedArtifact(['## Needs your call', 'None.']) });
+    const p = spawn(join(binDir, 'fake-agent'), [], { cwd: repo });
+    procs.push(p);
+    const artifact = '.agent-terminal/loop/artifacts/impl-summary.slice-2.md';
+    p.stdin.write(`As the final line of your ${artifact} artifact, write EXACTLY this marker line so\nturn-done:work-impl-approve\n`);
+    await vi.waitFor(() => expect(readIf(join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME))).toBe('work-impl-approve'), { timeout: 5000 });
+    expect(readIf(join(repo, artifact))).toBe('## Needs your call\nNone.\n');
   });
 });
