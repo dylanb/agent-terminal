@@ -71,8 +71,10 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
         announcements.push(`${terminal.launchDirectory}: ${text || (previousAttention.get(terminal.id) === CONTROLLER_OVERSIZED_STATUS_TEXT ? 'Status available: no attention or error reported' : 'Attention and error cleared')}`);
       }
     }
+    if (announcements.length || [...previousAttention.keys()].some(id => !currentAttention.has(id))) {
+      status.textContent = announcements.join('\n');
+    }
     previousAttention = currentAttention;
-    if (announcements.length) status.textContent = announcements.join('\n');
     const announce = () => {
       if (disposed) return;
       alert.replaceChildren();

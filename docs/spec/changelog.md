@@ -1,3 +1,5 @@
+> **#219 slice 2:** Clear obsolete accessible attention/error announcements on connection loss, preserving focus and current recovery snapshots. Real-socket and real PTY/flow/gate checks cover outage resolution, repeated recovery, stale title/callback rejection, same-directory peers, activation, exit and dismissal.
+
 > **#219 slice 1:** Controller panes show live flow/step, issue number and title preview, independent assignment/activity, errors and authoritative human-needed reasons. Passive publication works while terminals are hidden, preserves notices and gate state, rejects obsolete title completions, and preserves full reasons. README and §23.6 describe availability, timing and activation without acknowledgement. Recovery strengthening remains slice 2.
 
 - **2026-10-22 — §23.6 bounded controller status (operator approved).** Limit snapshots to 1 MiB UTF-8 and 1,024 nonempty fragments; expire incomplete transfers after five seconds. Oversized publication shows an explicit unavailable state with access to the full reason in the terminal; normal status resumes automatically.
