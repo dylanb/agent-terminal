@@ -606,6 +606,9 @@ button:hover { border-color:var(--dim); }
 .flowpicker { position:relative; display:flex; flex-direction:column; gap:6px; }
 .flowpicker:not(:has(.flow-picker-trigger)) { margin-bottom:0; padding-bottom:0; border-bottom:0; }
 .flowpicker .flow-picker-trigger { align-self:flex-start; }
+.pickupconfirm { display:flex; flex-direction:column; gap:6px; }
+.pickupconfirm:empty { display:none; }
+.pickupconfirm .pill { align-self:flex-start; }
 .flowpicker .pill { max-width:100%; height:auto; min-height:34px; padding-block:6px; white-space:normal; overflow-wrap:anywhere; text-align:left; }
 .flowpicker .flow-picker-list { list-style:none; margin:0; padding:4px; border:1px solid var(--hair); border-radius:7px; background:var(--bg); max-height:240px; overflow:auto; }
 .flowpicker .flow-picker-option { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline; padding:5px 7px; border-radius:5px; cursor:pointer; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; }

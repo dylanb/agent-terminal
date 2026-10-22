@@ -21,6 +21,7 @@ import {
   type ActiveFlowWriteResult,
   type FlowCatalogListResult,
   type RebindResult,
+  type ConfirmRunPickupResult,
   type GithubRef,
   type MonitorApi,
   type ViewerApi,
@@ -141,6 +142,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowListCatalog, { sessionId: SESSION_ID, repoKey }) as Promise<FlowCatalogListResult>,
   rebindHeldRun: (repoKey, choice, ifStepMissing) =>
     ipcRenderer.invoke(CH.flowRebindHeldRun, { sessionId: SESSION_ID, repoKey, choice, ifStepMissing }) as Promise<RebindResult>,
+  confirmRunPickup: (repoKey, run, pr, ticket) =>
+    ipcRenderer.invoke(CH.flowConfirmRunPickup, { sessionId: SESSION_ID, repoKey, run, pr, ticket }) as Promise<ConfirmRunPickupResult>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
