@@ -1,7 +1,8 @@
 import { connect, type Socket } from 'node:net';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, controllerUpdateTarget, createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
+import type { ControllerIncompatibility } from '../shared/ipc';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
 export const CONTROLLER_RETRY_DELAY_MS = 5_000;
@@ -11,6 +12,7 @@ export function registerControllerTerminal(
   identity: ControllerIdentity,
   activate: () => 'activated' | 'unavailable',
   onRegistered: () => void = () => {},
+  onIncompatible: (report: ControllerIncompatibility) => void = () => {},
 ): () => void {
   let canceled = false;
   let started = false;
@@ -36,7 +38,7 @@ export function registerControllerTerminal(
       scheduleRetry();
     });
     current.once('connect', () => {
-      if (!canceled) current.write(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
+      if (!canceled) current.write(encodeControllerMessage({ version: 1, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', ...identity }));
     });
     current.on('data', (chunk: Buffer) => {
       if (canceled || current.destroyed) return;
@@ -49,6 +51,14 @@ export function registerControllerTerminal(
               started = true;
               onRegistered();
             }
+          } else if (!registered && message.type === 'incompatible') {
+            onIncompatible({
+              update: controllerUpdateTarget(CONTROLLER_PROTOCOL_MAJOR, message.supported),
+              terminalVersion: CONTROLLER_PROTOCOL_MAJOR,
+              controllerVersions: message.supported,
+            });
+            current.destroy();
+            break;
           } else if (registered && message.type === 'activate') {
             const outcome = activate();
             current.write(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome }));

@@ -44,12 +44,18 @@ import {
   type UiSettings,
   type OsPlatform,
   type MenuEditMsg,
+  type StartupIncompatibleMsg,
 } from '../shared/ipc';
 
 export const termApi: TermApi = {
   startup: {
     ready: () => ipcRenderer.invoke(CH.startupReady, { sessionId: SESSION_ID }) as Promise<void>,
     rendered: () => ipcRenderer.send(CH.startupRendered, { sessionId: SESSION_ID }),
+    onIncompatible: (cb) => {
+      const h = (_e: unknown, { sessionId: _sessionId, ...report }: StartupIncompatibleMsg): void => cb(report);
+      ipcRenderer.on(CH.startupIncompatible, h);
+      return () => ipcRenderer.removeListener(CH.startupIncompatible, h);
+    },
   },
   onData: (cb) => {
     const h = (_e: unknown, m: PtyDataMsg): void => cb(m.data);

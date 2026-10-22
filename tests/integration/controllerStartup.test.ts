@@ -42,6 +42,18 @@ describe('initial controller registration', () => {
     await new Promise<void>(resolve => listener!.listen(resolveControllerEndpoint(home), resolve));
   }
 
+  it.each([
+    { supported: { min: 0, max: 0 }, update: 'controller' },
+    { supported: { min: 2, max: 3 }, update: 'terminal' },
+  ] as const)('reports which app to update when the controller supports versions $supported.min–$supported.max', async ({ supported, update }) => {
+    await listen(socket => socket.once('data', () => socket.end(`${JSON.stringify({ type: 'incompatible', supported })}\n`)));
+    const reports: unknown[] = [];
+    let starts = 0;
+    cancel = registerControllerTerminal(home, identity, () => 'activated', () => { starts++; }, report => reports.push(report));
+    await vi.waitFor(() => expect(reports).toEqual([{ update, terminalVersion: 1, controllerVersions: supported }]));
+    expect(starts).toBe(0);
+  });
+
   it('confirms registration only after publishing the accepted identity to subscribers', async () => {
     transport = await startControllerTransport(home);
     let published = false;
@@ -58,7 +70,7 @@ describe('initial controller registration', () => {
       }
     });
     await once(peer, 'connect');
-    peer.write(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
+    peer.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', ...identity }));
     await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 1, type: 'registered' }, published: true }]));
   });
 

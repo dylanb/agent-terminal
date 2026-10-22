@@ -160,7 +160,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from './autoGateComposition';
-import type { CliInstallResult } from '../shared/ipc';
+import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
@@ -207,6 +207,7 @@ async function createWindow(): Promise<void> {
     return startupReady;
   });
   let finishRegistration!: (accepted: boolean) => void;
+  let incompatibility: StartupIncompatibleMsg | undefined;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
   const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot), () => {
     if (win.isDestroyed()) return 'unavailable';
@@ -214,7 +215,13 @@ async function createWindow(): Promise<void> {
     win.show();
     win.focus();
     return 'activated';
-  }, () => finishRegistration(true));
+  }, () => finishRegistration(true), report => {
+    incompatibility = { sessionId: SESSION_ID, ...report };
+    if (!win.isDestroyed()) win.webContents.send(CH.startupIncompatible, incompatibility);
+  });
+  win.webContents.on('did-finish-load', () => {
+    if (incompatibility) win.webContents.send(CH.startupIncompatible, incompatibility);
+  });
   win.once('closed', () => {
     unregisterController();
     finishRegistration(false);
