@@ -614,3 +614,12 @@ button:hover { border-color:var(--dim); }
 .flowpicker .flow-picker-lock { margin:0; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); line-height:1.35; }
 .flowpicker .flow-picker-alert { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--danger); line-height:1.35; overflow-wrap:anywhere; }
 .flowpicker .flow-picker-alert:empty { min-height:0; margin:0; }
+
+.controller-panes { padding:var(--focus-ring-extent); overflow:auto; max-height:100%; }
+.controller-pane-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,20rem),1fr)); gap:var(--r); }
+.controller-pane-list button, .controller-disconnected { min-width:0; white-space:normal; overflow-wrap:anywhere; text-align:left; padding:var(--r); border:1px solid var(--hair); border-radius:var(--r); background:var(--card); color:var(--text); }
+.controller-pane-list .controller-disconnected { margin:0; color:var(--danger); }
+.controller-panes > [role="alert"]:empty { margin:0; }
+body:has(> .controller-panes) { overflow:visible; }
+
+.startup-waiting { padding:clamp(16px, 4vw, 48px); height:100%; overflow:auto; overflow-wrap:anywhere; }

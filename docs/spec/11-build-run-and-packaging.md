@@ -27,3 +27,9 @@ pnpm run dev       # electron-vite dev (renderer HMR)
 
 ---
 
+
+## Separate controller packaging (#217)
+
+The build includes `out/main/controller.js` and its renderer alongside the independent terminal entry. `electron-builder.controller.yml` derives the existing packaging configuration with its own application identity and output directory. Build the terminal with `pnpm run package`, then the controller with `pnpm exec electron-builder --config electron-builder.controller.yml`. Installed apps resolve bundled preload, renderer and runtime resources without a checkout. README documents installed/development launch order, Ubuntu-only Linux support verification and the operator-accepted native macOS GUI verification gap.
+
+Initial terminal startup requires a confirmed connection to the separate controller (§23.6). Either application may launch first: the terminal presents instructions and retries automatically until a compatible controller accepts it. Install matching builds of both packages.

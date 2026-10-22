@@ -53,3 +53,7 @@ const ptyProcess = pty.spawn(shellPath, shellArgs, {
 
 ---
 
+
+### Controller registration prerequisite (#218)
+
+Before shell spawning or flow initialization, show the waiting window and obtain confirmed initial controller registration (§23.6). Input and flow-start requests cannot release this prerequisite. A closed waiting window cancels registration. After acceptance, perform the existing shell/flow initialization once and preserve early PTY output until the renderer installs its listeners.

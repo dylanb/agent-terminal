@@ -1,6 +1,7 @@
+import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
@@ -7688,6 +7689,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
 // reopen, and every RED / GREEN / refactor turn of the reopened slice is handed it (work prompts and fixers);
 // approving refactor ends the slice and clears it, so the next loop's prompt carries no brief.
 test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN and refactor turns, then clears it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(6));
   const repo = seedFullTddChainRepo('agent-term-e2e-redbrief-', 'red'); // the slice phases are all this test needs
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-redbrief-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-redbrief-bin-', { realCommitOps: true });

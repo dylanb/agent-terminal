@@ -70,3 +70,29 @@ describe('scripts/red-check.mjs when vitest writes no report', () => {
     }
   }, 120_000);
 });
+
+describe('scripts/red-check.mjs with real Chromium', () => {
+  let browserReport: RedCheckReport;
+  beforeAll(() => {
+    const run = spawnSync(process.execPath, ['scripts/red-check.mjs', '--config', `${FIXTURES}/vitest.browser.config.mjs`], { cwd: ROOT, encoding: 'utf8' });
+    const parsed = parseRedCheckReport(run.stdout);
+    if (!parsed.ok) throw new Error(`${parsed.reason}\n${run.stdout}\n${run.stderr}`);
+    browserReport = parsed.report;
+  }, 120_000);
+
+  it('maps transformed browser stacks to the authored assertion line', () => {
+    expect(browserReport.tests.find(t => t.name === 'fails at its check')).toMatchObject({
+      file: `${FIXTURES}/sample.case.ts`, outcome: 'failed-assertion', failures: [{ line: 4 }],
+    });
+  });
+
+  it('reports both authored soft assertion lines', () => {
+    expect(browserReport.tests.find(t => t.name === 'fails two soft checks')).toMatchObject({
+      outcome: 'failed-assertion', failures: [{ line: 8 }, { line: 9 }],
+    });
+  });
+
+  it('keeps browser exceptions distinct from assertions', () => {
+    expect(browserReport.tests.find(t => t.name === 'throws a TypeError')?.outcome).toBe('errored');
+  });
+});
