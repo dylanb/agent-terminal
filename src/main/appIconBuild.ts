@@ -6,13 +6,13 @@
 
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { resolveWindowIconPath } from './appIcon';
+import { resolveWindowIconPath, type AppIcon } from './appIcon';
 
-/** Copy <rootDir>/build/icon.png to where the unpackaged resolver reads it when app.getAppPath() is
- *  `mainOutDir`. Returns the destination path. */
-export function copyDevIcon(rootDir: string, mainOutDir: string): string {
-  const src = path.join(rootDir, 'build', 'icon.png');
-  const dest = resolveWindowIconPath({ packaged: false, appPath: mainOutDir });
+/** Copy the committed icon under <rootDir>/build to where the unpackaged resolver reads it when
+ *  app.getAppPath() is `mainOutDir`. Returns the destination path. */
+export function copyDevIcon(rootDir: string, mainOutDir: string, icon: AppIcon): string {
+  const src = resolveWindowIconPath({ packaged: false, appPath: rootDir }, icon);
+  const dest = resolveWindowIconPath({ packaged: false, appPath: mainOutDir }, icon);
   mkdirSync(path.dirname(dest), { recursive: true });
   copyFileSync(src, dest);
   return dest;

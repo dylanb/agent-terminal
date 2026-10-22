@@ -31,11 +31,13 @@ const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fil
 if (invokedDirectly) {
   const { Resvg } = await import('@resvg/resvg-js');
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const result = generateIcon({
-    svgPath: path.join(root, 'build', 'icon.svg'),
-    pngPath: path.join(root, 'build', 'icon.png'),
-    hashPath: path.join(root, 'build', 'icon.svg.sha256'),
-    render: (svg) => new Resvg(svg, { fitTo: { mode: 'width', value: ICON_SIZE } }).render().asPng(),
-  });
-  console.log(result.regenerated ? 'gen-icon: wrote build/icon.png' : 'gen-icon: build/icon.svg unchanged, skipped');
+  for (const name of ['icon', 'controller-icon']) {
+    const result = generateIcon({
+      svgPath: path.join(root, 'build', `${name}.svg`),
+      pngPath: path.join(root, 'build', `${name}.png`),
+      hashPath: path.join(root, 'build', `${name}.svg.sha256`),
+      render: (svg) => new Resvg(svg, { fitTo: { mode: 'width', value: ICON_SIZE } }).render().asPng(),
+    });
+    console.log(result.regenerated ? `gen-icon: wrote build/${name}.png` : `gen-icon: build/${name}.svg unchanged, skipped`);
+  }
 }

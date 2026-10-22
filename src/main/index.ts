@@ -178,11 +178,11 @@ async function createWindow(): Promise<void> {
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
   // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
-  applyDockIcon(app.dock, process.platform, iconLoc);
+  applyDockIcon(app.dock, process.platform, iconLoc, 'terminal');
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    icon: resolveWindowIconPath(iconLoc),
+    icon: resolveWindowIconPath(iconLoc, 'terminal'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
