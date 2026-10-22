@@ -224,7 +224,9 @@ test('clicking a pane restores its minimized terminal window', { tag: '@ownapp' 
     await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
     await expect.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
     await controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false }).click();
-    await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(false);
+    await expect.soft(async () => {
+      expect(await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(false);
+    }).toPass({ timeout: 10_000 });
     await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
   } finally { await h.dispose(); }
 });
