@@ -11,6 +11,7 @@ import type {
   InstallPreviewId,
   RetiredExample,
 } from '../../src/shared/ipc';
+import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
 
 // Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional per-destination
 // consent step → apply → destination-grouped result reporting. Tests assert the observable DOM + the
@@ -37,6 +38,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     previewId: PREVIEW_ID,
     destinations: cleanDestinations,
     retired: [],
+    retiredFallback: null,
   };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
@@ -45,6 +47,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
     retired: [],
+    retiredFallback: null,
   });
   const RETIRED: RetiredExample[] = [
     { destination: 'flowCatalog', rel: 'feature-dev-v2' as DestRelativePath },
@@ -213,6 +216,25 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       (retiredBox() as HTMLInputElement).click();
       confirmBtn().click();
       await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(PREVIEW_ID, [], true));
+    });
+
+    it('names each retired flow as what left the files behind', async () => {
+      await openWithRetired([], vi.fn(async () => okResult()));
+      for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
+    });
+
+    it('warns, beside the removal, that a fallback flow still on a retired flow stops working unless the flow home is replaced', async () => {
+      createInstallExamples(host, deps({ preview: vi.fn(async () => ({ ...withRetired(conflicting('flow')), retiredFallback: 'feature-dev-v2' }) as InstallExamplesPreview) }));
+      button().click();
+      await vi.waitFor(() => expect(prompt()).not.toBeNull());
+      const described = host.querySelector(`#${(retiredBox() as HTMLInputElement).getAttribute('aria-describedby')}`);
+      expect(described?.textContent).toMatch(/fallback flow.*feature-dev-v2/);
+      expect(described?.textContent).toContain('Flow home');
+    });
+
+    it('gives no fallback warning when the fallback flow is not a retired one', async () => {
+      await openWithRetired(['flow'], vi.fn(async () => okResult()));
+      expect(prompt()?.textContent).not.toContain('fallback flow');
     });
 
     it('offers no removal when nothing retired was found', async () => {

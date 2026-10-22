@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -9,9 +9,10 @@ import {
   previewInstallExamples,
   type InstallDestination,
 } from '../../src/main/installExamples';
-import { flowCatalogDir } from '../../src/main/flow';
-import { RETIRED_FLOW_IDS, RETIRED_LOOPS } from '../../src/main/retiredExamples';
-import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
+import { RETIRED_LOOPS } from '../../src/main/retiredExamples';
+import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
+import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { SESSION_ID, type InstallDestinationId, type RetiredExample } from '../../src/shared/ipc';
 
 // §18.1 v2.212 — Install examples offers to remove what the retired feature-dev and feature-dev-v2 flows left
@@ -42,7 +43,6 @@ const codexAgents = (): string => path.join(codexHome, 'agents');
 function plantRemnants(): RetiredExample[] {
   plant(path.join(catalog(), 'feature-dev', 'flow.yaml'));
   plant(path.join(catalog(), 'feature-dev-v2', 'todo-templates', 'polish.md'));
-  plant(path.join(claudeLoops(), 'feature-dev', 'green-loop', 'green-loop.yaml'));
   plant(path.join(claudeLoops(), 'feature-dev-v2', 'plan-bundle-loop', 'plan-bundle-loop.yaml'));
   plant(path.join(claudeAgents(), 'plan-bundle-loop--review-plan-intent.md'));
   plant(path.join(claudeAgents(), 'plan-polish-loop--review-plan-security.md'));
@@ -51,7 +51,6 @@ function plantRemnants(): RetiredExample[] {
   return [
     { destination: 'flowCatalog', rel: 'feature-dev' },
     { destination: 'flowCatalog', rel: 'feature-dev-v2' },
-    { destination: 'appLoops', rel: 'feature-dev' },
     { destination: 'appLoops', rel: 'feature-dev-v2' },
     { destination: 'agents', rel: 'plan-bundle-loop--review-plan-intent.md' },
     { destination: 'agents', rel: 'plan-polish-loop--review-plan-security.md' },
@@ -76,7 +75,12 @@ function plantKeepers(): string[] {
     plant(path.join(claudeAgents(), 'my-agent.md'), 'mine\n'),
     plant(path.join(claudeAgents(), 'plan-bundle-loop--notes.txt'), 'mine\n'),
     plant(path.join(claudeAgents(), 'plan-loop--review-plan-intent.md'), 'mine\n'),
+    plant(path.join(claudeAgents(), 'plan-bundle-loop--review-plan-mine.md'), 'mine\n'),
     plant(path.join(codexAgents(), 'mine.toml'), 'mine\n'),
+    plant(path.join(codexAgents(), 'plan_polish_loop__review_plan_mine.toml'), 'mine\n'),
+    // No build wrote a per-flow folder for v1: #179 renamed it to feature-dev-v2 in the change that added them.
+    plant(path.join(claudeLoops(), 'feature-dev', 'green-loop', 'green-loop.yaml'), 'mine\n'),
+    plant(path.join(codexLoops(), 'feature-dev', 'green-loop', 'green-loop.yaml'), 'mine\n'),
   ];
 }
 
@@ -176,6 +180,52 @@ describe('the install removes the remnants only when asked', () => {
     expect(res.ok).toBe(false);
     expect(res.removed).toEqual([]);
     for (const r of remnants) expect(existsSync(remnantPath(r))).toBe(true);
+  });
+});
+
+describe('a removal that fails part-way', () => {
+  it.skipIf(process.getuid?.() === 0)('reports the failure, and reports as removed exactly what is gone', () => {
+    plantRemnants();
+    const locked = path.join(catalog(), 'feature-dev-v2', 'todo-templates');
+    chmodSync(locked, 0o555);
+    try {
+      const res = applyInstallExamples(dirs, [], { removeRetired: true });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toContain('Could not remove the retired feature-dev-v2');
+      expect(byKey(res.removed)).toEqual(['flowCatalog:feature-dev']);
+      expect(existsSync(path.join(catalog(), 'feature-dev'))).toBe(false);
+      expect(existsSync(path.join(locked, 'polish.md'))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+});
+
+describe('the preview names a fallback flow that is still a retired one', () => {
+  const fallback = (body: string): string => plant(path.join(flowHomeDir(home), FLOW_DEF_FILE), body);
+  const shippedFlow = (): string => readFileSync(path.join(resolveFeatureDevFlowDir({ packaged: false, appPath: process.cwd() }), FLOW_DEF_FILE), 'utf8');
+  const named = (id: string): string => shippedFlow().replace(/^name: .*$/m, `name: ${id}`);
+
+  it.each(RETIRED_FLOW_IDS)('names %s when the fallback flow.yaml is that flow', (id) => {
+    fallback(named(id));
+    const preview = previewInstallExamples(dirs);
+    expect(preview.ok && preview.retiredFallback).toBe(id);
+  });
+
+  it.each([
+    ['the shipped flow', (): string => shippedFlow()],
+    ['garbled YAML', (): string => '{{{'],
+    ['a flow with no name', (): string => shippedFlow().replace(/^name: .*$\n/m, '')],
+  ])('names nothing for %s', (_name, body) => {
+    fallback(body());
+    const preview = previewInstallExamples(dirs);
+    expect(preview.ok && preview.retiredFallback).toBeNull();
+  });
+
+  it('names nothing when there is no fallback flow.yaml yet', () => {
+    const preview = previewInstallExamples(dirs);
+    expect(preview.ok && preview.retiredFallback).toBeNull();
   });
 });
 

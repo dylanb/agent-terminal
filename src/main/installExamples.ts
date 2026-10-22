@@ -15,13 +15,14 @@ import {
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
 } from './exampleAssets';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from './flow';
+import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
 import { CLAUDE_REVIEWER_AGENT, CODEX_REVIEWER_AGENT, planReviewerAgents, type ReviewerAgentFormat } from './reviewerAgents';
-import { retiredFlowFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { retiredCatalogEntries, retiredLoopFolders, retiredReviewerAgents, type RetiredLister } from './retiredExamples';
+import { RETIRED_FLOW_IDS } from '../shared/retiredFlows';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -248,7 +249,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: HOME_ROOT_FIX,
     plan: catalogFiles,
     overwrite: { mode: 'confirm-overwrite' },
-    retired: retiredFlowFolders,
+    retired: retiredCatalogEntries,
   },
   appLoops: {
     bundle: resolveExampleLoopsV2Dir,
@@ -256,7 +257,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
-    retired: retiredFlowFolders,
+    retired: retiredLoopFolders,
   },
   commands: {
     bundle: resolveExampleCommandsDir,
@@ -279,7 +280,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     rootFix: CODEX_ROOT_FIX,
     plan: filesUnder,
     overwrite: { mode: 'confirm-overwrite' },
-    retired: retiredFlowFolders,
+    retired: retiredLoopFolders,
   },
   codexAgents: {
     bundle: resolveExampleLoopsV2Dir,
@@ -455,6 +456,14 @@ interface InstallAuthorization {
 const retiredOf = (destinations: ResolvedDestination[]): RetiredExample[] =>
   destinations.flatMap((d) => d.retired.map((rel) => ({ destination: d.id, rel })));
 
+/** The retired flow the installed fallback flow.yaml still is, read by the loader that runs it (§18.7.3). */
+function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
+  const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
+  if (file === undefined) return null;
+  const load = loadFlowDefinitionFromFile(file.real);
+  return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
+}
+
 function hash(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -537,6 +546,7 @@ function verifyAuthorization(
 interface PreparedInstallExamples {
   destinations: InstallDestinationPreview[];
   retired: RetiredExample[];
+  retiredFallback: string | null;
   authorization: InstallAuthorization;
 }
 
@@ -594,6 +604,7 @@ function prepareInstallExamples(
       prepared: {
         destinations: previews,
         retired,
+        retiredFallback: retiredFallbackOf(resolution.destinations),
         authorization: { files, conflicts, retired },
       },
     };
@@ -606,7 +617,7 @@ function prepareInstallExamples(
 }
 
 export type InstallExamplesInspection =
-  | { ok: true; destinations: InstallDestinationPreview[]; retired: RetiredExample[] }
+  | { ok: true; destinations: InstallDestinationPreview[]; retired: RetiredExample[]; retiredFallback: string | null }
   | { ok: false; error: string };
 
 export function previewInstallExamples(
@@ -618,6 +629,7 @@ export function previewInstallExamples(
     ok: true,
     destinations: preparation.prepared.destinations,
     retired: preparation.prepared.retired,
+    retiredFallback: preparation.prepared.retiredFallback,
   };
 }
 
@@ -821,6 +833,7 @@ export function createInstallExamplesCoordinator(
         previewId,
         destinations: preparation.prepared.destinations,
         retired: preparation.prepared.retired,
+        retiredFallback: preparation.prepared.retiredFallback,
       };
     },
     apply(message) {

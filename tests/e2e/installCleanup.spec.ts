@@ -57,18 +57,26 @@ function seed(): { home: string; configDir: string; remnants: string[]; keeper: 
   const configDir = tmp('agent-term-e2e-retired-cfg-');
   const remnants = [
     plant(join(home, '.agent-terminal', 'flows', 'feature-dev-v2', 'flow.yaml')),
-    plant(join(configDir, 'loops-v2', 'feature-dev', 'green-loop', 'green-loop.yaml')),
+    plant(join(configDir, 'loops-v2', 'feature-dev-v2', 'green-loop', 'green-loop.yaml')),
     plant(join(configDir, 'agents', 'plan-polish-loop--review-plan-intent.md')),
   ];
   const keeper = plant(join(configDir, 'agents', 'my-agent.md'), 'mine\n');
   return { home, configDir, remnants, keeper };
 }
 
+/** The fallback flow.yaml an older build seeded: a valid flow still named for a retired one. */
+function seedRetiredFallback(home: string): void {
+  const shipped = readFileSync(join('example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8');
+  plant(join(home, '.agent-terminal', 'flow.yaml'), shipped.replace(/^name: .*$/m, 'name: feature-dev-v2'));
+}
+
 test('ticking the removal deletes what the retired flows left, reports it, and keeps the operator’s own files', { tag: '@ownapp' }, async () => {
   const { home, configDir, remnants, keeper } = seed();
+  seedRetiredFallback(home);
   await openInstall(home, configDir);
 
   await expect(retiredBox()).not.toBeChecked();
+  await expect(view().locator('.flow-modal')).toContainText('Your fallback flow is still feature-dev-v2');
   await expect(view().locator('.flow-modal')).toContainText('plan-polish-loop--review-plan-intent.md');
   await retiredBox().check();
   await view().locator('.flow-modal button.confirm').click();
@@ -85,6 +93,7 @@ test('installing without ticking the removal keeps every leftover', { tag: '@own
   const { home, configDir, remnants } = seed();
   await openInstall(home, configDir);
 
+  await expect(view().locator('.flow-modal')).not.toContainText('fallback flow');
   await view().locator('.flow-modal button.confirm').click();
 
   await expect(view().locator('[role="status"]')).toContainText('created', { timeout: 15_000 });

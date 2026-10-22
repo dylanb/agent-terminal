@@ -507,6 +507,7 @@ describe('install consent dialog stays operable with a long file manifest', () =
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
@@ -561,6 +562,7 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
@@ -579,10 +581,11 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
 
   it('does not let the manifest overprint the footer actions', () => {
     const rows = host.querySelector('.install-consent-rows') as HTMLElement;
+    const clip = (host.querySelector('.flow-modal [data-modal-scroll]') as HTMLElement).getBoundingClientRect();
     const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
     // The rows must stop where the footer begins — a viewport-relative cap cannot know that, so an
     // over-tall manifest escapes the column and paints straight over the buttons.
-    expect(rows.getBoundingClientRect().bottom).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
+    expect(Math.min(rows.getBoundingClientRect().bottom, clip.bottom)).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
   });
 
   it('keeps the footer actions reachable', () => {
@@ -608,6 +611,7 @@ describe('the consent dialog with both replacements and retired leftovers surviv
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired,
+        retiredFallback: null,
         destinations: [{ destination: 'appLoops', conflict: true, files }],
       }),
       apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
@@ -631,10 +635,17 @@ describe('the consent dialog with both replacements and retired leftovers surviv
     }
   });
 
-  it('keeps each group’s checkbox painted inside its own list', () => {
+  it('scrolls both groups in the one box the modal shell styles (UI §5.7)', () => {
+    const scrolls = [...host.querySelectorAll<HTMLElement>('.flow-modal [data-modal-scroll]')];
+    expect(scrolls).toHaveLength(1);
+    for (const rows of host.querySelectorAll('.install-consent-rows')) expect(scrolls[0].contains(rows)).toBe(true);
+  });
+
+  it('paints each group’s checkbox inside the scroll box once it is scrolled to', () => {
+    const scroll = host.querySelector<HTMLElement>('.flow-modal [data-modal-scroll]') as HTMLElement;
     for (const box of host.querySelectorAll<HTMLElement>('.install-consent-opt input[type="checkbox"]')) {
-      const rows = box.closest('.install-consent-rows') as HTMLElement;
-      const clip = rows.getBoundingClientRect();
+      box.scrollIntoView({ block: 'nearest' });
+      const clip = scroll.getBoundingClientRect();
       const r = box.getBoundingClientRect();
       expect(r.top).toBeGreaterThanOrEqual(clip.top);
       expect(r.bottom).toBeLessThanOrEqual(clip.bottom + 1);
@@ -660,6 +671,7 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
@@ -788,6 +800,7 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
@@ -834,6 +847,7 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
         retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: true, files: files('flow') },
           { destination: 'appLoops', conflict: true, files: files('appLoops') },

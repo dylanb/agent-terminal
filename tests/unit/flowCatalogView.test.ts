@@ -37,7 +37,7 @@ describe('install examples view — renders the flow-catalog result group (§18.
   };
   const deps: InstallExamplesDeps = {
     preview: vi.fn(
-      async (): Promise<InstallExamplesPreview> => ({ ok: true, previewId: PREVIEW_ID, destinations: [], retired: [] }),
+      async (): Promise<InstallExamplesPreview> => ({ ok: true, previewId: PREVIEW_ID, destinations: [], retired: [], retiredFallback: null }),
     ),
     apply: vi.fn(async (): Promise<InstallExamplesResult> => catalogResult),
   };

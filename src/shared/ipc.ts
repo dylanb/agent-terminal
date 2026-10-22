@@ -1040,6 +1040,8 @@ export type InstallExamplesPreview =
       previewId: InstallPreviewId;
       destinations: InstallDestinationPreview[];
       retired: RetiredExample[];
+      /** §18.1 v2.212: the retired flow the installed fallback flow.yaml still is, or null. */
+      retiredFallback: string | null;
     }
   | { ok: false; error: string };
 

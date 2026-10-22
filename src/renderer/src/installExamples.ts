@@ -13,6 +13,7 @@ import {
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
+import { RETIRED_FLOW_IDS } from '../../shared/retiredFlows';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
@@ -26,6 +27,9 @@ export interface InstallExamplesDeps {
 export interface InstallExamples {
   dispose(): void;
 }
+
+const inWords = (names: readonly string[]): string =>
+  names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flow: 'Flow home',
@@ -196,6 +200,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     previewId: InstallPreviewId,
     conflicts: Conflict[],
     retired: RetiredExample[],
+    retiredFallback: string | null,
     returnFocus: () => void,
   ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
@@ -214,7 +219,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           ? ['Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.']
           : []),
         ...(retired.length > 0
-          ? ['The retired feature-dev and feature-dev-v2 flows left files behind. They are kept unless you choose to remove them.']
+          ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind. They are kept unless you choose to remove them.`]
           : []),
       ].join(' ');
       cardEl.append(h3, p);
@@ -284,7 +289,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           consentGroup('retired', 'Retired examples'),
           'retired',
           `Remove ${retired.length} retired item${retired.length === 1 ? '' : 's'}, whatever they hold`,
-          `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
+          [
+            `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
+            ...(retiredFallback !== null
+              ? [`Your fallback flow is still ${retiredFallback}: replace ${DESTINATION_LABEL.flow} too, or it stops working once these are removed.`]
+              : []),
+          ].join(' '),
         );
         retiredBox.setAttribute('data-retired', '');
       }
@@ -310,7 +320,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       cardEl.append(foot);
 
       // The body slots are declared on the contract (UI §5.7); the shell applies them.
-      return { card: cardEl, initialFocus: boxes.values().next().value ?? retiredBox ?? confirm, describedById, grow: body, scroll: body.querySelector<HTMLElement>('.install-consent-rows') ?? body };
+      return { card: cardEl, initialFocus: boxes.values().next().value ?? retiredBox ?? confirm, describedById, grow: body, scroll: body };
     });
   }
 
@@ -345,7 +355,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     setBusy(false);
-    promptReplace(preview.previewId, conflicts, preview.retired, returnFocus);
+    promptReplace(preview.previewId, conflicts, preview.retired, preview.retiredFallback, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());
