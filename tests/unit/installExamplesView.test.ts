@@ -223,12 +223,12 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       for (const id of RETIRED_FLOW_IDS) expect(prompt()?.textContent).toContain(id);
     });
 
-    it('warns, beside the removal, that a fallback flow still on a retired flow stops working unless the flow home is replaced', async () => {
+    it('warns, beside the removal, that a fallback flow still on a retired flow may use what it removes, and to replace the flow home', async () => {
       createInstallExamples(host, deps({ preview: vi.fn(async () => ({ ...withRetired(conflicting('flow')), retiredFallback: 'feature-dev-v2' }) as InstallExamplesPreview) }));
       button().click();
       await vi.waitFor(() => expect(prompt()).not.toBeNull());
       const described = host.querySelector(`#${(retiredBox() as HTMLInputElement).getAttribute('aria-describedby')}`);
-      expect(described?.textContent).toMatch(/fallback flow.*feature-dev-v2/);
+      expect(described?.textContent).toContain('Your fallback flow is still the retired feature-dev-v2, which may use what these remove');
       expect(described?.textContent).toContain('Flow home');
     });
 

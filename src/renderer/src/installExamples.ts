@@ -292,7 +292,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           [
             `${retiredList(retired)}. A run using one of these flows stops until you choose another flow.`,
             ...(retiredFallback !== null
-              ? [`Your fallback flow is still ${retiredFallback}: replace ${DESTINATION_LABEL.flow} too, or it stops working once these are removed.`]
+              ? [`Your fallback flow is still the retired ${retiredFallback}, which may use what these remove: replace ${DESTINATION_LABEL.flow} too.`]
               : []),
           ].join(' '),
         );

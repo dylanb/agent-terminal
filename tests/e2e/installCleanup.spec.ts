@@ -76,7 +76,7 @@ test('ticking the removal deletes what the retired flows left, reports it, and k
   await openInstall(home, configDir);
 
   await expect(retiredBox()).not.toBeChecked();
-  await expect(view().locator('.flow-modal')).toContainText('Your fallback flow is still feature-dev-v2');
+  await expect(view().locator('.flow-modal')).toContainText('Your fallback flow is still the retired feature-dev-v2, which may use what these remove');
   await expect(view().locator('.flow-modal')).toContainText('plan-polish-loop--review-plan-intent.md');
   await retiredBox().check();
   await view().locator('.flow-modal button.confirm').click();

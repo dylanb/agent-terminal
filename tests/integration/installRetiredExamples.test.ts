@@ -173,6 +173,15 @@ describe('the install removes the remnants only when asked', () => {
     }
   });
 
+  it('removes nothing when a write fails part-way through the install', () => {
+    const remnants = plantRemnants();
+    mkdirSync(path.join(configRoot, 'commands', 'groom-ticket.md'), { recursive: true });
+    const res = applyInstallExamples(dirs, [], { removeRetired: true });
+    expect(res.ok).toBe(false);
+    expect(res.removed).toEqual([]);
+    for (const r of remnants) expect(existsSync(remnantPath(r)), `${r.destination}:${r.rel}`).toBe(true);
+  });
+
   it('removes nothing when the install itself fails', () => {
     const remnants = plantRemnants();
     const broken = dirs.map((d) => (d.id === 'commands' ? { ...d, bundleDir: path.join(home, 'no-such-bundle') } : d));
