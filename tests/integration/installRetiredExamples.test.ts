@@ -178,6 +178,8 @@ describe('the install removes the remnants only when asked', () => {
     mkdirSync(path.join(configRoot, 'commands', 'groom-ticket.md'), { recursive: true });
     const res = applyInstallExamples(dirs, [], { removeRetired: true });
     expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('groom-ticket.md');
+    expect(res.created.length).toBeGreaterThan(0);
     expect(res.removed).toEqual([]);
     for (const r of remnants) expect(existsSync(remnantPath(r)), `${r.destination}:${r.rel}`).toBe(true);
   });
