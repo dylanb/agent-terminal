@@ -27,7 +27,7 @@ if (vitestArgs.length > 0 || specArgs.length === 0) {
     process.exitCode = 1;
     ok = false;
   } else {
-    tests.push(...vitestReport(run));
+    tests.push(...run.tests);
   }
 }
 if (ok && specArgs.length > 0) tests.push(...runPlaywright(specArgs));
@@ -51,8 +51,9 @@ function runVitest(vitestArgs) {
   const dir = mkdtempSync(path.join(tmpdir(), 'red-check-'));
   const out = path.join(dir, 'vitest.json');
   try {
-    spawnSync(process.execPath, [vitestBin, 'run', '--reporter=json', `--outputFile=${out}`, ...vitestArgs], {
+    spawnSync(process.execPath, [vitestBin, 'run', `--reporter=${path.join(here, 'red-check-reporter.mjs')}`, ...vitestArgs], {
       stdio: ['ignore', 'ignore', 'inherit'],
+      env: { ...process.env, RED_CHECK_VITEST_OUTPUT: out },
     });
     try {
       return JSON.parse(readFileSync(out, 'utf8'));
@@ -62,45 +63,6 @@ function runVitest(vitestArgs) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}
-
-function vitestReport(run) {
-  const lineIn = (message, abs) => {
-    const at = message.indexOf(`${abs}:`);
-    if (at === -1) return null;
-    const n = Number.parseInt(message.slice(at + abs.length + 1), 10);
-    return Number.isInteger(n) && n > 0 ? n : null;
-  };
-  const isAssertion = (message) => message.startsWith('AssertionError');
-
-  const tests = [];
-  for (const file of run.testResults) {
-    if (file.assertionResults.length === 0 && file.status === 'failed') {
-      tests.push({ file: rel(file.name), name: '', outcome: 'errored', failures: [] });
-      continue;
-    }
-    for (const t of file.assertionResults) {
-      const name = controlFree([...t.ancestorTitles, t.title].join(' > '));
-      if (t.status === 'passed') {
-        tests.push({ file: rel(file.name), name, outcome: 'passed', failures: [] });
-        continue;
-      }
-      if (t.status !== 'failed') {
-        tests.push({ file: rel(file.name), name, outcome: 'skipped', failures: [] });
-        continue;
-      }
-      const failures = t.failureMessages.map((m) => ({ line: lineIn(m, file.name), message: m.split('\n')[0], assertion: isAssertion(m) }));
-      const located = failures.every((f) => f.line !== null);
-      const outcome = located && failures.length > 0 && failures.every((f) => f.assertion) ? 'failed-assertion' : 'errored';
-      tests.push({
-        file: rel(file.name),
-        name,
-        outcome,
-        failures: failures.filter((f) => f.line !== null).map((f) => ({ line: f.line, message: f.message })),
-      });
-    }
-  }
-  return tests;
 }
 
 function git(...gitArgs) {

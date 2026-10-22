@@ -32,6 +32,7 @@
     "src/renderer/src/statusStrip.ts",
     "src/renderer/src/todoTab.ts",
     "src/renderer/src/captureTab.ts",
+    "src/renderer/src/controllerPanes.ts",
     "src/renderer/src/monitor.ts",
     "src/renderer/src/shell.ts",
     "src/renderer/src/crossHighlight.ts",

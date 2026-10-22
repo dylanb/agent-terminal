@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { controllerApi } from './controller';
+import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import {
   CH,
   SESSION_ID,
@@ -45,6 +47,10 @@ import {
 } from '../shared/ipc';
 
 export const termApi: TermApi = {
+  startup: {
+    ready: () => ipcRenderer.invoke(CH.startupReady, { sessionId: SESSION_ID }) as Promise<void>,
+    rendered: () => ipcRenderer.send(CH.startupRendered, { sessionId: SESSION_ID }),
+  },
   onData: (cb) => {
     const h = (_e: unknown, m: PtyDataMsg): void => cb(m.data);
     ipcRenderer.on(CH.ptyData, h);
@@ -226,9 +232,13 @@ export const examplesApi: ExamplesApi = {
     } satisfies InstallExamplesApplyMsg) as Promise<InstallExamplesResult>,
 };
 
-contextBridge.exposeInMainWorld('term', termApi);
-contextBridge.exposeInMainWorld('monitor', monitorApi);
-contextBridge.exposeInMainWorld('viewer', viewerApi);
-contextBridge.exposeInMainWorld('flow', flowApi);
-contextBridge.exposeInMainWorld('cli', cliApi);
-contextBridge.exposeInMainWorld('examples', examplesApi);
+if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {
+  contextBridge.exposeInMainWorld('controller', controllerApi);
+} else {
+  contextBridge.exposeInMainWorld('term', termApi);
+  contextBridge.exposeInMainWorld('monitor', monitorApi);
+  contextBridge.exposeInMainWorld('viewer', viewerApi);
+  contextBridge.exposeInMainWorld('flow', flowApi);
+  contextBridge.exposeInMainWorld('cli', cliApi);
+  contextBridge.exposeInMainWorld('examples', examplesApi);
+}
