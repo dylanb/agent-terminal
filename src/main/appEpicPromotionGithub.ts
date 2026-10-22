@@ -7,6 +7,7 @@ import { errMsg } from './errno';
 import { numberFromGithubUrl } from '../shared/githubUrl';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositorySource } from './githubRepository';
+import { ensureGithubLabel } from './githubLabel';
 import type { AppEpicPromotionGitHub } from './epicPromotion';
 
 export function createRealAppEpicPromotionGitHub(
@@ -22,22 +23,7 @@ export function createRealAppEpicPromotionGitHub(
     }
   };
   return {
-    ensureLabel: async (label) => {
-      const listed = await gh(['label', 'list', '--search', label, '--limit', '100', '--json', 'name'], 'label lookup failed');
-      let names: unknown;
-      try {
-        names = JSON.parse(listed);
-      } catch {
-        throw new Error('label lookup failed: the label listing was not recognized');
-      }
-      if (!Array.isArray(names)) throw new Error('label lookup failed: the label listing was not recognized');
-      // GitHub label names are case-insensitive: creating a case-variant of an existing label fails.
-      const wanted = label.toLowerCase();
-      const present = names.some((n: unknown) =>
-        typeof n === 'object' && n !== null && typeof (n as { name?: unknown }).name === 'string' &&
-        (n as { name: string }).name.toLowerCase() === wanted);
-      if (!present) await gh(['label', 'create', label], 'label creation failed');
-    },
+    ensureLabel: async (label) => void (await ensureGithubLabel(gh, label)),
     createIssue: async (title, body) => {
       const out = await gh(['issue', 'create', '--title', title, '--body-file', '-'], 'sub-ticket creation failed', body);
       const number = numberFromGithubUrl(out);

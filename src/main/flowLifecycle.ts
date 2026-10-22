@@ -24,6 +24,8 @@ export interface FlowLifecycleDeps {
   /** §27.9.1 — end the engine-held run: called on every reset of the run to not_started. */
   endRun(repoKey: string): void;
   recordTerminate(repoKey: string): void;
+  /** §18.7.8 */
+  spanTerminated?(repoKey: string): void;
   clearTodos(repoKey: string): void;
   clearSliceBrief(repoKey: string): void;
   clearMonitor(): void;
@@ -62,6 +64,7 @@ export function createFlowLifecycle(deps: FlowLifecycleDeps): FlowLifecycle {
     bestEffort(() => deps.endRun(repoKey));
     bestEffort(() => deps.releaseLoopTurn(repoKey));
     bestEffort(() => deps.recordTerminate(repoKey));
+    bestEffort(() => deps.spanTerminated?.(repoKey));
     bestEffort(() => deps.clearTodos(repoKey));
     bestEffort(() => deps.clearSliceBrief(repoKey));
     bestEffort(() => deps.clearMonitor());

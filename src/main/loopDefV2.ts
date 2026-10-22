@@ -189,6 +189,25 @@ export interface LoopDefV2 {
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
 export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string } | { ok: false; reason: string };
 
+/** A resolution that also names the def file it read, as a real path. */
+export type LoopDefV2Located = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile: string } | { ok: false; reason: string };
+
+export interface LoopDefPromptFile {
+  role: string;
+  file: string;
+}
+
+/** The def's prompt resources: the tier-root references it loads as prompts, never its `inputs`/`outputs`
+ *  artifact bindings. */
+export function loopDefPromptFiles(def: LoopDefV2): LoopDefPromptFile[] {
+  return [
+    ...(def.brief !== undefined ? [{ role: 'brief', file: def.brief }] : []),
+    { role: 'work recipe', file: def.work.recipe },
+    ...(def.rounds.kind === 'engine' ? [{ role: 'consolidator recipe', file: def.rounds.consolidator }] : []),
+    ...def.reviewers.map((r) => ({ role: `charter ${r.persona}`, file: r.charter })),
+  ];
+}
+
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
   repoDir: string;
@@ -542,7 +561,7 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   return { tierRoot: root, defDir: path.dirname(defPath), defPath, tierName: 'repo', jail };
 }
 
-export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
+export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Located {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
   const candidates: DefCandidate[] = [];
   const repo = repoCandidate(name, ctx.repoDir);
@@ -590,7 +609,7 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, defFile: confinedDefPath.path };
     } catch (e) {
       if (e instanceof DefError) return { ok: false, reason: e.message };
       return { ok: false, reason: e instanceof Error ? e.message : String(e) };

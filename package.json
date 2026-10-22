@@ -23,6 +23,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm run build && playwright test",
+    "bench": "pnpm run build && ELECTRON_RUN_AS_NODE=1 electron out/main/bench.js",
     "package": "pnpm run gen-icon && pnpm run build && electron-builder",
     "prepare": "husky"
   },

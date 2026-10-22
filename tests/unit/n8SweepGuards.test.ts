@@ -103,6 +103,7 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
     'src/main/appIconBuild.ts', // build-time
     'src/main/exampleAssetsBuild.ts', // build-time
     'src/main/artifactCheckMain.ts', // second main-bundle input (electron.vite.config.ts), run by the agent
+    'src/main/benchMainEntry.ts', // third main-bundle input (electron.vite.config.ts), the `bench` script's runner (#180)
   ];
 
   it('the entry points still exist', () => {

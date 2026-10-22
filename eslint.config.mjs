@@ -36,6 +36,13 @@ const localPlugin = {
   },
 };
 
+const AMBIENT = 'A bench module takes this as an argument; benchMainEntry.ts reads it from the process.';
+const SHELL = 'Spawn with argv only, never shell text (CWE-78).';
+const SHELL_IMPORTS = ['child_process', 'node:child_process'].map((name) => ({ name, importNames: ['default', 'exec', 'execSync'], message: SHELL }));
+const SHELL_KEY = "Property:matches([key.name='shell'], [key.value='shell']):not([value.value=false])";
+const SHELL_OPTION = { selector: `CallExpression[callee.name=/^(spawn|spawnSync|execFile|execFileSync)$/] > ObjectExpression > ${SHELL_KEY}`, message: SHELL };
+const SHELL_SYNTAX = { selector: SHELL_KEY, message: SHELL };
+
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
   {
@@ -43,5 +50,48 @@ export default [
     languageOptions: { parser: tseslint.parser, ecmaVersion: 'latest', sourceType: 'module' },
     plugins: { local: localPlugin },
     rules: { 'local/no-todo-comments': 'error' },
+  },
+  {
+    // A later block's options for the same rule replace these, so each block below repeats them.
+    files: ['src/main/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', ...SHELL_IMPORTS],
+      'no-restricted-syntax': ['error', SHELL_OPTION],
+    },
+  },
+  {
+    files: ['src/main/bench*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', ...SHELL_IMPORTS],
+      'no-restricted-syntax': ['error', SHELL_SYNTAX],
+    },
+  },
+  {
+    files: ['src/main/bench*.ts'],
+    ignores: ['src/main/benchMainEntry.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        ...[['process', 'env'], ['process', 'cwd'], ['process', 'hrtime'], ['Date', 'now'], ['performance', 'now'], ['Math', 'random']].map(([object, property]) => ({
+          object,
+          property,
+          message: AMBIENT,
+        })),
+        { property: 'homedir', message: AMBIENT },
+      ],
+      'no-restricted-imports': [
+        'error',
+        ...['os', 'node:os'].map((name) => ({ name, importNames: ['homedir'], message: AMBIENT })),
+        ...['process', 'node:process'].map((name) => ({ name, importNames: ['env', 'cwd'], message: AMBIENT })),
+        ...SHELL_IMPORTS,
+      ],
+      'no-restricted-syntax': [
+        'error',
+        { selector: "NewExpression[callee.name='Date'][arguments.length=0]", message: AMBIENT },
+        { selector: "CallExpression[callee.name='Date']", message: AMBIENT },
+        { selector: 'CallExpression[callee.name=/^userConfig(Root|LoopsDir|LoopsV2Dir|CommandsDir|AgentsDir)$/][arguments.length=0]', message: AMBIENT },
+        SHELL_SYNTAX,
+      ],
+    },
   },
 ];

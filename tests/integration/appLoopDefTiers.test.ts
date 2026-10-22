@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAppLoopDefTiers } from '../../src/main/appLoopDefTiers';
 import type { BundleLocation } from '../../src/main/bundleLocation';
+import { userConfigRoot } from '../../src/main/userConfig';
 
 // The composition root hands `resolveLoopDefV2` its def tiers through this one helper (index.ts). The wiring
 // contract AC 5 depends on: the SURVIVING operator tier AND the RETIRED-schema tier are each derived from their
@@ -29,7 +30,7 @@ describe('resolveAppLoopDefTiers — the composition root wires all three def ti
 
   it('derives the retired-schema tier from userConfigLoopsDir — a sibling of the surviving loops-v2 tier', () => {
     const loc: BundleLocation = { packaged: false, appPath: appDir };
-    const tiers = resolveAppLoopDefTiers(loc);
+    const tiers = resolveAppLoopDefTiers(loc, userConfigRoot());
     expect(tiers.retired).toBe(join(configDir, 'loops'));
     expect(tiers.operator).toBe(join(configDir, 'loops-v2'));
     // the two operator-space tiers are disjoint siblings, never nested
@@ -38,7 +39,7 @@ describe('resolveAppLoopDefTiers — the composition root wires all three def ti
 
   it('carries a non-null app-bundled root so a namespace-less step always has a fallback tier', () => {
     const loc: BundleLocation = { packaged: false, appPath: appDir };
-    const tiers = resolveAppLoopDefTiers(loc);
+    const tiers = resolveAppLoopDefTiers(loc, userConfigRoot());
     expect(typeof tiers.appBundled).toBe('string');
     expect(tiers.appBundled.length).toBeGreaterThan(0);
   });

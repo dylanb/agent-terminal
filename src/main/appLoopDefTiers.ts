@@ -8,10 +8,10 @@ import { userConfigLoopsDir, userConfigLoopsV2Dir } from './userConfig';
  *  literal — so a CLAUDE_CONFIG_DIR redirect can never move one without the other, and the retired leg feeds
  *  AC 5's no-tier-answers reason enrichment (a def name absent from every surviving tier, with the operator's
  *  own retired-schema def still present, names why it stopped resolving). */
-export function resolveAppLoopDefTiers(iconLoc: BundleLocation): LoopDefV2Tiers {
+export function resolveAppLoopDefTiers(iconLoc: BundleLocation, configRoot: string | null): LoopDefV2Tiers {
   return {
-    operator: userConfigLoopsV2Dir(),
+    operator: configRoot === null ? null : userConfigLoopsV2Dir(configRoot),
     appBundled: resolveExampleLoopsV2Dir(iconLoc),
-    retired: userConfigLoopsDir(),
+    retired: configRoot === null ? null : userConfigLoopsDir(configRoot),
   };
 }

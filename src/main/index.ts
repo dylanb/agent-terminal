@@ -126,10 +126,12 @@ import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
 import { hostedAgentKind } from './agentKind';
 import { foregroundCommand } from './foregroundCommand';
-import { userConfigAgentsDir } from './userConfig';
+import { userConfigAgentsDir, userConfigRoot } from './userConfig';
 import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
+import { setupBenchLaunch } from './benchSpan';
+import { BENCH_LAUNCH_ENV } from '../shared/benchLaunch';
 import { reopenSliceTransition } from './sliceReopen';
 import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
 import { createTrustedPickups, runPickupRel } from './trustedPickups';
@@ -146,6 +148,7 @@ import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
 import { assembleReportOnDisk } from './reportSections';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
+import { appDefContext as buildAppDefContext } from './appDefContext';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import { createAutoGate, defResolutionOf } from './autoGate';
 import type { LoopBinding } from '../shared/loopNamespace';
@@ -172,6 +175,17 @@ import {
 import { createRealAppBootstrapPorts } from './appBootstrapPorts';
 
 async function createWindow(): Promise<void> {
+  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
+  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
+  const encodedLaunch = process.env[BENCH_LAUNCH_ENV];
+  delete process.env[BENCH_LAUNCH_ENV];
+  const bench = setupBenchLaunch(encodedLaunch, launchRoot, () => app.quit());
+  if (!bench.ok) {
+    console.error(`agent-terminal: the bench launch value is refused: ${bench.error}`);
+    app.exit(1);
+    return;
+  }
+  const benchPorts = bench.ports;
   const iconLoc: BundleLocation = app.isPackaged
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
@@ -193,8 +207,6 @@ async function createWindow(): Promise<void> {
   installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
-  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
-  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   const resolveExampleInstallDestinations = (): InstallDestination[] =>
     exampleInstallDirs(iconLoc, { flowGlobalDir, codexHome: codexHome() });
   const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
@@ -366,11 +378,7 @@ async function createWindow(): Promise<void> {
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => {
     const load = resolveActiveDefinition(repoDir);
-    return {
-      tiers: resolveAppLoopDefTiers(iconLoc),
-      repoDir,
-      ...(load.ok ? { flow: load.definition.name } : {}),
-    };
+    return buildAppDefContext(iconLoc, userConfigRoot(), repoDir, load.ok ? load.definition.name : undefined);
   };
   let lifecycle: FlowLifecycle;
   const agentQuestion = createAgentQuestion({
@@ -606,7 +614,7 @@ async function createWindow(): Promise<void> {
     }),
     // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
     // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
-    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc)),
+    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc, userConfigRoot())),
   });
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
@@ -670,6 +678,7 @@ async function createWindow(): Promise<void> {
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
       provideAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor, (n) => observedResolveDef(repoKey, n)),
+    ...(benchPorts ? { span: benchPorts.span } : {}),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
@@ -949,6 +958,7 @@ async function createWindow(): Promise<void> {
     },
     endRun: composeLifecycleEndRun(autoGate),
     recordTerminate: (repoKey) => audit.recordTerminate(repoKey),
+    ...(benchPorts ? { spanTerminated: (repoKey: string) => benchPorts.terminated(repoKey) } : {}),
     releaseLoopTurn: (repoKey) => appEngine.releaseStalledTurn(repoKey),
     clearTodos: (repoKey) => todoStore.clear(repoKey),
     clearSliceBrief: (repoKey) => clearSliceBrief(repoKey),
@@ -1166,7 +1176,7 @@ async function createWindow(): Promise<void> {
       const r = resolveRun(repoKey);
       return r.load.ok ? { definition: r.load.definition, binding: r.binding } : null;
     },
-    start: (repoKey, opts) => inTransition(repoKey, appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
+    start: (repoKey, opts) => inTransition(repoKey, benchPorts?.startEntryFor(repoKey) ?? appLoopEntryFor('start'), () => flow.start(repoKey, opts)),
     now: () => Date.now(),
     record: recordFlowTransition,
   });
@@ -1177,11 +1187,22 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
+  // §18.7.8
+  let closedByApp = false;
+  const markQuitting = (): void => {
+    closedByApp = true;
+  };
+  app.on('before-quit', markQuitting);
+  win.once('closed', () => app.off('before-quit', markQuitting));
+  win.on('close', () => {
+    if (!closedByApp) benchPorts?.windowClosed();
+  });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
   ptyProcess.onExit(({ exitCode }) => {
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
+      closedByApp = true;
       win.close();
     }
   });

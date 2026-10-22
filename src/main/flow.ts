@@ -16,6 +16,7 @@ import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
+import { readWholeNumber } from '../shared/flowStateValues';
 import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
@@ -24,6 +25,8 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import { resolveStepSpan, type StepSpan } from '../shared/flowStepSpan';
+import type { BenchAppEnding } from '../shared/benchLaunch';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -167,17 +170,23 @@ export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
 export function loadUntrustedFlowDefinition(file: string): FlowLoad {
+  return readUntrustedFlowDefinition(file).load;
+}
+
+/** `loadUntrustedFlowDefinition`, with the exact text it validated (null when it read none), so a caller that
+ *  copies the definition copies those bytes, never a second read of the file (CWE-367). */
+export function readUntrustedFlowDefinition(file: string): { load: FlowLoad; text: string | null } {
   const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
-  if (read.ok) return parseFlowDefinition(read.text, file);
+  if (read.ok) return { load: parseFlowDefinition(read.text, file), text: read.text };
   switch (read.cause) {
     case 'absent':
-      return { ok: false, error: `no flow.yaml found at ${file}` };
+      return { load: { ok: false, error: `no flow.yaml found at ${file}` }, text: null };
     case 'over-cap':
-      return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
+      return { load: { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` }, text: null };
     case 'unreadable':
       return {
-        ok: false,
-        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+        load: { ok: false, error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}` },
+        text: null,
       };
     default:
       return read.cause satisfies never;
@@ -284,6 +293,16 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
+/** §18.4 / §24.2.3 T7 — the step that declares a typed ref input, and that input's name: one source for both the
+ *  ref value (the input's name) and its visibility gate (the step), so they cannot desync. */
+export function flowTypedInput(definition: FlowDefinition, type: string): { step: FlowStepDef; name: string } | undefined {
+  for (const step of definition.steps) {
+    const input = (step.inputs ?? []).find((i) => i.type === type);
+    if (input) return { step, name: input.name };
+  }
+  return undefined;
+}
+
 /** A run's identity: its Start instant (epoch ms) and the `name:` of the flow it started from (§27.9.1, §25). */
 export interface RunIdentity {
   startedAt: number;
@@ -354,6 +373,15 @@ export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) 
  *  omitted in tests, where a loop step then renders no loop view. */
 export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
+/** §18.7.8 */
+export type FlowSpanEnding = Extract<BenchAppEnding, 'left span' | 'completed'>;
+
+/** §18.7.8 */
+export interface MachineSpan {
+  span: StepSpan;
+  ended(ending: FlowSpanEnding): void;
+}
+
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -361,6 +389,7 @@ export function createFlowMachine(
   store?: Omit<FlowStateStore, 'clearProgression'>,
   onEnter?: FlowEnterStep,
   readAppLoopView?: FlowReadAppLoopView,
+  span?: MachineSpan,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): MachineView => {
@@ -401,17 +430,8 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
-  // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
-  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
-    for (const step of steps) {
-      const input = (step.inputs ?? []).find((i) => i.type === type);
-      if (input) return { step, name: input.name };
-    }
-    return undefined;
-  };
-  const ticketInput = typedInput('github-ticket');
-  const prInput = typedInput('pr');
+  const ticketInput = flowTypedInput(def, 'github-ticket');
+  const prInput = flowTypedInput(def, 'pr');
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -452,12 +472,20 @@ export function createFlowMachine(
 
   const current = (): FlowStepDef => steps[index];
 
+  // §18.7.8
+  const spanRange = span ? resolveStepSpan(names, span.span) : undefined;
+  const holds = (target: number): boolean =>
+    spanRange === undefined || (spanRange.ok && spanRange.firstIndex <= target && target <= spanRange.lastIndex);
+  const leaveSpan = (): MachineView => {
+    if (spanRange?.ok) span?.ended('left span');
+    return view();
+  };
+
   // Own-property lookup only (§24.2.3 T7): an input named `__proto__` must not resolve a ref off the
   // prototype chain.
   const numericInput = (name: string | undefined): number | undefined => {
     if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
-    const raw = inputs[name];
-    return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+    return readWholeNumber(inputs[name]);
   };
   // §28.4 — the loop-back count from an UNTRUSTED plan-supplied input, made safe at the use site: an absent,
   // non-integer, or sub-1 value falls to a single pass (no loop-back — the safe direction against a runaway),
@@ -585,6 +613,7 @@ export function createFlowMachine(
         const completed = repeatCounts[step.id] ?? 1; // first arrival at this step = one slice done
         const backIndex = names.indexOf(step.repeat.backTo);
         if (completed < slicesFor(step.repeat.countInput) && backIndex >= 0) {
+          if (!holds(backIndex)) return leaveSpan();
           repeatCounts[step.id] = completed + 1;
           index = backIndex;
           persist();
@@ -592,16 +621,19 @@ export function createFlowMachine(
         }
       }
       if (index < steps.length - 1) {
+        if (!holds(index + 1)) return leaveSpan();
         index += 1;
         persist();
         return enter(view());
       }
       status = 'done';
       persist();
+      span?.ended('completed');
       return view();
     },
     restart: () => {
       requireStatus('done', 'restart');
+      if (!holds(0)) return leaveSpan();
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
@@ -619,6 +651,8 @@ export function createFlowMachine(
       // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
       // navigated, so a mismatch is inert rather than an unhandled rejection (§27).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
+      // §18.7.8
+      if (!holds(index - 1)) return view();
       if (index > 0) index -= 1;
       else {
         // §18.7.4 (v2.161)
@@ -638,6 +672,7 @@ export function createFlowMachine(
       const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
       const target = backTo ? names.indexOf(backTo) : -1;
       if (target < 0 || target > index) return view();
+      if (!holds(target)) return leaveSpan();
       index = target;
       persist();
       return enter(view()); // re-enter RED so its work turn re-runs
@@ -726,6 +761,12 @@ export type TerminateResult =
 /** What the definition seam returns (§18.1 load, §18.7.3 AC9 binding). */
 export type ResolvedDefinition = ResolvedRunDefinition;
 
+/** §18.7.8 */
+export interface FlowSpanPort {
+  spanFor(repoKey: string): StepSpan | null;
+  ended(repoKey: string, ending: FlowSpanEnding): void;
+}
+
 export interface FlowManagerDeps {
   /** Global fallback dir for the DEFINITION only (§18.1); STATE is never global. */
   globalDir: string;
@@ -737,6 +778,7 @@ export interface FlowManagerDeps {
    *  renders no loop view. A `legacy`-marked step never reaches this — its marked-binding error view (AC 4)
    *  is produced in the machine. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
+  span?: FlowSpanPort;
 }
 
 function displaySafeHold(hold: HeldRunView): HeldRunView {
@@ -756,6 +798,10 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
+  const spanOf = (repoKey: string): MachineSpan | undefined => {
+    const held = deps.span?.spanFor(repoKey) ?? null;
+    return held === null ? undefined : { span: held, ended: (ending) => deps.span?.ended(repoKey, ending) };
+  };
   const machineFor = (repoKey: string, run?: StartRunDefinition): { machine: FlowMachine; binding?: DispositionRead } => {
     const live = loadDef(repoKey, deps.globalDir);
     // §27.9.1 — a Start acts on the one resolution it was handed, never a second live read.
@@ -774,6 +820,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       makeStore(repoKey),
       deps.onEnterStep,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
+      spanOf(repoKey),
     );
     cache.set(repoKey, { sig, machine });
     return { machine, binding: resolved.binding };
@@ -836,7 +883,9 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       // would reset a different machine.
       const { machine } = machineFor(k);
       const at = machine.state();
-      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId) {
+      // A first-step rollback's target lies before the flow, outside every span, so under one the machine refuses it
+      // and the record must stay.
+      if (at.status !== 'in_progress' || at.position !== 1 || at.stepName !== fromStepId || spanOf(k) !== undefined) {
         return viewOf(k, (m) => m.revertStep(fromStepId));
       }
       const record = readRunBinding(k);

@@ -3,9 +3,22 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedFakeAgentSteps, seedFakeGhGit, seedV3GoalAgent, v3ImplGoals, writePromptedArtifact } from '../e2e/fakeTools';
+import {
+  goalAgentOverruns,
+  readFakeGhIssue,
+  seedFakeAgentSteps,
+  seedFakeGhGit,
+  seedFakeGhIssue,
+  seedFakeGhLabels,
+  seedGoalSessionAgent,
+  seedV3GoalAgent,
+  v3ImplGoals,
+  writePromptedArtifact,
+  type FakeGhIssue,
+} from '../e2e/fakeTools';
 import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/roundReport';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { ticketPromptLines } from '../../src/shared/currentTicket';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 
@@ -268,5 +281,211 @@ describe('the feature-dev-v3 goal agent', () => {
     p.stdin.write(`As the final line of your ${artifact} artifact, write EXACTLY this marker line so\nturn-done:work-impl-approve\n`);
     await vi.waitFor(() => expect(readIf(join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME))).toBe('work-impl-approve'), { timeout: 5000 });
     expect(readIf(join(repo, artifact))).toBe('## Needs your call\nNone.\n');
+  });
+});
+
+describe('the fake gh issue store', () => {
+  const store = () => {
+    const { binDir, ghOnlyBinDir, logFile } = seedFakeGhGit('fake-gh-store-');
+    dirs.push(binDir, ghOnlyBinDir);
+    const env = { ...process.env, FAKE_GHGIT_LOG: logFile };
+    const gh = (args: string[], input = '', bin = binDir) => spawnSync(join(bin, 'gh'), args, { env, input, encoding: 'utf8' });
+    return { binDir, ghOnlyBinDir, logFile, gh };
+  };
+  const source: FakeGhIssue = {
+    number: 180,
+    title: 'Bench-1',
+    body: 'The intent.\nSecond line, no trailing newline',
+    labels: ['agent-loop/ready', 'epic'],
+    comments: [
+      { author: 'operator', createdAt: '2026-10-19T08:00:00Z', body: 'First comment' },
+      { author: 'reviewer', createdAt: '2026-10-19T09:00:00Z', body: 'Second\ncomment' },
+    ],
+  };
+
+  it('serves a seeded issue with exactly the fields asked for, in gh\'s JSON shape', () => {
+    const { logFile, gh } = store();
+    seedFakeGhIssue(logFile, source);
+    const all = gh(['issue', 'view', '180', '--repo', 'github.com/fake/repo', '--json', 'title,body,labels,comments']);
+    expect(all.status).toBe(0);
+    expect(JSON.parse(all.stdout)).toEqual({
+      title: 'Bench-1',
+      body: source.body,
+      labels: [{ name: 'agent-loop/ready' }, { name: 'epic' }],
+      comments: [
+        { author: { login: 'operator' }, createdAt: '2026-10-19T08:00:00Z', body: 'First comment' },
+        { author: { login: 'reviewer' }, createdAt: '2026-10-19T09:00:00Z', body: 'Second\ncomment' },
+      ],
+    });
+    expect(JSON.parse(gh(['issue', 'view', '180', '--json', 'title,url']).stdout)).toEqual({ title: 'Bench-1', url: 'https://github.com/fake/repo/issues/180' });
+    expect(gh(['issue', 'view', '180', '--json', 'body', '-q', '.body']).stdout).toBe(`${source.body}\n`);
+    expect(gh(['issue', 'view', '180', '--json', 'nope']).status).not.toBe(0);
+  });
+
+  it('leaves an issue it does not hold to the canned answers', () => {
+    const { logFile, gh } = store();
+    seedFakeGhIssue(logFile, source);
+    expect(JSON.parse(gh(['issue', 'view', '176', '--json', 'title,url']).stdout)).toEqual({ title: 'Fake ticket', url: 'https://github.com/fake/repo/issues/176' });
+  });
+
+  it('stores a created issue\'s title, labels and body under the next number, keeping the per-issue body sink', () => {
+    const { logFile, gh } = store();
+    const created = gh(['issue', 'create', '--title', 'Copy of 180', '--label', 'epic', '--label', 'bench-run,other', '--body-file', '-', '--repo', 'github.com/fake/repo'], 'copied body');
+    expect(created.stdout.trim()).toBe('https://github.com/fake/repo/issues/501');
+    expect(readFakeGhIssue(logFile, 501)).toEqual({ number: 501, title: 'Copy of 180', body: 'copied body', labels: ['epic', 'bench-run', 'other'], comments: [] });
+    expect(readIf(`${logFile}.issue-body.501`)).toBe('copied body');
+    expect(gh(['issue', 'create', '--title', 'next', '--body-file', '-'], 'b').stdout.trim()).toBe('https://github.com/fake/repo/issues/502');
+  });
+
+  it('appends each comment in order with a fixed author and a sequenced time, the same in every fresh store', () => {
+    const times: string[][] = [];
+    for (let k = 0; k < 2; k++) {
+      const { logFile, gh } = store();
+      seedFakeGhIssue(logFile, { ...source, comments: [] });
+      expect(gh(['issue', 'comment', '180', '--repo', 'github.com/fake/repo', '--body-file', '-'], 'one\nline two').status).toBe(0);
+      expect(gh(['issue', 'comment', '180', '--body', 'two']).status).toBe(0);
+      const comments = readFakeGhIssue(logFile, 180)?.comments ?? [];
+      expect(comments.map((c) => [c.author, c.body])).toEqual([['fake-user', 'one\nline two'], ['fake-user', 'two']]);
+      times.push(comments.map((c) => c.createdAt));
+    }
+    expect(times[0][0]).not.toBe(times[0][1]);
+    expect(times[1]).toEqual(times[0]);
+  });
+
+  it('refuses a comment on an issue it does not hold', () => {
+    const { gh } = store();
+    expect(gh(['issue', 'comment', '9', '--body', 'x']).status).not.toBe(0);
+  });
+
+  it('serves the body an issue edit wrote', () => {
+    const { logFile, gh } = store();
+    seedFakeGhIssue(logFile, source);
+    expect(gh(['issue', 'edit', '180', '--body-file', '-', '--repo', 'github.com/fake/repo'], 'rewritten').status).toBe(0);
+    expect(readFakeGhIssue(logFile, 180)?.body).toBe('rewritten');
+  });
+
+  it('lists the seeded labels, and a created one after them', () => {
+    const { logFile, gh } = store();
+    seedFakeGhLabels(logFile, ['epic', 'agent-loop/ready']);
+    gh(['label', 'create', 'bench-run', '--description', 'A Bench-1 issue copy']);
+    expect(JSON.parse(gh(['label', 'list', '--json', 'name']).stdout)).toEqual([{ name: 'epic' }, { name: 'agent-loop/ready' }, { name: 'bench-run' }]);
+  });
+
+  it('has a gh-only bin dir with no git that shares the store and the log', () => {
+    const { binDir, ghOnlyBinDir, logFile, gh } = store();
+    expect(existsSync(join(ghOnlyBinDir, 'git'))).toBe(false);
+    gh(['issue', 'create', '--title', 'made', '--body-file', '-'], 'body', binDir);
+    expect(JSON.parse(gh(['issue', 'view', '501', '--json', 'title'], '', ghOnlyBinDir).stdout)).toEqual({ title: 'made' });
+    expect(readIf(logFile)).toMatch(/^gh issue create .*\ngh issue view 501 /m);
+  });
+
+  it('returns null for an issue it does not hold', () => {
+    const { logFile } = store();
+    expect(readFakeGhIssue(logFile, 7)).toBeNull();
+  });
+});
+
+describe('the goal-session fake agent', () => {
+  const doneFile = (repo: string): string => join(repo, '.agent-terminal', 'loop', TURN_DONE_FILENAME);
+  const setup = (script: Parameters<typeof seedGoalSessionAgent>[2]) => {
+    const { binDir, logFile } = seedFakeGhGit('goal-agent-bin-');
+    dirs.push(binDir);
+    const repo = tmp('goal-agent-repo-');
+    seedGoalSessionAgent(binDir, 'fake-agent', script);
+    const p = spawn(join(binDir, 'fake-agent'), [], { cwd: repo, env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
+    procs.push(p);
+    const send = (line: string): void => void p.stdin.write(`${line}\n`);
+    return { binDir, logFile, repo, send };
+  };
+  const goalLine = (repo: string, step: string, leg: number, prompt: string): string => {
+    const rel = `.agent-terminal/loop/goal-prompt.${step}.${leg}.md`;
+    mkdirSync(join(repo, '.agent-terminal', 'loop'), { recursive: true });
+    writeFileSync(join(repo, rel), prompt);
+    return `/goal Every instruction in ${rel} is carried out for leg ${leg} of this goal; .agent-terminal/loop/goal-progress.0123abcd.json records which (turn-done:work-${step}).`;
+  };
+  const awaitDone = async (repo: string, key: string): Promise<void> => {
+    await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe(key), { timeout: 5000 });
+    rmSync(doneFile(repo));
+  };
+
+  it('runs each step\'s scripted entries in order, one per /goal, with the leg and progress file in hand', async () => {
+    const { binDir, repo, send } = setup({
+      goal: { groom: ['printf "%s %s\\n" "first" "$leg" >> legs', 'printf "%s %s %s\\n" "second" "$leg" "$gp" >> legs'] },
+    });
+    send(goalLine(repo, 'groom', 1, 'do the groom'));
+    await awaitDone(repo, 'work-groom');
+    send(goalLine(repo, 'groom', 2, 'carry on'));
+    await awaitDone(repo, 'work-groom');
+    expect(readIf(join(repo, 'legs'))).toBe('first 1\nsecond 2 .agent-terminal/loop/goal-progress.0123abcd.json\n');
+    expect(readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n')).toHaveLength(2);
+    expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toBe('do the groomcarry on');
+    expect(goalAgentOverruns(binDir)).toEqual([]);
+  });
+
+  it('records a /goal or work turn past its script as an overrun and signals nothing for it', async () => {
+    const { binDir, repo, send } = setup({ goal: { groom: [':'] }, work: { 'groom-approve': [':'] } });
+    send(goalLine(repo, 'groom', 1, 'p'));
+    await awaitDone(repo, 'work-groom');
+    send(goalLine(repo, 'groom', 2, 'p'));
+    send('approve now (turn-done:work-groom-approve)');
+    await awaitDone(repo, 'work-groom-approve');
+    send('again (turn-done:work-groom-approve)');
+    send(goalLine(repo, 'plan', 1, 'p'));
+    await vi.waitFor(() => expect(goalAgentOverruns(binDir)).toEqual(['goal groom 2', 'work groom-approve 2', 'goal plan 1']), { timeout: 5000 });
+    expect(existsSync(doneFile(repo))).toBe(false);
+  });
+
+  it('logs a work turn for a step it has no script for as an overrun', async () => {
+    const { binDir, repo, send } = setup({ work: { plan: [':'] } });
+    send('refactor now (turn-done:work-refactor)');
+    send('plan (turn-done:work-plan)');
+    await awaitDone(repo, 'work-plan');
+    expect(goalAgentOverruns(binDir)).toEqual(['work refactor 1']);
+  });
+
+  it('answers a work turn by its own step, never a step whose id it prefixes', async () => {
+    const { repo, send } = setup({ work: { plan: ['echo plan >> seen'], 'plan-approve': ['echo plan-approve >> seen'] } });
+    send('approve (turn-done:work-plan-approve)');
+    await awaitDone(repo, 'work-plan-approve');
+    send('plan (turn-done:work-plan)');
+    await awaitDone(repo, 'work-plan');
+    expect(readIf(join(repo, 'seen'))).toBe('plan-approve\nplan\n');
+  });
+
+  it('saves the ticket text it read for the issue its prompt names, without the issue number or URL', async () => {
+    const { logFile, repo, send } = setup({ goal: { groom: [':'] }, recordTicket: true });
+    seedFakeGhIssue(logFile, {
+      number: 612,
+      title: 'Bench-1',
+      body: 'The intent.',
+      labels: ['epic', 'bench-run'],
+      comments: [{ author: 'fake-user', createdAt: '2026-01-01T00:00:01Z', body: 'Originally by operator.\n\nFirst comment' }],
+    });
+    send(goalLine(repo, 'groom', 1, ['Intro.', ...ticketPromptLines(612)].join('\n')));
+    await awaitDone(repo, 'work-groom');
+    const seen = readIf(join(repo, '.agent-terminal', 'ticket-seen.groom.txt'));
+    expect(seen).toContain('Bench-1');
+    expect(seen).toContain('The intent.');
+    expect(seen).toContain('epic');
+    expect(seen).toContain('bench-run');
+    expect(seen).toContain('Originally by operator.\n\nFirst comment');
+    expect(seen).not.toContain('612');
+    expect(seen).not.toContain('2026-01-01');
+  });
+
+  it('logs a ticket the store does not hold as unread, and leaves no ticket text to compare', async () => {
+    const { binDir, repo, send } = setup({ goal: { groom: [':'] }, recordTicket: true });
+    send(goalLine(repo, 'groom', 1, ticketPromptLines(613).join('\n')));
+    await awaitDone(repo, 'work-groom');
+    expect(goalAgentOverruns(binDir)).toEqual(['ticket-unread groom 1']);
+    expect(existsSync(join(repo, '.agent-terminal', 'ticket-seen.groom.txt'))).toBe(false);
+  });
+
+  it('logs a /goal whose prompt names no ticket as unread, and still runs that /goal\'s entry', async () => {
+    const { binDir, repo, send } = setup({ goal: { groom: ['echo ran >> seen'] }, recordTicket: true });
+    send(goalLine(repo, 'groom', 1, 'No ticket line here.\n'));
+    await awaitDone(repo, 'work-groom');
+    expect(readIf(join(repo, 'seen'))).toBe('ran\n');
+    expect(goalAgentOverruns(binDir)).toEqual(['ticket-unread groom 1']);
   });
 });

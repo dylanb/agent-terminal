@@ -12,6 +12,7 @@ import { errMsg } from './errno';
 import type { FlowStatus } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
+import { isRepeatCount, isStringValue } from '../shared/flowStateValues';
 
 /** Persisted progression (§19.1). `inputs` is flow-wide, not per-step, so a value resolved at one
  *  step threads to later steps' inputs (§18.1 output→input; §18.4 / §24.2.3 T3). */
@@ -68,8 +69,6 @@ export function isPersistedStep(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-const isStringValue = (v: unknown): v is string => typeof v === 'string';
-
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
 function readInputs(raw: unknown): Record<string, string> | null {
   if (!isRecord(raw)) return null;
@@ -90,9 +89,6 @@ function readStartedAt(raw: unknown): number | null {
 function readFlowName(raw: unknown): string | null {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
-
-/** True where `v` is a persistable repeat count — a positive integer (§28.4). */
-const isRepeatCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
 
 /** Null when absent/empty (so the round-trip omits the key). Keeps only positive-integer counts on the
  *  lenient read path; the strict write path rejects a document carrying an ill-typed one, mirroring
