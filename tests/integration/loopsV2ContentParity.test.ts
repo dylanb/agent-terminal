@@ -42,6 +42,7 @@ const NEW_CHARTERS: readonly CharterRow[] = [
   { file: 'plan-goal-loop/charter/test-architect.md', persona: 'review-plan-test-architect', marker: 'AC-to-test bijection' },
   { file: 'plan-goal-loop/charter/determinism.md', persona: 'review-plan-determinism', marker: 'Scriptable-per-turn' },
   { file: 'plan-goal-loop/charter/tracer-slicer.md', persona: 'review-plan-tracer-slicer', marker: 'Thin-but-complete' },
+  { file: 'plan-goal-loop/charter/ui.md', persona: 'review-plan-ui', marker: 'Design-system-first' },
   { file: 'red-loop/charter/red-authenticity.md', persona: 'impl-review-red-authenticity', marker: 'Fails for the right reason' },
   { file: 'green-loop/charter/regression-guard.md', persona: 'impl-review-regression-guard', marker: 'No vacuous green' },
 ];
@@ -57,15 +58,23 @@ const NEW_RECIPES: readonly RecipeRow[] = [
   { kind: 'phase', file: 'green-loop/prompts/work.md', completes: 'green' },
 ];
 
+// #246 — plan-only's planner gains the same plan-phase UI reviewer, under its own flow folder.
+const PLAN_ONLY_ID = 'plan-only';
+const PLAN_ONLY_CHARTERS: readonly CharterRow[] = [
+  { file: 'plan-loop/charter/ui.md', persona: 'review-plan-ui', marker: 'Design-system-first' },
+];
+
 /** null rather than throwing, so a missing-content pin fails by assertion, never an uncaught ENOENT
  *  that would read as a collection error. */
-function read(rel: string): string | null {
+function readIn(tree: string, rel: string): string | null {
   try {
-    return readFileSync(join(SOURCE_TREE, rel), 'utf8');
+    return readFileSync(join(tree, rel), 'utf8');
   } catch {
     return null;
   }
 }
+const read = (rel: string): string | null => readIn(SOURCE_TREE, rel);
+const readPlanOnly = (rel: string): string | null => readIn(join(BUNDLE_TREE, PLAN_ONLY_ID), rel);
 
 describe('loops-v2 content-parity — manifest is internally consistent', () => {
   it('every charter file, persona, and marker is distinct and well-shaped', () => {
@@ -101,14 +110,14 @@ describe('loops-v2 content-parity — manifest is internally consistent', () => 
 });
 
 // §28.6 P6b
-function assertCharterContract(row: CharterRow): void {
+function assertCharterContract(row: CharterRow, readRel: (rel: string) => string | null = read): void {
   it('exists and carries its distinctive marker', () => {
-    const body = read(row.file);
+    const body = readRel(row.file);
     expect(body, `charter absent: ${row.file}`).not.toBeNull();
     expect(body).toContain(row.marker);
   });
   it('composes the ported charter structure', () => {
-    const body = read(row.file) ?? '';
+    const body = readRel(row.file) ?? '';
     const firstNonEmpty = body.split('\n').find((l) => l.trim().length > 0) ?? '';
     expect(firstNonEmpty).toMatch(/^# Reviewer charter — /);
     expect(body).toContain(`Derived from persona: ${row.persona}.`);
@@ -116,14 +125,20 @@ function assertCharterContract(row: CharterRow): void {
     expect(afterPersona.trim().length, `${row.file}: empty lane body`).toBeGreaterThan(0);
   });
   it('contains no dead engine token', () => {
-    const body = read(row.file) ?? '';
+    const body = readRel(row.file) ?? '';
     for (const token of DEAD_TOKENS) expect(body, `${row.file}: dead token ${token}`).not.toContain(token);
   });
 }
 
-describe('loops-v2 content-parity — the 3 planning-discipline charters (§28.6 P6b)', () => {
+describe('loops-v2 content-parity — the 4 planning-discipline charters (§28.6 P6b, P6e)', () => {
   for (const row of NEW_CHARTERS.filter(isPlanningCharter)) {
     describe(row.file, () => assertCharterContract(row));
+  }
+});
+
+describe('loops-v2 content-parity — plan-only\'s plan-phase UI charter (§28.6 P6e)', () => {
+  for (const row of PLAN_ONLY_CHARTERS) {
+    describe(`${PLAN_ONLY_ID}/${row.file}`, () => assertCharterContract(row, readPlanOnly));
   }
 });
 
