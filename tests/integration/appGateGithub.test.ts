@@ -156,35 +156,37 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     );
   });
 
-  it('fails without mutating GitHub when a required input is absent', async () => {
+  it('has nothing to act on without a PR or issue, and mutates nothing (§27.13)', async () => {
     const g = githubState();
     const run = createAppGateGitHub(g.github);
-    await expect(
-      run('mark-ready', {
-        pr: null,
-        ticket: null,
-        bodyFile: null,
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/no PR/);
-    await expect(
-      run('publish-pr-body', {
-        pr: 5,
-        ticket: null,
-        bodyFile: null,
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/body artifact/);
-    await expect(
-      run('update-issue-body', {
-        pr: null,
-        ticket: null,
-        bodyFile: '/x',
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/no issue/);
+    await expect(run('mark-ready', { pr: null, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no PR/),
+    });
+    await expect(run('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no PR/),
+    });
+    await expect(run('update-issue-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no issue/),
+    });
     expect(g.state.ready).toEqual(new Set());
     expect(g.state.issueBodies).toEqual(new Map());
+    expect(g.state.pullRequestBodies).toEqual(new Map());
+  });
+
+  it('reports a side-effect that acted as done', async () => {
+    const g = githubState();
+    await expect(createAppGateGitHub(g.github)('mark-ready', { pr: 7, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({ outcome: 'done' });
+    expect(g.state.ready).toEqual(new Set([7]));
+  });
+
+  it('fails without mutating GitHub when the body artifact is absent', async () => {
+    const g = githubState();
+    await expect(
+      createAppGateGitHub(g.github)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null, bootstrap: null }),
+    ).rejects.toThrow(/body artifact/);
     expect(g.state.pullRequestBodies).toEqual(new Map());
   });
 
