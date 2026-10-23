@@ -122,4 +122,12 @@ describe('package script wiring', () => {
     expect(script).toContain('gen-icon');
     expect(script.indexOf('gen-icon')).toBeLessThan(script.indexOf('electron-builder'));
   });
+
+  it('packages the controller as well as the terminal, after the shared build', () => {
+    const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'));
+    const steps = (pkg.scripts.package as string).split('&&').map(step => step.trim());
+    const controller = steps.indexOf('electron-builder --config electron-builder.controller.yml');
+    expect(steps).toContain('electron-builder');
+    expect(controller).toBeGreaterThan(steps.indexOf('pnpm run build'));
+  });
 });
