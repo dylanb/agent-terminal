@@ -1022,6 +1022,51 @@ test('feature-dev-v3 run stops only at groom-approve, plan-approve and impl-appr
   expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
 });
 
+// §28.3/§27.13 — the pickup branch is plan-loop/issue-176 (seedAutoGateRepo), which the fake git records pushes to.
+const pushedOids = (logFile: string): string[] =>
+  readIf(logFile).split('\n').flatMap((l) => {
+    const m = /^git .*\bpush\b.* ([0-9a-f]{40}):refs\/heads\/plan-loop\/issue-176$/.exec(l);
+    return m ? [m[1]] : [];
+  });
+
+test('feature-dev-v3: every gate commit is pushed to the PR branch, and a failed push at impl-approve holds the gate until approving again lands it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 10 * UI_MS);
+  const home = tmp('agent-term-e2e-push-home-');
+  const repo = seedFeatureDevRun('agent-term-e2e-push-', home);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  const pushFail = join(tmp('agent-term-e2e-push-knob-'), 'fail');
+  const { logFile } = await launchInto('agent-term-e2e-push-', repo, home, (binDir) => seedFeatureDevAgent(binDir), { FAKE_GIT_PUSH_FAIL: pushFail });
+  await recordLoopErrors();
+
+  await flowControl().click();
+  await approveHumanStep(home, repo, 'groom-approve', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveHumanStep(home, repo, 'plan-approve', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await awaitHumanGate(home, repo, 'impl-approve', 9 * LOOP_ROUND_MS + 8 * APPROVE_ADVANCE_MS);
+
+  const phaseCommits = gitIn(repo, 'log', '--format=%H', `${baseline}..HEAD`).split('\n');
+  expect(phaseCommits).toHaveLength(8);
+  expect(pushedOids(logFile)).toEqual(expect.arrayContaining(phaseCommits));
+
+  writeFileSync(pushFail, '');
+  await approveOption().click();
+  await expect.poll(loopErrors, { timeout: APPROVE_ADVANCE_MS }).toEqual([expect.stringMatching(/could not push plan-loop\/issue-176 to the pull request/)]);
+  expect(flowState(repo)).toMatch(/^step: impl-approve$/m);
+  expect(runState(repo)).not.toMatch(/status: accepted/);
+  expect(readIf(logFile).split('\n').filter((l) => /^gh pr edit .*--body-file/.test(l))).toEqual([]);
+  await expect(errorDialog()).toContainText('could not push plan-loop/issue-176 to the pull request', { timeout: UI_MS });
+  await errorDialog().locator('.dismiss').click();
+  await expect(errorDialog()).toHaveCount(0);
+  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+
+  rmSync(pushFail);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+  expect(pushedOids(logFile).at(-1)).toBe(gitIn(repo, 'rev-parse', 'HEAD'));
+  expect(readIf(logFile).split('\n').filter((l) => /^gh pr edit .*--body-file/.test(l))).toHaveLength(1);
+  const decisions = auditGateEntries(home, repo, { step: 'impl-approve' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+});
+
 test('feature-dev-v3 auto step halts on stop-for-a-human: the shipped flow\'s `groom` gate names the reason and does not advance (AC16, AC2)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(4, 0));
   const home = tmp('agent-term-e2e-137-fdev-halt-home-');

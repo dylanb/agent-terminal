@@ -1,5 +1,5 @@
 // §28.3/§28.5.1 — the `commit` gate side-effect: a local `git commit` fired out-of-band on §27.9 approve,
-// alongside the §27.13 `gh` side-effects. Best-effort (§27.13 / AC3): a failure never aborts the accept. On a
+// alongside the §27.13 `gh` side-effects (§27.13 decides whether its failure holds the gate). On a
 // commit it captures the new HEAD SHA (§28.5.1) — the baseline the next phase's frozen-tests diffs from — and
 // stages ONLY the phase's own paths (the injected phase-start snapshot leaves operator WIP untouched, §28.3).
 

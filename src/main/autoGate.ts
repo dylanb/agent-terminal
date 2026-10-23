@@ -350,6 +350,13 @@ export function createAutoGate(deps: AutoGateDeps): AutoGate {
         }
         halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: detail(outcome.reason) }]);
         return;
+      case 'held':
+        halt(repoDir, run, d, [{ reason: 'approve-not-persisted', detail: 'the approve was held for a retry' }], { write: false });
+        return;
+      default: {
+        const unhandled: never = outcome;
+        return unhandled;
+      }
     }
   };
 

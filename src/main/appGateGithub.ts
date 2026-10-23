@@ -12,10 +12,13 @@ export interface AppGateSideEffectCtx {
   bootstrap: AppLoopBootstrap | null;
 }
 
+/** §27.13 — `no-target` when the run has no PR or issue for the action to act on. */
+export type AppGateSideEffectResult = { outcome: 'done' } | { outcome: 'no-target'; reason: string };
+
 export type RunAppGateSideEffect = (
   action: string,
   ctx: AppGateSideEffectCtx,
-) => Promise<void>;
+) => Promise<AppGateSideEffectResult>;
 
 export type AppGatePullRequest = PullRequest;
 
@@ -54,22 +57,22 @@ export function createAppGateGitHub(
   return async (action, ctx) => {
     switch (action) {
       case 'mark-ready':
-        if (ctx.pr === null) throw new Error('no PR to mark ready');
+        if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
         await verifyBootstrap(ctx);
         await github.markPullRequestReady(ctx.pr);
-        return;
+        return { outcome: 'done' };
       case 'update-issue-body':
         if (ctx.ticket === null) {
-          throw new Error('no issue to publish the body to');
+          return { outcome: 'no-target', reason: 'no issue to publish the body to' };
         }
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
         }
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
-        return;
+        return { outcome: 'done' };
       case 'publish-pr-body':
         if (ctx.pr === null) {
-          throw new Error('no PR to publish the body to');
+          return { outcome: 'no-target', reason: 'no PR to publish the body to' };
         }
         if (ctx.bodyFile === null) {
           throw new Error('no body artifact to publish');
@@ -80,7 +83,7 @@ export function createAppGateGitHub(
           ctx.bodyFile,
           ctx.bootstrap?.issue ?? null,
         );
-        return;
+        return { outcome: 'done' };
       default:
         throw new Error(`unknown approve side-effect action: ${action}`);
     }
