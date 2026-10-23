@@ -47,7 +47,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
     result([{ file: 'tests/a.test.ts', line: 12 }]);
     report(12);
     at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
-    expect(check()).toEqual({ kind: 'verified', unchecked: [] });
+    expect(check()).toEqual({ kind: 'verified', claim: 'declared-failures', unchecked: [] });
   });
 
   it('verifies a verification-only result against a fresh report in which its tests all passed, and refuses one in which a test failed', () => {
@@ -58,7 +58,7 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
       at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
     };
     write('passed');
-    expect(check()).toEqual({ kind: 'verified', unchecked: [] });
+    expect(check()).toEqual({ kind: 'verified', claim: 'all-passing', unchecked: [] });
     write('failed-assertion');
     expect(check().kind).toBe('refused');
   });

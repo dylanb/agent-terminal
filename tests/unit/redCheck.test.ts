@@ -57,7 +57,7 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
 
   it('passes when every declared check failed by assertion and nothing else failed', () => {
     const v = redCheckVerdict({ report: parsed(report([failing(12)])), intended: [{ file: 'tests/a.test.ts', line: 12 }], addedTestPaths: added });
-    expect(v).toEqual({ ok: true, unchecked: [] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
   });
 
   it('refuses a test that failed before reaching its own check (an undeclared failure location)', () => {
@@ -90,7 +90,7 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
       intended: [{ file: 'tests/a.test.ts', line: 12 }],
       addedTestPaths: added,
     });
-    expect(v).toEqual({ ok: true, unchecked: [] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
   });
 
   it('accepts several failing checks in one test, each declared (expect.soft)', () => {
@@ -100,7 +100,7 @@ describe('redCheckVerdict — a RED fails exactly where it says it does (§28.5.
       intended: [{ file: 'tests/a.test.ts', line: 12 }, { file: 'tests/a.test.ts', line: 14 }],
       addedTestPaths: added,
     });
-    expect(v).toEqual({ ok: true, unchecked: [] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
   });
 });
 
@@ -110,7 +110,7 @@ describe('redCheckVerdict — a declared failure the repo check does not cover (
 
   it('passes a RED whose only declared failures are in a file the report never mentions, naming that file unchecked', () => {
     const v = redCheckVerdict({ report: parsed(report([])), intended: [{ file: spec, line: 7 }], addedTestPaths: [spec] });
-    expect(v).toEqual({ ok: true, unchecked: [spec] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [spec] });
   });
 
   it('still holds the covered files to their declared checks', () => {
@@ -128,7 +128,7 @@ describe('redCheckVerdict — a declared failure the repo check does not cover (
       intended: [{ file: 'tests/a.test.ts', line: 12 }, { file: spec, line: 7 }],
       addedTestPaths: ['tests/a.test.ts', spec],
     });
-    expect(v).toEqual({ ok: true, unchecked: [spec] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [spec] });
   });
 });
 
@@ -145,7 +145,7 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
       intended: intendedOf(resultWith(exampleIntendedFailures())),
       addedTestPaths: ['tests/adder.test.ts'],
     });
-    expect(v).toEqual({ ok: true, unchecked: [] });
+    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
   });
 
   it('the instruction names the command, the report path, and the intended-failures field', () => {
@@ -158,7 +158,7 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
   it('the result the instruction shows declares the failures its example report observes', () => {
     const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.json' }).join('\n');
     const shown = text.slice(text.lastIndexOf('{\n  "outcome"'));
-    expect(redCheckVerdict({ report: parsed(exampleRedCheckReport()), intended: intendedOf(shown), addedTestPaths: ['tests/adder.test.ts'] })).toEqual({ ok: true, unchecked: [] });
+    expect(redCheckVerdict({ report: parsed(exampleRedCheckReport()), intended: intendedOf(shown), addedTestPaths: ['tests/adder.test.ts'] })).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
   });
 
   it('the instruction says a declared failure in a file the check does not run is still declared, and recorded as unchecked', () => {
@@ -177,7 +177,7 @@ describe('verificationCheckVerdict — a verification-only RED passes everywhere
   });
 
   it('passes when every test in the added files passed', () => {
-    expect(verificationCheckVerdict({ report: parsed(report([test('passed')])), addedTestPaths: added })).toEqual({ ok: true, unchecked: [] });
+    expect(verificationCheckVerdict({ report: parsed(report([test('passed')])), addedTestPaths: added })).toEqual({ ok: true, claim: 'all-passing', unchecked: [] });
   });
 
   it.each([['failed-assertion'], ['errored'], ['skipped']] as const)('refuses a test in an added file that %s, naming it', (outcome) => {
@@ -189,6 +189,7 @@ describe('verificationCheckVerdict — a verification-only RED passes everywhere
   it('ignores files this turn did not add to', () => {
     expect(verificationCheckVerdict({ report: parsed(report([test('passed'), test('failed-assertion', 'tests/other.test.ts')])), addedTestPaths: added })).toEqual({
       ok: true,
+      claim: 'all-passing',
       unchecked: [],
     });
   });
@@ -196,6 +197,7 @@ describe('verificationCheckVerdict — a verification-only RED passes everywhere
   it('names an added file the report never mentions as not independently checked', () => {
     expect(verificationCheckVerdict({ report: parsed(report([test('passed')])), addedTestPaths: [...added, 'tests/e2e/a.spec.ts'] })).toEqual({
       ok: true,
+      claim: 'all-passing',
       unchecked: ['tests/e2e/a.spec.ts'],
     });
   });

@@ -29,7 +29,10 @@ export interface RedCheckReport {
 
 export type { IntendedFailure };
 
-export type RedCheckVerdict = { ok: true; unchecked: string[] } | { ok: false; reason: string };
+/** §28.5.3 */
+export type RedCheckClaim = 'declared-failures' | 'all-passing';
+
+export type RedCheckVerdict = { ok: true; claim: RedCheckClaim; unchecked: string[] } | { ok: false; reason: string };
 
 /** §28.5.2 */
 export const RED_CHECK_MISSING_WARNING =
@@ -115,7 +118,7 @@ export function redCheckVerdict(q: { report: RedCheckReport; intended: IntendedF
   const declared = new Set(q.intended.filter((i) => covered.has(i.file)).map((i) => loc(i.file, i.line)));
   for (const d of declared) if (!observed.has(d)) problems.push(`${d} is declared but did not fail by assertion`);
   for (const o of observed) if (!declared.has(o)) problems.push(`${o} failed but is not a declared intended failure`);
-  return problems.length === 0 ? { ok: true, unchecked } : { ok: false, reason: `the RED check refused: ${problems.join('; ')}` };
+  return problems.length === 0 ? { ok: true, claim: 'declared-failures', unchecked } : { ok: false, reason: `the RED check refused: ${problems.join('; ')}` };
 }
 
 /** §28.5.3 */
@@ -126,7 +129,7 @@ export function verificationCheckVerdict(q: { report: RedCheckReport; addedTestP
     .map((t) => `${t.file} › ${t.name} ${t.outcome === 'skipped' ? 'was skipped' : t.outcome === 'errored' ? 'errored' : 'failed by assertion'}`);
   if (problems.length > 0) return { ok: false, reason: `the RED check refused a verification-only RED, whose tests must all pass: ${problems.join('; ')}` };
   const covered = new Set(q.report.tests.map((t) => t.file));
-  return { ok: true, unchecked: [...added].filter((f) => !covered.has(f)).sort() };
+  return { ok: true, claim: 'all-passing', unchecked: [...added].filter((f) => !covered.has(f)).sort() };
 }
 
 export function redCheckReportRel(resultRel: string): string {

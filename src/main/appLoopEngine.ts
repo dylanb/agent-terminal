@@ -878,7 +878,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (check.kind === 'unconfigured') {
       deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check not configured — this RED was not independently checked`, null);
     } else if (check.unchecked.length > 0) {
-      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — those declared failures were not independently checked`, null);
+      const unseen = check.claim === 'all-passing' ? 'those added tests were not independently seen passing' : 'those declared failures were not independently checked';
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} red check does not cover ${check.unchecked.join(', ')} — ${unseen}`, null);
     }
     return { ok: true };
   };
