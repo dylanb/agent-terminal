@@ -176,14 +176,16 @@ async function recordLoopErrors(): Promise<void> {
 }
 const loopErrors = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __loopErrors: string[] }).__loopErrors);
 
-/** The gate commands of the repo's one §25 run file, read without a run identity (the test makes exactly one Start). */
-function runGateCmds(home: string, repo: string): string[] {
+/** The command entries of the repo's one §25 run file, read without a run identity (the test makes exactly one
+ *  Start) — every one, or only the gate's. */
+function runCmds(home: string, repo: string, source?: 'gate'): string[] {
   const dir = auditRepoDir(auditRootDir(home), repo);
   const files = readdirSync(dir);
   expect(files).toHaveLength(1);
   const { events } = parseAuditStream(readFileSync(join(dir, files[0]), 'utf8'));
-  return events.flatMap((e) => (e.type === 'command' && e.source === 'gate' ? [e.cmd] : []));
+  return events.flatMap((e) => (e.type === 'command' && (source === undefined || e.source === source) ? [e.cmd] : []));
 }
+const runGateCmds = (home: string, repo: string): string[] => runCmds(home, repo, 'gate');
 
 async function openLoopPanel(): Promise<void> {
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
@@ -225,6 +227,27 @@ test('auto clean gate advances with its phase commit; no alert is raised and the
   expect(kinds).toContainEqual({ kind: { family: 'gate', kind: 'side-effect', option: 'approve' }, decider: 'engine' });
   expect(entries.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toEqual([]);
   expect(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
+});
+
+test('an auto RED whose new tests verify behavior that already exists is engine-approved with its commit, and the run log says so (v2.214)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(3, 0));
+  const home = tmp('agent-term-e2e-verify-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-verify-', 'red');
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, 'auto-red', autoGateFlowYaml(AUTO_RED_THEN_MANUAL));
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  await launchInto('agent-term-e2e-verify-', repo, home, { ...redAgent(), verificationOnly: true });
+
+  await flowControl().click();
+
+  await expect
+    .poll(() => flowState(repo), { timeout: LOOP_ROUND_MS })
+    .toMatch(/^step: done$/m)
+    .catch(failWithDiagnosis(home, repo));
+  await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
+  expect(gitIn(repo, 'log', '--format=%s', `${baseline}..HEAD`).split('\n')).toContain('RED');
+  expect(gitIn(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toContain('tests/red_added.test.ts');
+  expect(runCmds(home, repo).filter((c) => c.includes('verification-only RED'))).toHaveLength(1);
 });
 
 test('an auto gate whose verdict is stop for a human halts at the gate, names the reason, and the operator approve after it is human (AC2, AC8)', { tag: '@ownapp' }, async () => {

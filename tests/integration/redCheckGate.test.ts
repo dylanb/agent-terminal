@@ -50,6 +50,19 @@ describe('checkRed — the RED gate holds the repo\'s own report against the dec
     expect(check()).toEqual({ kind: 'verified', unchecked: [] });
   });
 
+  it('verifies a verification-only result against a fresh report in which its tests all passed, and refuses one in which a test failed', () => {
+    capabilities('red_check_command: node check.mjs\n');
+    writeFileSync(resultPath(), examplePhaseResult('passed', { verificationOnly: true }));
+    const write = (outcome: string): void => {
+      writeFileSync(reportPath(), JSON.stringify({ version: 1, tests: [{ file: TEST_FILE, name: 't', outcome, failures: outcome === 'passed' ? [] : [{ line: 4, message: 'AssertionError' }] }] }));
+      at(join(...ARTIFACTS, 'red-result.check.json'), 2_000);
+    };
+    write('passed');
+    expect(check()).toEqual({ kind: 'verified', unchecked: [] });
+    write('failed-assertion');
+    expect(check().kind).toBe('refused');
+  });
+
   it('refuses a test that failed somewhere other than its declared check', () => {
     capabilities('red_check_command: node check.mjs\n');
     result([{ file: 'tests/a.test.ts', line: 12 }]);

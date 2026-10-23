@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { basename } from 'node:path';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { createAppLoopEngine } from '../../src/main/appLoopEngine';
-import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { RED_CHECK_MISSING_WARNING } from '../../src/shared/redCheck';
 import { PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
@@ -162,5 +162,66 @@ describe('each RED review round and the red check (§28.5.3)', () => {
     await driveToRedReview(engine);
     await finishRound(engine);
     expect(seen.at(-1)?.resultPath).toMatch(/red-result\.slice-2\.json$/);
+  });
+});
+
+describe('a verification-only RED (§28.5.3)', () => {
+  const verifies = (p = predicates({})) => {
+    const engine = h.makeEngine(undefined, p);
+    enterRed(engine);
+    h.writeResult(examplePhaseResult('passed', { verificationOnly: true }), exampleCapturedOutput('passed'));
+    return engine;
+  };
+  const signal = async (engine: Engine): Promise<void> => {
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onInjectable();
+    engine.onInjectable();
+  };
+
+  it('tells the agent how to write it, and hands it a result check that accepts it', () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    enterRed(engine);
+    expect(h.injected[1]).toContain(`"${PHASE_RESULT_FIELDS.verificationOnly}": true`);
+    expect(h.injected[1]).toMatch(/check-artifact result \S+ failed-assertion no-build verification-only/);
+  });
+
+  it('completes RED, and the run log says the slice verified behavior that already exists', async () => {
+    const engine = verifies();
+    await signal(engine);
+    expect(h.emitError).not.toHaveBeenCalled();
+    expect(reviewInjected()).toBeDefined();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/verification-only RED.*already/), 0);
+  });
+
+  it('writes no verification-only entry for a RED whose tests failed by assertion', async () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    await driveToRedReview(engine);
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('verification-only'), expect.anything());
+  });
+
+  it('is not refused by a test command that exited 0', async () => {
+    const engine = verifies(makeFakeCompletionPredicates({ workingTreeTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }), recoverExitCode: async () => 0 }));
+    await signal(engine);
+    expect(h.emitError).not.toHaveBeenCalled();
+    expect(reviewInjected()).toBeDefined();
+  });
+
+  it('still needs a test the turn added', async () => {
+    const engine = verifies(makeFakeCompletionPredicates({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    await signal(engine);
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('no test file was added'));
+    expect(reviewInjected()).toBeUndefined();
+  });
+
+  it('holds the turn when the red check refuses it', async () => {
+    const engine = verifies(predicates({ command: COMMAND, outcome: () => ({ kind: 'refused', reason: 'the RED check refused: tests/a.test.ts › t failed' }) }));
+    await signal(engine);
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('tests/a.test.ts › t failed'));
+    expect(reviewInjected()).toBeUndefined();
   });
 });

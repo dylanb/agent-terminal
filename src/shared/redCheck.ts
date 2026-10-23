@@ -118,6 +118,17 @@ export function redCheckVerdict(q: { report: RedCheckReport; intended: IntendedF
   return problems.length === 0 ? { ok: true, unchecked } : { ok: false, reason: `the RED check refused: ${problems.join('; ')}` };
 }
 
+/** §28.5.3 */
+export function verificationCheckVerdict(q: { report: RedCheckReport; addedTestPaths: string[] }): RedCheckVerdict {
+  const added = new Set(q.addedTestPaths);
+  const problems = q.report.tests
+    .filter((t) => added.has(t.file) && t.outcome !== 'passed')
+    .map((t) => `${t.file} › ${t.name} ${t.outcome === 'skipped' ? 'was skipped' : t.outcome === 'errored' ? 'errored' : 'failed by assertion'}`);
+  if (problems.length > 0) return { ok: false, reason: `the RED check refused a verification-only RED, whose tests must all pass: ${problems.join('; ')}` };
+  const covered = new Set(q.report.tests.map((t) => t.file));
+  return { ok: true, unchecked: [...added].filter((f) => !covered.has(f)).sort() };
+}
+
 export function redCheckReportRel(resultRel: string): string {
   const cut = resultRel.lastIndexOf('/');
   const dot = resultRel.lastIndexOf('.');
@@ -155,6 +166,8 @@ export function composeRedCheckInstruction(opts: { command: string; reportRel: s
     'run log records them as not independently checked.',
     'A test that fails before it reaches the check it exists for is not fixed by listing that earlier line: restructure',
     'it so its own check is the one that fails — split it, or use soft assertions so every check reports.',
+    `A verification-only result declares no \`"${PHASE_RESULT_FIELDS.intendedFailures}"\`: the engine passes it only when every test in`,
+    'the files you added tests to passed.',
     'An example report and the matching result:',
     '',
     exampleRedCheckReport(),

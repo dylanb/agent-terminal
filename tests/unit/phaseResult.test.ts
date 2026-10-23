@@ -3,6 +3,7 @@ import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/ph
 import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import {
   PHASE_RESULT_FIELDS,
+  RED_COMPLETION,
   composePhaseResultInstruction,
   exampleCapturedOutput,
   examplePhaseResult,
@@ -23,7 +24,7 @@ const end = (text: string, want: Parameters<typeof phaseResultEnd>[1], captured:
 describe('reading a phase result (§28.5.2 / §28.5.5)', () => {
   it('reads the canonical example back as itself, for every outcome', () => {
     for (const outcome of PHASE_OUTCOMES) {
-      expect(readPhaseResult(examplePhaseResult(outcome))).toEqual({ ok: true, result: { outcome, build: null, intendedFailures: null } });
+      expect(readPhaseResult(examplePhaseResult(outcome))).toEqual({ ok: true, result: { outcome, build: null, intendedFailures: null, verificationOnly: false } });
     }
   });
 
@@ -153,5 +154,42 @@ describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)',
   it('works for the refactor bar (tests still pass, no build)', () => {
     const p = composePhaseResultInstruction({ resultRel: RESULT_REL, completingOutcome: REFACTOR_COMPLETING_OUTCOME, closing: [] }).join('\n');
     expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}": "${REFACTOR_COMPLETING_OUTCOME}"`);
+  });
+});
+
+describe('a verification-only RED result (§28.5.3)', () => {
+  const verifies = examplePhaseResult('passed', { verificationOnly: true });
+
+  it('reads back as a passed run that verifies existing behavior', () => {
+    expect(readPhaseResult(verifies)).toMatchObject({ ok: true, result: { outcome: 'passed', verificationOnly: true } });
+    expect(readPhaseResult(examplePhaseResult('failed-assertion'))).toMatchObject({ ok: true, result: { verificationOnly: false } });
+  });
+
+  it.each([
+    ['a verification claim on a run that did not pass', result({ outcome: 'failed-assertion', verificationOnly: true })],
+    ['a verification claim that also declares intended failures', result({ outcome: 'passed', verificationOnly: true, intendedFailures: [{ file: 'tests/a.ts', line: 5 }] })],
+    ['a verification claim that is not true or false', result({ outcome: 'passed', verificationOnly: 'yes' })],
+  ])('is not well-formed with %s', (_what, text) => {
+    const read = readPhaseResult(text);
+    expect(read.ok).toBe(false);
+    if (!read.ok) expect(read.problem).toContain(`"${PHASE_RESULT_FIELDS.verificationOnly}"`);
+  });
+
+  it('completes RED, alongside a run that fails by assertion', () => {
+    expect(end(verifies, RED_COMPLETION, 'Test Files  1 passed (1)').ok).toBe(true);
+    expect(end(examplePhaseResult('failed-assertion'), RED_COMPLETION).ok).toBe(true);
+  });
+
+  it('does not complete RED with a passing run that does not claim verification', () => {
+    const e = end(examplePhaseResult('passed'), RED_COMPLETION, 'Test Files  1 passed (1)');
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.problem).toMatch(/reports passed, not failed-assertion/);
+  });
+
+  it('does not complete GREEN or refactor: verification completes only RED', () => {
+    const green = end(examplePhaseResult('passed', { build: 'built', verificationOnly: true }), { outcome: 'passed', build: 'built' });
+    expect(green.ok).toBe(false);
+    if (!green.ok) expect(green.problem).toContain('RED');
+    expect(end(verifies, { outcome: REFACTOR_COMPLETING_OUTCOME }).ok).toBe(false);
   });
 });

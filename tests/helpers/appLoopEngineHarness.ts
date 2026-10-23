@@ -257,7 +257,7 @@ export class AppLoopEngineHarness {
             ? `check-artifact verdict ${check.rel} --catalog ${check.catalog.join(',')}`
             : check.kind === 'progress'
               ? `check-artifact progress ${check.rel} ${check.leg} ${check.legs ? 'legs' : 'one-leg'}`
-              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}`,
+              : `check-artifact result ${check.rel} ${check.outcome} ${check.build ?? 'no-build'}${check.acceptsVerificationOnly ? ' verification-only' : ''}`,
       ...depsOverride,
     };
     return createAppLoopEngine(this.deps);

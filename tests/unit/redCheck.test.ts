@@ -6,6 +6,7 @@ import {
   parseRedCheckReport,
   redCheckReportRel,
   redCheckVerdict,
+  verificationCheckVerdict,
   type RedCheckReport,
 } from '../../src/shared/redCheck';
 import { PHASE_RESULT_FIELDS, examplePhaseResult, readPhaseResult, type IntendedFailure } from '../../src/shared/phaseResult';
@@ -163,5 +164,39 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
   it('the instruction says a declared failure in a file the check does not run is still declared, and recorded as unchecked', () => {
     const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.md' }).join(' ');
     expect(text).toMatch(/does not run[\s\S]*still declare[\s\S]*not independently checked/i);
+  });
+});
+
+describe('verificationCheckVerdict — a verification-only RED passes everywhere it added tests (§28.5.3)', () => {
+  const added = ['tests/a.test.ts'];
+  const test = (outcome: RedCheckReport['tests'][number]['outcome'], file = 'tests/a.test.ts') => ({
+    file,
+    name: `t-${outcome}`,
+    outcome,
+    failures: outcome === 'failed-assertion' || outcome === 'errored' ? [{ line: 4, message: 'boom' }] : [],
+  });
+
+  it('passes when every test in the added files passed', () => {
+    expect(verificationCheckVerdict({ report: parsed(report([test('passed')])), addedTestPaths: added })).toEqual({ ok: true, unchecked: [] });
+  });
+
+  it.each([['failed-assertion'], ['errored'], ['skipped']] as const)('refuses a test in an added file that %s, naming it', (outcome) => {
+    const v = verificationCheckVerdict({ report: parsed(report([test('passed'), test(outcome)])), addedTestPaths: added });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toContain(`t-${outcome}`);
+  });
+
+  it('ignores files this turn did not add to', () => {
+    expect(verificationCheckVerdict({ report: parsed(report([test('passed'), test('failed-assertion', 'tests/other.test.ts')])), addedTestPaths: added })).toEqual({
+      ok: true,
+      unchecked: [],
+    });
+  });
+
+  it('names an added file the report never mentions as not independently checked', () => {
+    expect(verificationCheckVerdict({ report: parsed(report([test('passed')])), addedTestPaths: [...added, 'tests/e2e/a.spec.ts'] })).toEqual({
+      ok: true,
+      unchecked: ['tests/e2e/a.spec.ts'],
+    });
   });
 });

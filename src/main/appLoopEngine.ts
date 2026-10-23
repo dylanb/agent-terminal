@@ -24,9 +24,9 @@ import type { LifecycleTerminateResult } from './flowLifecycle';
 import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME, type PhaseOutcome } from '../shared/phaseOutcome';
-import { GREEN_COMPLETING_BUILD_OUTCOME, type BuildOutcome } from '../shared/buildOutcome';
-import { phaseOutputRel, phaseResultEnd } from '../shared/phaseResult';
+import { GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
+import { RED_COMPLETION, phaseOutputRel, phaseResultEnd, readPhaseResult, type PhaseResultWant } from '../shared/phaseResult';
 import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeGoalReviewLines, composeReportRepairPrompt, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import type { ArtifactCheck } from './artifactCheck';
@@ -712,7 +712,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** The phase-result clause (§28.5.3), decided by the same `phaseResultEnd` the agent's own check runs. */
-  const resultShortfall = (rel: string, abs: string, want: { outcome: PhaseOutcome; build?: BuildOutcome }): string | null => {
+  const resultShortfall = (rel: string, abs: string, want: PhaseResultWant): string | null => {
     const content = deps.readArtifact(abs);
     if (content === null) return `the phase result ${rel} is missing`;
     const output = phaseOutputFile(abs);
@@ -799,7 +799,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // engine's redAsyncGate; BOTH completion routes AND it in — the done-signal via the runner's
         // PrecomputedGate (§28 Option C), the human-accept via routeOut computing the same gate — so AC2 holds on
         // both paths (§28.5.6 keeps "a test was added" machine-authoritative, not a human-override target).
-        return resultShortfall(active.completion.resultRel, active.completion.resultPath, { outcome: RED_COMPLETING_OUTCOME });
+        return resultShortfall(active.completion.resultRel, active.completion.resultPath, RED_COMPLETION);
       case 'green': {
         // §28.5.3 — the SYNCHRONOUS GREEN clause. The async clauses (baseline present+branch-matched, the
         // exit-direction, and the NON-blocking frozen detection) are the engine's greenAsyncGate, ANDed on both completion routes like the RED gate.
@@ -843,14 +843,31 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const exit = await deps.completionPredicates.recoverExitCode({ repoDir: a.repoDir, turnKey: a.turnKey });
       // §28.5.2a — exit 0 ⇒ the agent may not claim RED. DORMANT until N7/#92 wires a source (recoverExitCode
-      // returns null today), but a real, tested bound: injecting an exit code exercises this direction.
-      if (exit !== null && exit === 0) {
+      // returns null today), but a real, tested bound: injecting an exit code exercises this direction. A
+      // verification-only RED claims a passing run, so exit 0 is its expected direction (§28.5.3).
+      if (exit !== null && exit === 0 && !redVerifiesOnly(a)) {
         return { ok: false, reason: 'the test command exited 0 — that is not a RED failure' };
       }
       if (a.completion.kind !== 'red') return { ok: true };
       return await redCheckClause(a, a.completion.resultPath, added.paths);
     } catch (e) {
       return { ok: false, reason: `RED completion check failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  };
+
+  /** §28.5.3 — whether the turn's RED result is a well-formed verification-only result. */
+  const redVerifiesOnly = (a: ActiveAppTurn): boolean => {
+    if (a.completion.kind !== 'red' && a.completion.kind !== 'red-report') return false;
+    const text = deps.readArtifact(a.completion.resultPath);
+    if (text === null) return false;
+    const read = readPhaseResult(text);
+    return read.ok && read.result.verificationOnly;
+  };
+
+  /** §28.5.3 */
+  const auditRedVerification = (a: ActiveAppTurn): void => {
+    if (a.completion.kind === 'red' && redVerifiesOnly(a)) {
+      deps.audit(a.repoDir, `§28 ${a.loopName} ${a.stepId} verification-only RED — the slice's new tests pass against behavior already built`, 0);
     }
   };
 
@@ -1179,7 +1196,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           ...(active.completion.kind === 'red-report'
             ? {
                 redCheck: { command: deps.completionPredicates.redCheckCommand(active.repoDir), resultRel: active.completion.resultRel },
-                resultCheckCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: RED_COMPLETING_OUTCOME }),
+                resultCheckCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, ...RED_COMPLETION }),
               }
             : {}),
         });
@@ -1203,7 +1220,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               ? {
                   kind: 'red',
                   resultRel: active.completion.resultRel,
-                  checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, outcome: RED_COMPLETING_OUTCOME }),
+                  checkCommand: deps.artifactCheckCommand({ kind: 'result', rel: active.completion.resultRel, ...RED_COMPLETION }),
                   redCheckCommand: deps.completionPredicates.redCheckCommand(active.repoDir),
                 }
               : active.completion.kind === 'green'
@@ -1306,6 +1323,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
+        auditRedVerification(active);
         if (active.run.kind === 'rounds') enterReview(active, FIRST_ROUND);
         else routeWorkToGate(active);
         return;
@@ -1800,7 +1818,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // (ENOSPC/EPERM/a planted symlink) leaves the disk on `error`, so re-surface the live error and record
         // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
         // phases cannot drift on the write-failure contract.
-        const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number): void => {
+        const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number, accepted?: () => void): void => {
           // The one view push follows the accepted fact, so the stop is never shown without its halt (§27.9.1).
           if (!persist('complete', undefined, false)) {
             refuseRouteOut('turn-error', saveFailReason, round);
@@ -1808,6 +1826,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
           runner.release();
           deps.audit(repoDir, successAudit, 0);
+          accepted?.();
           hook(() => deps.loopRunEvent?.(repoDir, stepId, turnKey, 'accepted'));
           deps.onViewChanged();
         };
@@ -1922,7 +1941,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
               refuseRouteOut('turn-error', gate.reason);
               return;
             }
-            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`);
+            acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (RED gate satisfied)`, undefined, () => auditRedVerification(a));
           });
           return;
         }

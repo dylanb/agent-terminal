@@ -6,7 +6,7 @@ import { loadLoopCapabilities } from './loopCapabilities';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { errMsg } from './errno';
-import { MAX_RED_CHECK_REPORT_BYTES, parseRedCheckReport, redCheckReportRel, redCheckVerdict } from '../shared/redCheck';
+import { MAX_RED_CHECK_REPORT_BYTES, parseRedCheckReport, redCheckReportRel, redCheckVerdict, verificationCheckVerdict } from '../shared/redCheck';
 import { readPhaseResult } from '../shared/phaseResult';
 
 export type RedCheckOutcome = { kind: 'unconfigured' } | { kind: 'verified'; unchecked: string[] } | { kind: 'refused'; reason: string };
@@ -49,7 +49,9 @@ export function checkRed(q: { repoDir: string; resultPath: string; addedTestPath
     if (!parsed.ok) return refused(`the RED check report ${reportRel} is malformed: ${parsed.reason}`);
     const result = readPhaseResult(readFileSync(q.resultPath, 'utf8'));
     if (!result.ok) return refused(`the RED result ${path.basename(q.resultPath)}: ${result.problem}`);
-    const verdict = redCheckVerdict({ report: parsed.report, intended: result.result.intendedFailures ?? [], addedTestPaths: q.addedTestPaths });
+    const verdict = result.result.verificationOnly
+      ? verificationCheckVerdict({ report: parsed.report, addedTestPaths: q.addedTestPaths })
+      : redCheckVerdict({ report: parsed.report, intended: result.result.intendedFailures ?? [], addedTestPaths: q.addedTestPaths });
     return verdict.ok ? { kind: 'verified', unchecked: verdict.unchecked } : refused(verdict.reason);
   } catch (e) {
     return refused(`the RED check could not read its inputs: ${errMsg(e)}`);
