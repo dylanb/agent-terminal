@@ -22,6 +22,7 @@ export const CH = {
   ptyExit: 'pty:exit',
   startupReady: 'startup:ready',
   startupRendered: 'startup:rendered',
+  startupIncompatible: 'startup:incompatible',
   monitorCapture: 'monitor:capture',
   monitorEvent: 'monitor:event',
   monitorEventRemoved: 'monitor:eventRemoved',
@@ -1347,7 +1348,16 @@ export interface ControllerSnapshot { sessionId: SessionId; terminals: Controlle
 export interface ControllerActivation { sessionId: SessionId; id: string }
 
 
+export interface ControllerVersionRange { min: number; max: number }
+export interface ControllerIncompatibility {
+  update: 'controller' | 'terminal';
+  terminalVersion: number;
+  controllerVersions: ControllerVersionRange;
+}
+export interface StartupIncompatibleMsg extends ControllerIncompatibility { sessionId: SessionId }
+
 export interface StartupApi {
   ready(): Promise<void>;
   rendered(): void;
+  onIncompatible(cb: (report: ControllerIncompatibility) => void): () => void;
 }

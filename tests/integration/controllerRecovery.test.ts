@@ -54,7 +54,7 @@ describe('registered terminal recovery', () => {
       peak = Math.max(peak, peers.size);
       if (attempts.length === 1) {
         initial = socket;
-        socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+        socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'registered' }));
       } else if (mode === 'interrupted') socket.destroy();
       else if (mode === 'malformed') socket.end('invalid\n');
     });
@@ -81,7 +81,7 @@ describe('registered terminal recovery', () => {
     await listen(socket => {
       registrations++;
       initial = socket;
-      socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity, () => 'activated', () => { started = true; });
     cancel.push(stop);
@@ -129,7 +129,7 @@ describe('registered terminal recovery', () => {
     let starts = 0;
     await listen(socket => {
       attempts.push(socket);
-      if (attempts.length === 1) socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      if (attempts.length === 1) socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'registered' }));
     });
     cancel.push(registerControllerTerminal(home, identity, () => 'activated', () => { starts++; }));
     await vi.waitFor(() => expect(starts).toBe(1));
@@ -147,7 +147,7 @@ describe('registered terminal recovery', () => {
     let activations = 0;
     await listen(socket => {
       peer = socket;
-      if (state === 'registered') socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      if (state === 'registered') socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity,
       () => { activations++; return 'activated'; }, () => { starts++; });
@@ -155,7 +155,7 @@ describe('registered terminal recovery', () => {
     await vi.waitFor(() => expect(peer).toBeDefined());
     if (state === 'registered') await vi.waitFor(() => expect(starts).toBe(1));
     peer!.write(encodeControllerMessage(state === 'pending'
-      ? { version: 1, type: 'registered' }
+      ? { version: 1, minor: 0, type: 'registered' }
       : { version: 1, type: 'activate', requestId: 'queued-at-close' }));
     stop();
     await vi.waitFor(() => expect(peers.size).toBe(0));

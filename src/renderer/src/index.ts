@@ -37,7 +37,18 @@ import { createCliInstall } from './cliInstall';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
+const stopIncompatible = window.term.startup.onIncompatible(({ update, terminalVersion, controllerVersions: { min, max } }) => {
+  const supported = min === max ? `version ${min}` : `versions ${min}–${max}`;
+  const action = update === 'controller'
+    ? 'Update Agent Terminal Controller, then restart it.'
+    : 'Update Agent Terminal, then open this terminal again.';
+  const message = document.getElementById('startup-incompatible')!;
+  message.textContent = `This terminal uses controller protocol version ${terminalVersion}, but the running controller supports ${supported}. ${action}`;
+  message.hidden = false;
+});
+
 void window.term.startup.ready().then(() => {
+  stopIncompatible();
   document.getElementById('startup-waiting')!.hidden = true;
   document.getElementById('app')!.hidden = false;
   initialize();

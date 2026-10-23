@@ -41,7 +41,7 @@ describe('controller stale representations', () => {
         }
       }
     });
-    socket.write(encodeControllerMessage({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+    socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
     await vi.waitFor(() => expect(confirmed).toBe(true));
     const terminal = server.terminals().find(item => !before.has(item.id) && item.status !== 'disconnected')!;
     return { socket, terminal, activations: () => activations };

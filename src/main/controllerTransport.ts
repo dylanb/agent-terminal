@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
-import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, ControllerVersionMismatch, createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
@@ -56,7 +56,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
             }
             registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
             notify();
-            socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+            socket.write(encodeControllerMessage({ version: 1, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
           } else if (message.type === 'result') {
             const request = pending.get(message.requestId);
             if (request?.socket === socket) request.finish(message.outcome);
@@ -65,7 +65,11 @@ export async function startControllerTransport(appHome: string): Promise<Control
             break;
           }
         }
-      } catch { socket.destroy(); }
+      } catch (error) {
+        if (error instanceof ControllerVersionMismatch && !registrations.has(socket)) {
+          socket.end(encodeControllerMessage({ type: 'incompatible', supported: CONTROLLER_SUPPORTED_MAJORS }));
+        } else socket.destroy();
+      }
     });
   });
   try {

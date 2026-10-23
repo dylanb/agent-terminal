@@ -33,7 +33,7 @@ describe('controller real local transport', () => {
     const socket = connect(resolveControllerEndpoint(appHome));
     peers.push(socket);
     await once(socket, 'connect');
-    socket.write(encodeControllerMessage({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: null }));
+    socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', launchDirectory: directory, repositoryRoot: null }));
     return socket;
   }
 
@@ -278,6 +278,34 @@ describe('controller real local transport', () => {
         directories: terminals.map(terminal => terminal.launchDirectory),
       }).toEqual({ count: 2, identities: 2, directories: ['/work/same', '/work/same'] });
     });
+  });
+
+  it('registers a terminal speaking a newer minor version with fields this controller does not know', async () => {
+    server = await startControllerTransport(appHome);
+    const socket = connect(resolveControllerEndpoint(appHome));
+    peers.push(socket);
+    await once(socket, 'connect');
+    const replies: ControllerMessage[] = [];
+    const decoder = createControllerDecoder();
+    socket.on('data', (chunk: Buffer) => replies.push(...decoder.push(chunk)));
+    socket.write(`${JSON.stringify({ version: 1, minor: 7, type: 'register', launchDirectory: '/work/newer', repositoryRoot: null, colour: 'teal' })}\n`);
+    await vi.waitFor(() => expect(replies).toEqual([{ version: 1, minor: 0, type: 'registered' }]));
+    expect(server.terminals()).toEqual([expect.objectContaining({ launchDirectory: '/work/newer', repositoryRoot: null })]);
+    expect(server.terminals()[0]).not.toHaveProperty('colour');
+  });
+
+  it('answers a terminal speaking an unsupported major version with its supported versions and closes', async () => {
+    server = await startControllerTransport(appHome);
+    const socket = connect(resolveControllerEndpoint(appHome));
+    peers.push(socket);
+    await once(socket, 'connect');
+    let replies = '';
+    socket.on('data', (chunk: Buffer) => { replies += chunk.toString(); });
+    const closed = once(socket, 'close');
+    socket.write(`${JSON.stringify({ version: 2, type: 'register', launchDirectory: '/work/future', repositoryRoot: null })}\n`);
+    await closed;
+    expect(replies).toBe('{"type":"incompatible","supported":{"min":1,"max":1}}\n');
+    expect(server.terminals()).toEqual([]);
   });
 
   it('keeps a valid peer registerable after another peer sends malformed input', async () => {
