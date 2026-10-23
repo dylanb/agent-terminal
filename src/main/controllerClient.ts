@@ -1,7 +1,9 @@
 import type { ControllerWorkStatus } from '../shared/ipc';
-import { connect, type Socket } from 'node:net';
+import { connect } from 'node:net';
+import WebSocket from 'ws';
+import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
@@ -16,7 +18,7 @@ export function registerControllerTerminal(
 ): () => void {
   let canceled = false;
   let started = false;
-  let socket: Socket | undefined;
+  let socket: WebSocket | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
   const scheduleRetry = () => {
@@ -26,61 +28,64 @@ export function registerControllerTerminal(
     if (canceled) return;
     let registered = false;
     let unsubscribe: (() => void) | undefined;
-    let waitingForDrain = false;
+    let sendingStatus = false;
     let pendingStatus: ControllerWorkStatus | undefined;
-    let current: Socket;
-    try { current = connect(resolveControllerEndpoint(appHome)); }
-    catch { scheduleRetry(); return; }
+    let current: WebSocket;
+    try {
+      // A literal socket path also supports ':' and '?', which ws+unix URLs cannot encode.
+      current = new WebSocket('ws://localhost', {
+        ...controllerWebSocketOptions,
+        createConnection: () => connect(resolveControllerEndpoint(appHome)),
+      });
+    } catch { scheduleRetry(); return; }
     socket = current;
     const publishStatus = (work: ControllerWorkStatus) => {
-      if (canceled || current.destroyed) return;
-      if (waitingForDrain) {
+      if (canceled || current.readyState !== WebSocket.OPEN) return;
+      if (sendingStatus) {
         pendingStatus = work;
         return;
       }
-      waitingForDrain = !current.write(encodeControllerMessage({ version: 1, type: 'status', work }));
+      sendingStatus = true;
+      current.send(encodeControllerMessage({ version: 1, type: 'status', work }), error => {
+        sendingStatus = false;
+        if (error) { current.terminate(); return; }
+        const latest = pendingStatus;
+        pendingStatus = undefined;
+        if (latest) publishStatus(latest);
+      });
     };
-    current.on('drain', () => {
-      waitingForDrain = false;
-      const latest = pendingStatus;
-      pendingStatus = undefined;
-      if (latest) publishStatus(latest);
-    });
-    const decoder = createControllerDecoder(() => current.destroy());
-    deadline = setTimeout(() => current.destroy(), CONTROLLER_REGISTRATION_DEADLINE_MS);
-    current.on('error', () => current.destroy());
+    deadline = setTimeout(() => current.terminate(), CONTROLLER_REGISTRATION_DEADLINE_MS);
+    current.on('error', () => current.terminate());
     current.once('close', () => {
-      decoder.dispose();
       clearTimeout(deadline);
       unsubscribe?.();
       pendingStatus = undefined;
       socket = undefined;
       scheduleRetry();
     });
-    current.once('connect', () => {
-      if (!canceled) current.write(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
+    current.once('open', () => {
+      if (!canceled) current.send(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
     });
-    current.on('data', (chunk: Buffer) => {
-      if (canceled || current.destroyed) return;
+    current.on('message', (chunk, binary) => {
+      if (canceled || current.readyState !== WebSocket.OPEN) return;
       try {
-        for (const message of decoder.push(chunk)) {
-          if (!registered && message.type === 'registered') {
-            registered = true;
-            clearTimeout(deadline);
-            unsubscribe = subscribeStatus?.(publishStatus);
-            if (!started) {
-              started = true;
-              onRegistered();
-            }
-          } else if (registered && message.type === 'activate') {
-            const outcome = activate();
-            current.write(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome }));
-          } else {
-            current.destroy();
-            break;
+        if (binary) throw new Error('Binary controller message');
+        const message = parseControllerMessage(chunk.toString());
+        if (!registered && message.type === 'registered') {
+          registered = true;
+          clearTimeout(deadline);
+          unsubscribe = subscribeStatus?.(publishStatus);
+          if (!started) {
+            started = true;
+            onRegistered();
           }
+        } else if (registered && message.type === 'activate') {
+          const outcome = activate();
+          current.send(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome }));
+        } else {
+          current.terminate();
         }
-      } catch { current.destroy(); }
+      } catch { current.terminate(); }
     });
   };
   attempt();
@@ -88,6 +93,6 @@ export function registerControllerTerminal(
     canceled = true;
     clearTimeout(deadline);
     clearTimeout(retry);
-    socket?.destroy();
+    socket?.terminate();
   };
 }

@@ -1,10 +1,13 @@
-import { connect, createServer, type Socket } from 'node:net';
+import { connect, type Socket } from 'node:net';
+import { createServer } from 'node:http';
+import WebSocket, { WebSocketServer } from 'ws';
+import { controllerWebSocketOptions } from './controllerWebSocket';
 import { lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
-import { createControllerDecoder, encodeControllerMessage } from '../shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
@@ -29,47 +32,48 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const ownership = createWorktreeLock({ lockRoot: directory }).acquire(endpoint);
   if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
-  const registrations = new Map<Socket, ControllerTerminal>();
+  const registrations = new Map<WebSocket, ControllerTerminal>();
   const retained = new Map<string, ControllerTerminal>();
   const snapshot = () => [...retained.values(), ...registrations.values()].map(terminal => ({ ...terminal }));
-  const pending = new Map<string, { socket: Socket; finish(outcome: 'activated' | 'unavailable'): void }>();
+  const pending = new Map<string, { socket: WebSocket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
   const notify = () => { for (const listener of listeners) listener(snapshot()); };
-  const server = createServer(socket => {
+  const server = createServer((_request, response) => { response.writeHead(426); response.end(); });
+  server.on('connection', socket => {
     sockets.add(socket);
-    const decoder = createControllerDecoder(() => socket.destroy());
-    socket.on('error', () => socket.destroy());
+    socket.once('close', () => sockets.delete(socket));
+  });
+  const webSockets = new WebSocketServer({ server, ...controllerWebSocketOptions });
+  webSockets.on('connection', socket => {
+    socket.on('error', () => socket.terminate());
     socket.on('close', () => {
-      decoder.dispose();
-      sockets.delete(socket);
       const terminal = registrations.get(socket);
       if (terminal) retained.set(terminal.id, { ...terminal, status: 'disconnected' });
       registrations.delete(socket);
       for (const request of pending.values()) if (request.socket === socket) request.finish('unavailable');
       notify();
     });
-    socket.on('data', (chunk: Buffer) => {
+    socket.on('message', (chunk, binary) => {
       try {
-        for (const message of decoder.push(chunk)) {
-          if (message.type === 'register' && !registrations.has(socket)) {
-            for (const [id, terminal] of retained) {
-              if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
-            }
-            registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
-            notify();
-            socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
-          } else if (message.type === 'status' && registrations.has(socket)) {
-            registrations.get(socket)!.work = message.work;
-            notify();
-          } else if (message.type === 'result') {
-            const request = pending.get(message.requestId);
-            if (request?.socket === socket) request.finish(message.outcome);
-          } else {
-            socket.destroy();
-            break;
+        if (binary) throw new Error('Binary controller message');
+        const message = parseControllerMessage(chunk.toString());
+        if (message.type === 'register' && !registrations.has(socket)) {
+          for (const [id, terminal] of retained) {
+            if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
           }
+          registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
+          notify();
+          socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
+        } else if (message.type === 'status' && registrations.has(socket)) {
+          registrations.get(socket)!.work = message.work;
+          notify();
+        } else if (message.type === 'result') {
+          const request = pending.get(message.requestId);
+          if (request?.socket === socket) request.finish(message.outcome);
+        } else {
+          socket.terminate();
         }
-      } catch { socket.destroy(); }
+      } catch { socket.terminate(); }
     });
   });
   try {
@@ -103,6 +107,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
       server.listen(endpoint, resolve);
     });
   } catch (error) {
+    webSockets.close();
     ownership.release();
     throw error;
   }
@@ -118,7 +123,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
     },
     async activate(id) {
       const socket = [...registrations].find(([, terminal]) => terminal.id === id)?.[0];
-      if (!socket || socket.destroyed || pending.size >= 128) return 'unavailable';
+      if (!socket || socket.readyState !== WebSocket.OPEN || pending.size >= 128) return 'unavailable';
       return new Promise<'activated' | 'unavailable'>(resolve => {
         const requestId = randomUUID();
         const finish = (outcome: 'activated' | 'unavailable') => {
@@ -128,7 +133,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
         };
         const timer = setTimeout(() => finish('unavailable'), CONTROLLER_ACTIVATION_TIMEOUT_MS);
         pending.set(requestId, { socket, finish });
-        socket.write(encodeControllerMessage({ version: 1, type: 'activate', requestId }), error => {
+        socket.send(encodeControllerMessage({ version: 1, type: 'activate', requestId }), error => {
           if (error) pending.get(requestId)?.finish('unavailable');
         });
       });
@@ -136,7 +141,9 @@ export async function startControllerTransport(appHome: string): Promise<Control
     dispose: () => new Promise<void>((resolve, reject) => {
       listeners.clear();
       for (const request of pending.values()) request.finish('unavailable');
+      for (const socket of webSockets.clients) socket.terminate();
       for (const socket of sockets) socket.destroy();
+      webSockets.close();
       server.close(error => {
         ownership.release();
         if (error) reject(error);

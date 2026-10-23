@@ -1,5 +1,7 @@
+import WebSocket from 'ws';
+import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { connect, type Socket } from 'node:net';
+
 import { once } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,14 +23,14 @@ let stopClient: (() => void) | undefined;
 let snapshot: ControllerSnapshot;
 let root: string;
 let server: Awaited<ReturnType<typeof startControllerTransport>>;
-const sockets: Socket[] = [];
+const sockets: WebSocket[] = [];
 
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'at-status-')));
   server = await startControllerTransport(root);
 });
 afterEach(async () => {
-  for (const socket of sockets.splice(0)) socket.destroy();
+  for (const socket of sockets.splice(0)) socket.terminate();
   stopClient?.();
   stopClient = undefined;
   disposeIpc?.();
@@ -38,18 +40,18 @@ afterEach(async () => {
 });
 
 async function register(directory: string) {
-  const socket = connect(resolveControllerEndpoint(root));
+  const socket = connectWebSocket(resolveControllerEndpoint(root));
   sockets.push(socket);
-  socket.on('error', () => socket.destroy());
-  await once(socket, 'connect');
-  const acknowledgement = once(socket, 'data');
-  socket.write(JSON.stringify({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/repo' }) + '\n');
+  socket.on('error', () => socket.terminate());
+  await once(socket, 'open');
+  const acknowledgement = once(socket, 'message');
+  socket.send(JSON.stringify({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/repo' }) + '\n');
   await acknowledgement;
   return socket;
 }
 
-function publish(socket: Socket, work: WorkStatus) {
-  socket.write(JSON.stringify({ version: 1, type: 'status', work }) + '\n');
+function publish(socket: WebSocket, work: WorkStatus) {
+  socket.send(JSON.stringify({ version: 1, type: 'status', work }) + '\n');
 }
 
 it('publishes complete current work only for the socket owning the terminal', async () => {
@@ -67,7 +69,7 @@ it('a new subscriber receives the latest complete status including cleared condi
   const socket = await register('/repo/current');
   const old = workStatus({ attention: { status: 'error', reasons: ['Old halt'] }, error: { reason: 'Old failure' } });
   const current = workStatus({ flow: { availability: 'known', name: 'next', step: 'verify', assignment: 'assigned' }, ticket: { availability: 'none' }, activity: 'quiet' });
-  socket.write([old, current].map(work => JSON.stringify({ version: 1, type: 'status', work })).join('\n') + '\n');
+  for (const work of [old, current]) publish(socket, work);
   let snapshot: ReturnType<typeof server.terminals> = [];
   const unsubscribe = server.subscribeTerminals(items => { snapshot = items; });
   try {

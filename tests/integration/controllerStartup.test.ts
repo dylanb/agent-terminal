@@ -1,5 +1,7 @@
+import WebSocket from 'ws';
+import { connectWebSocket, createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, createServer, type Server, type Socket } from 'node:net';
+import type { Server } from 'node:http';
 import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,13 +19,13 @@ describe('initial controller registration', () => {
   let listener: Server | undefined;
   let transport: Awaited<ReturnType<typeof startControllerTransport>> | undefined;
   let cancel: (() => void) | undefined;
-  const sockets = new Set<Socket>();
+  const sockets = new Set<WebSocket>();
   beforeEach(() => { home = realpathSync(mkdtempSync(join(tmpdir(), 'at-c2-'))); });
   afterEach(async () => {
     cancel?.();
     cancel = undefined;
     vi.useRealTimers();
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets) socket.terminate();
     sockets.clear();
     if (listener) await new Promise<void>(resolve => listener!.close(() => resolve()));
     listener = undefined;
@@ -31,11 +33,11 @@ describe('initial controller registration', () => {
     transport = undefined;
     rmSync(home, { recursive: true, force: true });
   });
-  async function listen(onConnection: (socket: Socket) => void) {
+  async function listen(onConnection: (socket: WebSocket) => void) {
     mkdirSync(dirname(resolveControllerEndpoint(home)), { recursive: true, mode: 0o700 });
-    listener = createServer(socket => {
+    listener = createWebSocketTestServer(socket => {
       sockets.add(socket);
-      socket.on('error', () => socket.destroy());
+      socket.on('error', () => socket.terminate());
       socket.on('close', () => sockets.delete(socket));
       onConnection(socket);
     });
@@ -46,19 +48,12 @@ describe('initial controller registration', () => {
     transport = await startControllerTransport(home);
     let published = false;
     transport.subscribeTerminals(items => { published = items.some(item => item.launchDirectory === identity.launchDirectory); });
-    const peer = connect(resolveControllerEndpoint(home));
+    const peer = connectWebSocket(resolveControllerEndpoint(home));
     sockets.add(peer);
     const frames: Array<{ message: unknown; published: boolean }> = [];
-    let pending = '';
-    peer.on('data', chunk => {
-      pending += chunk.toString();
-      for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
-        frames.push({ message: JSON.parse(pending.slice(0, end)), published });
-        pending = pending.slice(end + 1);
-      }
-    });
-    await once(peer, 'connect');
-    peer.write(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
+    peer.on('message', chunk => frames.push({ message: JSON.parse(chunk.toString()), published }));
+    await once(peer, 'open');
+    peer.send(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
     await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 1, type: 'registered' }, published: true }]));
   });
 
@@ -70,9 +65,9 @@ describe('initial controller registration', () => {
       attempts.push(performance.now());
       peak = Math.max(peak, ++active);
       socket.on('close', () => { active--; });
-      socket.once('data', () => {
-        if (mode === 'interrupted') socket.destroy();
-        if (mode === 'malformed') socket.end('not JSON\n');
+      socket.once('message', () => {
+        if (mode === 'interrupted') socket.terminate();
+        if (mode === 'malformed') socket.send('not JSON');
       });
     });
     cancel = registerControllerTerminal(home, identity, () => 'activated');
@@ -92,17 +87,17 @@ describe('initial controller registration', () => {
   }, 30_000);
 
   it('uses the two-second pending deadline and five-second retry delay', async () => {
-    const attempts: Socket[] = [];
+    const attempts: WebSocket[] = [];
     await listen(socket => { attempts.push(socket); socket.resume(); });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     cancel = registerControllerTerminal(home, identity, () => 'activated');
     await delay(100);
     expect(attempts).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1_999);
-    expect.soft(attempts[0].destroyed).toBe(false);
+    expect.soft((attempts[0].readyState === WebSocket.CLOSED)).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await delay(100);
-    expect.soft(attempts[0].destroyed, 'unconfirmed attempt expires at two seconds').toBe(true);
+    expect.soft((attempts[0].readyState === WebSocket.CLOSED), 'unconfirmed attempt expires at two seconds').toBe(true);
     await vi.advanceTimersByTimeAsync(4_999);
     await delay(100);
     expect.soft(attempts).toHaveLength(1);

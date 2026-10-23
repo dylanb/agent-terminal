@@ -2,6 +2,7 @@
 
 > **#219 slice 1:** Controller panes show live flow/step, issue number and title preview, independent assignment/activity, errors and authoritative human-needed reasons. Passive publication works while terminals are hidden, preserves notices and gate state, rejects obsolete title completions, and preserves full reasons. README and §23.6 describe availability, timing and activation without acknowledgement. Recovery strengthening remains slice 2.
 
+- **2026-10-22 — §23.6 standard WebSocket transport (operator requested).** Replace custom newline framing and status assembly with `ws` over the private Unix socket. Remove the incomplete-message deadline; retain registration/activation deadlines, bounded payloads and latest-status backpressure. Both applications must be updated together.
 - **2026-10-22 — §23.6 bounded controller status (operator approved).** Limit snapshots to 1 MiB UTF-8 and 1,024 nonempty fragments; expire incomplete transfers after five seconds. Oversized publication shows an explicit unavailable state with access to the full reason in the terminal; normal status resumes automatically.
 
 > **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Dismissal/replacement follows in slice 4.

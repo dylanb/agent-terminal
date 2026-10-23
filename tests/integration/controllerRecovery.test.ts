@@ -1,5 +1,7 @@
+import WebSocket from 'ws';
+import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServer, type Server, type Socket } from 'node:net';
+import type { Server } from 'node:http';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { startControllerTransport } from '../../src/main/controllerTransport';
-import { createControllerDecoder, encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 
 const identity = { launchDirectory: '/work/recovery', repositoryRoot: '/work/recovery' };
 
@@ -15,13 +17,13 @@ describe('registered terminal recovery', () => {
   let home: string;
   let listener: Server | undefined;
   let transport: Awaited<ReturnType<typeof startControllerTransport>> | undefined;
-  const peers = new Set<Socket>();
+  const peers = new Set<WebSocket>();
   const cancel: Array<() => void> = [];
   beforeEach(() => { home = realpathSync(mkdtempSync(join(tmpdir(), 'at-rec-'))); });
   afterEach(async () => {
     for (const stop of cancel.splice(0)) stop();
     vi.useRealTimers();
-    for (const peer of peers) peer.destroy();
+    for (const peer of peers) peer.terminate();
     peers.clear();
     if (listener) await new Promise<void>(resolve => listener!.close(() => resolve()));
     listener = undefined;
@@ -30,15 +32,15 @@ describe('registered terminal recovery', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  async function listen(onRegistration: (socket: Socket) => void) {
+  async function listen(onRegistration: (socket: WebSocket) => void) {
     mkdirSync(dirname(resolveControllerEndpoint(home)), { recursive: true, mode: 0o700 });
-    listener = createServer(socket => {
+    listener = createWebSocketTestServer(socket => {
       peers.add(socket);
-      socket.on('error', () => socket.destroy());
+      socket.on('error', () => socket.terminate());
       socket.on('close', () => peers.delete(socket));
-      const decoder = createControllerDecoder();
-      socket.on('data', (chunk: Buffer) => {
-        for (const message of decoder.push(chunk)) if (message.type === 'register') onRegistration(socket);
+      socket.on('message', (chunk: Buffer) => {
+        const message = parseControllerMessage(chunk.toString());
+        if (message.type === 'register') onRegistration(socket);
       });
     });
     await new Promise<void>(resolve => listener!.listen(resolveControllerEndpoint(home), resolve));
@@ -46,7 +48,7 @@ describe('registered terminal recovery', () => {
 
   it.each(['interrupted', 'silent', 'malformed'] as const)('bounds sustained %s retries after a confirmed connection is lost', async mode => {
     const attempts: number[] = [];
-    let initial: Socket | undefined;
+    let initial: WebSocket | undefined;
     let started = false;
     let peak = 0;
     await listen(socket => {
@@ -54,14 +56,14 @@ describe('registered terminal recovery', () => {
       peak = Math.max(peak, peers.size);
       if (attempts.length === 1) {
         initial = socket;
-        socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
-      } else if (mode === 'interrupted') socket.destroy();
-      else if (mode === 'malformed') socket.end('invalid\n');
+        socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
+      } else if (mode === 'interrupted') socket.terminate();
+      else if (mode === 'malformed') socket.send('invalid');
     });
     cancel.push(registerControllerTerminal(home, identity, () => 'activated', () => { started = true; }));
     await vi.waitFor(() => expect(started).toBe(true));
     const lostAt = performance.now();
-    initial!.destroy();
+    initial!.terminate();
     await delay(21_500);
     const retries = attempts.slice(1);
     expect.soft(retries.length, 'sustained registered outage produces multiple retries').toBeGreaterThanOrEqual(3);
@@ -77,17 +79,17 @@ describe('registered terminal recovery', () => {
   it('waits five seconds after established loss and cancels a running terminal during that delay', async () => {
     let registrations = 0;
     let started = false;
-    let initial: Socket | undefined;
+    let initial: WebSocket | undefined;
     await listen(socket => {
       registrations++;
       initial = socket;
-      socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity, () => 'activated', () => { started = true; });
     cancel.push(stop);
     await vi.waitFor(() => expect(started).toBe(true));
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    initial!.destroy();
+    initial!.terminate();
     await delay(100);
     await vi.advanceTimersByTimeAsync(4_999);
     await delay(100);
@@ -95,7 +97,7 @@ describe('registered terminal recovery', () => {
     await vi.advanceTimersByTimeAsync(1);
     await delay(100);
     expect.soft(registrations, 'established loss retries at five seconds').toBe(2);
-    initial!.destroy();
+    initial!.terminate();
     await delay(100);
     stop();
     await vi.advanceTimersByTimeAsync(20_000);
@@ -125,16 +127,16 @@ describe('registered terminal recovery', () => {
   }, 30_000);
 
   it('begins an unconfirmed recovery registration after established loss', async () => {
-    const attempts: Socket[] = [];
+    const attempts: WebSocket[] = [];
     let starts = 0;
     await listen(socket => {
       attempts.push(socket);
-      if (attempts.length === 1) socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      if (attempts.length === 1) socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
     });
     cancel.push(registerControllerTerminal(home, identity, () => 'activated', () => { starts++; }));
     await vi.waitFor(() => expect(starts).toBe(1));
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    attempts[0].destroy();
+    attempts[0].terminate();
     await delay(100);
     await vi.advanceTimersByTimeAsync(5_000);
     await delay(100);
@@ -142,19 +144,19 @@ describe('registered terminal recovery', () => {
   });
 
   it.each(['pending', 'registered'] as const)('closing a %s terminal rejects queued messages and ends its live connection', async state => {
-    let peer: Socket | undefined;
+    let peer: WebSocket | undefined;
     let starts = 0;
     let activations = 0;
     await listen(socket => {
       peer = socket;
-      if (state === 'registered') socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
+      if (state === 'registered') socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity,
       () => { activations++; return 'activated'; }, () => { starts++; });
     cancel.push(stop);
     await vi.waitFor(() => expect(peer).toBeDefined());
     if (state === 'registered') await vi.waitFor(() => expect(starts).toBe(1));
-    peer!.write(encodeControllerMessage(state === 'pending'
+    peer!.send(encodeControllerMessage(state === 'pending'
       ? { version: 1, type: 'registered' }
       : { version: 1, type: 'activate', requestId: 'queued-at-close' }));
     stop();

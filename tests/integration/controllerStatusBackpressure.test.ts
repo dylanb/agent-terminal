@@ -1,15 +1,17 @@
+import WebSocket from 'ws';
+import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { expect, it, vi } from 'vitest';
-import { createServer, type Socket } from 'node:net';
+
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { createControllerDecoder, encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import type { ControllerWorkStatus } from '../../src/shared/ipc';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
-const connections = vi.hoisted(() => [] as Socket[]);
+const connections = vi.hoisted(() => [] as import('node:net').Socket[]);
 vi.mock('node:net', async importOriginal => {
   const net = await importOriginal<typeof import('node:net')>();
   return { ...net, connect: (...args: Parameters<typeof net.connect>) => {
@@ -23,19 +25,17 @@ it('bounds queued writes while a receiver is paused and delivers the latest full
   const root = mkdtempSync(join(tmpdir(), 'at-pressure-'));
   const endpoint = resolveControllerEndpoint(root);
   mkdirSync(dirname(endpoint), { recursive: true });
-  let peer: Socket | undefined;
+  let peer: WebSocket | undefined;
   let publish: ((work: ControllerWorkStatus) => void) | undefined;
   let latest: ControllerWorkStatus | undefined;
-  const server = createServer(socket => {
+  const server = createWebSocketTestServer(socket => {
     peer = socket;
-    const decoder = createControllerDecoder();
-    socket.on('data', (chunk: Buffer) => {
-      for (const message of decoder.push(chunk)) {
-        if (message.type === 'register') {
-          socket.pause();
-          socket.write(encodeControllerMessage({ version: 1, type: 'registered' }));
-        } else if (message.type === 'status') latest = message.work;
-      }
+    socket.on('message', (chunk: Buffer) => {
+      const message = parseControllerMessage(chunk.toString());
+      if (message.type === 'register') {
+        socket.pause();
+        socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
+      } else if (message.type === 'status') latest = message.work;
     });
   });
   await new Promise<void>(resolve => server.listen(endpoint, resolve));
@@ -55,7 +55,7 @@ it('bounds queued writes while a receiver is paused and delivers the latest full
     await expect.poll(() => latest, { timeout: 5000 }).toEqual(current);
   } finally {
     stop();
-    peer?.destroy();
+    peer?.terminate();
     await new Promise<void>(resolve => server.close(() => resolve()));
     connections.length = 0;
     rmSync(root, { recursive: true, force: true });
