@@ -24,7 +24,7 @@ The smallest indivisible units. Pure presentation: given inputs, they produce DO
 no app/domain state and know nothing about IPC, the session, or where they sit.
 
 - Examples: pill button, badge, status dot, hairline divider, `kbd` hint, eyebrow label.
-- Styled **only** through `tokens.css` custom properties (§22.4) — no hard-coded color, no
+- Styled **only** through `src/renderer/src/tokens.css` custom properties (§22.4) — no hard-coded color, no
   layout assumptions, both themes for free.
 - No timers, no subscriptions, no `window.*` access.
 
@@ -86,8 +86,11 @@ required services (injected `deps`) are all named. Nothing reaches outside it.
    terminal and capture is a `reveal(id)` call / event on each organism's interface — not one
    organism poking the other's DOM. Both can be visible at once *because* neither depends on
    the other's placement.
-5. **Theming via tokens only.** All color/spacing from `tokens.css`; light + dark must both
-   work with no per-placement override.
+5. **Theming via tokens only.** All color/spacing from `src/renderer/src/tokens.css`; light + dark must both
+   work with no per-placement override. A new colour value is defined only as a token in
+   `src/renderer/src/tokens.css`, never in a component rule, and a controller pane-status colour uses the
+   `--status-*` tokens. Colours already hard-coded in component rules stay as they are; this
+   governs new work.
 6. **Clean teardown.** `dispose()` removes every listener, timer, and node it created, so an
    organism can be unmounted from frame A and mounted in frame B without leaks.
 
@@ -258,7 +261,7 @@ pins for scroll and footer reachability.
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
-- [ ] Styled via `tokens.css`; light + dark both correct.
+- [ ] Styled via `src/renderer/src/tokens.css`; light + dark both correct.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
