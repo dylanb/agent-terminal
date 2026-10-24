@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { basename } from 'node:path';
 import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPredicates';
 import type { createAppLoopEngine } from '../../src/main/appLoopEngine';
-import { examplePhaseResult } from '../../src/shared/phaseResult';
+import { exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { RED_CHECK_MISSING_WARNING } from '../../src/shared/redCheck';
 import { PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
-import { CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, createAppLoopEngineHarness, flushRedGate } from '../helpers/appLoopEngineHarness';
+import { CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, TURN_KEY, createAppLoopEngineHarness, flushRedGate } from '../helpers/appLoopEngineHarness';
 
 // §28.5.3
 
@@ -71,7 +71,7 @@ describe('the RED work turn and the red check (§28.5.3)', () => {
   });
 
   it('completes RED when the red check verifies it', async () => {
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(h.emitError).not.toHaveBeenCalled();
     expect(reviewInjected()).toBeDefined();
@@ -85,29 +85,29 @@ describe('the RED work turn and the red check (§28.5.3)', () => {
   });
 
   it('writes no unchecked entry to the run log when the red check verified the RED', async () => {
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('not independently checked'), expect.anything());
   });
 
   it('completes RED when the declared failures sit in a file the red check does not cover, and the run log names that file', async () => {
     const spec = 'tests/e2e/a.spec.ts';
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [spec] }) }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [spec] }) }));
     await driveToRedReview(engine);
     expect(reviewInjected()).toBeDefined();
-    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/tests\/e2e\/a\.spec\.ts.*not independently checked/), null);
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/tests\/e2e\/a\.spec\.ts.*declared failures were not independently checked/), null);
   });
 });
 
 describe('each RED review round and the red check (§28.5.3)', () => {
   it('tells the fixer to re-run the red check when one is configured', async () => {
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(reviewInjected()).toContain(COMMAND);
   });
 
   it('hands the fixer the result check for the phase result it edits when one is configured', async () => {
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }) }));
     await driveToRedReview(engine);
     expect(reviewInjected()).toMatch(new RegExp(`check-artifact result \\S*${basename(h.resultPath).replace(/\./g, '\\.')} failed-assertion no-build`));
   });
@@ -119,7 +119,7 @@ describe('each RED review round and the red check (§28.5.3)', () => {
   });
 
   it('does not complete a round whose red check refuses', async () => {
-    let outcome: Awaited<ReturnType<LoopCompletionPredicates['redCheck']>> = { kind: 'verified', unchecked: [] };
+    let outcome: Awaited<ReturnType<LoopCompletionPredicates['redCheck']>> = { kind: 'verified', claim: 'declared-failures', unchecked: [] };
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => outcome }));
     await driveToRedReview(engine);
     outcome = { kind: 'refused', reason: REFUSAL };
@@ -131,7 +131,7 @@ describe('each RED review round and the red check (§28.5.3)', () => {
   });
 
   it('completes a round whose red check verifies, and one with no red check configured', async () => {
-    for (const p of [predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }) }), predicates({})]) {
+    for (const p of [predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }) }), predicates({})]) {
       h.tearDown();
       h.setUp();
       const engine = h.makeEngine(undefined, p);
@@ -142,7 +142,7 @@ describe('each RED review round and the red check (§28.5.3)', () => {
   });
 
   it('refuses the operator accept of a round whose red check refuses — the check is machine ground truth', async () => {
-    let outcome: Awaited<ReturnType<LoopCompletionPredicates['redCheck']>> = { kind: 'verified', unchecked: [] };
+    let outcome: Awaited<ReturnType<LoopCompletionPredicates['redCheck']>> = { kind: 'verified', claim: 'declared-failures', unchecked: [] };
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => outcome }));
     await driveToRedReview(engine);
     outcome = { kind: 'refused', reason: REFUSAL };
@@ -157,10 +157,102 @@ describe('each RED review round and the red check (§28.5.3)', () => {
 
   it("checks the current slice's RED result, not slice 1's", async () => {
     const seen: RedCheckQuery[] = [];
-    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', unchecked: [] }), seen }));
+    const engine = h.makeEngine(undefined, predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'declared-failures', unchecked: [] }), seen }));
     h.currentSliceResult = 2;
     await driveToRedReview(engine);
     await finishRound(engine);
     expect(seen.at(-1)?.resultPath).toMatch(/red-result\.slice-2\.json$/);
+  });
+});
+
+describe('a verification-only RED (§28.5.3)', () => {
+  const verifies = (p = predicates({})) => {
+    const engine = h.makeEngine(undefined, p);
+    enterRed(engine);
+    h.writeResult(examplePhaseResult('passed', { verificationOnly: true }), exampleCapturedOutput('passed'));
+    return engine;
+  };
+  const signal = async (engine: Engine): Promise<void> => {
+    engine.onDoneSignal();
+    await flushRedGate();
+    engine.onInjectable();
+    engine.onInjectable();
+  };
+
+  it('tells the agent how to write it, and hands it a result check that accepts it', () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    enterRed(engine);
+    expect(h.injected[1]).toContain(`"${PHASE_RESULT_FIELDS.verificationOnly}": true`);
+    expect(h.injected[1]).toMatch(/check-artifact result \S+ failed-assertion no-build verification-only/);
+  });
+
+  it('completes RED, and the run log says the slice verified behavior that already exists', async () => {
+    const engine = verifies();
+    await signal(engine);
+    expect(h.emitError).not.toHaveBeenCalled();
+    expect(reviewInjected()).toBeDefined();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/verification-only RED.*already/), 0);
+  });
+
+  it('writes no verification-only entry for a RED whose tests failed by assertion', async () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    await driveToRedReview(engine);
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('verification-only'), expect.anything());
+  });
+
+  it('is not refused by a test command that exited 0', async () => {
+    const engine = verifies(makeFakeCompletionPredicates({ workingTreeTestPaths: async () => ({ ok: true, paths: ['tests/a.test.ts'] }), recoverExitCode: async () => 0 }));
+    await signal(engine);
+    expect(h.emitError).not.toHaveBeenCalled();
+    expect(reviewInjected()).toBeDefined();
+  });
+
+  it('still needs a test the turn added', async () => {
+    const engine = verifies(makeFakeCompletionPredicates({ workingTreeTestPaths: async () => ({ ok: true, paths: [] }) }));
+    await signal(engine);
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('no test file was added'));
+    expect(reviewInjected()).toBeUndefined();
+  });
+
+  it('names an added test the red check does not cover as not seen passing, not as a declared failure', async () => {
+    const spec = 'tests/e2e/a.spec.ts';
+    const engine = verifies(predicates({ command: COMMAND, outcome: () => ({ kind: 'verified', claim: 'all-passing', unchecked: [spec] }) }));
+    await signal(engine);
+    expect(reviewInjected()).toBeDefined();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/tests\/e2e\/a\.spec\.ts.*not independently seen passing/), null);
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('declared failures'), expect.anything());
+  });
+
+  it('completes on the operator accept, and the run log says the slice verified behavior that already exists', async () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    enterRed(engine);
+    engine.onStall();
+    h.writeResult(examplePhaseResult('passed', { verificationOnly: true }), exampleCapturedOutput('passed'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flushRedGate();
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringMatching(/verification-only RED.*already/), 0);
+  });
+
+  it('writes no verification-only entry on the operator accept of a RED whose tests failed by assertion', async () => {
+    const engine = h.makeEngine(undefined, predicates({}));
+    enterRed(engine);
+    engine.onStall();
+    h.writeResult(examplePhaseResult('failed-assertion'));
+    engine.routeOut(h.repo, STEP, TURN_KEY, 'accept');
+    await flushRedGate();
+    expect(h.audit).toHaveBeenCalledWith(h.repo, expect.stringContaining('RED gate satisfied'), expect.anything());
+    expect(h.audit).not.toHaveBeenCalledWith(h.repo, expect.stringContaining('verification-only'), expect.anything());
+  });
+
+  it('holds the turn when the red check refuses it', async () => {
+    const engine = verifies(predicates({ command: COMMAND, outcome: () => ({ kind: 'refused', reason: 'the RED check refused: tests/a.test.ts › t failed' }) }));
+    await signal(engine);
+    engine.onDoneSignal();
+    await flushRedGate();
+    expect(h.emitError).toHaveBeenCalledWith(expect.stringContaining('tests/a.test.ts › t failed'));
+    expect(reviewInjected()).toBeUndefined();
   });
 });
