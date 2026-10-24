@@ -58,7 +58,7 @@ async function register(directory: string, disconnect = true) {
   sockets.push(socket);
   socket.on('error', () => socket.terminate());
   await once(socket, 'open');
-  socket.send(encodeControllerMessage({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+  socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
   await vi.waitFor(() => expect(snapshot.terminals.some(item => item.launchDirectory === directory)).toBe(true));
   const terminal = snapshot.terminals.find(item => item.launchDirectory === directory)!;
   if (disconnect) {

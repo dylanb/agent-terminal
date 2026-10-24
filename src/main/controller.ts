@@ -7,13 +7,21 @@ import { installNavigationGuards } from './windowGuards';
 import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import { installControllerIpc } from './controllerIpc';
 import { errMsg } from './errno';
+import { applyDockIcon, resolveWindowIconPath } from './appIcon';
+import type { BundleLocation } from './bundleLocation';
 
 app.setName('Agent Terminal Controller');
 let quitting = false;
 app.on('before-quit', () => { quitting = true; });
 
 void app.whenReady().then(async () => {
+  const iconLoc: BundleLocation = app.isPackaged
+    ? { packaged: true, resourcesPath: process.resourcesPath }
+    : { packaged: false, appPath: app.getAppPath() };
+  // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
+  applyDockIcon(app.dock, process.platform, iconLoc, 'controller');
   const window = new BrowserWindow({
+    icon: resolveWindowIconPath(iconLoc, 'controller'),
     webPreferences: { preload: join(__dirname, '../preload/index.js'), additionalArguments: [CONTROLLER_WINDOW_ARGUMENT], contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   installNavigationGuards(window.webContents);

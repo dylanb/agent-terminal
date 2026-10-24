@@ -21,6 +21,7 @@ function githubState(
     branch: 'plan-loop/issue-78',
     state: 'OPEN',
     closingIssues: [78],
+    crossRepository: false,
   },
 ): { state: GitHubState; github: AppGateGitHubOperations } {
   const state: GitHubState = {
@@ -123,6 +124,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
       branch: 'tampered',
       state: 'CLOSED',
       closingIssues: [],
+      crossRepository: false,
     });
     const bodyFile =
       '/repo/.agent-terminal/loop/artifacts/groomed-ticket.md';
@@ -154,35 +156,37 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     );
   });
 
-  it('fails without mutating GitHub when a required input is absent', async () => {
+  it('has nothing to act on without a PR or issue, and mutates nothing (§27.13)', async () => {
     const g = githubState();
     const run = createAppGateGitHub(g.github);
-    await expect(
-      run('mark-ready', {
-        pr: null,
-        ticket: null,
-        bodyFile: null,
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/no PR/);
-    await expect(
-      run('publish-pr-body', {
-        pr: 5,
-        ticket: null,
-        bodyFile: null,
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/body artifact/);
-    await expect(
-      run('update-issue-body', {
-        pr: null,
-        ticket: null,
-        bodyFile: '/x',
-        bootstrap: null,
-      }),
-    ).rejects.toThrow(/no issue/);
+    await expect(run('mark-ready', { pr: null, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no PR/),
+    });
+    await expect(run('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no PR/),
+    });
+    await expect(run('update-issue-body', { pr: null, ticket: null, bodyFile: '/x', bootstrap: null })).resolves.toEqual({
+      outcome: 'no-target',
+      reason: expect.stringMatching(/no issue/),
+    });
     expect(g.state.ready).toEqual(new Set());
     expect(g.state.issueBodies).toEqual(new Map());
+    expect(g.state.pullRequestBodies).toEqual(new Map());
+  });
+
+  it('reports a side-effect that acted as done', async () => {
+    const g = githubState();
+    await expect(createAppGateGitHub(g.github)('mark-ready', { pr: 7, ticket: null, bodyFile: null, bootstrap: null })).resolves.toEqual({ outcome: 'done' });
+    expect(g.state.ready).toEqual(new Set([7]));
+  });
+
+  it('fails without mutating GitHub when the body artifact is absent', async () => {
+    const g = githubState();
+    await expect(
+      createAppGateGitHub(g.github)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null, bootstrap: null }),
+    ).rejects.toThrow(/body artifact/);
     expect(g.state.pullRequestBodies).toEqual(new Map());
   });
 
@@ -236,12 +240,26 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     );
   });
 
+  it('refuses a bootstrap PR opened from a fork before mutation', async () => {
+    const g = githubState({ number: 42, branch: 'plan-loop/issue-78', state: 'OPEN', closingIssues: [78], crossRepository: true });
+    await expect(
+      createAppGateGitHub(g.github)('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: { pr: 42, issue: 78, branch: 'plan-loop/issue-78', initialStatus: 'planning' },
+      }),
+    ).rejects.toThrow(/pull request #42 is from another repository/);
+    expect(g.state.ready).toEqual(new Set());
+  });
+
   it('refuses a tampered persisted bootstrap identity before mutation', async () => {
     const g = githubState({
       number: 42,
       branch: 'other/branch',
       state: 'OPEN',
       closingIssues: [999],
+      crossRepository: false,
     });
     await expect(
       createAppGateGitHub(g.github)('mark-ready', {
@@ -255,7 +273,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
           initialStatus: 'planning',
         },
       }),
-    ).rejects.toThrow(/bootstrap PR identity/i);
+    ).rejects.toThrow(/bootstrap PR identity does not match GitHub: pull request #42 is on other\/branch, not plan-loop\/issue-78/);
     expect(g.state.ready).toEqual(new Set());
   });
 });

@@ -1,9 +1,9 @@
-import type { ControllerWorkStatus } from '../shared/ipc';
+import type { ControllerIncompatibility, ControllerWorkStatus } from '../shared/ipc';
 import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
@@ -15,6 +15,7 @@ export function registerControllerTerminal(
   activate: () => 'activated' | 'unavailable',
   onRegistered: () => void = () => {},
   subscribeStatus?: (listener: (work: ControllerWorkStatus) => void) => () => void,
+  onIncompatible: (report: ControllerIncompatibility) => void = () => {},
 ): () => void {
   let canceled = false;
   let started = false;
@@ -46,7 +47,7 @@ export function registerControllerTerminal(
         return;
       }
       sendingStatus = true;
-      current.send(encodeControllerMessage({ version: 1, type: 'status', work }), error => {
+      current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => {
         sendingStatus = false;
         if (error) { current.terminate(); return; }
         const latest = pendingStatus;
@@ -64,7 +65,7 @@ export function registerControllerTerminal(
       scheduleRetry();
     });
     current.once('open', () => {
-      if (!canceled) current.send(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
+      if (!canceled) current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', ...identity }));
     });
     current.on('message', (chunk, binary) => {
       if (canceled || current.readyState !== WebSocket.OPEN) return;
@@ -79,9 +80,16 @@ export function registerControllerTerminal(
             started = true;
             onRegistered();
           }
+        } else if (!registered && message.type === 'incompatible') {
+          onIncompatible({
+            update: controllerUpdateTarget(CONTROLLER_PROTOCOL_MAJOR, message.supported),
+            terminalVersion: CONTROLLER_PROTOCOL_MAJOR,
+            controllerVersions: message.supported,
+          });
+          current.terminate();
         } else if (registered && message.type === 'activate') {
           const outcome = activate();
-          current.send(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome }));
+          current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: message.requestId, outcome }));
         } else {
           current.terminate();
         }

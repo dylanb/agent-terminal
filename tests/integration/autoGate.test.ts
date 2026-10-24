@@ -1663,8 +1663,10 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
     readRunState: () => GATE_RUN,
     resolveDef: () => ({ ok: true, def: COMMIT_GATE, tierRoot: '/tmp/tier', defDir: '/tmp/tier/loop' }),
     refs: () => ({ pr: null, ticket: null, bootstrap: null }),
-    runSideEffect: async () => {},
+    runSideEffect: async () => ({ outcome: 'done' }),
     runCommitSideEffect: async () => ({ outcome: 'committed', sha: SHA, branch: 'main' }),
+    runPushSideEffect: async () => {},
+    failureHoldsGate: () => false,
     recordBaseline: () => {},
     persistAccept: () => {},
     assembleReport: () => {},
@@ -1832,7 +1834,10 @@ describe('autoGate — the engine approve shares the human approve\'s deps and g
       composeEngineApprove(
         () =>
           plantedApproveDeps({
-            runSideEffect: async (action) => void effects.push(action),
+            runSideEffect: async (action) => {
+              effects.push(action);
+              return { outcome: 'done' };
+            },
             runCommitSideEffect: async () => {
               effects.push('commit');
               return { outcome: 'committed', sha: SHA, branch: 'main' };

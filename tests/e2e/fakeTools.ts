@@ -3,20 +3,16 @@
 
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
-import { exampleConsolidatorOutput, type ConsolidatorVerdict } from '../../src/shared/consolidatorOutput';
 import { PHASE_OUTPUT_SUFFIX, exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
-import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { shellQuote } from '../../src/shared/shellQuote';
 import type { PhaseOutcome } from '../../src/shared/phaseOutcome';
 import type { BuildOutcome } from '../../src/shared/buildOutcome';
 import { catalogEntryDefFile } from '../../src/main/flow';
-import { FEATURE_DEV_ID, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
-import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import { seedSharedExampleConfig } from '../helpers/e2eExampleConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
@@ -108,6 +104,8 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     'if [ "$1" = "checkout" ] && [ "$2" != "--detach" ]; then echo "$2" > "$FAKE_GHGIT_LOG.current-branch"; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "update-ref" ] && [ "$2" = "-d" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    // FAKE_GIT_PUSH_FAIL: while that file exists, every push fails as an unreachable origin would.
+    'if [ "$1" = "push" ] && [ -n "$FAKE_GIT_PUSH_FAIL" ] && [ -e "$FAKE_GIT_PUSH_FAIL" ]; then echo "fake git: injected push failure" >&2; exit 1; fi\n' +
     'if [ "$1" = "push" ]; then for arg in "$@"; do case "$arg" in [0-9a-f]*:refs/heads/*) branch=${arg##*:refs/heads/}; oid=${arg%%:*}; echo "$branch" > "$FAKE_GHGIT_LOG.remote-branch"; echo "$oid" > "$FAKE_GHGIT_LOG.remote-oid"; exit 0;; esac; done; fi\n' +
     'if [ "$1" = "ls-remote" ]; then branch=${!#}; branch=${branch#refs/heads/}; remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); if [ "$remote_branch" = "$branch" ]; then printf "%s\\t%s\\n" 1111111111111111111111111111111111111111 "refs/heads/$branch"; fi; exit 0; fi\n' +
     'if [ "$1" = "push" ]; then delete_next=; for arg in "$@"; do if [ -n "$delete_next" ]; then rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi; [ "$arg" = "--delete" ] && delete_next=1; done; fi\n' +
@@ -133,6 +131,9 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
     'if [ "$1" = "issue" ] && [ "$2" = "view" ] && [[ "$*" = *"--json body"* ]]; then printf \'%s\\n\' "Original epic intent — do not overwrite."; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
+    // The open PR a branch already has, answered only to a `--head` lookup and only when the knob is set, so a pickup's
+    // own conflict probe (run without it) still sees a free branch.
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ -n "$FAKE_GH_BRANCH_PR" ] && [[ " $* " = *" --head "* ]]; then printf \'[{"number":%s,"url":"https://github.com/fake/repo/pull/%s","isCrossRepository":false}]\\n\' "$FAKE_GH_BRANCH_PR" "$FAKE_GH_BRANCH_PR"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
@@ -180,6 +181,7 @@ export const PLAN_V2_ROSTER = [
   'review-plan-intent',
   'review-plan-maintainability',
   'review-plan-contracts',
+  'review-plan-ui',
 ];
 export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
@@ -469,98 +471,94 @@ export function seedCompletionGateConfig(prefix: string, completion: 'red' | 'gr
   writeFileSync(defPath, swapped);
   return cfg;
 }
-// ---- §28.10 S7 — the full-TDD chain e2e: drive the SHIPPED flow end-to-end from a groomed ticket (AC1) ----
+// ---- §28.10 — chain e2e budgets ----
 // A chain test drives one §27 loop per step; the per-test ceiling scales with the loops it drives, never the
 // global 60 s default, so adding a step to the shipped flow cannot push a saturated runner past it.
 const CHAIN_LOOP_MS = 15_000;
 export const chainBudget = (loops: number): number => Math.ceil((WINDOW_TIMEOUT_MS + loops * CHAIN_LOOP_MS) / 30_000) * 30_000;
-// §27.5
-const CHAIN_STEPS = ['groom', 'plan-bundle', 'plan-polish', 'infra', 'red', 'green', 'refactor', 'integration-slice'] as const;
-function shippedRoster(step: string): string[] {
-  const repoDir = resolve(__dirname, '..', '..');
-  const appBundled = resolveExampleLoopsV2Dir({ packaged: false, appPath: repoDir });
-  const r = resolveLoopDefV2(`${step}-loop`, { tiers: { operator: null, appBundled, retired: null }, repoDir, flow: FEATURE_DEV_ID });
-  if (!r.ok) throw new Error(`${step}-loop: ${r.reason}`);
-  return r.def.reviewers.map((rev) => rev.persona);
-}
-export const CHAIN_ROSTERS: Record<string, string[]> = Object.fromEntries(CHAIN_STEPS.map((step) => [step, shippedRoster(step)]));
 
-// A multi-step fake-agent driving the whole chain. Each review round writes a report accounting for that
-// loop's roster (§27.5); the phase loops classify their §28.5 result files. The n-th consolidate turn of a step
-// writes `verdicts[step][n-1]`, and `clean` when absent; on an all-`clean` chain the n-th red/green/refactor
-// consolidate is impl-slice n's. Per-step turn counts live under `binDir`, outside the worktree.
-export function seedFullTddChainAgent(
-  binDir: string,
-  opts: { implSlices?: number; polishedSlices?: number; redPlan?: string; logInjected?: boolean; verdicts?: Partial<Record<string, ConsolidatorVerdict[]>>; runChecksFor?: string[] } = {},
-): void {
-  const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
-  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
-  const art = '.agent-terminal/loop/artifacts';
-  const decode = (b64s: string, dst: string): string => `printf %s '${b64s}' | base64 -d > ${dst}`;
-  const report = (step: string): string => b64(exampleRoundReport({ sections: ['summary', 'findings', 'disposition'], roster: CHAIN_ROSTERS[step] }));
-  const check = (step: string): string =>
-    opts.runChecksFor?.includes(step) ? `{ eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; ` : '';
-  // §28.4.1 D3 — when the ticket plans N impl-slices, the plan-bundle writes a `## Impl-slices` block the gate
-  // sources the `slices` count from; otherwise the plan carries no block and the run stays a single slice.
-  const planB64 = b64(
-    opts.implSlices ? `# plan\n\n${exampleSlicePlan(opts.implSlices)}\n${completionMarker('plan-bundle')}\n` : `# plan\n${completionMarker('plan-bundle')}\n`,
-  );
+// ---- feature-dev-v3 goal sessions (§27.3/§27.12): a fake agent answering each `/goal` line by the step it names ----
+export const V3_ART = '.agent-terminal/loop/artifacts';
+export const writeV3 = (file: string, lines: string[]): string => `mkdir -p ${V3_ART}; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > ${V3_ART}/${file}`;
+export const V3_GROOM_INTENT = writeV3('groom-intent.md', ['## MVP', '## Decision boundary', completionMarker('groom-intent')]);
+/** The shell that writes the goal progress file for the leg in `$leg` with `status`. */
+export const goalProgressCmd = (status: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "${status}"}\\n' "$leg" > "$gp"`;
+/** The shell that reports the leg in `$leg` blocked on `reason`. */
+export const goalBlockedCmd = (reason: string): string => `mkdir -p .agent-terminal/loop; printf '{"leg": %s, "status": "blocked", "blocked": "${reason}"}\\n' "$leg" > "$gp"`;
+/** The shell that runs every check the goal prompt in `$p` hands the session, logging what each printed. */
+export const GOAL_CHECK_CMD = `grep 'ELECTRON_RUN_AS_NODE=1 ' "$p" | sed 's/^ *//' > .agent-terminal/checks-seen; while IFS= read -r chk <&3; do { eval "$chk" </dev/null; printf 'exit=%s\\n' "$?"; } >> .agent-terminal/checker-log 2>&1; done 3< .agent-terminal/checks-seen`;
+/** The shell that reads the leg and the progress file a `/goal` line in `$line` names into `$leg` and `$gp`. */
+export const GOAL_LEG_CMD = `leg=$(printf '%s' "$line" | grep -o 'for leg [0-9]*' | tr -dc 0-9); gp=$(printf '%s' "$line" | grep -o '\\.agent-terminal/loop/goal-progress\\.[0-9a-f]*\\.json' | head -1)`;
 
-  const workArm: Record<string, string> = {
-    groom: `mkdir -p ${art}; printf '%s\\n' '# groomed' '${completionMarker('groom')}' > ${art}/groomed-ticket.md; ${done('work-groom')}`,
-    'plan-bundle': `mkdir -p ${art}; ${decode(planB64, `${art}/plan.md`)}; ${done('work-plan-bundle')}`,
-    // §28.8.1 — with `polishedSlices` the polish turn rewrites the slice block, so a test can tell which gate's count won.
-    'plan-polish': opts.polishedSlices
-      ? `${decode(b64(`# plan\n\n${exampleSlicePlan(opts.polishedSlices)}\n${completionMarker('plan-bundle')}\n${completionMarker('plan-polish')}\n`), `${art}/plan.md`)}; ${done('work-plan-polish')}`
-      : `printf '%s\\n' '${completionMarker('plan-polish')}' >> ${art}/plan.md; ${done('work-plan-polish')}`,
-    infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts; ${done('work-infra')}`,
-    // A RED re-entered for the same slice (§28.4.2 back-to-RED) must ADD a test again, so a redo writes a new file.
-    // §28.5.3 — with `redPlan` the first RED work turn rewrites the approved plan, as a RED that splits its slice does.
-    red: `${opts.redPlan !== undefined ? `[ "$(turn_count red-plan)" = 1 ] && ${decode(b64(opts.redPlan), `${art}/plan.md`)}; ` : ''}mkdir -p tests; f=tests/red_added.test.ts; [ -f "$f" ] && f=tests/red_redo_$(ls tests | wc -l | tr -d ' ').test.ts; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > "$f"; ${writePhaseResultSh('"${RES:-' + art + '/red-result.json}"', examplePhaseResult('failed-assertion'), exampleCapturedOutput('failed-assertion'))}; ${done('work-red')}`,
-    // GREEN and refactor write content that differs per turn, so slice 2's approve has something to commit.
-    green: `n=$(turn_count work-green); printf '%s\\n' "export const feat = $n;" > feature.ts; ${writePhaseResultSh('"${RES:-' + art + '/green-result.json}"', examplePhaseResult('passed', { build: 'built' }))}; ${done('work-green')}`,
-    refactor: done('work-refactor'),
-    'integration-slice': `printf '%s\\n' 'export const integ = 3;' > integration.ts; ${done('work-integration-slice')}`,
-  };
-  const reviewArm = (step: string): string => {
-    const base = `mkdir -p .agent-terminal/loop/reports; r=$(rnd); ${decode(report(step), '.agent-terminal/loop/reports/$r.json')}`;
-    // refactor-loop's gate commits, so its round leaves a behavior-preserving edit for that commit to record.
-    return step === 'refactor'
-      ? `${base}; ${writePhaseResultSh('.agent-terminal/loop/refactor-results/$r.json', examplePhaseResult('passed'))}; n=$(turn_count review-refactor); printf '%s\\n' "export const rf = $n;" > refactor.ts; ${done('review-refactor')}`
-      : `${base}; ${check(step)}${done(`review-${step}`)}`;
-  };
-  const consolidateArm = (step: string): string => {
-    const scripted = (opts.verdicts?.[step] ?? []).map((v, i) => `${i + 1}) OUTB='${b64(exampleConsolidatorOutput(v, CHAIN_ROSTERS[step]))}' ;;`).join(' ');
-    return (
-      `n=$(turn_count consolidate-${step}); OUTB='${b64(exampleConsolidatorOutput('clean', CHAIN_ROSTERS[step]))}'; case "$n" in ${scripted} esac; ` +
-      `r=$(rnd); mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ${check(step)}${done(`consolidate-${step}`)}`
-    );
-  };
-
-  const steps = CHAIN_STEPS;
-  const cases = steps
-    .flatMap((s) => [
-      `    *turn-done:consolidate-${s}*) ${consolidateArm(s)} ;;`,
-      `    *turn-done:review-${s}*) ${reviewArm(s)} ;;`,
-      `    *turn-done:work-${s}*) ${workArm[s]} ;;`,
-    ])
-    .join('\n');
+/** A goal-session fake agent for feature-dev-v3. `goal[step]` is the shell a `/goal` for `step` runs, with the
+ *  leg in `$leg` and its prompt file in `$p`, before it signals done; a step it has no entry for says nothing.
+ *  `work[step]` answers a plain work turn, with the work artifact its prompt names in `$ART`. Every `/goal` and
+ *  `/compact` line is logged, and every goal prompt is appended to `goal-prompts-seen` and kept per step as
+ *  `goal-prompt.<step>.<n>.md`. */
+export function seedV3GoalAgent(binDir: string, name: string, goal: Record<string, string>, work: Record<string, string> = {}, extra: string[] = []): void {
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${DONE_REL}`;
+  const goalCases = Object.entries(goal).map(([step, cmd]) => `${step}) ${cmd}; ${done(`work-${step}`)} ;;`).join(' ');
+  const keepPrompt = 'k=$(ls .agent-terminal | grep -c "^goal-prompt\\.$step\\."); cp "$p" ".agent-terminal/goal-prompt.$step.$((k + 1)).md"';
   const script =
     '#!/usr/bin/env bash\n' +
-    'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
-    turnCountFn(binDir) +
-    'while IFS= read -r line; do\n' +
-    '  [ -z "$line" ] && continue\n' +
-    (opts.logInjected ? '  mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log\n' : '') +
-    '  case "$line" in\n' +
+    'while IFS= read -r line; do\n  [ -z "$line" ] && continue\n  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
-    '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
-    // §28.4 D1 — honor the phase-result path the prompt names (`red-result.slice-N.json` on a loop-back
-    // re-entry), so a real agent writing where told is modeled rather than a hardcoded slice-1 filename.
-    '    *"Write the classification to "*) t=${line#*Write the classification to }; RES=${t%% as a JSON object*} ;;\n' +
-    `${cases}\n` +
-    '    *"ELECTRON_RUN_AS_NODE=1 "*) chk="ELECTRON_RUN_AS_NODE=1 ${line#*ELECTRON_RUN_AS_NODE=1 }" ;;\n' +
-    '  esac\n' +
-    'done\n';
-  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+    `    /compact*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/compacts-seen ;;\n` +
+    `    /goal*) mkdir -p .agent-terminal; printf '%s\\n' "$line" >> .agent-terminal/goal-commands-seen; p=$(printf '%s' "$line" | grep -o '\\.agent-terminal/[^ ]*\\.md' | head -1); cp "$p" .agent-terminal/goal-prompt-seen.md; cat "$p" >> .agent-terminal/goal-prompts-seen; ${GOAL_LEG_CMD}; step=$(printf '%s' "$line" | grep -o 'turn-done:work-[a-z-]*' | sed 's/turn-done:work-//'); ${keepPrompt}; case "$step" in ${goalCases} esac ;;\n` +
+    '    *"As the final line of your "*) t=${line#*As the final line of your }; ART=${t%% artifact*} ;;\n' +
+    Object.entries(work).map(([step, cmd]) => `    *turn-done:work-${step}*) ${cmd}; ${done(`work-${step}`)} ;;\n`).join('') +
+    extra.join('') +
+    '  esac\ndone\n';
+  writeFileSync(join(binDir, name), script, { mode: 0o755 });
+}
+
+/** The shell that writes `lines` to the work artifact a plain work turn's prompt named in `$ART`. */
+export const writePromptedArtifact = (lines: string[]): string => `mkdir -p "$(dirname "$ART")"; printf '%s\\n' ${lines.map((l) => `'${l}'`).join(' ')} > "$ART"`;
+/** The groom step's `/goal` arm: writes the groomed ticket and its report, then finishes the goal. */
+export const V3_GROOM_GOAL =
+  `${writeV3('groomed-ticket.md', ['# Groomed ticket 176', completionMarker('groom')])}; ` +
+  `${writeV3('groom-report.md', ['## Needs your call', 'None.', '## Groomer decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
+/** The groom-approve work turn: the summary the operator approves. */
+export const V3_GROOM_APPROVE = writeV3('groom-summary.md', ['## Needs your call', 'None.', completionMarker('groom-approve')]);
+/** The plan step's `/goal` arm: writes `plan`, marked complete, and its report, then finishes the goal. */
+export const v3PlanGoal = (plan: string): string =>
+  `printf %s '${b64(`${plan}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; ` +
+  `${writeV3('plan-report.md', ['## Needs your call', 'None.', '## Planner decisions', '1. kept', '## Review history', 'no findings'])}; ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}`;
+/** The plan-approve work turn: the operator's session rewrites the plan to `plan` when given, then the summary. */
+export const v3PlanApproveWork = (plan?: string): string =>
+  `${plan === undefined ? '' : `printf %s '${b64(`${plan}\n${completionMarker('plan')}\n`)}' | base64 -d > ${V3_ART}/plan.md; `}` +
+  writeV3('plan-summary.md', ['## Needs your call', 'None.', completionMarker('plan-approve')]);
+
+/** The shell that writes `step`'s §27.10 report section to `file`, counting the step's runs as "run N of <step>". */
+export const v3Section = (step: string, file = `${V3_ART}/impl-report/${step}.md`): string =>
+  `mkdir -p "$(dirname "${file}")"; n=$(( $(cat .agent-terminal/runs-${step} 2>/dev/null || echo 0) + 1 )); echo $n > .agent-terminal/runs-${step}; ` +
+  `printf '%s\\n' '## ${step}' "run $n of ${step}" '### Needs your call' 'None.' '### Decisions' '1. kept' '### Review history' 'no findings' '### Test evidence' 'pnpm test: passed' > "${file}"`;
+
+/** The shell that writes a §28.5.5 phase result of `outcome` to the `artifact` file the goal prompt in `$p` names. */
+const v3PromptedResult = (artifact: string, outcome: PhaseOutcome, build?: BuildOutcome): string =>
+  `res=$(grep -o '${V3_ART}/${artifact}[.a-z0-9-]*\\.json' "$p" | head -1); ` +
+  writePhaseResultSh('"$res"', examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
+
+const V3_IMPL_WORK: Record<string, string> = {
+  infra: `printf '%s\\n' 'export const infra = 1;' > infra.ts`,
+  // A slice that runs RED again adds its own test and changes the code anew.
+  red: `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_$(ls tests | wc -l | tr -d ' ').test.ts; ${v3PromptedResult('red-result', 'failed-assertion')}`,
+  green: `printf '%s\\n' "export const feat = $RANDOM;" > feature.ts; ${v3PromptedResult('green-result', 'passed', 'built')}`,
+  refactor: `printf '%s\\n' "export const rf = $RANDOM;" > refactor.ts; rr=$(printf '%s' "$gp" | sed 's/goal-progress/refactor-result/'); ${writePhaseResultSh('"$rr"', examplePhaseResult('passed'), exampleCapturedOutput('passed'))}`,
+  'integration-slice': `printf '%s\\n' "export const integ = $RANDOM;" > integration.ts`,
+};
+
+/** The `/goal` arms of feature-dev-v3's implementation steps. Each run does its step's work, writes the report
+ *  section and phase result its prompt names, then finishes the goal and runs its checks. `before[step]` runs
+ *  first; the `blocked[step]`-th run of a step reports itself blocked instead of finishing; a step in
+ *  `checkpointFirstLeg` checkpoints its first leg and does all this on the next. */
+export function v3ImplGoals(opts: { before?: Record<string, string>; blocked?: Record<string, number>; checkpointFirstLeg?: string[] } = {}): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(V3_IMPL_WORK).map(([step, work]) => {
+      const sec = `sec=$(grep -o '${V3_ART}/impl-report/${step}[.a-z0-9-]*\\.md' "$p" | head -1)`;
+      const finish = opts.blocked?.[step] === undefined ? `${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}` : `if [ "$n" = ${opts.blocked[step]} ]; then ${goalBlockedCmd(`${step} needs the operator`)}; else ${goalProgressCmd('done')}; ${GOAL_CHECK_CMD}; fi`;
+      const run = `${opts.before?.[step] ? `${opts.before[step]}; ` : ''}${work}; ${sec}; ${v3Section(step, '${sec}')}; ${finish}`;
+      return [step, opts.checkpointFirstLeg?.includes(step) ? `if [ "$leg" = 1 ]; then ${goalProgressCmd('checkpoint')}; else ${run}; fi` : run];
+    }),
+  );
 }

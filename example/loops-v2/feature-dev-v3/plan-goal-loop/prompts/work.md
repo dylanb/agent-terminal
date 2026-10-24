@@ -36,6 +36,11 @@ real external tool the tests replace with a stand-in — and the real-run check 
 The deterministic test infrastructure the slices need — the harness, fakes, and fixtures — hermetic and
 scriptable per turn.
 
+## Design system
+
+Only for a ticket that touches renderer UI: the section **Design system first** above describes, scheduled
+first in the slice plan below.
+
 ## Slice plan
 
 Break the work into RED/GREEN impl-slices — each complete and RED-first — plus a final integration slice.

@@ -116,6 +116,7 @@ export interface AppGitRemote {
   fetchRef(url: string, ref: string): Promise<string>;
   readRef(url: string, ref: string): Promise<string | null>;
   createRef(url: string, oid: string, ref: string): Promise<void>;
+  fastForwardRef(url: string, oid: string, ref: string): Promise<void>;
   deleteRef(url: string, ref: string, expectedOid: string): Promise<void>;
 }
 
@@ -248,6 +249,17 @@ export function createAppGitRemote(
           'push',
           '--receive-pack=git-receive-pack',
           `--force-with-lease=${ref}:`,
+          '--',
+          url,
+          `${source}:${ref}`,
+        ]);
+      }),
+    fastForwardRef: (url, oid, ref) =>
+      isolated(async (git) => {
+        const source = parseAppGitObjectId(oid, 'local ref');
+        await git([
+          'push',
+          '--receive-pack=git-receive-pack',
           '--',
           url,
           `${source}:${ref}`,

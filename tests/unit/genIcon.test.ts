@@ -107,6 +107,12 @@ describe('committed icon artifacts', () => {
     const recorded = readFileSync(path.join(buildDir, 'icon.svg.sha256'), 'utf8').trim();
     expect(recorded).toBe(fingerprint(svg));
   });
+
+  it('records a build/controller-icon.svg.sha256 that matches the committed build/controller-icon.svg', () => {
+    const svg = readFileSync(path.join(buildDir, 'controller-icon.svg'));
+    const recorded = readFileSync(path.join(buildDir, 'controller-icon.svg.sha256'), 'utf8').trim();
+    expect(recorded).toBe(fingerprint(svg));
+  });
 });
 
 describe('package script wiring', () => {
@@ -115,5 +121,13 @@ describe('package script wiring', () => {
     const script = pkg.scripts.package as string;
     expect(script).toContain('gen-icon');
     expect(script.indexOf('gen-icon')).toBeLessThan(script.indexOf('electron-builder'));
+  });
+
+  it('packages the controller as well as the terminal, after the shared build', () => {
+    const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8'));
+    const steps = (pkg.scripts.package as string).split('&&').map(step => step.trim());
+    const controller = steps.indexOf('electron-builder --config electron-builder.controller.yml');
+    expect(steps).toContain('electron-builder');
+    expect(controller).toBeGreaterThan(steps.indexOf('pnpm run build'));
   });
 });

@@ -53,8 +53,8 @@ describe('initial controller registration', () => {
     const frames: Array<{ message: unknown; published: boolean }> = [];
     peer.on('message', chunk => frames.push({ message: JSON.parse(chunk.toString()), published }));
     await once(peer, 'open');
-    peer.send(encodeControllerMessage({ version: 1, type: 'register', ...identity }));
-    await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 1, type: 'registered' }, published: true }]));
+    peer.send(encodeControllerMessage({ version: 2, type: 'register', ...identity }));
+    await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 2, type: 'registered' }, published: true }]));
   });
 
   it.each(['interrupted', 'malformed', 'silent'] as const)('retries %s initial registration within the documented real-time bounds without overlap', async mode => {

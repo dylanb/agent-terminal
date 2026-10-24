@@ -16,8 +16,8 @@ const intent = (loop: string): string => `${loop}/charter/intent.md`;
 const worker = (loop: string): string => `${loop}/prompts/brief.md`;
 
 // refactor-loop carries no intent lens (a behavior-preserving turn); its worker still carries the ban below.
-const AC_INTENT = ['green-loop', 'red-loop', 'integration-slice-loop', 'plan-loop', 'plan-bundle-loop', 'plan-polish-loop'].map(intent);
-const AC_WORKERS = ['green-loop', 'red-loop', 'refactor-loop', 'integration-slice-loop', 'infra-loop', 'plan-loop', 'plan-bundle-loop', 'plan-polish-loop'].map(worker);
+const AC_INTENT = ['green-loop', 'red-loop', 'integration-slice-loop', 'plan-loop', 'plan-goal-loop'].map(intent);
+const AC_WORKERS = ['green-loop', 'red-loop', 'refactor-loop', 'integration-slice-loop', 'infra-loop', 'plan-loop', 'plan-goal-loop'].map(worker);
 const COMPLETENESS_INTENT = ['integration-slice-loop', 'green-loop'].map(intent);
 const CODE_WORKERS = ['green-loop', 'red-loop', 'refactor-loop', 'integration-slice-loop', 'infra-loop'].map(worker);
 

@@ -18,10 +18,10 @@ it('accepts standard WebSockets on a literal Unix path and completes a slow frag
   try {
     await once(peer, 'open');
     const ack = once(peer, 'message');
-    peer.send(JSON.stringify({ version: 1, type: 'register', launchDirectory: '/repo/café', repositoryRoot: '/repo' }));
-    expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 1, type: 'registered' });
+    peer.send(JSON.stringify({ version: 2, type: 'register', launchDirectory: '/repo/café', repositoryRoot: '/repo' }));
+    expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 2, type: 'registered' });
     const work = workStatus({ error: { reason: 'é🙂\\"\n'.repeat(10000) } });
-    const payload = Buffer.from(JSON.stringify({ version: 1, type: 'status', work }));
+    const payload = Buffer.from(JSON.stringify({ version: 2, type: 'status', work }));
     const split = payload.indexOf(Buffer.from('🙂')) + 1;
     peer.send(payload.subarray(0, split), { binary: false, fin: false });
     await delay(5100);
@@ -44,7 +44,7 @@ it.each(['payload', 'fragments', 'utf8', 'binary', 'json', 'version', 'control-s
         peer.on('error', () => {});
         await once(peer, 'open');
         const ack = once(peer, 'message');
-        peer.send(JSON.stringify({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: null }));
+        peer.send(JSON.stringify({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: null }));
         await ack;
       }
       const [bad, healthy] = peers;
@@ -57,12 +57,12 @@ it.each(['payload', 'fragments', 'utf8', 'binary', 'json', 'version', 'control-s
       } else if (invalid === 'utf8') bad.send(Buffer.from([0xff]), { binary: false });
       else if (invalid === 'binary') bad.send(Buffer.from('{}'));
       else if (invalid === 'json') bad.send('not JSON');
-      else if (invalid === 'version') bad.send(JSON.stringify({ version: 2, type: 'status', work: workStatus() }));
-      else bad.send(JSON.stringify({ version: 1, type: 'result', requestId: 'x'.repeat(16 * 1024), outcome: 'activated' }));
+      else if (invalid === 'version') bad.send(JSON.stringify({ version: 3, type: 'status', work: workStatus() }));
+      else bad.send(JSON.stringify({ version: 2, type: 'result', requestId: 'x'.repeat(16 * 1024), outcome: 'activated' }));
       await closed;
       await expect.poll(() => server.terminals().find(item => item.launchDirectory === '/bad')).toMatchObject({ status: 'disconnected' });
       expect(server.terminals().find(item => item.launchDirectory === '/bad')?.work).toBeUndefined();
-      healthy.send(JSON.stringify({ version: 1, type: 'status', work: workStatus() }));
+      healthy.send(JSON.stringify({ version: 2, type: 'status', work: workStatus() }));
       await expect.poll(() => server.terminals().find(item => item.launchDirectory === '/healthy')?.work).toEqual(workStatus());
     } finally { for (const peer of peers) peer.terminate(); await server.dispose(); rmSync(root, { recursive: true, force: true }); }
   },

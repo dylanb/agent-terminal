@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
-import { parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
@@ -64,7 +64,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
           }
           registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
           notify();
-          socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
+          socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
         } else if (message.type === 'status' && registrations.has(socket)) {
           registrations.get(socket)!.work = message.work;
           notify();
@@ -74,7 +74,11 @@ export async function startControllerTransport(appHome: string): Promise<Control
         } else {
           socket.terminate();
         }
-      } catch { socket.terminate(); }
+      } catch (error) {
+        if (error instanceof ControllerVersionMismatch && !registrations.has(socket)) {
+          socket.send(encodeControllerMessage({ type: 'incompatible', supported: CONTROLLER_SUPPORTED_MAJORS }), () => socket.close());
+        } else socket.terminate();
+      }
     });
   });
   try {
@@ -134,7 +138,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
         };
         const timer = setTimeout(() => finish('unavailable'), CONTROLLER_ACTIVATION_TIMEOUT_MS);
         pending.set(requestId, { socket, finish });
-        socket.send(encodeControllerMessage({ version: 1, type: 'activate', requestId }), error => {
+        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'activate', requestId }), error => {
           if (error) pending.get(requestId)?.finish('unavailable');
         });
       });

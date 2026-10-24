@@ -15,7 +15,26 @@ import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
-import { b64, exampleConfigDir, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, seedFullTddChainAgent, type StepScript } from './fakeTools';
+import {
+  b64,
+  exampleConfigDir,
+  goalBlockedCmd,
+  seedFakeAgentSteps,
+  seedFakeAgentV2,
+  seedFakeGhGit,
+  seedV3GoalAgent,
+  V3_GROOM_APPROVE,
+  V3_GROOM_GOAL,
+  V3_GROOM_INTENT,
+  v3ImplGoals,
+  v3PlanApproveWork,
+  v3PlanGoal,
+  v3Section,
+  writePromptedArtifact,
+  type StepScript,
+} from './fakeTools';
+import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
+import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -321,7 +340,7 @@ test('a gate that stops for the operator asks the agent why: an `auto` (e) halt 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: clean');
   await expect
     .poll(() => injectedLog(repo), { timeout: UI_MS })
-    .toContain('(e) frozen check unavailable: loop-capabilities.yaml')
+    .toMatch(/\(e\) frozen check unavailable: loop-capabilities\.yaml/)
     .catch(failWithDiagnosis(home, repo));
   const log = injectedLog(repo);
   expect(log).toMatch(/\(e\) frozen check unavailable: loop-capabilities\.yaml/);
@@ -918,17 +937,39 @@ test('restart keeps the run\'s auto authority: after a relaunch, Restart from `d
   expect(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
 });
 
-// ── #137 S5: the shipped `feature-dev` authorities, end to end (AC16) ──
+// ── #137 S5: the shipped feature-dev-v3 authorities, end to end (AC16) ──
 
-const FEATURE_DEV_YAML = readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v2', 'flow.yaml'), 'utf8');
-const FEATURE_DEV_AUTO_GATES = 9;
-const FEATURE_DEV_LOOP_RUNS = 11;
+const FEATURE_DEV_YAML = readFileSync(join(process.cwd(), 'example', 'flows', FEATURE_DEV_ID, 'flow.yaml'), 'utf8');
+const FEATURE_DEV_HUMAN_STEPS = ['groom-approve', 'plan-approve', 'impl-approve'];
+// groom-intent, groom, plan, infra and integration-slice, and red, green and refactor for each of 2 impl-slices.
+const FEATURE_DEV_AUTO_GATES = 11;
+const FEATURE_DEV_LOOP_RUNS = FEATURE_DEV_AUTO_GATES + FEATURE_DEV_HUMAN_STEPS.length;
 
 function seedFeatureDevRun(prefix: string, home: string): string {
-  const repo = seedAutoGateRepo(prefix, 'groom', { ticket: '176' });
+  const repo = seedAutoGateRepo(prefix, 'groom-intent', { ticket: '176' });
   cleanup.push(repo);
-  seedTrustedFlow(home, repo, 'feature-dev-v2', FEATURE_DEV_YAML);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
   return repo;
+}
+
+/** A feature-dev-v3 run whose every session finishes and whose plan has 2 impl-slices; the `blocked[step]`-th
+ *  run of an implementation step, or the groom with `groomBlocked`, reports itself blocked instead. */
+function seedFeatureDevAgent(binDir: string, opts: { blocked?: Record<string, number>; groomBlocked?: boolean } = {}): void {
+  seedV3GoalAgent(
+    binDir,
+    'fake-agent',
+    {
+      groom: opts.groomBlocked ? goalBlockedCmd('The ticket asks for two exports.') : V3_GROOM_GOAL,
+      plan: v3PlanGoal(`# plan\n\n${exampleSlicePlan(2)}`),
+      ...v3ImplGoals({ blocked: opts.blocked }),
+    },
+    {
+      'groom-intent': V3_GROOM_INTENT,
+      'groom-approve': V3_GROOM_APPROVE,
+      'plan-approve': v3PlanApproveWork(),
+      'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
+    },
+  );
 }
 
 /** Wait, bounded, for `step`'s clean gate to wait on the operator; a halt or a stall fails naming what the gate shows. */
@@ -945,20 +986,25 @@ async function awaitHumanGate(home: string, repo: string, step: string, timeout:
   expect(await haltRows().count()).toBe(0);
 }
 
-test('feature-dev run stops only at plan-polish and integration-slice: every other gate advances alone with its phase commit (AC16)', { tag: '@ownapp' }, async () => {
+/** Approve the human gate at `step` and wait for the flow to leave it. */
+async function approveHumanStep(home: string, repo: string, step: string, timeout: number): Promise<void> {
+  await awaitHumanGate(home, repo, step, timeout);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(new RegExp(`^step: ${step}$`, 'm'));
+}
+
+test('feature-dev-v3 run stops only at groom-approve, plan-approve and impl-approve: every other gate advances alone with its phase commit (AC16)', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 6 * UI_MS);
   const home = tmp('agent-term-e2e-137-fdev-home-');
   const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-', home);
   const baseline = gitIn(repo, 'rev-parse', 'HEAD');
-  const { logFile } = await launchInto('agent-term-e2e-137-fdev-', repo, home, (binDir) => seedFullTddChainAgent(binDir, { implSlices: 2 }));
+  const { logFile } = await launchInto('agent-term-e2e-137-fdev-', repo, home, (binDir) => seedFeatureDevAgent(binDir));
 
   await flowControl().click();
 
-  await awaitHumanGate(home, repo, 'plan-polish', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
-  await approveOption().click();
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-polish$/m);
-
-  await awaitHumanGate(home, repo, 'integration-slice', 8 * LOOP_ROUND_MS + 7 * APPROVE_ADVANCE_MS);
+  await approveHumanStep(home, repo, 'groom-approve', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveHumanStep(home, repo, 'plan-approve', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await awaitHumanGate(home, repo, 'impl-approve', 9 * LOOP_ROUND_MS + 8 * APPROVE_ADVANCE_MS);
   await approveOption().click();
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
 
@@ -967,46 +1013,88 @@ test('feature-dev run stops only at plan-polish and integration-slice: every oth
 
   const entries = auditGateEntries(home, repo);
   const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
-  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(2);
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(FEATURE_DEV_HUMAN_STEPS.length);
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES);
-  for (const step of ['plan-polish', 'integration-slice']) {
+  for (const step of FEATURE_DEV_HUMAN_STEPS) {
     const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
     expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
   }
   expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
 });
 
-test('feature-dev auto step halts on stop-for-a-human: the shipped flow\'s `groom` gate names the reason and does not advance (AC16, AC2)', { tag: '@ownapp' }, async () => {
+// §28.3/§27.13 — the pickup branch is plan-loop/issue-176 (seedAutoGateRepo), which the fake git records pushes to.
+const pushedOids = (logFile: string): string[] =>
+  readIf(logFile).split('\n').flatMap((l) => {
+    const m = /^git .*\bpush\b.* ([0-9a-f]{40}):refs\/heads\/plan-loop\/issue-176$/.exec(l);
+    return m ? [m[1]] : [];
+  });
+
+test('feature-dev-v3: every gate commit is pushed to the PR branch, and a failed push at impl-approve holds the gate until approving again lands it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 10 * UI_MS);
+  const home = tmp('agent-term-e2e-push-home-');
+  const repo = seedFeatureDevRun('agent-term-e2e-push-', home);
+  const baseline = gitIn(repo, 'rev-parse', 'HEAD');
+  const pushFail = join(tmp('agent-term-e2e-push-knob-'), 'fail');
+  const { logFile } = await launchInto('agent-term-e2e-push-', repo, home, (binDir) => seedFeatureDevAgent(binDir), { FAKE_GIT_PUSH_FAIL: pushFail });
+  await recordLoopErrors();
+
+  await flowControl().click();
+  await approveHumanStep(home, repo, 'groom-approve', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveHumanStep(home, repo, 'plan-approve', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await awaitHumanGate(home, repo, 'impl-approve', 9 * LOOP_ROUND_MS + 8 * APPROVE_ADVANCE_MS);
+
+  const phaseCommits = gitIn(repo, 'log', '--format=%H', `${baseline}..HEAD`).split('\n');
+  expect(phaseCommits).toHaveLength(8);
+  expect(pushedOids(logFile)).toEqual(expect.arrayContaining(phaseCommits));
+
+  writeFileSync(pushFail, '');
+  await approveOption().click();
+  await expect.poll(loopErrors, { timeout: APPROVE_ADVANCE_MS }).toEqual([expect.stringMatching(/could not push plan-loop\/issue-176 to the pull request/)]);
+  expect(flowState(repo)).toMatch(/^step: impl-approve$/m);
+  expect(runState(repo)).not.toMatch(/status: accepted/);
+  expect(readIf(logFile).split('\n').filter((l) => /^gh pr edit .*--body-file/.test(l))).toEqual([]);
+  await expect(errorDialog()).toContainText('could not push plan-loop/issue-176 to the pull request', { timeout: UI_MS });
+  await errorDialog().locator('.dismiss').click();
+  await expect(errorDialog()).toHaveCount(0);
+  await expect(approveOption()).toBeVisible({ timeout: UI_MS });
+
+  rmSync(pushFail);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
+  expect(pushedOids(logFile).at(-1)).toBe(gitIn(repo, 'rev-parse', 'HEAD'));
+  expect(readIf(logFile).split('\n').filter((l) => /^gh pr edit .*--body-file/.test(l))).toHaveLength(1);
+  const decisions = auditGateEntries(home, repo, { step: 'impl-approve' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
+  expect(decisions.map((e) => gateDecisionDecider(e.cmd))).toEqual(['human']);
+});
+
+test('feature-dev-v3 auto step halts on stop-for-a-human: the shipped flow\'s `groom` gate names the reason and does not advance (AC16, AC2)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(4, 0));
   const home = tmp('agent-term-e2e-137-fdev-halt-home-');
   const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-halt-', home);
-  await launchInto('agent-term-e2e-137-fdev-halt-', repo, home, (binDir) => seedFullTddChainAgent(binDir, { verdicts: { groom: ['stop for a human'] } }));
+  await launchInto('agent-term-e2e-137-fdev-halt-', repo, home, (binDir) => seedFeatureDevAgent(binDir, { groomBlocked: true }));
 
   await flowControl().click();
 
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: stop for a human/m);
+  await expect.poll(() => runState(repo), { timeout: 2 * LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: stop for a human/m);
   await openLoopPanel();
   await expect(approveOption()).toBeVisible({ timeout: UI_MS });
   await expect.poll(() => autoHaltsAt(home, repo, 'groom').map((e) => parseAutoHaltReasons(e.cmd)), { timeout: UI_MS }).toEqual([['stop-for-a-human']]);
   await expect(loopPanel().locator('[data-auto-halt-reason="stop-for-a-human"]')).toBeVisible({ timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: groom$/m);
-  expect(auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
+  expect(auditGateEntries(home, repo, { step: 'groom' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
 });
 
-test('pinning: feature-dev full chain: auto advance, one visible halt, human-only gates (#137 integration)', { tag: '@ownapp' }, async () => {
+test('pinning: feature-dev-v3 full chain: auto advance, one visible halt, human-only gates (#137 integration)', { tag: '@ownapp' }, async () => {
   test.setTimeout(WINDOW_TIMEOUT_MS + FIRST_PAINT_MS + FEATURE_DEV_LOOP_RUNS * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS) + 10 * UI_MS);
   const home = tmp('agent-term-e2e-137-fdev-full-home-');
   const repo = seedFeatureDevRun('agent-term-e2e-137-fdev-full-', home);
   const baseline = gitIn(repo, 'rev-parse', 'HEAD');
-  const { logFile } = await launchInto('agent-term-e2e-137-fdev-full-', repo, home, (binDir) =>
-    seedFullTddChainAgent(binDir, { implSlices: 2, verdicts: { green: ['clean', 'stop for a human'] } }),
-  );
+  const { logFile } = await launchInto('agent-term-e2e-137-fdev-full-', repo, home, (binDir) => seedFeatureDevAgent(binDir, { blocked: { green: 2 } }));
 
   await flowControl().click();
 
-  await awaitHumanGate(home, repo, 'plan-polish', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
-  await approveOption().click();
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).not.toMatch(/^step: plan-polish$/m);
+  await approveHumanStep(home, repo, 'groom-approve', 3 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
+  await approveHumanStep(home, repo, 'plan-approve', 2 * (LOOP_ROUND_MS + APPROVE_ADVANCE_MS));
 
   await expect
     .poll(() => (auditGateEntries(home, repo).some((e) => parseAutoHaltReasons(e.cmd) !== null) ? autoHaltsAt(home, repo, 'green').map((e) => parseAutoHaltReasons(e.cmd)) : null), {
@@ -1021,7 +1109,7 @@ test('pinning: feature-dev full chain: auto advance, one visible halt, human-onl
   await approveOption().click();
   await expect.poll(() => gitIn(repo, 'log', '-1', '--format=%s'), { timeout: APPROVE_ADVANCE_MS }).toBe('GREEN');
 
-  await awaitHumanGate(home, repo, 'integration-slice', 2 * LOOP_ROUND_MS + APPROVE_ADVANCE_MS);
+  await awaitHumanGate(home, repo, 'impl-approve', 3 * LOOP_ROUND_MS + 2 * APPROVE_ADVANCE_MS);
   await approveOption().click();
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
 
@@ -1030,9 +1118,9 @@ test('pinning: feature-dev full chain: auto advance, one visible halt, human-onl
 
   const entries = auditGateEntries(home, repo);
   const decisions = entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
-  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(3);
+  expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'human')).toHaveLength(FEATURE_DEV_HUMAN_STEPS.length + 1);
   expect(decisions.filter((e) => gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(FEATURE_DEV_AUTO_GATES - 1);
-  for (const step of ['plan-polish', 'integration-slice']) {
+  for (const step of FEATURE_DEV_HUMAN_STEPS) {
     const at = auditGateEntries(home, repo, { step }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision');
     expect(at.map((e) => gateDecisionDecider(e.cmd)), step).toEqual(['human']);
   }
@@ -1159,24 +1247,22 @@ test('auto gate concurrency, bound fallback: APP_AUTO_GATE_DECISION_MS=-5 falls 
 
 const PLAN_REL = '.agent-terminal/loop/artifacts/plan.md';
 
-test('auto gate concurrency, epic preview: an `auto` plan-polish gate on an epic plan raises the confirm-first preview, shows (k), creates nothing, and the operator\'s confirm is human (AC9)', { tag: '@ownapp' }, async () => {
+test('auto gate concurrency, epic preview: an `auto` plan-approve gate on an epic plan raises the confirm-first preview, shows (k), creates nothing, and the operator\'s confirm is human (AC9)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(8, 2) + LOOP_ROUND_MS);
   const home = tmp('agent-term-e2e-137-k-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-137-k-', 'groom', { ticket: '176' });
   cleanup.push(repo);
-  seedTrustedFlow(home, repo, 'human-groom-auto-plan-polish', autoGateFlowYaml([
+  seedTrustedFlow(home, repo, 'human-groom-auto-plan-approve', autoGateFlowYaml([
     { id: 'groom', kind: 'loop', loop: 'groom-loop', authority: 'human' },
-    { id: 'plan-polish', kind: 'loop', loop: 'plan-polish-loop', authority: 'auto' },
+    { id: 'plan-approve', kind: 'loop', loop: 'plan-approve-loop', authority: 'auto' },
     { id: 'done', kind: 'manual' },
   ]));
-  const epicPlan = `${exampleEpicPlan(2)}\n${completionMarker('plan-polish')}\n`;
   const { logFile } = await launchInto('agent-term-e2e-137-k-', repo, home, {
     groom: GROOM_AGENT,
-    'plan-polish': {
-      artifactRel: PLAN_REL,
+    'plan-approve': {
+      artifactRel: '.agent-terminal/loop/artifacts/plan-summary.md',
       work: 'complete',
-      roster: loopRoster('plan-polish-loop'),
-      extraShell: { work: [`printf %s '${b64(epicPlan)}' | base64 -d > ${PLAN_REL}`] },
+      extraShell: { work: [`printf %s '${b64(`${exampleEpicPlan(2)}\n`)}' | base64 -d > ${PLAN_REL}`] },
     },
   });
 
@@ -1185,14 +1271,14 @@ test('auto gate concurrency, epic preview: an `auto` plan-polish gate on an epic
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: groom$[\s\S]*verdict: clean/m);
   await openLoopPanel();
   await approveOption().click({ timeout: UI_MS });
-  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-polish$/m);
-  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-polish$[\s\S]*verdict: clean/m);
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-approve$/m);
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-approve$[\s\S]*verdict: clean/m);
   await dismissLoopErrors();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="epic-promotion"]')).toBeVisible({ timeout: UI_MS });
   expect(readIf(logFile)).not.toContain('issue create');
-  expect(flowState(repo)).toMatch(/^step: plan-polish$/m);
+  expect(flowState(repo)).toMatch(/^step: plan-approve$/m);
   const run = runIdentity(repo);
   const previews = auditGateEntries(home, repo, { run }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'epic-promotion-preview');
   expect(previews.map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);

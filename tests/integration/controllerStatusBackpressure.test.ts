@@ -24,7 +24,7 @@ it('coalesces a burst for a paused receiver without replaying superseded snapsho
       const message = parseControllerMessage(chunk.toString());
       if (message.type === 'register') {
         socket.pause();
-        socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
+        socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
       } else if (message.type === 'status') received.push(message.work);
     });
   });

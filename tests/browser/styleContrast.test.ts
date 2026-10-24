@@ -506,13 +506,15 @@ describe('install consent dialog stays operable with a long file manifest', () =
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
-      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     });
     (host.querySelector('.kprofile button') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
@@ -559,13 +561,15 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
-      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     });
     (host.querySelector('.kprofile button') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
@@ -577,10 +581,11 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
 
   it('does not let the manifest overprint the footer actions', () => {
     const rows = host.querySelector('.install-consent-rows') as HTMLElement;
+    const clip = (host.querySelector('.flow-modal [data-modal-scroll]') as HTMLElement).getBoundingClientRect();
     const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
     // The rows must stop where the footer begins — a viewport-relative cap cannot know that, so an
     // over-tall manifest escapes the column and paints straight over the buttons.
-    expect(rows.getBoundingClientRect().bottom).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
+    expect(Math.min(rows.getBoundingClientRect().bottom, clip.bottom)).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
   });
 
   it('keeps the footer actions reachable', () => {
@@ -588,6 +593,63 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
     const r = confirm.getBoundingClientRect();
     expect(r.bottom).toBeLessThanOrEqual(window.innerHeight);
     expect(r.top).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// §18.1 v2.212 — the leftover removal is a second group beside the replacement one, with its own long manifest, so
+// both must stay inside the card's column at zoom and neither may collapse its checkbox out of sight.
+describe('the consent dialog with both replacements and retired leftovers survives a short viewport (WCAG 1.4.4, 1.4.10, 2.4.11)', () => {
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    await page.viewport(512, 384);
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`) as DestRelativePath[];
+    const retired = Array.from({ length: 24 }, (_, i) => ({ destination: 'agents' as const, rel: `plan-polish-loop--review-plan-lens-${i}.md` as DestRelativePath }));
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        retired,
+        retiredFallback: null,
+        destinations: [{ destination: 'appLoops', conflict: true, files }],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-modal input[data-retired]')).not.toBeNull());
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  it('keeps every option list above the footer actions', () => {
+    const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
+    const lists = [...host.querySelectorAll<HTMLElement>('.install-consent-rows')];
+    expect(lists).toHaveLength(2);
+    const clip = (host.querySelector('.install-consent-body') as HTMLElement).getBoundingClientRect();
+    for (const rows of lists) {
+      const painted = Math.min(rows.getBoundingClientRect().bottom, clip.bottom);
+      expect(painted).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
+    }
+  });
+
+  it('scrolls both groups in the one box the modal shell styles (UI §5.7)', () => {
+    const scrolls = [...host.querySelectorAll<HTMLElement>('.flow-modal [data-modal-scroll]')];
+    expect(scrolls).toHaveLength(1);
+    for (const rows of host.querySelectorAll('.install-consent-rows')) expect(scrolls[0].contains(rows)).toBe(true);
+  });
+
+  it('paints each group’s checkbox inside the scroll box once it is scrolled to', () => {
+    const scroll = host.querySelector<HTMLElement>('.flow-modal [data-modal-scroll]') as HTMLElement;
+    for (const box of host.querySelectorAll<HTMLElement>('.install-consent-opt input[type="checkbox"]')) {
+      box.scrollIntoView({ block: 'nearest' });
+      const clip = scroll.getBoundingClientRect();
+      const r = box.getBoundingClientRect();
+      expect(r.top).toBeGreaterThanOrEqual(clip.top);
+      expect(r.bottom).toBeLessThanOrEqual(clip.bottom + 1);
+    }
   });
 });
 
@@ -608,13 +670,15 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
-      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     });
     (host.querySelector('.kprofile button') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
@@ -735,13 +799,15 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
-      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     });
     (host.querySelector('.kprofile button') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
@@ -780,13 +846,15 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        retired: [],
+        retiredFallback: null,
         destinations: [
           { destination: 'flow', conflict: true, files: files('flow') },
           { destination: 'appLoops', conflict: true, files: files('appLoops') },
           { destination: 'commands', conflict: true, files: files('commands') },
         ],
       }),
-      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [], notInstalled: [], removed: [] }),
     });
     (host.querySelector('.kprofile button') as HTMLElement).click();
     await vi.waitUntil(() => host.querySelector('.flow-modal') !== null);

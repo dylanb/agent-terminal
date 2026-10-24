@@ -97,7 +97,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
           await expect.soft.poll(() => registrations.length, { timeout: RETRY_OBSERVATION_MS }).toBeGreaterThan(1);
           expect.soft(starts(h.fixture.root)).toBe('');
         }
-        registrations[registrations.length - 1].socket.send('{"version":1,"type":"registered"}\n');
+        registrations[registrations.length - 1].socket.send('{"version":2,"type":"registered"}\n');
         await expect.poll(() => starts(h.fixture.root)).toBe('started\n');
         await delay(UNCONFIRMED_OBSERVATION_MS);
         expect(starts(h.fixture.root)).toBe('started\n');
@@ -106,7 +106,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
         const child = terminal.app.process();
         await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
         await expect.poll(() => child.exitCode).not.toBeNull();
-        registrations[0].socket.send('{"version":1,"type":"registered"}\n');
+        registrations[0].socket.send('{"version":2,"type":"registered"}\n');
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
         expect(registrations).toHaveLength(1);

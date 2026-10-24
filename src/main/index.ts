@@ -11,6 +11,7 @@ import {
   type ChannelPayloads,
   type FlowCatalogListResult,
   type RebindResult,
+  type ConfirmRunPickupResult,
   type FlowStateView,
   type GateDecisionOption,
   type GithubRef,
@@ -43,6 +44,7 @@ import {
   isValidFlowClearActiveFlow,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
+  isValidFlowConfirmRunPickup,
   isValidFlowResolveAppBootstrapConflict,
   isValidFlowResolveEpicPromotion,
   isValidFlowAppRouteOut,
@@ -79,7 +81,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, type FlowLoad } from './flow';
+import { createFlowManager, deriveFlowView, type FlowLoad, type FlowStepDef } from './flow';
 import { createRunResolver } from './runResolver';
 import { createActiveFlowGate, selectIfUnlocked } from './activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from './worktreeLock';
@@ -130,11 +132,16 @@ import { codexAgentsDir, codexHome } from './codexConfig';
 import { createLoopCompletionPredicates } from './loopCompletionPredicates';
 import { appLoopEntryFor } from './appLoopEntry';
 import { reopenSliceTransition } from './sliceReopen';
-import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion, type AppLoopBootstrap } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearBaselineCommit, clearPolish, clearSliceBrief, readSliceBrief, writeSliceBrief, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, readPickupRecord, readBaselineCommit, readEpicPromotion, recordBaselineCommit, recordChangedTests, refactorResultFile, refactorResultRel, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, writeEpicPromotion } from './appLoopState';
+import { createTrustedPickups, runPickupRel } from './trustedPickups';
+import { inProgressRunIdentity } from './gateRunState';
+import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
+import { createRealPullRequestLookup } from './pullRequestLookup';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import type { LoopDefV2Context } from './loopDefV2';
+import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
+import { createRealAppGatePush } from './appGatePush';
 import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type AppGateDecisionDeps } from './appGateDecision';
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
@@ -155,7 +162,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from './autoGateComposition';
-import type { CliInstallResult } from '../shared/ipc';
+import type { CliInstallResult, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
@@ -173,11 +180,11 @@ async function createWindow(): Promise<void> {
     ? { packaged: true, resourcesPath: process.resourcesPath }
     : { packaged: false, appPath: app.getAppPath() };
   // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
-  applyDockIcon(app.dock, process.platform, iconLoc);
+  applyDockIcon(app.dock, process.platform, iconLoc, 'terminal');
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    icon: resolveWindowIconPath(iconLoc),
+    icon: resolveWindowIconPath(iconLoc, 'terminal'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -205,6 +212,7 @@ async function createWindow(): Promise<void> {
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
   const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
   let currentWork: import('../shared/ipc').ControllerWorkStatus | undefined;
+  let incompatibility: StartupIncompatibleMsg | undefined;
   const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot), () => {
     if (win.isDestroyed()) return 'unavailable';
     if (win.isMinimized()) win.restore();
@@ -215,6 +223,12 @@ async function createWindow(): Promise<void> {
     statusListeners.add(listener);
     if (currentWork) listener(currentWork);
     return () => { statusListeners.delete(listener); };
+  }, report => {
+    incompatibility = { sessionId: SESSION_ID, ...report };
+    if (!win.isDestroyed()) win.webContents.send(CH.startupIncompatible, incompatibility);
+  });
+  win.webContents.on('did-finish-load', () => {
+    if (incompatibility) win.webContents.send(CH.startupIncompatible, incompatibility);
   });
   win.once('closed', () => {
     unregisterController();
@@ -720,13 +734,57 @@ async function createWindow(): Promise<void> {
   });
   const recordFlowTransition = composeRecordFlowTransition(audit, autoGate);
 
-  // Security limitation (§27.12), tracked in #155: this map is runtime-seeded only, so after a relaunch
-  // appGateGithub.verifyBootstrap early-returns and the gate's PR-identity check is silently skipped; a
-  // naive re-seed from the repo-scoped persisted bootstrap could retarget a destructive `gh pr ready`.
-  const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
+  const trustedAppBootstraps = createTrustedPickups({
+    currentRun: inProgressRunIdentity,
+    persistFailed: (repoDir, reason) => {
+      audit.recordCommand(repoDir, 'pickup', `§27 pickup could not be saved for a relaunch: ${reason}`, 1);
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's pull request could not be saved, so a relaunch will not know it: ${reason}` });
+    },
+    forgetFailed: (repoDir, reason) => {
+      audit.recordCommand(repoDir, 'pickup', `§27 a forgotten run pickup could not be removed: ${reason}`, 1);
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove ${runPickupRel()}.` });
+    },
+  });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
+  // §27.13 v2.211
+  const runsBegunHere = new Set<string>();
+  const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
+    const run = inProgressRunIdentity(repoKey);
+    if (run === null || trustedAppBootstraps.get(repoKey) !== undefined) return null;
+    const load = resolveActiveDefinition(repoKey);
+    if (!load.ok) return null;
+    const view = flow.state(repoKey);
+    const reached = reachedPickupStep(load.definition.steps, view.position, (step: FlowStepDef): PickupContractV2 | null => {
+      if (step.kind !== 'loop' || step.loop === undefined) return null;
+      const resolved = observedResolveDef(repoKey, step.loop);
+      return resolved.ok ? resolved.def.pickup : null;
+    });
+    const held = awaitingPickupConfirm({
+      run,
+      pickupInFlight: pickupInFlight?.repoKey === repoKey,
+      pickupStep: reached?.at ?? 'none',
+      runBegunHere: runsBegunHere.has(repoKey),
+      flowRefs: { ticket: view.refs?.ticket ?? null, pr: view.refs?.pr ?? null },
+      bootstrapRecord: readPickupRecord(repoKey),
+    });
+    return held === null || reached === null ? null : { run: held, initialStatus: reached.contract.initialStatus };
+  };
+  const pickupConfirmations = createRunPickupConfirmations({
+    heldRun: pickupHeldRun,
+    evidence: (repoKey) => {
+      const branch = currentGitBranch(repoKey);
+      return { branch: branch.ok ? branch.branch : null, flowTicket: flow.state(repoKey).refs?.ticket ?? null, bootstrapRecord: readPickupRecord(repoKey) };
+    },
+    lookup: createRealPullRequestLookup,
+    trust: (repoKey, pickup) => {
+      trustedAppBootstraps.set(repoKey, pickup);
+      pickupRecordPredatesRun.delete(repoKey);
+    },
+    changed: () => pushFlowChanged(),
+  });
+  const pickupHoldRefusal = (repoKey: string): string | null => (pickupConfirmations.held(repoKey) ? PICKUP_CONFIRM_FIRST : null);
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
     const existing = appBootstrapSessions.get(repoDir);
@@ -945,7 +1003,12 @@ async function createWindow(): Promise<void> {
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
     const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity);
     const activity = loopActivityFor(repoKey);
-    return activity ? { ...base, loopActivity: activity } : base;
+    const pickupConfirm = pickupConfirmations.view(repoKey);
+    return {
+      ...base,
+      ...(activity ? { loopActivity: activity } : {}),
+      ...(pickupConfirm !== undefined ? { pickupConfirm } : {}),
+    };
   };
 
   lifecycle = createFlowLifecycle({
@@ -972,16 +1035,16 @@ async function createWindow(): Promise<void> {
     presentView: (repoKey, view) => trackLoop(repoKey, withDerived(repoKey, view)),
   });
 
-  const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
-    const previous = trustedAppBootstraps.get(repoKey);
+  const beginRunHere = <T>(repoKey: string, transition: () => T): T => {
     const predated = pickupRecordPredatesRun.has(repoKey);
-    trustedAppBootstraps.delete(repoKey);
+    const begunHere = runsBegunHere.has(repoKey);
     pickupRecordPredatesRun.add(repoKey);
+    runsBegunHere.add(repoKey);
     try {
       return transition();
     } catch (e) {
-      if (previous !== undefined) trustedAppBootstraps.set(repoKey, previous);
       if (!predated) pickupRecordPredatesRun.delete(repoKey);
+      if (!begunHere) runsBegunHere.delete(repoKey);
       throw e;
     }
   };
@@ -1081,6 +1144,12 @@ async function createWindow(): Promise<void> {
     },
     runSideEffect: createRealAppGateGitHub(repoKey),
     runCommitSideEffect: createRealAppGateCommit(repoKey),
+    runPushSideEffect: createRealAppGatePush(repoKey),
+    // §27.9.1 N9b.1
+    failureHoldsGate: (repoDir, step) => {
+      const load = resolveActiveDefinition(repoDir);
+      return !load.ok || load.definition.steps.find((st) => st.id === step)?.gateAuthority !== 'auto';
+    },
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
     assembleReport: (repoDir, report) => {
       assembleReportOnDisk(report, flow.state(repoDir).steps);
@@ -1149,11 +1218,18 @@ async function createWindow(): Promise<void> {
     const load = resolveActiveDefinition(repoKey);
     return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
   };
-  const runAppGateDecision = createGuardedGateDecision({
+  const refuseGateDecision = (reason: string): void => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason });
+  const guardedGateDecision = createGuardedGateDecision({
     bindingOf: gateBindingOf,
-    refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    refuse: refuseGateDecision,
     run: runAppGateDecisionRaw,
   });
+  const runAppGateDecision: typeof guardedGateDecision = (repoKey, ...rest) => {
+    const held = pickupHoldRefusal(repoKey);
+    if (held === null) return guardedGateDecision(repoKey, ...rest);
+    refuseGateDecision(held);
+    return Promise.resolve(false);
+  };
   autoGate.attachApprove(composeEngineApprove(approveDepsFor, gateBindingOf));
   const humanRunners = composeHumanDecisionRunners(autoGate, {
     decide: runAppGateDecision,
@@ -1235,6 +1311,11 @@ async function createWindow(): Promise<void> {
       // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) {
+          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: held });
+          return;
+        }
         if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
@@ -1367,7 +1448,11 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         // §18.7.4 AC11 — serialized with the active-flow write; refused (with a visible reason) while a peer holds it.
         const started = worktreeLock.withWorktreeLock(m.repoKey, () =>
-          withoutTrustedBootstrap(m.repoKey, () => trackLoop(m.repoKey, withDerived(m.repoKey, flowStartTransition(m.repoKey)))),
+          beginRunHere(m.repoKey, () => {
+            const started = flowStartTransition(m.repoKey);
+            trustedAppBootstraps.delete(m.repoKey);
+            return trackLoop(m.repoKey, withDerived(m.repoKey, started));
+          }),
         );
         if (started.ok) return started.value;
         return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: started.reason });
@@ -1378,6 +1463,8 @@ async function createWindow(): Promise<void> {
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowAdvance(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...pre, notice: held });
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = humanRunners.advance(m.repoKey, m.step);
         if (view === null) {
@@ -1391,14 +1478,19 @@ async function createWindow(): Promise<void> {
       },
       [CH.flowRestart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
-        return withoutTrustedBootstrap(m.repoKey, () =>
-          recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)),
-        );
+        // §27.13 — a Restart keeps the run's identity, so a saved pickup it cannot forget would be trusted again. Only a
+        // done run restarts (flow.restart); any other Restart is refused there and must not cost the run its pickup.
+        if (flow.state(m.repoKey).status === 'done' && !trustedAppBootstraps.forgetIfRemovable(m.repoKey)) {
+          return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: RESTART_KEEPS_PICKUP });
+        }
+        return beginRunHere(m.repoKey, () => recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)));
       },
-      [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) && knownRepoKeys.has(m.repoKey)
-          ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey))
-          : flowRequestError(),
+      [CH.flowUndo]: (_e, m) => {
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, flow.state(m.repoKey)), notice: held });
+        return recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey));
+      },
       // Terminate (#26, §18.7.2 AC6): the flow manager refuses it, writing nothing, unless the run has begun.
       // The audit write is best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per
       // AC9/AC10 nothing here signals the terminal process or touches external agent-loop engine state.
@@ -1411,6 +1503,8 @@ async function createWindow(): Promise<void> {
       [CH.flowProvideInput]: (_e, m) => {
         if (!isValidFlowProvideInput(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const current = flow.state(m.repoKey);
+        const held = pickupHoldRefusal(m.repoKey);
+        if (held !== null) return trackLoop(m.repoKey, { ...withDerived(m.repoKey, current), notice: held });
         if (current.status !== 'in_progress' || current.stepName !== m.step) {
           return trackLoop(m.repoKey, withDerived(m.repoKey, current));
         }
@@ -1451,6 +1545,10 @@ async function createWindow(): Promise<void> {
           listCatalog({ worktreeDir: m.repoKey, globalRoot: flowGlobalDir }, (choices) => heldRunRecovery.outcomes(m.repoKey, choices)),
         );
       },
+      [CH.flowConfirmRunPickup]: (_e, m): Promise<ConfirmRunPickupResult> =>
+        isValidFlowConfirmRunPickup(m) && knownRepoKeys.has(m.repoKey)
+          ? pickupConfirmations.confirm(m.repoKey, m.run, m.pr, m.ticket)
+          : Promise.resolve({ ok: false, reason: 'invalid flow:confirmRunPickup request' }),
       [CH.flowRebindHeldRun]: (_e, m): RebindResult => {
         if (!isValidFlowRebindHeldRun(m) || !knownRepoKeys.has(m.repoKey)) {
           return { ok: false, reason: 'invalid flow:rebindHeldRun request' };

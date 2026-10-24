@@ -21,7 +21,8 @@
     </svg>
     <section id="startup-waiting" class="startup-waiting" role="status">
       <h1>Waiting for the controller</h1>
-      <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If it is already running, make sure both apps use the same build and restart the controller.</p>
+      <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If the controller is already running, restart it. If this terminal still waits, update both apps to their latest builds.</p>
+      <p id="startup-incompatible" hidden></p>
       <p>You can close this window while waiting.</p>
     </section>
     <div id="app" class="app" hidden>
@@ -38,6 +39,8 @@
              The strip owns the whole block (header carries the step position), §24.2.2. -->
         <div class="blk flowstrip" id="flow-strip" role="status" aria-live="polite" aria-atomic="false"></div>
         <div class="blk flowpicker" id="flow-picker"></div>
+        <!-- §27.13 v2.211: a held run's ticket-and-PR confirm (createPickupConfirm). Empty unless a run is held. -->
+        <div class="blk pickupconfirm" id="pickup-confirm"></div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
@@ -120,6 +123,8 @@
     <!-- Destructive confirmation host (#26): createConfirmDialog renders the flow Terminate
          confirmation here, overlaying the app via fixed positioning. Empty until activated. -->
     <div id="flow-confirm-host"></div>
+    <!-- §27.13 v2.211: the held run's ticket-and-PR dialog, raised by the app on its own. -->
+    <div id="pickup-confirm-modal-host"></div>
     <!-- Bootstrap-failure error-alert host (§27.10): createErrorDialog renders the blocking pickup-failure
          alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
     <div id="flow-error-host"></div>

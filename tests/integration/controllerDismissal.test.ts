@@ -39,11 +39,11 @@ describe('controller stale representations', () => {
       if (message.type === 'registered') confirmed = true;
       if (message.type === 'activate') {
         activations++;
-        socket.send(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome: 'activated' }));
+        socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: message.requestId, outcome: 'activated' }));
       }
     });
     await once(socket, 'open');
-    socket.send(encodeControllerMessage({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
     await vi.waitFor(() => expect(confirmed).toBe(true));
     const terminal = server.terminals().find(item => !before.has(item.id) && item.status !== 'disconnected')!;
     return { socket, terminal, activations: () => activations };

@@ -45,13 +45,13 @@ async function register(directory: string) {
   socket.on('error', () => socket.terminate());
   await once(socket, 'open');
   const acknowledgement = once(socket, 'message');
-  socket.send(JSON.stringify({ version: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/repo' }) + '\n');
+  socket.send(JSON.stringify({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/repo' }) + '\n');
   await acknowledgement;
   return socket;
 }
 
 function publish(socket: WebSocket, work: WorkStatus) {
-  socket.send(JSON.stringify({ version: 1, type: 'status', work }) + '\n');
+  socket.send(JSON.stringify({ version: 2, type: 'status', work }) + '\n');
 }
 
 it('publishes complete current work only for the socket owning the terminal', async () => {
