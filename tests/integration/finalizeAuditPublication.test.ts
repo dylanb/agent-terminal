@@ -99,3 +99,14 @@ describe('#251 maintained audit publication', () => {
     expect(fx.writes).toHaveLength(1);
   });
 });
+
+
+describe('#251 publication artifact ownership', () => {
+  it.each([begin, end])('rejects a report containing the reserved delimiter %s before writing', async (marker) => {
+    const fx = fixture(original);
+    writeFileSync(fx.artifact, `Report containing ${marker}\n`);
+    expect(await fx.publish()).toEqual({ error: expect.any(String) });
+    expect(fx.body()).toBe(original);
+    expect(fx.writes).toEqual([]);
+  });
+});

@@ -1,6 +1,6 @@
 ## 18. Flow definitions (`flow.yaml`)
 
-**#251, preparation increment:** The shipped `feature-dev-v3` finalize step binds `finalize-loop`, a reviewerless goal entered automatically after implementation approval, with a human approve/redo gate and the final-preparation checklist. It consumes approved intent, plan and implementation evidence. Other flows retain their own finalization behavior. The finalize-summary Markdown artifact now carries the complete eight-section audit and the recipe invokes installed evidence and first-publication operations. Maintained-section rerun safety remains the following increment.
+**#251, preparation increment:** The shipped `feature-dev-v3` finalize step binds `finalize-loop`, a reviewerless goal entered automatically after implementation approval, with a human approve/redo gate and the final-preparation checklist. It consumes approved intent, plan and implementation evidence. Other flows retain their own finalization behavior. The finalize-summary Markdown artifact now carries the complete eight-section audit and the recipe invokes installed evidence and maintained-publication operations. Successful handoff requires matching remote publication; reruns replace the report without losing unrelated description.
 
 ### 18.1 Shape & library (D10/D13/D14/D23)
 

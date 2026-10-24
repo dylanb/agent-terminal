@@ -1,4 +1,4 @@
-> **#251 slice 2:** V3 finalization includes installed access to current-run audit evidence, the complete eight-section report recipe and first artifact publication (§§18.2, 25, 27, 28). Maintained-section rerun safety and publication-complete handoff remain slice 3. Human completion and merge ownership are unchanged.
+> **#251:** V3 finalization provides installed current-run audit evidence, the complete eight-section report and maintained publication (§§18.2, 25, 27, 28). Reruns replace the report at the bottom of the PR description, reject ambiguous ownership and verify remote readback before the human handoff. Human completion and merge ownership are unchanged.
 
 > **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Slice 4 adds occurrence-targeted dismissal with empty guidance and fixed-directory stale replacement that preserves live peers.
 

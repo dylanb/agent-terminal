@@ -1,6 +1,6 @@
 ## 25. Flow audit record (per-run, append-only)
 
-**#251, finalization lifecycle:** Entering v3 finalize and preparing its summary leave the flow in progress. Development-complete is a reporting convention only; it neither emits `flow.completed` nor substitutes for human flow completion. Preparation records its own decisions, revision-linked verification and failures using existing evidence. The complete maintained audit report is the following increment; no new telemetry or completion event is introduced here.
+**#251, finalization lifecycle:** Entering v3 finalize and preparing its summary leave the flow in progress. Development-complete is a reporting convention only; it neither emits `flow.completed` nor substitutes for human flow completion. Preparation records its own decisions, revision-linked verification and failures using existing evidence. The complete maintained audit report and verified publication precede the human handoff; neither introduces telemetry or a completion event.
 
 ### 25.1 Goal & boundary (D-audit-1)
 

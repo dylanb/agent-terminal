@@ -1,3 +1,11 @@
+## #251 slice 3 — maintained audit publication and human handoff
+
+Replace the prior marked audit section without duplicating it, retain surrounding description and closing
+references, and move the report below trailing context. Reject malformed/ambiguous ownership and reserved
+delimiters in artifacts before writing. Verify the entire published body through remote readback; write
+or readback failures remain recoverable failures, never successful handoffs. Installed runtime and real
+app journeys exercise retry, changed-report reruns, artifact access and explicit human completion.
+
 ## #251 slice 2 — installed audit evidence and first publication
 
 The v3 finalize recipe now requires the complete eight-section audit and matching publication before

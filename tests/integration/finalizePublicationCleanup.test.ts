@@ -25,14 +25,16 @@ it.each([false, true])('keeps publication outcome independent of cleanup failure
   const publicationError = new Error('publication rejected');
   vi.mocked(fs.rm).mockRejectedValue(cleanupError);
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  let body = 'Description\n';
   const run = createAppGateGitHub({
     pullRequest: async () => { throw new Error('unused'); },
-    pullRequestBody: async () => 'Description\n',
+    pullRequestBody: async () => body,
     markPullRequestReady: async () => { throw new Error('unused'); },
     updateIssueBody: async () => { throw new Error('unused'); },
     publishPullRequestBody: async (_number, file) => {
       dirs.push(dirname(file));
       if (fails) throw publicationError;
+      body = await fs.readFile(file, 'utf8');
     },
   });
   const result = run('publish-flow-audit', { pr: 41, ticket: 251, bodyFile: artifact, bootstrap: null });
