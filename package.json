@@ -1,0 +1,9 @@
+{
+  "name": "finalize-validation-251",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "build": "node --check greeting.js"
+  }
+}

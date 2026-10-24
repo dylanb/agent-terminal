@@ -1,0 +1,4 @@
+test_globs:
+  - "*.test.js"
+test_command: npm test
+build_command: npm run build
