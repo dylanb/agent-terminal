@@ -2,7 +2,7 @@ import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
@@ -19,6 +19,7 @@ import {
   b64,
   exampleConfigDir,
   goalBlockedCmd,
+  goalProgressCmd,
   seedFakeAgentSteps,
   seedFakeAgentV2,
   seedFakeGhGit,
@@ -35,6 +36,8 @@ import {
 } from './fakeTools';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
+import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
+import { seedFinalizeGit, seedScriptedGh } from '../helpers/finalizeFixtures';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -59,11 +62,13 @@ const loopTestBudget = (uiWaits: number, approves: number): number =>
 let app: ElectronApplication | undefined;
 let page: Page;
 const cleanup: string[] = [];
+const gitFixtures: GitRepoFixture[] = [];
 
 test.afterEach(async () => {
   await app?.close();
   app = undefined;
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const fixture of gitFixtures.splice(0)) fixture.cleanup();
 });
 
 const RED_RESULT_REL = '.agent-terminal/loop/artifacts/red-result.json';
@@ -993,6 +998,182 @@ function seedFeatureDevAgent(binDir: string, opts: { blocked?: Record<string, nu
       'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
     },
   );
+}
+
+test('#251 implementation approval automatically injects final preparation into the working session', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(5, 1));
+  const home = tmp('agent-term-e2e-finalize-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-finalize-', 'impl-approve', { ticket: '251' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  await launchInto('agent-term-e2e-finalize-', repo, home, (binDir) => {
+    seedV3GoalAgent(binDir, 'fake-agent', { finalize: goalBlockedCmd('Readiness unverified: latest-head CI is pending.') }, {
+      'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
+    });
+  });
+  await flowControl().click();
+  await approveHumanStep(home, repo, 'impl-approve', LOOP_ROUND_MS);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-commands-seen')), { timeout: APPROVE_ADVANCE_MS }).toMatch(/turn-done:work-finalize/);
+});
+
+const PREPARATION_CASES = [
+  { name: 'conflict', reason: 'release conflicts need an intent decision', status: 0, response: '' },
+  { name: 'commit', reason: 'commit rejected; local changes remain uncommitted', status: 0, response: '' },
+  { name: 'push', reason: 'push rejected; the local commit is not on the PR', status: 0, response: '' },
+  { name: 'pending', reason: 'latest-head CI is pending', status: 8, response: 'pending' },
+  { name: 'failed', reason: 'latest-head CI failed; the scoped fix is not yet verified', status: 1, response: 'failed' },
+  { name: 'unavailable', reason: 'CI evidence is unavailable', status: 1, response: '' },
+  { name: 'empty', reason: 'no CI checks were returned', status: 0, response: '[]' },
+  { name: 'stale', reason: 'successful CI belongs to an earlier revision', status: 0, response: 'stale' },
+  { name: 'changed-head', reason: 'the remote head changed after verification', status: 0, response: 'changed-head' },
+] as const;
+
+for (const scenario of PREPARATION_CASES) {
+  test(`#251 goal protocol: ${scenario.name} remains unverified until current-revision preparation succeeds`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(loopTestBudget(14, 1));
+    const home = tmp('agent-term-e2e-finalize-protocol-home-');
+    const fx = createGitRepoFixture();
+    gitFixtures.push(fx);
+    const { repo, remote, base, head } = seedFinalizeGit(fx);
+    const scaffold = seedAutoGateRepo('agent-term-e2e-finalize-protocol-', 'finalize', { ticket: '251' });
+    cleanup.push(scaffold);
+    cpSync(join(scaffold, '.agent-terminal'), join(repo, '.agent-terminal'), { recursive: true });
+    fx.writeRepoFile(repo, '.gitignore', '.agent-terminal/\n');
+    fx.commitAll(repo, 'Ignore flow artifacts');
+    const oldHead = fx.git(repo, ['rev-parse', 'HEAD']);
+    if (scenario.name !== 'conflict') {
+      expect(() => fx.git(repo, ['merge', '--no-edit', `origin/${base}`])).toThrow();
+      expect(fx.git(repo, ['diff', '--name-only', '--diff-filter=U'])).toBe('policy.txt');
+      fx.writeRepoFile(repo, 'policy.txt', 'approved resolution\n');
+      fx.commitAll(repo, 'Previously reconciled implementation');
+    }
+    fx.git(repo, ['push', 'origin', head]);
+    fx.writeRepoFile(repo, '.agent-terminal/loop/bootstrap.yaml', `schema_version: 1\nstatus: complete\npr: 77\nbranch: ${head}\nissue: 251\ninitial_status: planning\nupdated_at: 2026-07-23T00:00:00.000Z\n`);
+    const before = fx.git(remote, ['rev-parse', head]);
+    const rejectingHook = scenario.name === 'commit' ? join(repo, '.git', 'hooks', 'pre-commit') : join(remote, '.git', 'hooks', 'pre-receive');
+    if (scenario.name === 'commit' || scenario.name === 'push') {
+      writeFileSync(rejectingHook, '#!/bin/sh\necho "rejected by fixture" >&2\nexit 1\n', { mode: 0o755 });
+      fx.writeRepoFile(repo, 'verification.txt', 'scoped CI fix\n');
+    }
+    const gh = seedScriptedGh(tmp('agent-term-e2e-finalize-gh-'));
+    const checks = ['pr', 'checks', '77', '--repo', 'fixture/repo'];
+    const firstResponse = scenario.name === 'stale'
+      ? JSON.stringify({ headRefOid: oldHead, conclusion: 'SUCCESS' })
+      : scenario.name === 'changed-head'
+        ? JSON.stringify({ headRefOid: before, conclusion: 'SUCCESS' })
+        : scenario.response;
+    const hasInitialCheck = !['conflict', 'commit', 'push'].includes(scenario.name);
+    const operatorBlock = !hasInitialCheck;
+    gh.script(hasInitialCheck ? [{ args: checks, stdout: firstResponse, stderr: scenario.name === 'unavailable' ? 'API unavailable' : '', exitCode: scenario.status }] : []);
+    const realGit = shellQuote(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim());
+    const checkCommand = `${shellQuote(gh.command)} ${checks.map(shellQuote).join(' ')}`;
+    const config = tmp('agent-term-e2e-finalize-protocol-config-');
+    cpSync(exampleConfigDir, config, { recursive: true });
+    const def = join(config, 'loops-v2', 'finalize-protocol');
+    mkdirSync(def, { recursive: true });
+    writeFileSync(join(def, 'finalize-protocol.yaml'), [
+      'version: v2', 'name: finalize-protocol', 'work:', '  recipe: work.md', '  artifact: preparation',
+      '  goal: preparation has finished and is ready for the human', 'reviewers: []', 'boundaries: []', 'report:', '  sections: [summary]',
+      'gate:', '  - option: approve', '  - option: redo', 'outputs:', '  - id: preparation', '    path: preparation.md', '',
+    ].join('\n'));
+    writeFileSync(join(def, 'work.md'), 'Exercise the existing goal-session completion protocol.\n');
+    seedTrustedFlow(home, repo, 'finalize-protocol', [
+      'name: finalize-protocol', 'steps:', '  - id: finalize', '    kind: loop', '    loop: finalize-protocol',
+      '    loop_namespace: app', '    gate_authority: human', '',
+    ].join('\n'));
+    const reason = `Readiness unverified: ${scenario.reason}.`;
+    const { logFile } = await launchInto('agent-term-e2e-finalize-protocol-', repo, home, (binDir) => {
+      const signal = 'printf %s work-finalize > .agent-terminal/loop/turn-done';
+      const push = `${realGit} push origin ${shellQuote(head)}`;
+      const commit = `${realGit} add policy.txt verification.txt 2>/dev/null; ${realGit} add -u; ${realGit} commit -m 'Resolve approved intent'`;
+      const resolve = `printf '%s\\n' 'approved resolution' > policy.txt; ${realGit} add policy.txt && ${realGit} commit -m 'Resolve approved intent' && ${push}`;
+      const fix = `printf '%s\\n' 'verified scoped fix' > verification.txt; ${realGit} add verification.txt && ${realGit} commit -m 'Fix scoped CI failure' && ${push}`;
+      const actions: Record<string, { start: string; resume: string }> = {
+        conflict: { start: `${realGit} fetch origin ${shellQuote(base)}; ${realGit} merge --no-edit ${shellQuote(`origin/${base}`)}`, resume: resolve },
+        commit: { start: commit, resume: `${commit} && ${push}` },
+        push: { start: `${commit} && ${push}`, resume: push },
+        failed: { start: checkCommand, resume: fix },
+        'changed-head': { start: `${checkCommand}; ${fix}`, resume: ':' },
+      };
+      const action = actions[scenario.name] ?? { start: checkCommand, resume: ':' };
+      const waitFor = (file: string): string => `deadline=$((SECONDS + 20)); while [ ! -f ${shellQuote(file)} ]; do [ "$SECONDS" -lt "$deadline" ] || exit 98; sleep 0.05; done`;
+      const waitForChecks = `printf ready > .agent-terminal/checks-requested; ${waitFor('.agent-terminal/checks-ready')}`;
+      const finish = `${realGit} ls-remote origin ${shellQuote(`refs/heads/${head}`)} > .agent-terminal/verified-head; printf '%s\\n' ${shellQuote(completionMarker('finalize'))} > .agent-terminal/loop/artifacts/preparation.md; ${goalProgressCmd('done')}`;
+      const resume = `if ${action.resume}; then ${waitForChecks}; if ${checkCommand} > .agent-terminal/verified-ci; then ${finish}; fi; fi`;
+      const wait = operatorBlock ? goalBlockedCmd(reason) : `printf '%s\\n' ${shellQuote(reason)}; printf ready > .agent-terminal/awaiting-ci; ${waitFor('.agent-terminal/continue-preparation')}; ${resume}`;
+      seedV3GoalAgent(binDir, 'fake-agent', { finalize: `{ ${action.start}; } > .agent-terminal/initial-result 2>&1; printf '%s' "$?" > .agent-terminal/initial-exit; ${wait}` }, {}, [
+        `    *"not a turn."*) printf x >> .agent-terminal/gate-question-seen ;;\n`,
+        `    *"Continue preparation now"*) ${resume}; ${signal} ;;\n`,
+      ]);
+    }, { CLAUDE_CONFIG_DIR: config });
+    await flowControl().click();
+    if (operatorBlock) {
+      await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: stop for a human');
+      await openLoopPanel();
+      await expect(loopPanel()).toContainText(reason);
+    } else {
+      await expect.poll(() => readIf(join(repo, '.agent-terminal', 'awaiting-ci')), { timeout: LOOP_ROUND_MS }).toBe('ready');
+      await expect(page.locator('.xterm-rows')).toContainText(reason);
+      expect(runState(repo)).toMatch(/^status: working$/m);
+    }
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    expect(existsSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'preparation.md'))).toBe(false);
+    const atBlock = fx.git(remote, ['rev-parse', head]);
+    if (scenario.name === 'changed-head') expect(atBlock).not.toBe(before);
+    else expect(atBlock).toBe(before);
+    if (scenario.name === 'conflict') expect(fx.git(repo, ['diff', '--name-only', '--diff-filter=U'])).toBe('policy.txt');
+    if (scenario.name === 'commit') {
+      expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(before);
+      expect(fx.git(repo, ['status', '--porcelain'])).not.toBe('');
+    }
+    if (scenario.name === 'push') expect(fx.git(repo, ['rev-parse', 'HEAD'])).not.toBe(before);
+    if (scenario.name === 'commit' || scenario.name === 'push') {
+      expect(readIf(join(repo, '.agent-terminal', 'initial-exit'))).not.toBe('0');
+      expect(readIf(join(repo, '.agent-terminal', 'initial-result'))).toContain('rejected by fixture');
+      rmSync(rejectingHook);
+    }
+    if (hasInitialCheck) {
+      expect(gh.calls().map((call) => call.args)).toEqual([checks]);
+      expect(readIf(join(repo, '.agent-terminal', 'initial-result'))).toContain(scenario.name === 'unavailable' ? 'API unavailable' : firstResponse);
+    }
+    if (['pending', 'empty', 'unavailable', 'stale'].includes(scenario.name)) {
+      expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(before);
+      expect(fx.git(repo, ['status', '--porcelain'])).toBe('');
+    }
+    const sessionCommands = readIf(join(repo, '.agent-terminal', 'goal-commands-seen'));
+    if (operatorBlock) {
+      await expect.poll(() => readIf(join(repo, '.agent-terminal', 'gate-question-seen')), { timeout: UI_MS }).toBe('x');
+      await loopPanel().locator('[data-loop-close]').click();
+      await typeCommand('Continue preparation now.');
+    } else {
+      writeFileSync(join(repo, '.agent-terminal', 'continue-preparation'), 'ready');
+    }
+    await expect.poll(() => readIf(join(repo, '.agent-terminal', 'checks-requested')), { timeout: UI_MS }).toBe('ready');
+    const pushed = fx.git(remote, ['rev-parse', head]);
+    gh.script([{ args: checks, stdout: JSON.stringify({ headRefOid: pushed, conclusion: 'SUCCESS' }) }]);
+    writeFileSync(join(repo, '.agent-terminal', 'checks-ready'), 'ready');
+    await awaitHumanGate(home, repo, 'finalize', LOOP_ROUND_MS);
+    expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(pushed);
+    expect(fx.git(repo, ['show', 'HEAD:policy.txt'])).toBe('approved resolution');
+    expect(fx.git(repo, ['merge-base', 'HEAD', `origin/${base}`])).toBe(fx.git(repo, ['rev-parse', `origin/${base}`]));
+    if (['pending', 'empty', 'unavailable', 'stale'].includes(scenario.name)) expect(pushed).toBe(before);
+    if (scenario.name === 'changed-head') expect(pushed).toBe(atBlock);
+    if (['conflict', 'commit', 'push', 'failed'].includes(scenario.name)) expect(pushed).not.toBe(before);
+    expect(JSON.parse(readIf(join(repo, '.agent-terminal', 'verified-ci')))).toEqual({ headRefOid: pushed, conclusion: 'SUCCESS' });
+    expect(readIf(join(repo, '.agent-terminal', 'verified-head')).split(/\s/)[0]).toBe(pushed);
+    expect(gh.calls().map((call) => call.args)).toEqual(hasInitialCheck ? [checks, checks] : [checks]);
+    expect(readIf(join(repo, '.agent-terminal', 'goal-commands-seen'))).toBe(sessionCommands);
+    await expectSteady(() => flowState(repo), flowState(repo));
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    expect(auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
+    const auditDir = auditRepoDir(auditRootDir(home), repo);
+    const events = readdirSync(auditDir).flatMap((file) => parseAuditStream(readFileSync(join(auditDir, file), 'utf8')).events);
+    expect(events.some((e) => e.type === 'flow.started')).toBe(true);
+    expect(events.some((e) => e.type === 'flow.completed')).toBe(false);
+    expect(readIf(logFile)).not.toMatch(/gh pr (?:merge|review)|copilot/i);
+    await approveOption().click();
+    await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^status: done$/m);
+  });
 }
 
 /** Wait, bounded, for `step`'s clean gate to wait on the operator; a halt or a stall fails naming what the gate shows. */
