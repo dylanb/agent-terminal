@@ -72,10 +72,15 @@ it('disposes an incomplete HTTP upgrade and allows a fresh controller to own the
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'at-ws-http-')));
   let server = await startControllerTransport(root);
   const peer = connect(resolveControllerEndpoint(root));
+  const errors: Error[] = [];
+  peer.on('error', error => errors.push(error));
+  const closed = new Promise<void>(resolve => peer.once('close', () => resolve()));
   try {
     await once(peer, 'connect');
     peer.write('GET / HTTP/1.1\r\n');
     await server.dispose();
+    await closed;
+    for (const error of errors) expect(error).toMatchObject({ code: 'ECONNRESET' });
     server = await startControllerTransport(root);
     expect(server.terminals()).toEqual([]);
   } finally { peer.destroy(); await server.dispose(); rmSync(root, { recursive: true, force: true }); }
