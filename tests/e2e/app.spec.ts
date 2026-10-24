@@ -296,6 +296,7 @@ test('Send from a todo pastes an editable command line at the prompt without sub
 });
 
 test('injection honors bracketed-paste mode read live from the shadow (§9.3)', async () => {
+  await typeCommand("PS1='PASTE-MODE-PROMPT> '");
   // Mode OFF (?2004l): an unfenced paste arrives with no bracket markers (§9.3). cat -v renders bytes.
   await typeCommand('printf "\\x1b[?2004l"; cat -v');
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('off');
@@ -306,6 +307,7 @@ test('injection honors bracketed-paste mode read live from the shadow (§9.3)', 
   // Mode ON (?2004h): the paste must be fenced by ESC[200~ … ESC[201~.
   await typeCommand('');
   await page.keyboard.press('Control+D');
+  await expect.poll(async () => (await page.locator('.xterm-rows > div').allTextContents()).map((line) => line.trim()).filter(Boolean).at(-1)).toBe('PASTE-MODE-PROMPT>');
   await typeCommand('printf "\\x1b[?2004h"; cat -v');
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('on');
   await inject('fenced-in', true);

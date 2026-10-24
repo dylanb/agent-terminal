@@ -1016,6 +1016,110 @@ test('#251 implementation approval automatically injects final preparation into 
   await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-commands-seen')), { timeout: APPROVE_ADVANCE_MS }).toMatch(/turn-done:work-finalize/);
 });
 
+const AUDIT_TRANSPORT_REPORT = [
+  '# Flow audit',
+  '## Scope and status',
+  'feature-dev-v3; ticket 251; PR 41. Development complete for reporting; human completion and merge remain.',
+  '## Execution and decisions',
+  '| Step | Decision | Rationale |',
+  '| plan | Keep the approved scope | Operator decision |',
+  '## Stage timeline and elapsed time',
+  'Recorded elapsed time is not active work. Finalize interval remains open.',
+  '## Exceptions, blocks and checklist outcomes',
+  'red visit 1: one completed item. Deleted unfinished question retained as history.',
+  '## Evidence gaps and follow-up',
+  'An outside-todo question has unavailable text and step attribution.',
+  '## Finalize work and PR readiness',
+  'Latest-head checks passed. Publication is being attempted; human handoff follows readback.',
+  '## Review findings and resolutions',
+  'green: existing implementation finding fixed; Copilot finding dismissed with recorded rationale.',
+  '## Sources',
+  'Controlled agent response for transport testing; narrative accuracy is not established by this fixture.',
+  completionMarker('finalize'),
+];
+
+test('#251 audit transport: the artifact opens, publication is captured, redo updates it and human completion remains explicit', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(12, 1));
+  const home = tmp('agent-term-e2e-audit-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-audit-', 'finalize', { ticket: '251' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  const gh = seedScriptedGh(tmp('agent-term-e2e-audit-gh-'));
+  const edit = ['pr', 'edit', '41', '--repo', 'fixture/project', '--body-file', '-'];
+  const view = ['pr', 'view', '41', '--repo', 'fixture/project', '--json', 'body'];
+  const original = '# Implementation\n\nOperator context.\n\nCloses #251\n';
+  const report = (revision: number) => `${AUDIT_TRANSPORT_REPORT.slice(0, -1).join('\n')}\nRevision ${revision}\n${completionMarker('finalize')}\n`;
+  const body = (revision: number) => `${original}\n<!-- agent-terminal:flow-audit:start -->\n${report(revision)}<!-- agent-terminal:flow-audit:end -->\n`;
+  const artifactFor = (revision: number) => `.agent-terminal/audit-${revision}.md`;
+  for (const revision of [1, 2]) writeFileSync(join(repo, artifactFor(revision)), report(revision));
+  const script = (revision: number) => [
+    { args: edit },
+    { args: view, stdout: JSON.stringify({ body: body(revision) }) },
+  ];
+  gh.script([{ args: edit, stderr: 'publication rejected', exitCode: 1 }, ...script(1), ...script(2)]);
+  const { logFile } = await launchInto('agent-term-e2e-audit-', repo, home, (binDir) => {
+    const run = [
+      `ART=$(sed -n 's/^As the final line of your \\(.*\\) artifact,.*/\\1/p' "$p" | head -1)`,
+      'n=1; [ ! -f .agent-terminal/audit-runs ] || n=2',
+      'mkdir -p "$(dirname "$ART")"',
+      'cp ".agent-terminal/audit-$n.md" "$ART"',
+      'printf "%s" "$ART" > .agent-terminal/audit-artifact-path',
+      `if { if [ "$n" = 1 ]; then printf '%s' ${shellQuote(b64(body(1)))}; else printf '%s' ${shellQuote(b64(body(2)))}; fi | base64 -d | ${shellQuote(gh.command)} ${edit.map(shellQuote).join(' ')}; }; then`,
+      `${shellQuote(gh.command)} ${view.map(shellQuote).join(' ')} > .agent-terminal/audit-readback.json`,
+      'printf "%s" "$ART" > .agent-terminal/audit-artifact-path',
+      'printf "%s" "$n" > .agent-terminal/audit-runs',
+      goalProgressCmd('done'),
+      `else ${goalBlockedCmd('Readiness unverified: audit publication rejected. Retry publication after recovery.')}; fi`,
+    ].join('; ').replace('then;', 'then');
+    seedV3GoalAgent(binDir, 'fake-agent', { finalize: run }, {}, [
+      `    *"not a turn."*) printf x >> .agent-terminal/gate-question-seen ;;\n`,
+      `    *'Continue audit publication now.'*) ${run}; printf '%s' work-finalize > .agent-terminal/loop/turn-done ;;\n`,
+    ]);
+  });
+  await flowControl().click();
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: stop for a human');
+  await openLoopPanel();
+  await expect(loopPanel()).toContainText('audit publication rejected');
+  expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+  expect(readIf(join(repo, readIf(join(repo, '.agent-terminal/audit-artifact-path'))))).toBe(report(1));
+  expect(existsSync(join(repo, '.agent-terminal/audit-readback.json'))).toBe(false);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal/gate-question-seen')), { timeout: UI_MS }).toBe('x');
+  await loopPanel().locator('[data-loop-close]').click();
+  await typeCommand('Continue audit publication now.');
+  for (const revision of [1, 2]) {
+    await expect.poll(() => readIf(join(repo, '.agent-terminal/audit-runs')), { timeout: LOOP_ROUND_MS }).toBe(String(revision));
+    await awaitHumanGate(home, repo, 'finalize', LOOP_ROUND_MS);
+    const artifact = readIf(join(repo, '.agent-terminal/audit-artifact-path'));
+    expect(artifact).toMatch(/^\.agent-terminal\/loop\/artifacts\/.*\.md$/);
+    expect(readIf(join(repo, artifact))).toBe(report(revision));
+    expect(gh.calls().filter((call) => call.args[1] === 'edit').at(-1)?.stdin).toBe(body(revision));
+    expect(JSON.parse(readIf(join(repo, '.agent-terminal/audit-readback.json'))).body).toBe(body(revision));
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    await loopPanel().locator('[data-loop-close]').click();
+    await page.keyboard.press('Control+2');
+    await page.locator('#artifacts .tree .f').filter({ hasText: artifact.split('/').at(-1) }).click();
+    await expect(page.locator('#artifacts .vbody')).toContainText(`Revision ${revision}`);
+    await expect(page.locator('#artifacts .vbody')).toContainText('Review findings and resolutions');
+    await page.keyboard.press('Control+1');
+    await openLoopPanel();
+    if (revision === 1) {
+      await loopPanel().locator('[data-gate-option="redo"]').click();
+      const composer = page.locator('#redo-composer-host .flow-modal');
+      await composer.locator('textarea').fill('Update the audit for the new revision.');
+      await composer.locator('.confirm').click();
+      await expect(composer).toBeHidden();
+    }
+  }
+  await expectSteady(() => flowState(repo), flowState(repo));
+  const auditDir = auditRepoDir(auditRootDir(home), repo);
+  const events = readdirSync(auditDir).flatMap((file) => parseAuditStream(readFileSync(join(auditDir, file), 'utf8')).events);
+  expect(events.some((event) => event.type === 'flow.completed')).toBe(false);
+  expect(readIf(logFile)).not.toMatch(/gh pr (?:merge|review)|copilot/i);
+  expect(gh.calls().map((call) => call.args)).toEqual([edit, edit, view, edit, view]);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^status: done$/m);
+});
+
 const PREPARATION_CASES = [
   { name: 'conflict', reason: 'release conflicts need an intent decision', status: 0, response: '' },
   { name: 'commit', reason: 'commit rejected; local changes remain uncommitted', status: 0, response: '' },
