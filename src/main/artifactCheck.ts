@@ -8,22 +8,23 @@ import { shellQuote } from '../shared/shellQuote';
 import { roundReportProblems } from '../shared/roundReport';
 import { consolidatorOutputProblems } from '../shared/consolidatorOutput';
 import { goalLegEnd } from '../shared/goalProgress';
-import { phaseOutputRel, phaseResultEnd } from '../shared/phaseResult';
-import { isPhaseOutcome, type PhaseOutcome } from '../shared/phaseOutcome';
+import { phaseOutputRel, phaseResultEnd, type PhaseResultWant } from '../shared/phaseResult';
+import { isPhaseOutcome } from '../shared/phaseOutcome';
 import { isBuildOutcome, type BuildOutcome } from '../shared/buildOutcome';
 
 /** What to check: a round report against its sections + roster, a consolidator verdict against its catalog, a
- *  goal session's progress file against the leg it is on (§27.3), or a phase result against the outcome (and, for
- *  GREEN, the build) its phase needs (§28.5.3). */
+ *  goal session's progress file against the leg it is on (§27.3), or a phase result against what completes its
+ *  phase (§28.5.3). */
 export type ArtifactCheck =
   | { kind: 'report'; rel: string; sections: string[]; roster: string[] }
   | { kind: 'verdict'; rel: string; catalog: string[] }
   | { kind: 'progress'; rel: string; leg: number; legs: boolean }
-  | { kind: 'result'; rel: string; outcome: PhaseOutcome; build?: BuildOutcome };
+  | ({ kind: 'result'; rel: string } & PhaseResultWant);
 
 const IN_LEGS = 'legs';
 const ONE_LEG = 'one-leg';
 const NO_BUILD = 'no-build';
+const VERIFICATION_ONLY = 'verification-only';
 
 /** The rollup entry name the build emits the checker under, and the basename the runtime resolves it by. */
 export const ARTIFACT_CHECK_ENTRY = 'artifactCheck';
@@ -58,7 +59,7 @@ function checkArgv(check: ArtifactCheck): string[] {
     case 'progress':
       return ['progress', check.rel, String(check.leg), check.legs ? IN_LEGS : ONE_LEG];
     case 'result':
-      return ['result', check.rel, check.outcome, check.build ?? NO_BUILD];
+      return ['result', check.rel, check.outcome, check.build ?? NO_BUILD, ...(check.acceptsVerificationOnly ? [VERIFICATION_ONLY] : [])];
   }
 }
 
@@ -69,9 +70,15 @@ function progressProblems(content: string, leg: string, legs: string): string[] 
   return end.ok ? [] : [end.problem];
 }
 
-function resultProblems(rel: string, content: string, captured: string | null, outcome: string, build: string): string[] | null {
+function resultProblems(rel: string, content: string, captured: string | null, [outcome, build, verification]: string[]): string[] | null {
   if (!isPhaseOutcome(outcome) || (build !== NO_BUILD && !isBuildOutcome(build))) return null;
-  const end = phaseResultEnd({ result: content, captured, capturedRel: phaseOutputRel(rel) }, { outcome, ...(build !== NO_BUILD ? { build: build as BuildOutcome } : {}) });
+  if (verification !== undefined && verification !== VERIFICATION_ONLY) return null;
+  const want: PhaseResultWant = {
+    outcome,
+    ...(build !== NO_BUILD ? { build: build as BuildOutcome } : {}),
+    ...(verification === VERIFICATION_ONLY ? { acceptsVerificationOnly: true as const } : {}),
+  };
+  const end = phaseResultEnd({ result: content, captured, capturedRel: phaseOutputRel(rel) }, want);
   return end.ok ? [] : [end.problem];
 }
 
@@ -81,7 +88,7 @@ export function artifactCheckCommand(runtime: ArtifactCheckRuntime, check: Artif
   return ['ELECTRON_RUN_AS_NODE=1', ...[runtime.execPath, runtime.script, ...checkArgv(check)].map(shellQuote)].join(' ');
 }
 
-const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}>\n`;
+const USAGE = `usage: report <file> <sections,...> <personas,...> | verdict <file> <catalog,...> | progress <file> <leg> <${IN_LEGS}|${ONE_LEG}> | result <file> <outcome> <build|${NO_BUILD}> [${VERIFICATION_ONLY}]\n`;
 
 /** Run the check `argv` describes against the file `read` returns (null = missing). Exit 0 prints
  *  ARTIFACT_CHECK_PASSED; exit 1 lists each problem; exit 2 is a usage error. */
@@ -99,9 +106,9 @@ export function runArtifactCheck(argv: string[], read: (rel: string) => string |
     const found = content === null ? [`${rel} does not exist`] : progressProblems(content, rest[0], rest[1]);
     if (found === null) return { exitCode: 2, output: USAGE };
     problems = found;
-  } else if (kind === 'result' && rel !== undefined && rest.length === 2) {
+  } else if (kind === 'result' && rel !== undefined && (rest.length === 2 || rest.length === 3)) {
     const content = read(rel);
-    const found = content === null ? [`${rel} does not exist`] : resultProblems(rel, content, read(phaseOutputRel(rel)), rest[0], rest[1]);
+    const found = content === null ? [`${rel} does not exist`] : resultProblems(rel, content, read(phaseOutputRel(rel)), rest);
     if (found === null) return { exitCode: 2, output: USAGE };
     problems = found;
   } else {

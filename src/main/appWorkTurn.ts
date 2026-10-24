@@ -8,10 +8,10 @@ import type { SliceBrief } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
-import { PHASE_RESULT_FIELDS, composePhaseResultInstruction } from '../shared/phaseResult';
+import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
 import { composeRedCheckInstruction, redCheckReportRel } from '../shared/redCheck';
 import { ticketPromptLines } from '../shared/currentTicket';
-import { RED_COMPLETING_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
+import { RED_COMPLETING_OUTCOME, RED_VERIFICATION_OUTCOME, GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
 import { GREEN_COMPLETING_BUILD_OUTCOME } from '../shared/buildOutcome';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 import { GOAL_PROGRESS_FIELDS, exampleGoalNotes, exampleGoalProgress } from '../shared/goalProgress';
@@ -308,6 +308,10 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
           `This turn is a valid RED only when a test you ADDED fails by assertion (\`"${PHASE_RESULT_FIELDS.outcome}": "${RED_COMPLETING_OUTCOME}"\`).`,
           'A compile or import error (`errored`), a passing test (`passed`), or no test selected does NOT complete it —',
           'fix the test so it genuinely runs and fails on an assertion, then re-run and re-classify.',
+          'The one exception is a slice whose behavior an earlier slice already built, so every test you added passes',
+          'against the existing code: when your instructions let you record it as verification-only, write instead',
+          '',
+          examplePhaseResult(RED_VERIFICATION_OUTCOME, { verificationOnly: true }).trimEnd(),
           ...checkerLines(req.completion.checkCommand, 'phase result', resultCheckMoment(req)),
         ],
       }),

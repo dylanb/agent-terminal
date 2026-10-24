@@ -225,6 +225,9 @@ export interface StepScript {
   // turn authors a test-glob file this turn (the "a test was added" async clause).
   resultOutcome?: PhaseOutcome;
   writeTest?: boolean;
+  // §28.5.3 RED work mode: write a verification-only result (a passed run whose new tests verify behavior that
+  // already exists) instead of `resultOutcome`.
+  verificationOnly?: boolean;
   // §28.5.3 GREEN work mode: the build classification written alongside `resultOutcome` (default 'built'), and
   // whether the turn ALTERS a line of the committed tests/frozen.test.ts (`touchTest`, the frozen-check
   // detection) or only ADDS tests (`addTest`: a new test file and a test appended to tests/frozen.test.ts),
@@ -297,11 +300,12 @@ function stepArms(stepId: string, opts: StepScript): string[] {
   // .agent-terminal (a real test path that rides into the approve commit); the result file sits UNDER it.
   const writeResult = (outcome: PhaseOutcome, build?: BuildOutcome): string =>
     writePhaseResultSh(opts.artifactRel, examplePhaseResult(outcome, build ? { build } : undefined), exampleCapturedOutput(outcome));
+  const writeVerification = writePhaseResultSh(opts.artifactRel, examplePhaseResult('passed', { verificationOnly: true }), exampleCapturedOutput('passed'));
   const writeRedTest =
     opts.writeTest === false
       ? ''
       : `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(3); });' > tests/red_added.test.ts`;
-  const redBody = [bump, writeRedTest, writeResult(opts.resultOutcome ?? 'failed-assertion')];
+  const redBody = [bump, writeRedTest, opts.verificationOnly === true ? writeVerification : writeResult(opts.resultOutcome ?? 'failed-assertion')];
   // §28.5.3 — the GREEN work turn: the frozen check diffs the committed baseline against the working tree, so
   // rewriting the committed tests/frozen.test.ts is what raises the flag; appending to it does not.
   const testEdit = `mkdir -p tests; printf '%s\\n' 'test("adds", () => { expect(add(1, 1)).toBe(2); });' 'extra' > tests/frozen.test.ts`;

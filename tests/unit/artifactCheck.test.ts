@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exampleCapturedOutput, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
+import { RED_COMPLETION, exampleCapturedOutput, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
 import { execFileSync } from 'node:child_process';
 import { ARTIFACT_CHECK_PASSED, artifactCheckCommand, runArtifactCheck, type ArtifactCheck } from '../../src/main/artifactCheck';
 import { exampleRoundReport } from '../../src/shared/roundReport';
@@ -80,6 +80,16 @@ describe('runArtifactCheck — the agent-runnable format check (§27.12)', () =>
     const redRun = { [phaseOutputRel(red.rel)]: exampleCapturedOutput('failed-assertion') };
     expect(runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('failed-assertion'), ...redRun })).exitCode).toBe(0);
     expect(runArtifactCheck(argvOf(red), files({ [red.rel]: 'outcome: failed-assertion\n', ...redRun })).output).toContain('not valid JSON');
+  });
+
+  it("passes RED's check for a verification-only result, and still fails a passing run that claims nothing", () => {
+    const red: ArtifactCheck = { kind: 'result', rel: '.agent-terminal/loop/artifacts/red-result.json', ...RED_COMPLETION };
+    const run = { [phaseOutputRel(red.rel)]: exampleCapturedOutput('passed') };
+    expect(runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('passed', { verificationOnly: true }), ...run })).exitCode).toBe(0);
+    expect(runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('failed-assertion'), ...run })).exitCode).toBe(0);
+    const unclaimed = runArtifactCheck(argvOf(red), files({ [red.rel]: examplePhaseResult('passed'), ...run }));
+    expect(unclaimed.exitCode).toBe(1);
+    expect(unclaimed.output).toContain('reports passed, not failed-assertion');
   });
 
   it('fails a missing file, naming it', () => {

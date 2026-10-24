@@ -29,6 +29,13 @@ fail later. When the repository declares a `red_check_command`, read the red-che
 it records where each test actually failed, and the engine already holds it against the declared intended
 failures, so spend your attention on whether each declared check is the right one for its acceptance criterion.
 
+A verification-only RED records a slice whose behavior an earlier slice already built: every test it added
+passes. Grade it as strictly as a failing RED. Confirm the tests cover the slice's acceptance criteria, that the
+behavior they pass against already exists in the code (not in this change), and that the test evidence shows
+each check failing by assertion at that check when its behavior was broken in a scratch copy of the
+repository. A check with no such run, or one that still passed with its behavior broken, is a finding. A
+verification-only RED for a slice that is not already built is a finding: it is a RED that never failed.
+
 A RED counts only if it came from a run of the test in the environment the repository's own conventions
 prescribe for that test type: ensure every test needed to prove the in-scope change has actually been run —
 each new RED test, whatever its type (unit, integration, end-to-end, or any other the repository has) — and
