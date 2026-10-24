@@ -7,7 +7,7 @@
 // paintTokens and paintColors are passed to Playwright's `page.evaluate`, which serializes the function
 // source: neither may reference anything outside its own body, so the sentinel is spelled inline and
 // pinned to UNRESOLVED by tests/browser/tokenProbe.test.ts.
-import type { RGBA } from './wcag';
+import { parseColor, type RGBA } from './wcag';
 
 export const UNRESOLVED = 'rgb(1, 2, 3)';
 
@@ -44,4 +44,15 @@ export function paintColors(values: readonly string[]): string[] {
 /** Equal within one 8-bit step per channel, alpha included. */
 export function sameColor(a: RGBA, b: RGBA): boolean {
   return a.every((c, i) => Math.abs((i === 3 ? 255 : 1) * (c - b[i])) <= 1 + 1e-9);
+}
+
+/** Each name whose painted colour is not the matching `expected` painted colour, with both values. */
+export function mismatchedTokens(
+  names: readonly string[],
+  painted: Readonly<Record<string, string>>,
+  expected: readonly string[],
+): string[] {
+  return names.flatMap((name, i) =>
+    sameColor(parseColor(painted[name]), parseColor(expected[i])) ? [] : [`${name} painted ${painted[name]}, expected ${expected[i]}`],
+  );
 }
