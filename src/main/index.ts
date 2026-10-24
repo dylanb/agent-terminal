@@ -863,7 +863,7 @@ async function createWindow(): Promise<void> {
       const load = resolveActiveDefinition(repoKey);
       return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity };
     },
-    issueTitle: (repoKey, number) => createGithubRefs()(repoKey, 'issue', number),
+    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
   });
   controllerStatus.subscribe(work => {
     currentWork = work;

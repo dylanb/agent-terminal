@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,23 +11,13 @@ import { parseControllerMessage, encodeControllerMessage } from '../../src/share
 import type { ControllerWorkStatus } from '../../src/shared/ipc';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
-const connections = vi.hoisted(() => [] as import('node:net').Socket[]);
-vi.mock('node:net', async importOriginal => {
-  const net = await importOriginal<typeof import('node:net')>();
-  return { ...net, connect: (...args: Parameters<typeof net.connect>) => {
-    const socket = net.connect(...args);
-    connections.push(socket);
-    return socket;
-  } };
-});
-
-it('bounds queued writes while a receiver is paused and delivers the latest full status on drain', async () => {
+it('coalesces a burst for a paused receiver without replaying superseded snapshots', async () => {
   const root = mkdtempSync(join(tmpdir(), 'at-pressure-'));
   const endpoint = resolveControllerEndpoint(root);
   mkdirSync(dirname(endpoint), { recursive: true });
   let peer: WebSocket | undefined;
   let publish: ((work: ControllerWorkStatus) => void) | undefined;
-  let latest: ControllerWorkStatus | undefined;
+  const received: ControllerWorkStatus[] = [];
   const server = createWebSocketTestServer(socket => {
     peer = socket;
     socket.on('message', (chunk: Buffer) => {
@@ -35,7 +25,7 @@ it('bounds queued writes while a receiver is paused and delivers the latest full
       if (message.type === 'register') {
         socket.pause();
         socket.send(encodeControllerMessage({ version: 1, type: 'registered' }));
-      } else if (message.type === 'status') latest = message.work;
+      } else if (message.type === 'status') received.push(message.work);
     });
   });
   await new Promise<void>(resolve => server.listen(endpoint, resolve));
@@ -46,18 +36,18 @@ it('bounds queued writes while a receiver is paused and delivers the latest full
   try {
     await expect.poll(() => publish).toBeTypeOf('function');
     const work = workStatus({ error: { reason: 'x'.repeat(128 * 1024) } });
-    const wireBytes = Buffer.byteLength(encodeControllerMessage({ version: 1, type: 'status', work }));
+    publish!(work);
     for (let index = 0; index < 200; index++) publish!({ ...work, error: { reason: `${work.error!.reason}${index}` } });
-    expect(connections.at(-1)!.writableLength).toBeLessThan(wireBytes * 2);
     const current = { ...work, error: { reason: `${work.error!.reason}latest` } };
     publish!(current);
     peer!.resume();
-    await expect.poll(() => latest, { timeout: 5000 }).toEqual(current);
+    await expect.poll(() => received.at(-1), { timeout: 5000 }).toEqual(current);
+    expect(received.length).toBeLessThanOrEqual(2);
+    expect(received.every(snapshot => snapshot.error?.reason === work.error!.reason || snapshot.error?.reason === current.error.reason)).toBe(true);
   } finally {
     stop();
     peer?.terminate();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    connections.length = 0;
     rmSync(root, { recursive: true, force: true });
   }
 });

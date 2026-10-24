@@ -14,6 +14,7 @@ import { isErrno } from './errno';
 export const CONTROLLER_ACTIVATION_TIMEOUT_MS = 5_000;
 
 export interface ControllerRegistry {
+  /** Returned and delivered snapshots are detached values owned by the caller. */
   terminals(): ControllerTerminal[];
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
@@ -34,7 +35,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const sockets = new Set<Socket>();
   const registrations = new Map<WebSocket, ControllerTerminal>();
   const retained = new Map<string, ControllerTerminal>();
-  const snapshot = () => [...retained.values(), ...registrations.values()].map(terminal => ({ ...terminal }));
+  const snapshot = () => structuredClone([...retained.values(), ...registrations.values()]);
   const pending = new Map<string, { socket: WebSocket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
   const notify = () => { for (const listener of listeners) listener(snapshot()); };

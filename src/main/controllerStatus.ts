@@ -1,14 +1,32 @@
-import type { AgentState, ControllerWorkStatus, FlowStateView, GithubRef } from '../shared/ipc';
+import type { AgentState, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
 import { isControllerIssueNumber } from '../shared/controllerStatus';
 import { errMsg } from './errno';
 
 export interface ControllerStatusSource {
-  current(): { repoKey: string; flowName: string | null; view: FlowStateView; activity: AgentState };
-  issueTitle(repoKey: string, number: number): Promise<GithubRef | null>;
+  current(): {
+    repoKey: string;
+    flowName: string | null;
+    activity: AgentState;
+    view: Pick<FlowStateView, 'stepName' | 'status' | 'runStarted' | 'error'> & {
+      refs?: { ticket?: number };
+      loop?: {
+        status: string;
+        humanNeeded?: boolean;
+        errorReason?: string;
+        verdictReason?: string;
+        autoGate?: {
+          haltReasons: readonly { reason: string; detail?: string }[];
+          failedEffect?: { detail: string };
+        };
+      };
+    };
+  };
+  issueTitle(repoKey: string, number: number): Promise<string | null>;
 }
 
 export function createControllerStatus(source: ControllerStatusSource): {
   refresh(): void;
+  /** Each delivery is a detached value owned by the subscriber. */
   subscribe(listener: (work: ControllerWorkStatus) => void): () => void;
   dispose(): void;
 } {
@@ -23,7 +41,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
     const serialized = JSON.stringify(work);
     if (serialized === previous) return;
     previous = serialized;
-    for (const listener of listeners) listener(work);
+    for (const listener of listeners) listener(structuredClone(work));
   };
   const refresh = () => {
     if (!alive) return;
@@ -56,7 +74,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
         const owner = occurrence;
         void source.issueTitle(repoKey, number).catch(() => null).then(result => {
           if (!alive || occurrence !== owner) return;
-          owner.title = result ? { availability: 'known', text: result.title } : { availability: 'unavailable' };
+          owner.title = result !== null ? { availability: 'known', text: result } : { availability: 'unavailable' };
           refresh();
         });
       }
@@ -68,7 +86,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
   };
   return {
     refresh,
-    subscribe(listener) { listeners.add(listener); listener(work); return () => { listeners.delete(listener); }; },
+    subscribe(listener) { listeners.add(listener); listener(structuredClone(work)); return () => { listeners.delete(listener); }; },
     dispose() { alive = false; listeners.clear(); occurrence = undefined; },
   };
 }

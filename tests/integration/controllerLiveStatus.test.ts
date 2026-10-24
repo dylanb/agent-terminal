@@ -102,3 +102,23 @@ it('carries real-socket status through the actual controller IPC snapshot bounda
   publish(socket, work);
   await expect.poll(() => snapshot).toMatchObject({ sessionId: SESSION_ID, terminals: [expect.objectContaining({ launchDirectory: '/repo/ipc', work })] });
 });
+
+it('isolates registry snapshots and subscribers from each other through nested status values', async () => {
+  const socket = await register('/repo/owned');
+  const work = workStatus({ attention: { status: 'complete', reasons: ['Original reason'] }, error: { reason: 'Original error' } });
+  publish(socket, work);
+  await expect.poll(() => server.terminals()[0]?.work).toEqual(work);
+  const copy = server.terminals();
+  copy[0].work!.attention!.reasons.push('Caller mutation');
+  copy[0].work!.error!.reason = 'Caller mutation';
+  expect(server.terminals()[0].work).toEqual(work);
+  const stopMutator = server.subscribeTerminals(items => { items[0].work!.attention!.reasons.push('Subscriber mutation'); });
+  let received: typeof copy = [];
+  const stopObserver = server.subscribeTerminals(items => { received = items; });
+  try {
+    expect(received[0].work).toEqual(work);
+    const updated = workStatus({ ...work, activity: 'quiet' });
+    publish(socket, updated);
+    await expect.poll(() => received[0]?.work).toEqual(updated);
+  } finally { stopMutator(); stopObserver(); }
+});

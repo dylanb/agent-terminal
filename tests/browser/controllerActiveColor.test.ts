@@ -1,3 +1,4 @@
+import { page } from 'vitest/browser';
 import { expect, it } from 'vitest';
 import '../../src/renderer/src/styles.css';
 import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
@@ -12,7 +13,7 @@ it.each(['light', 'dark'])('shows active work in the signal color in %s theme', 
   token.style.color = 'var(--signal-text)';
   host.append(token);
   try {
-    const label = [...host.querySelectorAll('span')].find(element => element.textContent === 'Active')!;
+    const label = page.elementLocator(host).getByText('Active', { exact: true }).element();
     expect(getComputedStyle(label).color).toBe(getComputedStyle(token).color);
   } finally { panes.dispose(); host.remove(); document.documentElement.removeAttribute('data-theme'); }
 });

@@ -622,7 +622,7 @@ button:hover { border-color:var(--dim); }
 .controller-panes > [role="alert"]:empty { margin:0; }
 body:has(> .controller-panes) { overflow:visible; }
 
-.startup-waiting { padding:clamp(16px, 4vw, 48px); height:100%; overflow:auto; overflow-wrap:anywhere; }
+.startup-waiting { padding:calc(3 * var(--r)); height:100%; overflow:auto; overflow-wrap:anywhere; }
 
 .controller-work { display:grid; gap:var(--r); min-width:0; }
 .controller-ticket { display:flex; gap:var(--r); min-width:0; }

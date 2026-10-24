@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { startControllerTransport, type ControllerRegistry } from '../../src/main/controllerTransport';
 import { createControllerStatus } from '../../src/main/controllerStatus';
-import type { ControllerWorkStatus, GithubRef } from '../../src/shared/ipc';
+import type { ControllerWorkStatus } from '../../src/shared/ipc';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), 'at-status-recovery-')));
@@ -49,13 +49,13 @@ it('repeated real-socket recovery publishes current peer state and rejects callb
 it('late pre-outage title cannot overwrite current work after real-socket recovery', async () => {
   registry = await startControllerTransport(home);
   let repo = '/old';
-  let release!: (value: GithubRef | null) => void;
-  const pending = new Promise<GithubRef | null>(resolve => { release = resolve; });
+  let release!: (value: string | null) => void;
+  const pending = new Promise<string | null>(resolve => { release = resolve; });
   const source = createControllerStatus({
     current: () => ({ repoKey: repo, flowName: repo, activity: 'quiet', view: {
-      stepName: 'work', steps: ['work'], position: 1, total: 1, status: 'in_progress', runStarted: 'started', refs: { ticket: repo === '/old' ? 219 : 220 },
+      stepName: 'work', status: 'in_progress', runStarted: 'started', refs: { ticket: repo === '/old' ? 219 : 220 },
     } }),
-    issueTitle: async directory => directory === '/old' ? pending : { title: 'CURRENT_TITLE', body: '', url: 'https://example.test/220' },
+    issueTitle: async directory => directory === '/old' ? pending : 'CURRENT_TITLE',
   });
   stops.push(() => source.dispose());
   source.refresh();
@@ -69,7 +69,7 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
   await expect.poll(() => registry!.terminals()[0]?.work?.ticket, { timeout: 8_000 }).toMatchObject({ number: 220, title: { text: 'CURRENT_TITLE' } });
   const seen: ControllerWorkStatus[] = [];
   const unsubscribe = registry.subscribeTerminals(terminals => { for (const terminal of terminals) if (terminal.work) seen.push(terminal.work); });
-  release({ title: 'OBSOLETE_TITLE', body: '', url: 'https://example.test/219' });
+  release('OBSOLETE_TITLE');
   await pending;
   await new Promise(resolve => setTimeout(resolve, 100));
   unsubscribe();
