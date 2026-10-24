@@ -21,3 +21,21 @@ slice that implements it, and the final integration slice must wire every AC int
 explicitly records that wiring a non-goal. The only way an AC leaves scope is explicit, prior operator
 permission (a non-goal recorded in the ticket, or a split into an already-filed sub-ticket of the same epic);
 never self-defer an AC to "a later slice" without it.
+
+Your plan is graded by the principal, security, architecture, intent, maintainability, contracts and ui
+reviewers. Know the ui reviewer's standards before you start and meet them the first time:
+
+- **ui:** WCAG 2.2 AA, the WAI-ARIA Authoring Practices Guide patterns, design tokens as the single source of a
+  design system's values, and atomic design (atoms, molecules and organisms) — plus the repository's own UI
+  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches renderer UI.
+
+When the ticket touches renderer UI, the plan carries a `## Design system` section that lists every
+design-system change the work needs — new or changed tokens, new or changed shared components (atoms and
+molecules, per `UI-STANDARDS.md`), and the contrast pairings they introduce — or states `None.` when it needs
+none. A ticket that does not touch renderer UI omits the section.
+
+Schedule each listed change in the earliest slice or slices, ahead of every slice that uses it, each applied to a
+surface the operator can already see (the tracer-bullet rule's design-system note, for example in
+`TRACER-BULLET.md`), so later slices consume the design system rather than introduce styling of their own. Never
+plan a component-specific colour, spacing or typography value where a token should exist: plan the token in the
+design-system section instead.

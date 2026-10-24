@@ -181,6 +181,7 @@ export const PLAN_V2_ROSTER = [
   'review-plan-intent',
   'review-plan-maintainability',
   'review-plan-contracts',
+  'review-plan-ui',
 ];
 export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
