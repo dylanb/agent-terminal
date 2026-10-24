@@ -1,3 +1,5 @@
+> **#251 slice 1:** V3 finalization now starts autonomous PR preparation and retains a human completion/merge boundary (§§18.2, 25, 27, 28). Full audit publication remains the next approved increment.
+
 > **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Slice 4 adds occurrence-targeted dismissal with empty guidance and fixed-directory stale replacement that preserves live peers.
 
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application

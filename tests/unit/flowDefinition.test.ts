@@ -181,7 +181,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     }
   });
 
-  it('the shipped feature-dev flow declares `human` only at its three operator approvals, `auto` on every other loop step', () => {
+  it('the shipped feature-dev flow declares `human` only at its four operator approvals, `auto` on every other loop step', () => {
     const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'));
     expect(load.ok).toBe(true);
     if (!load.ok) return;
@@ -198,7 +198,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
       refactor: 'auto',
       'integration-slice': 'auto',
       'impl-approve': 'human',
-      finalize: null,
+      finalize: 'human',
     });
   });
 

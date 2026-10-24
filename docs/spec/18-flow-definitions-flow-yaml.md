@@ -1,5 +1,7 @@
 ## 18. Flow definitions (`flow.yaml`)
 
+**#251, preparation increment:** The shipped `feature-dev-v3` finalize step binds `finalize-loop`, a reviewerless goal entered automatically after implementation approval, with a human approve/redo gate and the final-preparation checklist. It consumes approved intent, plan and implementation evidence. Other flows retain their own finalization behavior. Full audit publication is the following planned increment, not a claim made by this preparation increment.
+
 ### 18.1 Shape & library (D10/D13/D14/D23)
 
 - A flow definition is a **declarative YAML file** the app reads and watches. The **local** run-definition source is `<worktree>/.agent-terminal/flow.yaml` (the legacy single-flow source, §18.7.3 leg 2 — consulted only when no flow is selected); progression for a run lives at `<worktree>/.agent-terminal/flow-state.yaml` (§19.1). **The flow a worktree runs is the operator's choice: a set active-flow pointer (§18.7.2) wins over a present local `flow.yaml`** (§18.7.3). **§18.7.3's pointer-catalog leg (leg 1) resolves and runs a catalog entry *in place* — there is no copy-to-`<worktree>/.agent-terminal/flow.yaml` step**: the worktree-local path is one source, not a required staging location for a resolved catalog definition, so downstream slices must **not** implement a copy-to-worktree instantiation for leg 1.

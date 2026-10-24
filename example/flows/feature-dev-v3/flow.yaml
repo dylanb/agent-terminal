@@ -77,5 +77,8 @@ steps:
     loop: impl-approve-loop
     loop_namespace: app
   - id: finalize
-    kind: manual
-    todo_template: polish
+    kind: loop
+    gate_authority: human
+    loop: finalize-loop
+    loop_namespace: app
+    todo_template: finalize

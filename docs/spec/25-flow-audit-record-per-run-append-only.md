@@ -1,5 +1,7 @@
 ## 25. Flow audit record (per-run, append-only)
 
+**#251, finalization lifecycle:** Entering v3 finalize and preparing its summary leave the flow in progress. Development-complete is a reporting convention only; it neither emits `flow.completed` nor substitutes for human flow completion. Preparation records its own decisions, revision-linked verification and failures using existing evidence. The complete maintained audit report is the following increment; no new telemetry or completion event is introduced here.
+
 ### 25.1 Goal & boundary (D-audit-1)
 
 Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the loop status/iteration, and the commands the flow issued on the user's behalf.
