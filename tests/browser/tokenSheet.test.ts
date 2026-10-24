@@ -1,24 +1,23 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import '../helpers/rendererTokens';
 import {
-  EXISTING_TOKENS,
+  EXISTING_TOKEN_NAMES,
+  LENGTH_TOKEN_NAMES,
   STATUSES,
-  STATUS_TOKENS,
-  expectedColor,
-  type DesignToken,
+  STATUS_TOKEN_NAMES,
+  aliasOf,
+  expectedLength,
   type ExistingToken,
   type Status,
   type StatusToken,
   type Theme,
 } from '../helpers/designTokens';
-import { UNRESOLVED, mismatchedTokens, paintColors, paintTokens, sameColor } from '../helpers/tokenProbe';
-import { compositeOver, contrastRatio, parseColor, type RGBA } from '../helpers/wcag';
+import { mismatchedTokens, offTable, paintColors, paintTokens, readColors, readLengths, sameColor } from '../helpers/tokenProbe';
+import { compositeOver, contrastRatio, type RGBA } from '../helpers/wcag';
 import { hslHue, hueDistance } from '../helpers/colorHue';
 
 const html = document.documentElement;
 const THEMES: readonly Theme[] = ['light', 'dark'];
-const EXISTING = Object.keys(EXISTING_TOKENS) as ExistingToken[];
-const STATUS = Object.keys(STATUS_TOKENS) as StatusToken[];
 const NEEDS_HUMAN = [
   '--status-needs-human',
   '--status-needs-human-text',
@@ -46,23 +45,6 @@ afterEach(() => {
   html.removeAttribute('style');
 });
 
-/** Each token that does not paint its table value in `theme`. */
-function offTable(names: readonly DesignToken[], theme: Theme): string[] {
-  return mismatchedTokens(names, paintTokens(names), paintColors(names.map((name) => expectedColor(name, theme))));
-}
-
-/** Each token's painted colour, or null when nothing defines it: an undefined token has no colour to grade. */
-function painted(names: readonly string[]): Record<string, RGBA | null> {
-  const unresolved = parseColor(UNRESOLVED);
-  return Object.fromEntries(
-    Object.entries(paintTokens(names)).map(([name, value]) => {
-      const color = parseColor(value);
-      return [name, sameColor(color, unresolved) ? null : color];
-    }),
-  );
-}
-
-/** Grades `check` over the named colours, or names the ones that are undefined. */
 function grade<N extends string>(
   colors: Record<string, RGBA | null>,
   names: readonly N[],
@@ -77,19 +59,26 @@ function grade<N extends string>(
 describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
   it('resolves every existing colour token to its table value', () => {
     useTheme(theme);
-    expect(offTable(EXISTING, theme)).toEqual([]);
+    expect(offTable(EXISTING_TOKEN_NAMES, theme)).toEqual([]);
   });
 
   it('resolves every status token to its table value', () => {
     useTheme(theme);
-    expect(offTable(STATUS, theme)).toEqual([]);
+    expect(offTable(STATUS_TOKEN_NAMES, theme)).toEqual([]);
+  });
+
+  it('resolves every non-colour token to its value', () => {
+    useTheme(theme);
+    expect(readLengths(LENGTH_TOKEN_NAMES)).toEqual(
+      Object.fromEntries(LENGTH_TOKEN_NAMES.map((name) => [name, expectedLength(name)])),
+    );
   });
 
   it('makes each aliased status token follow its target', () => {
     useTheme(theme);
-    const aliased = STATUS.flatMap((name) => {
-      const target = STATUS_TOKENS[name].alias;
-      return target === undefined ? [] : [{ name, target }];
+    const aliased = STATUS_TOKEN_NAMES.flatMap((name) => {
+      const target = aliasOf(name);
+      return target === null ? [] : [{ name, target }];
     });
     const targets = [...new Set(aliased.map(({ target }) => target))];
     targets.forEach((target, i) => html.style.setProperty(target, `rgb(7, 77, ${20 + 20 * i})`));
@@ -118,7 +107,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('gives each border a hue within 15° of its accent', () => {
     useTheme(theme);
-    const colors = painted(BORDERED.flatMap(([status, border]) => [accent(status), border]));
+    const colors = readColors(BORDERED.flatMap(([status, border]) => [accent(status), border]));
     const violations = BORDERED.flatMap(([status, border]) =>
       grade(colors, [accent(status), border], (c) => {
         const distance = hueDistance(hslHue(c[border]), hslHue(c[accent(status)]));
@@ -130,7 +119,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('paints each border visibly over the card', () => {
     useTheme(theme);
-    const colors = painted(['--card', ...BORDERED.map(([, border]) => border)]);
+    const colors = readColors(['--card', ...BORDERED.map(([, border]) => border)]);
     const violations = BORDERED.flatMap(([, border]) =>
       grade(colors, ['--card', border], (c) =>
         sameColor(compositeOver(c[border], c['--card']), c['--card']) ? `${border} paints as the card` : null,
@@ -142,7 +131,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
   it('gives the needs-human accent and text an amber hue, 30° to 50°', () => {
     useTheme(theme);
     const names = ['--status-needs-human', '--status-needs-human-text'] as const;
-    const colors = painted(names);
+    const colors = readColors(names);
     const violations = names.flatMap((name) =>
       grade(colors, [name], (c) => {
         const hue = hslHue(c[name]);
@@ -154,7 +143,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('gives each status tint a hue within 15° of its accent', () => {
     useTheme(theme);
-    const colors = painted(HUED.flatMap((s) => [accent(s), tint(s)]));
+    const colors = readColors(HUED.flatMap((s) => [accent(s), tint(s)]));
     const violations = HUED.flatMap((s) =>
       grade(colors, [accent(s), tint(s)], (c) => {
         const distance = hueDistance(hslHue(c[tint(s)]), hslHue(c[accent(s)]));
@@ -166,7 +155,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('paints each status tint visibly over the card', () => {
     useTheme(theme);
-    const colors = painted(['--card', ...STATUSES.map(tint)]);
+    const colors = readColors(['--card', ...STATUSES.map(tint)]);
     const violations = STATUSES.flatMap((s) =>
       grade(colors, ['--card', tint(s)], (c) =>
         sameColor(compositeOver(c[tint(s)], c['--card']), c['--card']) ? `${tint(s)} paints as the card` : null,
@@ -177,7 +166,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('gives each status text 4.5:1 on the card and on its painted tint', () => {
     useTheme(theme);
-    const colors = painted(['--card', ...STATUSES.flatMap((s) => [text(s), tint(s)])]);
+    const colors = readColors(['--card', ...STATUSES.flatMap((s) => [text(s), tint(s)])]);
     const violations = STATUSES.flatMap((s) =>
       grade(colors, ['--card', text(s), tint(s)], (c) => {
         const card = c['--card'];
@@ -192,7 +181,7 @@ describe.each(THEMES)('tokens.css alone, %s theme', (theme) => {
 
   it('gives each status accent 3:1 on the card', () => {
     useTheme(theme);
-    const colors = painted(['--card', ...STATUSES.map(accent)]);
+    const colors = readColors(['--card', ...STATUSES.map(accent)]);
     const violations = STATUSES.flatMap((s) =>
       grade(colors, ['--card', accent(s)], (c) => {
         const ratio = contrastRatio(compositeOver(c[accent(s)], c['--card']), c['--card']);

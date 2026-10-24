@@ -42,9 +42,6 @@ describe('local/no-todo-comments — forbids code TODO/FIXME deferral comments (
     expect(await markerErrors('export const TODO_UNDO_MS = 60000;\n')).toBe(0);
   });
 
-  // The rule must never exclude documentation of a legitimate external invariant/contract — one of the two
-  // comment kinds CODE-STANDARDS sanctions. Such a comment cites a spec clause or protocol and carries no
-  // deferral marker, so it passes clean; these pin that guarantee against a future over-broadening of MARKER.
   it('does NOT flag a marker-free external-invariant comment (a §n citation + tracked-issue pointer)', async () => {
     expect(
       await markerErrors(

@@ -1,38 +1,57 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { UNRESOLVED, paintColors, paintTokens, sameColor } from '../helpers/tokenProbe';
+import { offTable, paintColors, readColors, readLengths, sameColor } from '../helpers/tokenProbe';
 import { parseColor } from '../helpers/wcag';
 
+const html = document.documentElement;
+
 afterEach(() => {
-  document.documentElement.removeAttribute('style');
+  html.removeAttribute('style');
 });
 
-describe('paintTokens', () => {
-  it('paints the unresolved sentinel for a token nothing defines', () => {
-    const painted = paintTokens(['--never-defined']);
-    expect(sameColor(parseColor(painted['--never-defined']), parseColor(UNRESOLVED))).toBe(true);
+describe('readColors', () => {
+  it('reads a token nothing defines as null', () => {
+    expect(readColors(['--never-defined'])).toEqual({ '--never-defined': null });
   });
 
-  it('paints the colour a defined token resolves to, keyed by name', () => {
-    document.documentElement.style.setProperty('--probe-a', 'rgba(0,152,219,.12)');
-    document.documentElement.style.setProperty('--probe-b', '#C97F14');
-    const painted = paintTokens(['--probe-a', '--probe-b']);
+  it('reads the colour a defined token paints, keyed by name', () => {
+    html.style.setProperty('--probe-a', 'rgba(0,152,219,.12)');
+    html.style.setProperty('--probe-b', '#C97F14');
+    const colors = readColors(['--probe-a', '--probe-b']);
     const [a, b] = paintColors(['rgba(0,152,219,.12)', '#C97F14']);
-    expect(sameColor(parseColor(painted['--probe-a']), parseColor(a))).toBe(true);
-    expect(sameColor(parseColor(painted['--probe-b']), parseColor(b))).toBe(true);
-    expect(sameColor(parseColor(painted['--probe-b']), parseColor(UNRESOLVED))).toBe(false);
+    expect(sameColor(colors['--probe-a']!, parseColor(a))).toBe(true);
+    expect(sameColor(colors['--probe-b']!, parseColor(b))).toBe(true);
   });
 
-  it('paints the sentinel for an alias whose target is undefined', () => {
-    document.documentElement.style.setProperty('--probe-alias', 'var(--never-defined)');
-    const painted = paintTokens(['--probe-alias']);
-    expect(sameColor(parseColor(painted['--probe-alias']), parseColor(UNRESOLVED))).toBe(true);
+  it('reads an alias whose target is undefined as null', () => {
+    html.style.setProperty('--probe-alias', 'var(--never-defined)');
+    expect(readColors(['--probe-alias'])).toEqual({ '--probe-alias': null });
   });
 
   it('leaves the document as it found it', () => {
     const before = document.body.innerHTML;
-    paintTokens(['--never-defined']);
+    readColors(['--never-defined']);
+    readLengths(['--never-defined']);
     paintColors(['#000000']);
     expect(document.body.innerHTML).toBe(before);
+  });
+});
+
+describe('readLengths', () => {
+  it('reads a defined token as its computed length and an undefined one as null', () => {
+    html.style.setProperty('--probe-len', '7px');
+    expect(readLengths(['--probe-len', '--never-defined'])).toEqual({ '--probe-len': '7px', '--never-defined': null });
+  });
+});
+
+describe('offTable', () => {
+  it('names each token that does not paint its table value, and only those', () => {
+    html.style.setProperty('--card', '#FFFFFF');
+    html.style.setProperty('--signal', '#123456');
+    expect(offTable(['--card', '--signal'], 'light')).toEqual(['--signal painted rgb(18, 52, 86), expected rgb(0, 152, 219)']);
+  });
+
+  it('names a token nothing defines', () => {
+    expect(offTable(['--card'], 'light')).toHaveLength(1);
   });
 });
 

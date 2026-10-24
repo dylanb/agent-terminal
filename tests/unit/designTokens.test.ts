@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EXISTING_TOKENS,
-  STATUS_TOKENS,
+  EXISTING_TOKEN_NAMES,
+  LENGTH_TOKEN_NAMES,
+  STATUS_TOKEN_NAMES,
   STATUSES,
+  aliasOf,
   expectedColor,
-  type StatusTokenSpec,
+  expectedLength,
 } from '../helpers/designTokens';
 
 describe('design token table', () => {
-  it('holds the 36 existing colour tokens and the 17 status tokens of the #245 contract', () => {
-    expect(Object.keys(EXISTING_TOKENS)).toHaveLength(36);
-    expect(Object.keys(STATUS_TOKENS)).toHaveLength(17);
+  it('names the 36 existing colour tokens, the 17 status tokens of the #245 contract and the 4 non-colour tokens', () => {
+    expect(EXISTING_TOKEN_NAMES).toHaveLength(36);
+    expect(STATUS_TOKEN_NAMES).toHaveLength(17);
+    expect(LENGTH_TOKEN_NAMES).toEqual(['--focus-ring-w', '--focus-ring-offset', '--focus-ring-extent', '--r']);
     expect(STATUSES).toEqual(['error', 'needs-human', 'working', 'completed', 'idle']);
   });
 
@@ -30,13 +33,15 @@ describe('design token table', () => {
     expect(expectedColor('--status-needs-human', 'dark')).toBe('#FFB454');
   });
 
-  it('cannot express an illegal status token', () => {
-    // @ts-expect-error a status token is an alias or a pair of values, never both
-    const both: StatusTokenSpec = { alias: '--attn', light: '#000000', dark: '#000000' };
-    // @ts-expect-error an alias names an existing token
-    const dangling: StatusTokenSpec = { alias: '--attn-wash' };
-    // @ts-expect-error a new value is given for both themes
-    const oneTheme: StatusTokenSpec = { light: '#000000' };
-    expect([both, dangling, oneTheme]).toHaveLength(3);
+  it('names the target of each aliased status token, and none for a new value', () => {
+    expect(aliasOf('--status-error-text')).toBe('--danger');
+    expect(aliasOf('--status-idle-tint')).toBe('--hair2');
+    expect(aliasOf('--status-needs-human')).toBeNull();
+    expect(STATUS_TOKEN_NAMES.filter((name) => aliasOf(name) !== null)).toHaveLength(9);
+  });
+
+  it('gives each non-colour token its length', () => {
+    expect(expectedLength('--r')).toBe('7px');
+    expect(expectedLength('--focus-ring-extent')).toBe('4px');
   });
 });

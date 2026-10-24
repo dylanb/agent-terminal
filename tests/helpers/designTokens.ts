@@ -1,11 +1,7 @@
-// The #245 token oracle: the colour each token must paint, restated by hand. It is never derived from a
-// stylesheet (plan R3) — a table generated from the CSS under test could not catch a changed value.
-// Plain data: both the `browser` tests and the `_electron` e2e import it.
-
 export type Theme = 'light' | 'dark';
 type ThemeValues = { readonly light: string; readonly dark: string };
 
-export const EXISTING_TOKENS = {
+const EXISTING_TOKENS = {
   '--board': { light: '#FBFCFE', dark: '#FBFCFE' },
   '--leaf': { light: '#FFFFFF', dark: '#FFFFFF' },
   '--rule': { light: '#E3E9F0', dark: '#E3E9F0' },
@@ -55,13 +51,11 @@ export type StatusToken =
   | '--status-error-border'
   | '--status-needs-human-border';
 
-export type StatusTokenSpec =
+type StatusTokenSpec =
   | { readonly alias: ExistingToken; readonly light?: never; readonly dark?: never }
   | (ThemeValues & { readonly alias?: never });
 
-/** The #245 § Status token contract with its § Starting values. A changed starting value is changed here
- *  and listed in the pull request. */
-export const STATUS_TOKENS: Readonly<Record<StatusToken, StatusTokenSpec>> = {
+const STATUS_TOKENS: Readonly<Record<StatusToken, StatusTokenSpec>> = {
   '--status-error': { alias: '--attn' },
   '--status-error-text': { alias: '--danger' },
   '--status-error-tint': { light: 'rgba(229,72,77,.08)', dark: 'rgba(255,97,104,.11)' },
@@ -81,11 +75,30 @@ export const STATUS_TOKENS: Readonly<Record<StatusToken, StatusTokenSpec>> = {
   '--status-idle-tint': { alias: '--hair2' },
 };
 
-export type DesignToken = ExistingToken | StatusToken;
+const LENGTH_TOKENS = {
+  '--focus-ring-w': '2px',
+  '--focus-ring-offset': '2px',
+  '--focus-ring-extent': '4px',
+  '--r': '7px',
+} as const satisfies Record<`--${string}`, string>;
 
-/** The CSS colour `name` must paint in `theme`; an alias paints what its target paints. */
+export type DesignToken = ExistingToken | StatusToken;
+export type LengthToken = keyof typeof LENGTH_TOKENS;
+
+export const EXISTING_TOKEN_NAMES = Object.keys(EXISTING_TOKENS) as readonly ExistingToken[];
+export const STATUS_TOKEN_NAMES = Object.keys(STATUS_TOKENS) as readonly StatusToken[];
+export const LENGTH_TOKEN_NAMES = Object.keys(LENGTH_TOKENS) as readonly LengthToken[];
+
+export function aliasOf(name: StatusToken): ExistingToken | null {
+  return STATUS_TOKENS[name].alias ?? null;
+}
+
 export function expectedColor(name: DesignToken, theme: Theme): string {
   const spec: StatusTokenSpec =
     name in STATUS_TOKENS ? STATUS_TOKENS[name as StatusToken] : EXISTING_TOKENS[name as ExistingToken];
   return spec.alias === undefined ? spec[theme] : EXISTING_TOKENS[spec.alias][theme];
+}
+
+export function expectedLength(name: LengthToken): string {
+  return LENGTH_TOKENS[name];
 }

@@ -1,13 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
-import { EXISTING_TOKENS, STATUS_TOKENS, expectedColor, type DesignToken, type Theme } from '../helpers/designTokens';
+import { EXISTING_TOKEN_NAMES, STATUS_TOKEN_NAMES, expectedColor, type DesignToken, type Theme } from '../helpers/designTokens';
 import { mismatchedTokens, paintColors, paintTokens } from '../helpers/tokenProbe';
 
-const EXISTING = Object.keys(EXISTING_TOKENS) as DesignToken[];
-const STATUS = Object.keys(STATUS_TOKENS) as DesignToken[];
-
-/** Each token the window does not paint at its table value for the window's own theme. */
 async function offTable(page: Page, names: readonly DesignToken[]): Promise<string[]> {
   const theme: Theme = (await page.evaluate(() => document.documentElement.dataset.theme)) === 'dark' ? 'dark' : 'light';
   const painted = await page.evaluate(paintTokens, names);
@@ -22,10 +18,10 @@ test('the controller and agent-terminal windows both resolve every design token'
     const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.repositories[0]);
     await controller.page.waitForLoadState('load');
     await terminal.page.waitForLoadState('load');
-    expect.soft(await offTable(controller.page, EXISTING)).toEqual([]);
-    expect.soft(await offTable(controller.page, STATUS)).toEqual([]);
-    expect.soft(await offTable(terminal.page, EXISTING)).toEqual([]);
-    expect.soft(await offTable(terminal.page, STATUS)).toEqual([]);
+    expect.soft(await offTable(controller.page, EXISTING_TOKEN_NAMES)).toEqual([]);
+    expect.soft(await offTable(controller.page, STATUS_TOKEN_NAMES)).toEqual([]);
+    expect.soft(await offTable(terminal.page, EXISTING_TOKEN_NAMES)).toEqual([]);
+    expect.soft(await offTable(terminal.page, STATUS_TOKEN_NAMES)).toEqual([]);
   } finally {
     await h.dispose();
   }
