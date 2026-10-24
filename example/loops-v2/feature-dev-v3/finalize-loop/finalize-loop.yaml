@@ -3,7 +3,7 @@ name: finalize-loop
 work:
   recipe: prompts/work.md
   artifact: finalize-summary
-  goal: "the associated PR is reconciled with its actual target, all relevant changes are committed and pushed, required local verification and latest-remote-head CI pass, the implementation description is updated and verified, and preparation evidence is recorded for the human gate"
+  goal: "the associated PR is reconciled with its actual target, all relevant changes are committed and pushed, required local verification and latest-remote-head CI pass, the implementation description is updated and verified, and the complete audit report is published matching the local artifact before the human gate"
 reviewers: []
 boundaries:
   - boundary: pre-work

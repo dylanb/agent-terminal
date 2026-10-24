@@ -399,3 +399,14 @@ Per the CLAUDE.md tracer-bullet rule, each slice spans main → `src/shared/ipc.
 - **N9 — Epic promotion: the plan fans out into a chain.** Approving a plan classified an epic raises the **confirm-first** preview and, on confirmation, creates one sub-ticket per slice (§27.10) — AC slice, plan verbatim with the slice delimited, epic link, preceding slice's issue number — turns the epic into a tracking issue, then **closes the epic planning PR and terminates the flow** (slice 1 is a uniform sibling picked up by hand — P7b, §28.8; not the earlier re-point design). Resumable and idempotent. **Fire:** approve an epic plan. **Land:** the preview names every sub-ticket before anything is created; on confirm the chain exists on GitHub and the epic carries its checklist; re-approving creates nothing further. **e2e:** the fake-agent writes an epic plan, with `gh` recorded.
 - **N10 — Picking up a sub-ticket: reconstruct and skip to impl.** A ticket carrying the sub-ticket marker enters at groom; the app rebuilds the groomed-ticket and plan artifacts from the **body as it stands**, and the flow advances to **impl** without running groom or plan (§27.10). **Fire:** pick up a sub-ticket in a fresh worktree. **Land:** the flow lands at impl with both artifacts present and the operator's body edits honoured; a body malformed where the reconstruction reads it creates nothing and surfaces why.
 - **N11 — Stacked bases.** Slice k's pickup bases its branch and draft PR on slice k−1's branch, derived from k−1's issue number through the `pickup` branch template, falling back to the epic's base **and saying so** when that branch is absent (§27.10). **Fire:** pick up slice 2 while slice 1 is in review. **Land:** the PR targets slice 1's branch; picking up slice 3 with no slice-2 branch bases on the epic's base and names the slice it expected to stack on.
+
+
+### #251 — work-time audit publication access
+
+The bundled agent runtime also accepts `publish-flow-audit <repo> <PR> <artifact>`. The recipe uses the
+explicitly verified target identity; the runtime confines the artifact to the repository's flow artifacts,
+resolves the GitHub repository through the existing repository source, reads the PR description and
+appends the report beneath it in a marked section. It uses structured command arguments and a private
+body file, preserving unrelated content and closing references. Publication errors remain failures with
+local evidence retained. This slice supplies first publication; slice 3 owns maintained-section reruns,
+ownership validation and remote readback recovery. No human-gate publication side effect is added.

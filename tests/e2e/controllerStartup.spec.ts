@@ -24,7 +24,7 @@ for (const theme of ['light', 'dark']) {
       await terminal.page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
       await expect.soft(terminal.page.getByText(/start.*controller/i)).toBeVisible();
       expect.soft(starts(h.fixture.root)).toBe('');
-      expect(await terminal.page.evaluate(() => document.readyState)).toBe('complete');
+      await expect.poll(() => terminal.page.evaluate(() => document.readyState)).toBe('complete');
       const startsAtClose = starts(h.fixture.root);
       const child = terminal.app.process();
       await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());

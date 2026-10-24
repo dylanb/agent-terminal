@@ -1,4 +1,4 @@
-> **#251 slice 1:** V3 finalization now starts autonomous PR preparation and retains a human completion/merge boundary (§§18.2, 25, 27, 28). Full audit publication remains the next approved increment.
+> **#251 slice 2:** V3 finalization includes installed access to current-run audit evidence, the complete eight-section report recipe and first artifact publication (§§18.2, 25, 27, 28). Maintained-section rerun safety and publication-complete handoff remain slice 3. Human completion and merge ownership are unchanged.
 
 > **#218 slice 3:** Retain identifying disconnected errors after terminal exit or connection loss, remove live activation routing, and preserve usable focus and live peers. Slice 4 adds occurrence-targeted dismissal with empty guidance and fixed-directory stale replacement that preserves live peers.
 

@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { errMsg } from './errno';
 import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
@@ -24,6 +26,7 @@ export type AppGatePullRequest = PullRequest;
 
 export interface AppGateGitHubOperations {
   pullRequest(number: number): Promise<AppGatePullRequest>;
+  pullRequestBody?(number: number): Promise<string>;
   markPullRequestReady(number: number): Promise<void>;
   updateIssueBody(issue: number, bodyFile: string): Promise<void>;
   publishPullRequestBody(
@@ -70,6 +73,29 @@ export function createAppGateGitHub(
         }
         await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
         return { outcome: 'done' };
+      case 'publish-flow-audit': {
+        if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to publish the audit to' };
+        if (ctx.bodyFile === null) throw new Error('no audit artifact to publish');
+        if (!github.pullRequestBody) throw new Error('PR body access is unavailable');
+        await verifyBootstrap(ctx);
+        const report = await readFile(ctx.bodyFile, 'utf8');
+        if (!report.trim()) throw new Error('refused to publish an empty audit artifact');
+        const body = await github.pullRequestBody(ctx.pr);
+        const composed = `${body}\n<!-- agent-terminal:flow-audit:start -->\n${report}<!-- agent-terminal:flow-audit:end -->\n`;
+        const dir = await mkdtemp(join(tmpdir(), 'flow-audit-'));
+        try {
+          const file = join(dir, 'body.md');
+          await writeFile(file, composed, { mode: 0o600 });
+          await github.publishPullRequestBody(ctx.pr, file, null);
+        } finally {
+          try {
+            await rm(dir, { recursive: true, force: true });
+          } catch (error: unknown) {
+            console.warn(`Could not clean audit publication temporary directory ${dir}: ${errMsg(error)}`);
+          }
+        }
+        return { outcome: 'done' };
+      }
       case 'publish-pr-body':
         if (ctx.pr === null) {
           return { outcome: 'no-target', reason: 'no PR to publish the body to' };
@@ -99,6 +125,14 @@ export function createRealAppGateGitHub(
     repositorySource.resolve();
   const github: AppGateGitHubOperations = {
     pullRequest: (number) => pullRequests.pullRequest(number),
+    pullRequestBody: async (number) => {
+      const identity = await repository();
+      const value: unknown = JSON.parse(await runAppCommand('gh', ['pr', 'view', String(number), '--repo', identity.selector, '--json', 'body'], repoDir));
+      if (!value || typeof value !== 'object' || !('body' in value) || typeof value.body !== 'string') {
+        throw new Error('GitHub returned no PR body');
+      }
+      return value.body;
+    },
     markPullRequestReady: async (number) => {
       const identity = await repository();
       await runAppCommand(
