@@ -564,6 +564,73 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
     expect(gateReaching).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes a changed operator question without claiming the block was resolved', () => {
+    const gateReaching = vi.fn();
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)).toMatchObject({
+      status: 'complete',
+      verdict: 'stop for a human',
+      verdictReason: 'Only GitHub Actions billing remains.',
+    });
+    expect(gateReaching).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls.map((c) => c[1]).filter((line) => line === `§27 goal turn ${TURN_KEY} operator block updated`)).toHaveLength(1);
+    expect(h.audit.mock.calls.map((c) => c[1])).not.toContain(`§27 goal turn ${TURN_KEY} resumed after the operator resolved its block (done-signal)`);
+  });
+
+  it('does not report a changed block as saved when persistence fails, and accepts its retry', () => {
+    let fail = false;
+    const engine = makeEngine((repoDir, state) => {
+      if (fail) throw new Error('ENOSPC: no space left on device');
+      writeAppLoopState(repoDir, state);
+    });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    fail = true;
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('The plan asks for both a modal and a page.');
+    expect(engine.liveErrorFor(h.repo)?.kind).toBe('turn-error');
+    expect(h.audit.mock.calls.map((c) => c[1])).not.toContain(`§27 goal turn ${TURN_KEY} operator block updated`);
+
+    fail = false;
+    engine.onDoneSignal();
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('Only GitHub Actions billing remains.');
+    expect(engine.liveErrorFor(h.repo)).toBeNull();
+  });
+
+  it('publishes a revised question once when the gate notification replays the latched done-signal', () => {
+    let replay = false;
+    const gateReaching = vi.fn(() => {
+      if (replay) engine.onDoneSignal();
+    });
+    const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
+    h.defResult = resolved(goalDef(3));
+    enterAndInjectWork(engine);
+    writeProgress(BLOCKED);
+    engine.onDoneSignal();
+
+    replay = true;
+    writeProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Only GitHub Actions billing remains.' }));
+    engine.onDoneSignal();
+
+    expect(readAppLoopState(h.repo)?.verdictReason).toBe('Only GitHub Actions billing remains.');
+    expect(gateReaching).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls.map((c) => c[1]).filter((line) => line === `§27 goal turn ${TURN_KEY} operator block updated`)).toHaveLength(1);
+  });
+
   it('a resolved block whose session falls short of its completion check gets the usual retry, as any done-signal does', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));

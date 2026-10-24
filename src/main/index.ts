@@ -145,7 +145,7 @@ import { runAppGateDecision as runAppGateDecisionImpl, stepScopedAdvance, type A
 import { createEpicPromotionCoordinator, promotionRecordStale, readEpicSubTicketsAtGate, runEpicPromotion } from './epicPromotion';
 import { createRealAppEpicPromotionGitHub } from './appEpicPromotionGithub';
 import { probeChainedInput } from './chainedInputProbe';
-import { assembleReportOnDisk } from './reportSections';
+import { assembleReportOnDisk, type SectionedReport } from './reportSections';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import { createAutoGate, defResolutionOf } from './autoGate';
@@ -413,6 +413,12 @@ async function createWindow(): Promise<void> {
       ...(load.ok ? { flow: load.definition.name } : {}),
     };
   };
+  // Report reconstruction can run while the loop view is being restored; resolve only its definition.
+  const assembleFlowReport = (repoDir: string, report: SectionedReport): void => {
+    const load = resolveActiveDefinition(repoDir);
+    if (!load.ok) throw new Error(load.error);
+    assembleReportOnDisk(report, load.definition.steps.map((step) => step.id));
+  };
   let lifecycle: FlowLifecycle;
   const agentQuestion = createAgentQuestion({
     readiness: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
@@ -532,9 +538,7 @@ async function createWindow(): Promise<void> {
       }
     },
     inputState: probeChainedInput,
-    assembleReport: (repoDir, report) => {
-      assembleReportOnDisk(report, flow.state(repoDir).steps);
-    },
+    assembleReport: assembleFlowReport,
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
     // §27.5 — the round-keyed report location: the confined absolute path the engine reads back and the
     // repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).
@@ -1117,9 +1121,7 @@ async function createWindow(): Promise<void> {
       return !load.ok || load.definition.steps.find((st) => st.id === step)?.gateAuthority !== 'auto';
     },
     persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
-    assembleReport: (repoDir, report) => {
-      assembleReportOnDisk(report, flow.state(repoDir).steps);
-    },
+    assembleReport: assembleFlowReport,
     advanceFlow: stepScopedAdvance((repoDir) => flow.state(repoDir).stepName, (repoDir) => autoAdvanceFlow(repoDir)),
     // §28.4.1/§28.8.1/§28.5.3 — every approve whose def declares the `plan` output re-sources `slices`, the last
     // one winning: the polished plan, then any RED that split its own slice. resolveInputs sets the input WITHOUT

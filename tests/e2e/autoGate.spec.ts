@@ -10,7 +10,10 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
-import { readChangedTests, recordBaselineCommit, recordChangedTests } from '../../src/main/appLoopState';
+import { readChangedTests, recordBaselineCommit, recordChangedTests, writeAppLoopState } from '../../src/main/appLoopState';
+import { createFlowStateStore } from '../../src/main/flowState';
+import { recordDisposition } from '../../src/main/runDisposition';
+import { createTrustedPickups } from '../../src/main/trustedPickups';
 import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -1123,6 +1126,38 @@ test('#251 audit transport: the artifact opens, publication is captured, redo up
   expect(gh.read().calls.every((args) => args[0] === 'repo' || (args[0] === 'pr' && ['view', 'edit'].includes(args[1])))).toBe(true);
   await approveOption().click();
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^status: done$/m);
+});
+
+test('#251 relaunch reconstructs finalization evidence and preserves the human stop', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 0));
+  const home = tmp('at251-resume-');
+  const repo = seedAutoGateRepo('agent-term-e2e-finalize-resume-', 'finalize', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  const run = { flow: FEATURE_DEV_ID, startedAt: Date.parse('2026-10-24T10:00:00Z') };
+  recordDisposition(repo, { source: 'catalog', tier: 'global', id: FEATURE_DEV_ID });
+  createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', ...run, inputs: { ticket: '176' } });
+  createTrustedPickups({ currentRun: () => run, persistFailed: (_repo, reason) => { throw new Error(reason); }, forgetFailed: (_repo, reason) => { throw new Error(reason); } })
+    .set(repo, { pr: 4242, issue: 176, branch: 'plan-loop/issue-176', initialStatus: 'planning' });
+  writeAppLoopState(repo, {
+    loop: 'finalize-loop', step: 'finalize', turnKey: 'work-finalize', status: 'complete',
+    verdict: 'stop for a human', verdictReason: 'Theme choice and billing need answers.',
+    goalSession: 'cafebabe', chainedInputs: ['impl-report'],
+  });
+  const loopDir = join(repo, '.agent-terminal', 'loop');
+  mkdirSync(join(loopDir, 'artifacts', 'impl-report'), { recursive: true });
+  writeFileSync(join(loopDir, 'artifacts', 'impl-report', 'green.md'), '## green\n\nThe fixture implementation is complete.\n');
+  writeFileSync(join(loopDir, 'goal-progress.cafebabe.json'), JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Theme choice and billing need answers.' }));
+  writeFileSync(join(loopDir, 'turn-done'), 'work-finalize');
+
+  await launchInto('agent-term-e2e-finalize-resume-', repo, home, (binDir) => seedV3GoalAgent(binDir, 'fake-agent', {}), {}, null);
+  await openLoopPanel();
+
+  await expect(loopPanel()).toContainText('Theme choice and billing need answers.', { timeout: LOOP_ROUND_MS });
+  expect(runState(repo)).toContain('verdict: stop for a human');
+  expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+  expect(readIf(join(loopDir, 'artifacts', 'impl-report.md'))).toContain('The fixture implementation is complete.');
+  await expect(page.getByText('Maximum call stack size exceeded', { exact: false })).toHaveCount(0);
 });
 
 const PREPARATION_CASES = [

@@ -75,6 +75,23 @@ test('#251 installed evidence access reads the current recorder-created run with
   });
 });
 
+test('#251 installed evidence access follows the app home when it differs from the shell home', () => {
+  const flow = 'feature-dev-v3';
+  const startedAt = Date.parse('2026-10-24T10:00:00.684Z');
+  createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', flow, startedAt });
+  const recorder = createAuditRecorder({ root: auditRootDir(home), now: () => new Date(startedAt), flowName: () => flow });
+  recorder.recordTransition(repo, 'start', { status: 'not_started', stepName: 'finalize' }, { status: 'in_progress', stepName: 'finalize' }, { flow, startedAt });
+
+  const result = invoke(['audit-evidence', repo], { HOME: join(root, 'shell-home'), APP_HOME_DIR: home });
+
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  expect(response(result.stdout)).toMatchObject({
+    coverage: 'complete',
+    visits: [{ step: 'finalize', exited: null, elapsedMs: null }],
+  });
+});
+
 test('#251 installed work-time publication reads the actual artifact and appends it to the associated PR', () => {
   const bin = join(root, 'bin');
   mkdirSync(bin);

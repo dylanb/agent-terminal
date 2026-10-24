@@ -6,6 +6,7 @@ import { auditFilePath, auditRootDir } from './auditPaths';
 import { createFlowStateStore } from './flowState';
 import { confinedRealPath, resolveJail, resolveOwnedDirJail } from './confinedPath';
 import { createRealAppGateGitHub } from './appGateGithub';
+import { resolveAppHome } from './launchRoot';
 
 export function readCurrentAudit(repoDir: string): RunTimeline {
   try {
@@ -13,7 +14,7 @@ export function readCurrentAudit(repoDir: string): RunTimeline {
     const state = createFlowStateStore(repo).read();
     if (!state?.flow || state.startedAt === undefined) return reconstructTimeline('');
     const started = new Date(state.startedAt);
-    const root = auditRootDir(homedir());
+    const root = auditRootDir(resolveAppHome(process.env, homedir()));
     const jail = resolveOwnedDirJail(root);
     const file = jail && confinedRealPath(jail, auditFilePath(root, repo, state.flow, started));
     if (!file) return reconstructTimeline('');
