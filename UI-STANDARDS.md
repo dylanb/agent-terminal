@@ -130,6 +130,17 @@ and CLAUDE.md bans it outright. These assertions go in the **`browser` vitest pr
 The Playwright e2e is the other valid home. A pin that cannot fail for its own regression is worse
 than none — mutation-probe it: reintroduce the defect and watch it go red.
 
+**A design token is read through `tests/helpers/tokenProbe.ts`, never a hand-rolled probe.** A test that
+asks what a token paints, whether a token is defined, or whether tokens are at their expected values uses
+`readColors` (a colour, or `null` when nothing defines the token), `readLengths` (the same for a length) and
+`offTable(names, theme)`, against the expected values in `tests/helpers/designTokens.ts`
+(`EXISTING_TOKEN_NAMES`, `STATUS_TOKEN_NAMES`, `LENGTH_TOKEN_NAMES`, `expectedColor`, `aliasOf`,
+`expectedLength`). An e2e reads through Playwright with `paintTokens`/`paintColors` and compares with
+`mismatchedTokens`. A token added to `src/renderer/src/tokens.css` is added to `designTokens.ts` by hand —
+never generated from the stylesheet, which would make the check compare the sheet with itself. Writing a
+second `var()` probe, or a second way to tell an undefined token from a defined one, is the drift these
+helpers exist to stop.
+
 ### 3.3 The relocation test (mandatory for organisms)
 An organism's relocatability is only true when a test proves it. Mount the **same** organism,
 **unchanged**, in **two different placements** and run the **same** behavioral assertions
