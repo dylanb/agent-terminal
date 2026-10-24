@@ -34,6 +34,9 @@ before you start and meet them the first time:
 - **tracer-slicer:** tracer bullets (The Pragmatic Programmer), the walking skeleton and Elephant Carpaccio
   slicing (Cockburn), and vertical story-splitting patterns — plus the repository's own slicing rules (for
   example `TRACER-BULLET.md`).
+- **ui:** WCAG 2.2 AA, the WAI-ARIA Authoring Practices Guide patterns, design tokens as the single source of a
+  design system's values, and atomic design (atoms, molecules and organisms) — plus the repository's own UI
+  standards (for example `UI-STANDARDS.md`). It reviews only a plan that touches renderer UI.
 
 Write the plan at the altitude of contracts and intent: the files and modules touched, the seams, the
 contracts two surfaces read (shapes, names, persisted formats), and the behavior each slice must produce.
@@ -67,6 +70,19 @@ review rounds, so a slice too small to carry real work is pure overhead. Size th
 
 The target, the size floor, folding and grouping are planning guidance for you alone; reviewers do not grade
 slice count or size. The dependency split is not sizing: the tracer-slicer grades it.
+
+### Design system first
+
+When the ticket touches renderer UI, the plan carries a `## Design system` section that lists every
+design-system change the work needs — new or changed tokens, new or changed shared components (atoms and
+molecules, per `UI-STANDARDS.md`), and the contrast pairings they introduce — or states `None.` when it needs
+none. A ticket that does not touch renderer UI omits the section.
+
+Schedule each listed change in the earliest slice or slices, ahead of every slice that uses it, each applied to a
+surface the operator can already see (the tracer-bullet rule's design-system note, for example in
+`TRACER-BULLET.md`), so later slices consume the design system rather than introduce styling of their own. Never
+plan a component-specific colour, spacing or typography value where a token should exist: plan the token in the
+design-system section instead.
 
 ## Machine-read plan blocks
 

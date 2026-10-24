@@ -229,7 +229,7 @@ test('auto clean gate advances with its phase commit; no alert is raised and the
   expect(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
 });
 
-test('an auto RED whose new tests verify behavior that already exists is engine-approved with its commit, and the run log says so (v2.214)', { tag: '@ownapp' }, async () => {
+test('an auto RED whose new tests verify behavior that already exists is engine-approved with its commit, and the run log says so (v2.215)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 0));
   const home = tmp('agent-term-e2e-verify-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-verify-', 'red');

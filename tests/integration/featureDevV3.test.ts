@@ -292,13 +292,13 @@ describe('each implementation step is a goal session that reviews its own work (
 });
 
 describe('planning is one goal session that reviews itself, approved once (#212)', () => {
-  it('the plan step is a goal session in legs of 3 that reviews with all 9 plan reviewers', () => {
+  it('the plan step is a goal session in legs of 3 that reviews with all 10 plan reviewers', () => {
     const goal = loop('plan-goal-loop');
     expect(goal.rounds).toEqual({ kind: 'none' });
     expect(goal.work.goal).toContain(GOAL_NO_CHANGE_CLAUSE);
     expect(goal.work.checkpoint).toEqual({ passes: 3 });
     expect(goal.reviewers.map((r) => r.persona)).toEqual(
-      ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts', 'test-architect', 'determinism', 'tracer-slicer'].map((l) => `review-plan-${l}`),
+      ['principal', 'security', 'architecture', 'intent', 'maintainability', 'contracts', 'test-architect', 'determinism', 'tracer-slicer', 'ui'].map((l) => `review-plan-${l}`),
     );
     expect(goal.gate.map((g) => g.option)).not.toContain('request-changes');
   });
