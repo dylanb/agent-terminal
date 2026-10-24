@@ -20,7 +20,7 @@ const SLICING_REVIEWERS: readonly { loop: string; persona: string }[] = [
 ];
 
 const DESIGN_SYSTEM_SLICE_ACCEPTED =
-  'A slice whose main content is design-system work is a vertical slice when it applies that work to a surface that already exists, so the change is visible in the running app, and proves it RED-first through a real browser or the `_electron` e2e.';
+  'A slice whose main content is design-system work is a vertical slice when it applies that work to a surface that already exists, so the change is visible in the running app, and proves it RED-first through a real browser and the `_electron` e2e.';
 const DESIGN_SYSTEM_SLICE_REJECTED = 'A slice that adds tokens or shared components that nothing visible uses is still a horizontal layer.';
 
 const PLANNER_REQUIREMENTS = [
