@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { resolveArtifactCheckScript } from '../../src/main/artifactCheck';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { auditRootDir } from '../../src/main/auditPaths';
+import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { createFlowStateStore } from '../../src/main/flowState';
+import { seedAuditPublicationGh } from '../helpers/auditPublicationGh';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 
 const requirePackage = createRequire(__filename);
@@ -115,4 +116,84 @@ if (args[0] === 'repo' && args[1] === 'view') {
   expect(published.writes).toEqual([{
     repository: 'github.com/fixture/project', pr: 41, body: published.body,
   }]);
+});
+
+const startMarker = '<!-- agent-terminal:flow-audit:start -->';
+const endMarker = '<!-- agent-terminal:flow-audit:end -->';
+
+function publication(body: string) {
+  const bin = join(root, 'publication-bin');
+  const gh = seedAuditPublicationGh(bin, body);
+  const artifact = join(repo, '.agent-terminal', 'loop', 'artifacts', 'flow-audit.md');
+  mkdirSync(dirname(artifact), { recursive: true });
+  writeFileSync(artifact, 'Current report\n');
+  return { gh, artifact, run: () => invoke(['publish-flow-audit', repo, '41', artifact], { PATH: `${bin}:${process.env.PATH}` }) };
+}
+
+test('#251 installed publication replaces the report on repeated invocation', () => {
+  const original = 'Operator context.\nCloses #251\n';
+  const fx = publication(`${original}\n${startMarker}\nOld report\n${endMarker}\n`);
+  for (const report of ['Current report\n', 'Changed evidence\n']) {
+    writeFileSync(fx.artifact, report);
+    const result = fx.run();
+    expect.soft(result.status).toBe(0);
+    expect.soft(response(result.stdout)).toEqual({ outcome: 'done' });
+    expect.soft(fx.gh.read().body.split(startMarker)).toHaveLength(2);
+    expect.soft(fx.gh.read().body).not.toContain('Old report');
+    expect.soft(fx.gh.read().body.slice(fx.gh.read().body.indexOf(startMarker))).toBe(`${startMarker}\n${report}${endMarker}\n`);
+    expect.soft(fx.gh.read().body).toContain(original);
+  }
+});
+
+test('#251 installed publication rejects ambiguous ownership without a remote write', () => {
+  const original = `Operator context\n${startMarker}\nUnterminated audit`;
+  const fx = publication(original);
+  const result = fx.run();
+  expect.soft(result.status).not.toBe(0);
+  expect.soft(fx.gh.read().body).toBe(original);
+  expect.soft(fx.gh.read().writes).toEqual([]);
+});
+
+test('#251 installed publication surfaces rejection and retries successfully', () => {
+  const fx = publication('Operator context\nCloses #251\n');
+  fx.gh.set({ reject: true });
+  const rejected = fx.run();
+  expect(rejected.status).not.toBe(0);
+  expect(rejected.stderr).toMatch(/gh.*failed/i);
+  expect(fx.gh.read().writes).toEqual([]);
+  fx.gh.set({ reject: false });
+  const retried = fx.run();
+  expect(retried.status).toBe(0);
+  expect(response(retried.stdout)).toEqual({ outcome: 'done' });
+  expect(fx.gh.read().body).toContain(readFileSync(fx.artifact, 'utf8'));
+});
+
+test('#251 installed publication cannot claim success for mismatching remote readback', () => {
+  const fx = publication('Operator context\n');
+  fx.gh.set({ discard: true });
+  const result = fx.run();
+  expect.soft(result.status).not.toBe(0);
+  expect.soft(response(result.stdout)).not.toEqual({ outcome: 'done' });
+  expect(fx.gh.read().writes).toHaveLength(1);
+});
+
+test('#251 installed evidence access marks missing, unreadable and mismatched history unavailable', () => {
+  const flow = 'feature-dev-v3';
+  const started = new Date('2026-10-24T10:00:00Z');
+  createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', flow, startedAt: started.getTime() });
+  const file = auditFilePath(auditRootDir(home), repo, flow, started);
+  const unavailable = () => {
+    const result = invoke(['audit-evidence', repo]);
+    expect(result.status).toBe(0);
+    expect(response(result.stdout)).toMatchObject({ coverage: 'unavailable', header: null, events: [] });
+  };
+  unavailable();
+  mkdirSync(file, { recursive: true });
+  unavailable();
+  rmSync(file, { recursive: true });
+  const recorder = createAuditRecorder({ root: auditRootDir(home), now: () => started, flowName: () => flow });
+  recorder.recordTransition(repo, 'start', { status: 'not_started', stepName: 'finalize' }, { status: 'in_progress', stepName: 'finalize' }, { flow, startedAt: started.getTime() });
+  const recorded = readFileSync(file, 'utf8');
+  writeFileSync(file, recorded.replace('feature-dev-v3', 'another-flow'));
+  unavailable();
 });
