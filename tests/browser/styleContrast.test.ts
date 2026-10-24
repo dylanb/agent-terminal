@@ -1,5 +1,6 @@
 import { userEvent, page } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
