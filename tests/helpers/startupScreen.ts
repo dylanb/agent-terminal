@@ -23,7 +23,6 @@ export function showVersionMessage(screen: HTMLElement): void {
   const message = screen.querySelector<HTMLElement>(`#${VERSION_MESSAGE_ID}`);
   if (!message) throw new Error(`the mounted wait screen has no #${VERSION_MESSAGE_ID} for index.ts to fill`);
   message.textContent = VERSION_MESSAGE;
-  message.hidden = false;
 }
 
 export function unmountStartupScreen(): void {
