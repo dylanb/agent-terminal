@@ -2,7 +2,7 @@ import { cardStatus, SUMMARY_CLASS, SUMMARY_LABELS } from '../../shared/controll
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import { captureSubtreeFocus } from './dom';
 import type { ControllerApi, ControllerTerminal } from '../../shared/ipc';
-import { createControllerCard, type ControllerCard } from './controllerCard';
+import { createControllerCard, workConditions, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
 
 export interface ControllerPanesDeps {
@@ -97,9 +97,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   }
 
   function keepReasons(terminals: readonly ControllerTerminal[]): void {
-    const current = new Map(terminals.map(terminal => [terminal.id, new Set([
-      ...(terminal.work?.attention?.reasons ?? []), ...(terminal.work?.error ? [terminal.work.error.reason] : []),
-    ])]));
+    const current = new Map(terminals.map(terminal => [terminal.id, new Set(workConditions(terminal.work).flatMap(condition => condition.reasons))]));
     for (const [id, shown] of fullReasons) {
       const reasons = current.get(id);
       for (const reason of shown) if (!reasons?.has(reason)) shown.delete(reason);

@@ -15,6 +15,26 @@ export interface ControllerCard {
   dispose(): void;
 }
 
+export interface WorkCondition {
+  statusClass: 'needs-human' | 'error';
+  title: string;
+  reasons: readonly string[];
+}
+
+export function workConditions(work: ControllerWorkStatus | undefined): WorkCondition[] {
+  return [
+    ...(work?.attention ? [{ statusClass: 'needs-human' as const, title: `Human needed: ${work.attention.status}`, reasons: work.attention.reasons }] : []),
+    ...(work?.error ? [{ statusClass: 'error' as const, title: 'Error', reasons: [work.error.reason] }] : []),
+  ];
+}
+
+const TICKET_TEXT = { none: 'No ticket', loading: 'Ticket loading', unavailable: 'Ticket unavailable' } as const;
+const TITLE_TEXT = { loading: 'Title loading', unavailable: 'Title unavailable' } as const;
+const FLOW_TEXT = { loading: 'Flow loading', unavailable: 'Flow unavailable' } as const;
+const ACTIVITY_TEXT: Readonly<Record<ControllerWorkStatus['activity'], string>> = {
+  active: 'Active', quiet: 'Idle', unavailable: 'Activity unavailable',
+};
+
 let nextHeadingId = 0;
 
 function finalSegment(path: string): string {
@@ -77,27 +97,27 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     body.append(' ', action('bring-forward', 'Bring forward', 'Bring forward', deps.onBringForward));
   }
 
-  function appendWork(work: ControllerWorkStatus): void {
+  function ticketLine(work: ControllerWorkStatus): HTMLElement {
+    const line = element('p', 'controller-card-line controller-card-ticket');
     const muted = (text: string) => element('span', 'controller-muted', text);
-    const ticket = element('p', 'controller-card-line controller-card-ticket');
-    if (work.flow.availability === 'known' && work.flow.assignment === 'unassigned') ticket.append(muted('No flow run started'));
-    else if (work.ticket.availability === 'known') {
-      const title = work.ticket.title.availability === 'known'
-        ? element('span', 'controller-card-title', work.ticket.title.text)
-        : muted(work.ticket.title.availability === 'loading' ? 'Title loading' : 'Title unavailable');
-      if (work.ticket.title.availability === 'known') title.title = work.ticket.title.text;
-      ticket.append(element('span', 'controller-card-issue', `#${work.ticket.number}`), ' ', title);
-    } else ticket.append(muted(work.ticket.availability === 'none' ? 'No ticket' : work.ticket.availability === 'loading' ? 'Ticket loading' : 'Ticket unavailable'));
-    const flow = work.flow.availability === 'known'
-      ? `Flow: ${work.flow.name} — Step: ${work.flow.step}`
-      : work.flow.availability === 'loading' ? 'Flow loading' : 'Flow unavailable';
-    const activity = work.activity === 'active' ? 'Active' : work.activity === 'quiet' ? 'Idle' : 'Activity unavailable';
-    body.append(' ', ticket, ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', activity));
-    if (work.attention) appendCondition('needs-human', `Human needed: ${work.attention.status}`, work.attention.reasons);
-    if (work.error) appendCondition('error', 'Error', [work.error.reason]);
+    if (work.flow.availability === 'known' && work.flow.assignment === 'unassigned') line.append(muted('No flow run started'));
+    else if (work.ticket.availability !== 'known') line.append(muted(TICKET_TEXT[work.ticket.availability]));
+    else {
+      const { title } = work.ticket;
+      const titleText = title.availability === 'known' ? element('span', 'controller-card-title', title.text) : muted(TITLE_TEXT[title.availability]);
+      if (title.availability === 'known') titleText.title = title.text;
+      line.append(element('span', 'controller-card-issue', `#${work.ticket.number}`), ' ', titleText);
+    }
+    return line;
   }
 
-  function appendCondition(statusClass: 'needs-human' | 'error', title: string, texts: readonly string[]): void {
+  function appendWork(work: ControllerWorkStatus): void {
+    const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
+    body.append(' ', ticketLine(work), ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', ACTIVITY_TEXT[work.activity]));
+    for (const condition of workConditions(work)) appendCondition(condition);
+  }
+
+  function appendCondition({ statusClass, title, reasons: texts }: WorkCondition): void {
     const box = element('section', `controller-condition controller-condition-${statusClass}`);
     box.append(element('p', 'controller-condition-title', title), ' ');
     body.append(' ', box);
