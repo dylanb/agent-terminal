@@ -18,9 +18,16 @@ TDD rules.
 Grade the authenticity of each RED test. Fails for the right reason — it fails by an assertion whose message
 describes the intended behavior, not by a missing import, a compile or type error, or a collection error that
 never ran the test. Confirm the outcome classification is honest: a run that errored (never compiled) or passed is not
-a valid RED, only one that ran and had an expectation go unmet (§28.5.2); and confirm no RED test pins the
-implementation instead of the behavior it is meant to protect. This is the human backstop that keeps the
+a valid RED, only one that ran and had an expectation go unmet (§28.5.2); and confirm no RED test asserts private
+calls, call order or internal data structures instead of the behavior it is meant to protect. This is the human backstop that keeps the
 agent's own outcome classification (§28.5.2c) bounded.
+
+A RED test that a correct implementation could fail — one that pins a DOM shape, an update strategy or the
+moment a measurement lands, rather than the behavior its acceptance criterion names — is not a finding for this
+step when its own check still fails now and no wrong implementation passes it. GREEN corrects a RED test that
+rejects a correct implementation, logs the change under `### RED test changes`, and its reviewers and the
+operator judge it there. Mention it as a note for GREEN, never as a finding. A test that asserts private calls,
+call order or internal data structures is still a finding.
 
 Grade each test against the check it exists for. A test that fails before it reaches that check — a shared wait
 that times out, an earlier assertion, setup that never starts the thing under test — is not a valid RED for it:
