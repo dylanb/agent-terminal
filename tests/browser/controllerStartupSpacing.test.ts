@@ -11,7 +11,7 @@ describe.each(['light', 'dark'])('startup spacing in %s', theme => {
   it.each([320, 900])('follows theme spacing and fits a %ipx host', width => {
     document.documentElement.dataset.theme = theme;
     const template = new DOMParser().parseFromString(startupHtml, 'text/html');
-    const waiting = template.querySelector<HTMLElement>('[role="status"]')!;
+    const waiting = template.getElementById('startup-waiting')!;
     document.body.append(waiting);
     waiting.style.width = `${width}px`;
     waiting.style.setProperty('--r', '7px');
