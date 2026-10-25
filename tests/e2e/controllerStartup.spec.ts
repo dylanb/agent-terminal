@@ -8,6 +8,7 @@ import { createControllerHarness } from './controllerHarness';
 import { load } from 'js-yaml';
 import { seedTrustedFlow, autoGateFlowYaml } from './autoGateHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
+import { cardLocator } from '../helpers/controllerCards';
 
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
@@ -33,7 +34,7 @@ for (const theme of ['light', 'dark']) {
       const controller = await h.launch(controllerTarget, h.fixture.nonGit);
       await delay(RETRY_OBSERVATION_MS);
       expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
-      await expect(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(0);
+      await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
     } finally { await h.dispose(); }
   });
 }
@@ -43,7 +44,7 @@ test('startup automatically registers after controller launch and starts exactly
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-    await expect.soft(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
+    await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');
     await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
     await terminal.page.locator('.xterm-screen').click();
@@ -52,7 +53,7 @@ test('startup automatically registers after controller launch and starts exactly
     await expect(terminal.page.locator('.xterm-rows')).toContainText('STARTUP_READY');
     await delay(RETRY_OBSERVATION_MS);
     expect.soft(starts(h.fixture.root)).toBe('started\n');
-    await expect.soft(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1);
+    await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
   } finally { await h.dispose(); }
 });
 
@@ -61,7 +62,7 @@ test('startup with a running controller publishes a usable pane and starts one r
   try {
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
-    await expect(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1);
+    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
     await expect.poll(() => starts(h.fixture.root)).toBe('started\n');
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('printf "PRESENT_%s\\n" "READY"');

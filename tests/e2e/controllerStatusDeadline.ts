@@ -13,7 +13,7 @@ export async function statusDeadline(page: Page, identity: string, patterns: Reg
       let unsubscribe = () => {};
       const finish = () => { observer.disconnect(); unsubscribe(); clearTimeout(deadline); clearTimeout(registrationTimeout); resolve({ matched: seen, texts }); };
       const sample = () => {
-        const pane = [...document.querySelectorAll('button')].find(button => button.textContent?.includes(identity));
+        const pane = [...document.querySelectorAll<HTMLElement>('article')].find(card => card.textContent?.includes(identity));
         if (began === undefined) return;
         if (deadline === undefined) deadline = setTimeout(finish, Math.max(0, 2_000 - (performance.now() - began)));
         if (pane && performance.now() - began <= 2_000) {

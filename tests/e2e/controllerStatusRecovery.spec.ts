@@ -9,6 +9,7 @@ import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { bringForwardLocator, cardLocator, dismissLocator, statusRowLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -60,7 +61,7 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
       await expect(approve).toBeVisible();
       const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
       expect(source.loop?.humanNeeded).toBe(true);
-      await expect(controller.page.getByRole('button', { name: repo, exact: false })).toContainText(/Human needed/);
+      await expect(cardLocator(controller.page, repo)).toContainText(/Human needed/);
       const starts = readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8');
       if (outage === 'exit') await terminal.app.close();
       else {
@@ -69,13 +70,14 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
         if (outage === 'crash') await h.crash(controller.app);
       }
       if (outage !== 'crash') {
-        await expect(controller.page.getByText(/Disconnected: terminal unavailable/)).toBeVisible();
+        await expect(statusRowLocator(cardLocator(controller.page, repo))).toHaveText('Disconnected');
         const text = await controller.page.locator('body').innerText();
         expect.soft(!/Human needed/.test(text) || /last.known/i.test(text)).toBe(true);
-        await expect.soft(controller.page.getByRole('button', { name: new RegExp(`^${repo}`) })).toHaveCount(0);
+        await expect.soft(bringForwardLocator(cardLocator(controller.page, repo))).toHaveCount(0);
       }
       if (outage === 'exit') {
-        await controller.page.getByRole('button', { name: /Dismiss disconnected/ }).click();
+        await expect(dismissLocator(cardLocator(controller.page, repo))).toBeVisible();
+        await dismissLocator(cardLocator(controller.page, repo)).click();
         await expect(controller.page.getByText(/No terminals connected/)).toBeVisible();
         await expect.soft(controller.page.getByRole('status')).not.toContainText(/Human needed|stop for a human/);
       } else {
@@ -93,9 +95,10 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
         expect.soft(observed.matched).toEqual([true, true]);
         expect.soft(observed.texts.every(text => !/Human needed|stop for a human/.test(text))).toBe(true);
         await expect.soft(controller.page.getByRole('status')).not.toContainText(/Human needed|stop for a human/);
-        const pane = controller.page.getByRole('button', { name: repo, exact: false });
+        const pane = cardLocator(controller.page, repo);
         await expect.soft(pane).toHaveCount(1);
-        await pane.click();
+        await expect(bringForwardLocator(pane)).toBeVisible();
+        await bringForwardLocator(pane).click();
         await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
         expect.soft((await terminal.page.evaluate(directory => window.flow.state(directory), repo)).stepName).toBe('verify');
         expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe(starts);
@@ -128,7 +131,7 @@ test('repeated recovery keeps same-directory peers distinct after work context c
       await terminal.page.keyboard.type(`export RECOVERY_PEER=${index}`);
       await terminal.page.keyboard.press('Enter');
     }
-    await expect(controller.page.getByRole('button', { name: a, exact: false })).toHaveCount(2);
+    await expect(cardLocator(controller.page, a)).toHaveCount(2);
     for (let round = 0; round < 2; round++) {
       await h.crash(controller.app);
       if (round === 0) {
@@ -146,12 +149,12 @@ test('repeated recovery keeps same-directory peers distinct after work context c
         await expect(terminal.page.locator('.xterm-rows')).toContainText(`RECOVER_${round}_${index}`);
       }
       controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      await expect(controller.page.getByRole('button', { name: a, exact: false })).toHaveCount(2, { timeout: 10_000 });
-      const panes = controller.page.getByRole('button', { name: a, exact: false });
+      await expect(cardLocator(controller.page, a)).toHaveCount(2, { timeout: 10_000 });
+      const panes = cardLocator(controller.page, a);
       await expect.soft(panes.filter({ hasText: 'recovery-1' })).toContainText(round === 0 ? 'first-1' : 'next-1', { timeout: 2_000 });
       await expect.soft(panes.filter({ hasText: 'recovery-0' })).toContainText('first-0', { timeout: 2_000 });
       expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
-      await expect.soft(controller.page.getByRole('button', { name: b, exact: false })).toHaveCount(0);
+      await expect.soft(cardLocator(controller.page, b)).toHaveCount(0);
     }
   } finally { await h.dispose(); }
 });

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
+import { cardLocator } from '../helpers/controllerCards';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
@@ -21,7 +22,7 @@ test('a terminal speaking a newer minor version registers with the controller an
     let replies = '';
     terminal.on('message', (chunk: Buffer) => { replies += chunk.toString(); });
     terminal.send(`${JSON.stringify({ version: 2, minor: 7, type: 'register', launchDirectory: h.fixture.nonGit, repositoryRoot: null, colour: 'teal' })}`);
-    await expect(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1);
+    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
     await expect.poll(() => replies).toBe('{"version":2,"type":"registered"}');
   } finally {
     terminal?.terminate();

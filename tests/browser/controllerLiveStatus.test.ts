@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
-import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
-import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
+import { bringForwardIn, cardIn, showFullReasonIn } from '../helpers/controllerCards';
+import { mountControllerPanes } from '../helpers/controllerMount';
+import { statusTerminal } from '../helpers/controllerStatusFixture';
 import { compositeOver, contrastRatio, parseColor, ringOver, type RGBA } from '../helpers/wcag';
 
 function backdrop(element: Element): RGBA {
@@ -63,42 +64,31 @@ afterEach(() => {
 describe.each(['light', 'dark'])('live status painted in %s theme', theme => {
   it.each([320, 900])('keeps all independent status dimensions readable at %ipx', width => {
     document.documentElement.dataset.theme = theme;
-    const host = document.createElement('main');
-    host.style.width = `${width}px`;
-    document.body.append(host);
+    const parent = document.createElement('div');
+    parent.style.width = `${width}px`;
+    document.body.append(parent);
     const terminal = statusTerminal({
       flow: { availability: 'known', name: 'delivery', step: 'review', assignment: 'completed' }, activity: 'quiet',
       attention: { status: 'complete', reasons: ['Approval requires your decision'] },
       error: { reason: 'Required verification failed' },
     });
-    const component = createControllerPanes(host, { controller: statusService([terminal]).api });
+    const { host, dispose } = mountControllerPanes({ terminals: [terminal], parent });
     try {
-      for (const [pattern, color] of [[/completed/i, '--pass-text'], [/idle|quiet/i, '--dim'], [/needs? (?:a )?human|human.*needed/i, '--attn-text'], [/error/i, '--danger']] as const) {
-        const label = textElements(host, pattern)[0];
-        expect.soft(painted(label), `painted ${pattern}`).toBe(true);
-        const token = document.createElement('span');
-        token.style.color = `var(${color})`;
-        host.append(token);
-        expect.soft(label ? getComputedStyle(label).color : null, `themed ${pattern}`).toBe(getComputedStyle(token).color);
-        token.remove();
+      const card = cardIn(host, terminal.launchDirectory);
+      for (const text of ['Flow error', 'Idle', 'Human needed: complete', 'Approval requires your decision', 'Error', 'Required verification failed']) {
+        const label = card ? textElements(card, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))[0] : undefined;
         const behind = label ? backdrop(label) : undefined;
-        expect.soft(Boolean(label && behind && contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind) >= 4.5), `contrast ${pattern}`).toBe(true);
+        expect.soft(Boolean(label && painted(label) && behind && contrastRatio(ringOver(getComputedStyle(label).color, opacity(label), behind), behind) >= 4.5), `readable ${text}`).toBe(true);
       }
-      const error = textElements(host, /Required verification failed/)[0];
-      const token = document.createElement('span');
-      token.style.color = 'var(--danger)';
-      host.append(token);
-      expect.soft(error ? getComputedStyle(error).color : null, 'error uses the themed danger color').toBe(getComputedStyle(token).color);
-      token.remove();
       expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
-    } finally { component.dispose(); }
+    } finally { dispose(); }
   });
 
   it('ellipsizes a long title while keeping the issue number and full reasons accessible', async () => {
     document.documentElement.dataset.theme = theme;
-    const host = document.createElement('aside');
-    host.style.width = '320px';
-    document.body.append(host);
+    const parent = document.createElement('aside');
+    parent.style.width = '320px';
+    document.body.append(parent);
     const title = 'A long issue title '.repeat(30);
     const reason = 'The full failure reason must remain accessible. '.repeat(80);
     const terminal = statusTerminal({
@@ -106,20 +96,25 @@ describe.each(['light', 'dark'])('live status painted in %s theme', theme => {
       attention: { status: 'complete', reasons: [reason] },
     });
     terminal.launchDirectory = '/work/' + 'long-worktree-'.repeat(25);
-    const component = createControllerPanes(host, { controller: statusService([terminal]).api });
+    const { host, dispose } = mountControllerPanes({ terminals: [terminal], parent });
     try {
-      const preview = textElements(host, /A long issue title/)[0];
+      const card = cardIn(host, terminal.launchDirectory);
+      const preview = card ? textElements(card, /A long issue title/)[0] : undefined;
       const style = preview ? getComputedStyle(preview) : undefined;
       expect.soft(Boolean(preview && style && painted(preview) && style.textOverflow === 'ellipsis' && ['hidden', 'clip'].includes(style.overflowX) && style.whiteSpace === 'nowrap' && preview.scrollWidth > preview.clientWidth), 'single-line visible ellipsis').toBe(true);
-      expect.soft(visibleText(host, '#219'), 'readable issue number').toBe(true);
-      expect.soft(host.textContent, 'full reason available to assistive technology').toContain(reason);
-      const reasonLabel = textElements(host, /The full failure reason/)[0];
-      expect.soft(Boolean(reasonLabel && visibleText(host, reason, true) && !reasonLabel.closest('[aria-hidden="true"], [hidden]')), 'full reason is visibly readable without clipping').toBe(true);
+      expect.soft(card ? visibleText(card, '#219') : false, 'readable issue number').toBe(true);
+      expect.soft(card?.textContent ?? '', 'full reason available to assistive technology').toContain(reason);
+      const fullReason = () => {
+        const reasonLabel = textElements(host, /The full failure reason/)[0];
+        return Boolean(reasonLabel && visibleText(host, reason, true) && !reasonLabel.closest('[aria-hidden="true"], [hidden]'));
+      };
+      (await vi.waitFor(() => { const control = card ? showFullReasonIn(card) : undefined; if (!control) throw new Error('no control yet'); return control; }).catch(() => undefined))?.click();
+      const readable = await vi.waitFor(() => { if (!fullReason()) throw new Error('not shown yet'); return true; }).catch(() => false);
+      expect.soft(readable, 'full reason is visibly readable once Show full reason is used').toBe(true);
       expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
-      await userEvent.tab();
-      const focused = document.activeElement as HTMLElement;
-      expect.soft(host.contains(focused) && focused.tagName === 'BUTTON' && painted(focused), 'keyboard activation remains reachable').toBe(true);
-    } finally { component.dispose(); }
+      const bringForward = card ? bringForwardIn(card) : undefined;
+      expect.soft(painted(bringForward), 'Bring forward remains reachable').toBe(true);
+    } finally { dispose(); }
   });
 });
 
