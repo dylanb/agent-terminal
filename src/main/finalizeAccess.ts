@@ -5,7 +5,8 @@ import { auditTimestamp, reconstructTimeline, type RunTimeline } from '../shared
 import { auditFilePath, auditRootDir } from './auditPaths';
 import { createFlowStateStore } from './flowState';
 import { confinedRealPath, resolveJail, resolveOwnedDirJail } from './confinedPath';
-import { createRealAppGateGitHub } from './appGateGithub';
+import { createGitHubPullRequestBodies } from './pullRequestBody';
+import { publishFlowAudit } from './flowAuditPublication';
 import { resolveAppHome } from './launchRoot';
 
 export function readCurrentAudit(repoDir: string): RunTimeline {
@@ -36,7 +37,8 @@ export async function runFinalizeAccess(args: string[]): Promise<unknown> {
     const jail = resolveJail(repo, '.agent-terminal', 'loop', 'artifacts');
     const file = jail && confinedRealPath(jail, resolve(repo, artifact));
     if (!file) throw new Error('audit artifact is outside the flow artifacts directory or unreadable');
-    return createRealAppGateGitHub(repo)('publish-flow-audit', { pr, ticket: null, bodyFile: file, bootstrap: null });
+    await publishFlowAudit(createGitHubPullRequestBodies(repo), pr, readFileSync(file, 'utf8'));
+    return { outcome: 'done' };
   }
   throw new Error('expected audit-evidence <repo> or publish-flow-audit <repo> <PR> <artifact>');
 }

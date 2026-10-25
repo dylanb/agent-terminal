@@ -406,8 +406,9 @@ Per the CLAUDE.md tracer-bullet rule, each slice spans main → `src/shared/ipc.
 The bundled agent runtime also accepts `publish-flow-audit <repo> <PR> <artifact>`. The recipe uses the
 explicitly verified target identity; the runtime confines the artifact to the repository's flow artifacts,
 resolves the GitHub repository through the existing repository source, reads the PR description and
-maintains the report beneath it in one marked section. It uses structured command arguments and a private
-body file, preserving unrelated content and closing references. Publication errors remain failures with
+maintains the report beneath it in one marked section. It uses structured command arguments and sends the composed body as stdin data,
+preserving unrelated content and closing references. Audit publication depends only on reading and
+replacing PR-body text; artifact loading stays at the installed command boundary. Publication errors remain failures with
 local evidence retained. Reruns replace the existing section, moving it below any trailing operator context.
 Missing, reversed, nested or duplicate delimiters reject publication before a write; report artifacts
 containing reserved delimiters are likewise rejected. Publication succeeds only after the entire remote

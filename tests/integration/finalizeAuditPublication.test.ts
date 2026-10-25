@@ -1,11 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createAppGateGitHub } from '../../src/main/appGateGithub';
-
-const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+import { describe, expect, it } from 'vitest';
+import { publishFlowAudit } from '../../src/main/flowAuditPublication';
 
 const begin = '<!-- agent-terminal:flow-audit:start -->';
 const end = '<!-- agent-terminal:flow-audit:end -->';
@@ -14,38 +8,28 @@ const report = '# Flow audit\n\nDevelopment complete; finalization verified. Hum
 const maintained = (text: string) => `${begin}\n${text}${end}`;
 
 function fixture(body: string, options: { reject?: boolean; discard?: boolean; readbackError?: boolean } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'finalize-audit-'));
-  dirs.push(dir);
-  const artifact = join(dir, 'flow-audit.md');
-  writeFileSync(artifact, report);
   let published = body;
   const targets: number[] = [];
   const writes: string[] = [];
   const github = {
-    pullRequest: async (number: number) => ({ number, branch: 'feature-251', state: 'OPEN' as const, closingIssues: [251], crossRepository: false }),
-    pullRequestBody: async (number: number) => {
+    readBody: async (number: number) => {
       targets.push(number);
       if (writes.length && options.readbackError) throw new Error('readback unavailable');
       return published;
     },
-    markPullRequestReady: async () => { throw new Error('must not change draft state'); },
-    updateIssueBody: async () => { throw new Error('must not update an issue'); },
-    publishPullRequestBody: async (number: number, bodyFile: string) => {
+    replaceBody: async (number: number, text: string) => {
       targets.push(number);
       if (options.reject) throw new Error('publication rejected');
-      const text = readFileSync(bodyFile, 'utf8');
       writes.push(text);
       if (!options.discard) published = text;
     },
   };
-  const run = createAppGateGitHub(github);
   return {
-    artifact,
     body: () => published,
     targets,
     writes,
     options,
-    publish: () => run('publish-flow-audit', { pr: 41, ticket: 251, bodyFile: artifact, bootstrap: null })
+    publish: (text = report) => publishFlowAudit(github, 41, text).then(() => ({ outcome: 'done' }))
       .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) })),
   };
 }
@@ -65,8 +49,7 @@ describe('#251 maintained audit publication', () => {
     const expected = `${original}\n${suffix}\n${maintained(report)}\n`;
     expect.soft(await fx.publish()).toEqual({ outcome: 'done' });
     expect.soft(fx.body()).toBe(expected);
-    writeFileSync(fx.artifact, 'Updated evidence\n');
-    expect.soft(await fx.publish()).toEqual({ outcome: 'done' });
+    expect.soft(await fx.publish('Updated evidence\n')).toEqual({ outcome: 'done' });
     expect.soft(fx.body()).toBe(`${original}\n${suffix}\n${maintained('Updated evidence\n')}\n`);
   });
 
@@ -104,9 +87,15 @@ describe('#251 maintained audit publication', () => {
 describe('#251 publication artifact ownership', () => {
   it.each([begin, end])('rejects a report containing the reserved delimiter %s before writing', async (marker) => {
     const fx = fixture(original);
-    writeFileSync(fx.artifact, `Report containing ${marker}\n`);
-    expect(await fx.publish()).toEqual({ error: expect.any(String) });
+    expect(await fx.publish(`Report containing ${marker}\n`)).toEqual({ error: expect.any(String) });
     expect(fx.body()).toBe(original);
     expect(fx.writes).toEqual([]);
   });
+});
+
+it('rejects an empty report without changing the description', async () => {
+  const fx = fixture(original);
+  expect(await fx.publish(' \n')).toEqual({ error: expect.stringMatching(/empty/i) });
+  expect(fx.body()).toBe(original);
+  expect(fx.writes).toEqual([]);
 });

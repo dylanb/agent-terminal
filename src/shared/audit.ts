@@ -345,6 +345,7 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
     }
     if (e.type === 'todo.created') {
       const todo = { id: e.id, text: e.text, status: 'active' as const, deleted: false };
+      knownTodos.delete(e.id);
       knownTodos.set(e.id, todo);
       visitTodos.set(e.id, todo);
     }
@@ -363,10 +364,6 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
       finishVisit(e.ts);
       visit = undefined;
     }
-  });
-  finishVisit();
-  const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
-  for (const e of events) {
     switch (e.type) {
       case 'flow.started':
         tl.flow = { status: 'in_progress', step: e.step };
@@ -380,22 +377,6 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
         break;
       case 'flow.terminated':
         tl.flow = { status: 'not_started', step: '' };
-        break;
-      case 'todo.created':
-        tl.todos.push({ id: e.id, text: e.text, status: 'active' });
-        break;
-      case 'todo.status': {
-        const t = todoOf(e.id);
-        if (t) t.status = e.to;
-        break;
-      }
-      case 'todo.text': {
-        const t = todoOf(e.id);
-        if (t) t.text = e.text;
-        break;
-      }
-      case 'todo.deleted':
-        tl.todos = tl.todos.filter((t) => t.id !== e.id);
         break;
       case 'input.resolved':
         tl.inputs[e.name] = e.value;
@@ -425,7 +406,11 @@ export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoP
         tl.ci.push({ iteration: e.iteration, total: e.total, passed: e.passed, failed: e.failed, pending: e.pending });
         break;
     }
-  }
+  });
+  finishVisit();
+  tl.todos = [...knownTodos.values()]
+    .filter((todo) => !todo.deleted)
+    .map(({ id, text, status }) => ({ id, text, status }));
   return tl;
 }
 

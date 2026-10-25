@@ -17,6 +17,7 @@ describe('audit history continuity', () => {
       { ts, type: 'step.entered', step: 'red' },
       { ts, type: 'todo.deleted', id: 'b' },
     ]));
+    expect(result.todos).toEqual([{ id: 'a', text: 'Complete later', status: 'done' }]);
     expect(result.visits).toMatchObject([
       { step: 'red', completedTodoCount: 0, unfinishedTodos: [
         { id: 'a', text: 'Complete later', deleted: false },
@@ -28,6 +29,37 @@ describe('audit history continuity', () => {
       { step: 'red', completedTodoCount: 0, unfinishedTodos: [
         { id: 'b', text: 'Revised question', deleted: true },
       ] },
+    ]);
+  });
+
+  it('keeps deleted history while rebuilding the current checklist in creation order', () => {
+    const result = reconstructTimeline(stream([
+      { ts, type: 'flow.started', step: 'red' },
+      { ts, type: 'todo.created', id: 'a', text: 'Original' },
+      { ts, type: 'todo.text', id: 'a', text: 'Edited' },
+      { ts, type: 'todo.status', id: 'a', from: 'active', to: 'in_progress' },
+      { ts, type: 'todo.created', id: 'b', text: 'Surviving peer' },
+      { ts, type: 'step.entered', step: 'green' },
+      { ts, type: 'todo.deleted', id: 'a' },
+      { ts, type: 'step.entered', step: 'refactor' },
+      { ts, type: 'todo.text', id: 'missing', text: 'Unknown item' },
+      { ts, type: 'todo.created', id: 'a', text: 'Recreated' },
+      { ts, type: 'todo.text', id: 'a', text: 'Current text' },
+      { ts, type: 'todo.status', id: 'a', from: 'active', to: 'done' },
+    ]));
+    expect(result.todos).toEqual([
+      { id: 'b', text: 'Surviving peer', status: 'active' },
+      { id: 'a', text: 'Current text', status: 'done' },
+    ]);
+    expect(result.visits).toMatchObject([
+      { step: 'red', completedTodoCount: 0, unfinishedTodos: [
+        { id: 'a', text: 'Edited', status: 'in_progress', deleted: false },
+        { id: 'b', text: 'Surviving peer', status: 'active', deleted: false },
+      ] },
+      { step: 'green', completedTodoCount: 0, unfinishedTodos: [
+        { id: 'a', text: 'Edited', status: 'in_progress', deleted: true },
+      ] },
+      { step: 'refactor', completedTodoCount: 1, unfinishedTodos: [] },
     ]);
   });
 

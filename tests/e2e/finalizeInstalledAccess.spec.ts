@@ -135,9 +135,6 @@ if (args[0] === 'repo' && args[1] === 'view') {
   }]);
 });
 
-const startMarker = '<!-- agent-terminal:flow-audit:start -->';
-const endMarker = '<!-- agent-terminal:flow-audit:end -->';
-
 function publication(body: string) {
   const bin = join(root, 'publication-bin');
   const gh = seedAuditPublicationGh(bin, body);
@@ -146,44 +143,6 @@ function publication(body: string) {
   writeFileSync(artifact, 'Current report\n');
   return { gh, artifact, run: () => invoke(['publish-flow-audit', repo, '41', artifact], { PATH: `${bin}:${process.env.PATH}` }) };
 }
-
-test('#251 installed publication replaces the report on repeated invocation', () => {
-  const original = 'Operator context.\nCloses #251\n';
-  const fx = publication(`${original}\n${startMarker}\nOld report\n${endMarker}\n`);
-  for (const report of ['Current report\n', 'Changed evidence\n']) {
-    writeFileSync(fx.artifact, report);
-    const result = fx.run();
-    expect.soft(result.status).toBe(0);
-    expect.soft(response(result.stdout)).toEqual({ outcome: 'done' });
-    expect.soft(fx.gh.read().body.split(startMarker)).toHaveLength(2);
-    expect.soft(fx.gh.read().body).not.toContain('Old report');
-    expect.soft(fx.gh.read().body.slice(fx.gh.read().body.indexOf(startMarker))).toBe(`${startMarker}\n${report}${endMarker}\n`);
-    expect.soft(fx.gh.read().body).toContain(original);
-  }
-});
-
-test('#251 installed publication rejects ambiguous ownership without a remote write', () => {
-  const original = `Operator context\n${startMarker}\nUnterminated audit`;
-  const fx = publication(original);
-  const result = fx.run();
-  expect.soft(result.status).not.toBe(0);
-  expect.soft(fx.gh.read().body).toBe(original);
-  expect.soft(fx.gh.read().writes).toEqual([]);
-});
-
-test('#251 installed publication surfaces rejection and retries successfully', () => {
-  const fx = publication('Operator context\nCloses #251\n');
-  fx.gh.set({ reject: true });
-  const rejected = fx.run();
-  expect(rejected.status).not.toBe(0);
-  expect(rejected.stderr).toMatch(/gh.*failed/i);
-  expect(fx.gh.read().writes).toEqual([]);
-  fx.gh.set({ reject: false });
-  const retried = fx.run();
-  expect(retried.status).toBe(0);
-  expect(response(retried.stdout)).toEqual({ outcome: 'done' });
-  expect(fx.gh.read().body).toContain(readFileSync(fx.artifact, 'utf8'));
-});
 
 test('#251 installed publication cannot claim success for mismatching remote readback', () => {
   const fx = publication('Operator context\n');
