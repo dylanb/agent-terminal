@@ -1,2 +1,2 @@
-export const greeting = name => `Hello ${name}!`;
-export const retryCount = 1;
+export const greeting = name => `Welcome ${name}!`;
+export const retryCount = 2;
