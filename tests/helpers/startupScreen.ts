@@ -3,6 +3,10 @@
 import indexHtml from '../../src/renderer/index.html?raw';
 
 const SCREEN_ID = 'startup-waiting';
+const VERSION_MESSAGE_ID = 'startup-incompatible';
+
+export const VERSION_MESSAGE =
+  'This terminal uses controller protocol version 1, but the running controller supports versions 2–3. Update Agent Terminal, then open this terminal again.';
 
 let mounted: HTMLElement | null = null;
 
@@ -13,6 +17,13 @@ export function mountStartupScreen(): HTMLElement {
   mounted = document.importNode(source, true);
   document.body.appendChild(mounted);
   return mounted;
+}
+
+export function showVersionMessage(screen: HTMLElement): void {
+  const message = screen.querySelector<HTMLElement>(`#${VERSION_MESSAGE_ID}`);
+  if (!message) throw new Error(`the mounted wait screen has no #${VERSION_MESSAGE_ID} for index.ts to fill`);
+  message.textContent = VERSION_MESSAGE;
+  message.hidden = false;
 }
 
 export function unmountStartupScreen(): void {

@@ -7,6 +7,8 @@ import { createControllerHarness } from './controllerHarness';
 import { load } from 'js-yaml';
 import { seedTrustedFlow, autoGateFlowYaml } from './autoGateHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
+import { STARTUP_CARD, STARTUP_CARD_READING_ORDER } from '../helpers/startupCard';
+import { exposedText, nodesWithRole, parseAriaSnapshot, wholeText } from '../helpers/ariaSnapshot';
 
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
@@ -15,6 +17,7 @@ const RECOVERY_BOUND_MS = 10_000;
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const starts = (root: string) => existsSync(join(root, 'shell-starts')) ? readFileSync(join(root, 'shell-starts'), 'utf8') : '';
+const squash = (text: string) => text.replace(/\s+/g, '');
 
 for (const theme of ['light', 'dark']) {
   test(`startup waiting instructions are visible and responsive in ${theme}`, { tag: '@ownapp' }, async () => {
@@ -22,7 +25,7 @@ for (const theme of ['light', 'dark']) {
     try {
       const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
       await terminal.page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-      await expect.soft(terminal.page.getByText(/start.*controller/i)).toBeVisible();
+      await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
       expect.soft(starts(h.fixture.root)).toBe('');
       expect(await terminal.page.evaluate(() => document.readyState)).toBe('complete');
       const startsAtClose = starts(h.fixture.root);
@@ -41,10 +44,26 @@ test('startup automatically registers after controller launch and starts exactly
   const h = createControllerHarness();
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
+    await expect(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+    const card = parseAriaSnapshot(await terminal.page.locator('body').ariaSnapshot());
+    const read = exposedText(card);
+    expect.soft(squash(read.join(''))).toBe(squash(STARTUP_CARD_READING_ORDER.join('')));
+    const headings = nodesWithRole(card, 'heading');
+    expect.soft(headings.map(wholeText)).toEqual([STARTUP_CARD.heading]);
+    await expect.soft(terminal.page.getByRole('heading', { level: 1 })).toHaveAccessibleName(STARTUP_CARD.heading);
+    expect.soft(headings.filter(heading => wholeText(heading).includes(STARTUP_CARD.label))).toEqual([]);
+    expect.soft(nodesWithRole(card, 'list').map(list => list.children.map(item => [item.role, squash(wholeText(item))]))).toEqual([
+      [['listitem', squash(STARTUP_CARD.macosStep)], ['listitem', squash(STARTUP_CARD.linuxStep)]],
+    ]);
+    const statuses = nodesWithRole(card, 'status').map(wholeText);
+    expect.soft(statuses.filter(text => text.includes(STARTUP_CARD.statusLine))).toEqual([STARTUP_CARD.statusLine]);
+    expect.soft(statuses.filter(text => !text.includes(STARTUP_CARD.statusLine))).toEqual(['']);
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     await expect.soft(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');
     await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
+    await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeHidden();
+    await expect.soft(terminal.page.getByText(STARTUP_CARD.statusLine)).toBeHidden();
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('printf "STARTUP_%s\\n" "READY"');
     await terminal.page.keyboard.press('Enter');
@@ -110,7 +129,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
         expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
         expect(registrations).toHaveLength(1);
       } else {
-        await expect.soft(terminal.page.getByText(/start.*controller|controller.*start/i)).toBeVisible();
+        await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
         await expect.soft(terminal.page.getByText(/build/i)).toBeVisible();
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe('');
