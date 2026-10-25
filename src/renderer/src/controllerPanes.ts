@@ -1,5 +1,46 @@
+import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import { captureSubtreeFocus } from './dom';
-import type { ControllerApi } from '../../shared/ipc';
+import type { ControllerApi, ControllerWorkStatus } from '../../shared/ipc';
+
+function workDetails(work?: ControllerWorkStatus): HTMLElement {
+  const details = document.createElement('span');
+  details.className = 'controller-work';
+  const label = (text: string, tone = '') => {
+    const element = document.createElement('span');
+    element.className = tone;
+    element.textContent = text;
+    details.append(element);
+    return element;
+  };
+  if (!work) {
+    label('Work loading');
+    return details;
+  }
+  if (work.unavailableReason) {
+    label(CONTROLLER_OVERSIZED_STATUS_TEXT, 'controller-attention');
+    return details;
+  }
+  if (work.flow.availability === 'known') {
+    label(work.flow.assignment, `controller-assignment-${work.flow.assignment}`);
+    label(`Flow: ${work.flow.name} — Step: ${work.flow.step}`);
+  } else label(`Flow ${work.flow.availability}`);
+  if (work.ticket.availability === 'known') {
+    const ticket = label('', 'controller-ticket');
+    const number = document.createElement('span');
+    number.textContent = `#${work.ticket.number}`;
+    const title = document.createElement('span');
+    title.className = 'controller-ticket-title';
+    title.textContent = work.ticket.title.availability === 'known' ? work.ticket.title.text : `Title ${work.ticket.title.availability}`;
+    ticket.append(number, title);
+  } else label(work.ticket.availability === 'none' ? 'No ticket' : `Ticket ${work.ticket.availability}`);
+  label(work.activity === 'quiet' ? 'Idle' : work.activity === 'active' ? 'Active' : 'Activity unavailable', `controller-activity-${work.activity}`);
+  if (work.attention) {
+    label(`Human needed: ${work.attention.status}`, 'controller-attention');
+    for (const reason of work.attention.reasons) label(reason, 'controller-attention');
+  }
+  if (work.error) label(`Error: ${work.error.reason}`, 'controller-error');
+  return details;
+}
 
 export function createControllerPanes(host: HTMLElement, deps: { controller: ControllerApi }): { dispose(): void } {
   let disposed = false;
@@ -9,8 +50,31 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
   const alert = document.createElement('p');
   alert.setAttribute('role', 'alert');
   alert.setAttribute('aria-live', 'assertive');
-  host.append(list, alert);
+  const status = document.createElement('p');
+  status.className = 'controller-status-announcement';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-atomic', 'true');
+  let previousAttention = new Map<string, string>();
+  host.append(list, alert, status);
   const unsubscribe = deps.controller.subscribeTerminals(terminals => {
+    const currentAttention = new Map<string, string>();
+    const announcements: string[] = [];
+    for (const terminal of terminals) {
+      if (terminal.status === 'disconnected') continue;
+      const work = terminal.work;
+      const text = work?.unavailableReason ? CONTROLLER_OVERSIZED_STATUS_TEXT : [
+        ...(work?.attention ? [`Human needed: ${work.attention.status}`, ...work.attention.reasons] : []),
+        ...(work?.error ? [`Error: ${work.error.reason}`] : []),
+      ].join('. ');
+      currentAttention.set(terminal.id, text);
+      if (text !== (previousAttention.get(terminal.id) ?? '')) {
+        announcements.push(`${terminal.launchDirectory}: ${text || (previousAttention.get(terminal.id) === CONTROLLER_OVERSIZED_STATUS_TEXT ? 'Status available: no attention or error reported' : 'Attention and error cleared')}`);
+      }
+    }
+    if (announcements.length || [...previousAttention.keys()].some(id => !currentAttention.has(id))) {
+      status.textContent = announcements.join('\n');
+    }
+    previousAttention = currentAttention;
     const announce = () => {
       if (disposed) return;
       alert.replaceChildren();
@@ -41,6 +105,7 @@ export function createControllerPanes(host: HTMLElement, deps: { controller: Con
       button.type = 'button';
       button.dataset.terminalId = terminal.id;
       button.textContent = terminal.launchDirectory + (terminal.repositoryRoot ? ` Repository: ${terminal.repositoryRoot}` : '');
+      button.append(workDetails(terminal.work));
       button.addEventListener('click', () => {
         void deps.controller.activateTerminal(terminal.id).then(outcome => {
           if (outcome === 'unavailable') announce();

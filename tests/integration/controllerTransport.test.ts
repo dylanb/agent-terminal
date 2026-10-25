@@ -1,3 +1,5 @@
+import WebSocket from 'ws';
+import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, createServer, type Socket } from 'node:net';
@@ -8,12 +10,12 @@ import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startControllerTransport, CONTROLLER_ACTIVATION_TIMEOUT_MS } from '../../src/main/controllerTransport';
-import { createControllerDecoder, encodeControllerMessage, type ControllerMessage } from '../../src/shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage, type ControllerMessage } from '../../src/shared/controllerProtocol';
 
 describe('controller real local transport', () => {
   let root: string;
   let appHome: string;
-  const peers: Socket[] = [];
+  const peers: WebSocket[] = [];
   let server: Awaited<ReturnType<typeof startControllerTransport>> | undefined;
 
   beforeEach(() => {
@@ -23,17 +25,17 @@ describe('controller real local transport', () => {
   afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    for (const peer of peers.splice(0)) peer.destroy();
+    for (const peer of peers.splice(0)) peer.terminate();
     await server?.dispose();
     server = undefined;
     rmSync(root, { recursive: true, force: true });
   });
 
-  async function peer(directory: string): Promise<Socket> {
-    const socket = connect(resolveControllerEndpoint(appHome));
+  async function peer(directory: string): Promise<WebSocket> {
+    const socket = connectWebSocket(resolveControllerEndpoint(appHome));
     peers.push(socket);
-    await once(socket, 'connect');
-    socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', launchDirectory: directory, repositoryRoot: null }));
+    await once(socket, 'open');
+    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: null }));
     return socket;
   }
 
@@ -41,13 +43,15 @@ describe('controller real local transport', () => {
     const previous = new Set(server!.terminals().map(terminal => terminal.id));
     const socket = await peer(directory);
     const received: ControllerMessage[] = [];
-    const decoder = createControllerDecoder();
-    socket.on('data', (chunk: Buffer) => received.push(...decoder.push(chunk).filter(message => message.type === 'activate')));
+    socket.on('message', chunk => {
+      const message = parseControllerMessage(chunk.toString());
+      if (message.type === 'activate') received.push(message);
+    });
     await vi.waitFor(() => expect(server!.terminals().some(terminal => terminal.launchDirectory === directory && !previous.has(terminal.id))).toBe(true));
     return { socket, received, id: server!.terminals().find(terminal => terminal.launchDirectory === directory && !previous.has(terminal.id))!.id };
   }
 
-  it.each(['end', 'destroy'] as const)('retains identifying disconnected state after peer %s, including the last pane', async loss => {
+  it.each(['close', 'terminate'] as const)('retains identifying disconnected state after peer %s, including the last pane', async loss => {
     server = await startControllerTransport(appHome);
     const terminal = await registeredPeer('/work/retained');
     const updates: ReturnType<typeof server.terminals>[] = [];
@@ -154,7 +158,7 @@ describe('controller real local transport', () => {
       expect.soft(lstatSync(endpoint, { throwIfNoEntry: false })?.ino).toBe(inode);
       const response = await new Promise<string>(resolve => {
         const client = connect(endpoint);
-        peers.push(client);
+        connections.add(client);
         let data = '';
         client.setTimeout(1_000, () => { client.destroy(); resolve('timed out'); });
         client.on('data', chunk => { data += chunk.toString(); });
@@ -175,6 +179,7 @@ describe('controller real local transport', () => {
     expect(recovery, 'live-listener rejection must release ownership').toBe('listening');
     await registeredPeer('/work/after-listener');
   });
+
 
   async function leaveCrashedControllerEndpoint() {
     const entry = join(root, 'crash-controller.cjs');
@@ -230,7 +235,7 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(original.received).toHaveLength(1));
     const request = original.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    original.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    original.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await activation).toBe('activated');
   });
 
@@ -248,10 +253,10 @@ describe('controller real local transport', () => {
       if (release === 'confirmation') {
         const request = terminal.received[0];
         if (request.type !== 'activate') throw new Error('Expected activation request');
-        terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+        terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
         expect(await pending[0]).toBe('activated');
       } else if (release === 'disconnect') {
-        terminal.socket.destroy();
+        terminal.socket.terminate();
         expect(await Promise.all(pending)).toEqual(Array(128).fill('unavailable'));
       } else {
         expect(await Promise.all(pending)).toEqual(Array(128).fill('unavailable'));
@@ -260,7 +265,7 @@ describe('controller real local transport', () => {
       await vi.waitFor(() => expect(healthy.received).toHaveLength(1));
       const request = healthy.received[0];
       if (request.type !== 'activate') throw new Error('Expected activation request');
-      healthy.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+      healthy.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
       expect(await resumed).toBe('activated');
       await rejected;
     }, 10_000,
@@ -280,40 +285,12 @@ describe('controller real local transport', () => {
     });
   });
 
-  it('registers a terminal speaking a newer minor version with fields this controller does not know', async () => {
-    server = await startControllerTransport(appHome);
-    const socket = connect(resolveControllerEndpoint(appHome));
-    peers.push(socket);
-    await once(socket, 'connect');
-    const replies: ControllerMessage[] = [];
-    const decoder = createControllerDecoder();
-    socket.on('data', (chunk: Buffer) => replies.push(...decoder.push(chunk)));
-    socket.write(`${JSON.stringify({ version: 1, minor: 7, type: 'register', launchDirectory: '/work/newer', repositoryRoot: null, colour: 'teal' })}\n`);
-    await vi.waitFor(() => expect(replies).toEqual([{ version: 1, minor: 0, type: 'registered' }]));
-    expect(server.terminals()).toEqual([expect.objectContaining({ launchDirectory: '/work/newer', repositoryRoot: null })]);
-    expect(server.terminals()[0]).not.toHaveProperty('colour');
-  });
-
-  it('answers a terminal speaking an unsupported major version with its supported versions and closes', async () => {
-    server = await startControllerTransport(appHome);
-    const socket = connect(resolveControllerEndpoint(appHome));
-    peers.push(socket);
-    await once(socket, 'connect');
-    let replies = '';
-    socket.on('data', (chunk: Buffer) => { replies += chunk.toString(); });
-    const closed = once(socket, 'close');
-    socket.write(`${JSON.stringify({ version: 2, type: 'register', launchDirectory: '/work/future', repositoryRoot: null })}\n`);
-    await closed;
-    expect(replies).toBe('{"type":"incompatible","supported":{"min":1,"max":1}}\n');
-    expect(server.terminals()).toEqual([]);
-  });
-
   it('keeps a valid peer registerable after another peer sends malformed input', async () => {
     server = await startControllerTransport(appHome);
-    const malformed = connect(resolveControllerEndpoint(appHome));
+    const malformed = connectWebSocket(resolveControllerEndpoint(appHome));
     peers.push(malformed);
-    await once(malformed, 'connect');
-    malformed.end('not JSON\n');
+    await once(malformed, 'open');
+    malformed.send('not JSON');
     await peer('/work/healthy');
     await vi.waitFor(() => expect(server!.terminals().map(terminal => terminal.launchDirectory)).toEqual(['/work/healthy']));
   });
@@ -333,14 +310,12 @@ describe('controller real local transport', () => {
     const received: ControllerMessage[][] = [[], []];
     for (const messages of received) {
       const socket = await peer('/work/same');
-      const decoder = createControllerDecoder();
-      socket.on('data', (chunk: Buffer) => {
-        for (const message of decoder.push(chunk)) {
-          if (message.type === 'activate') messages.push(message);
-          if (message.type === 'activate') socket.write(encodeControllerMessage({
-            version: 1, type: 'result', requestId: message.requestId, outcome: 'activated',
-          }));
-        }
+      socket.on('message', (chunk: Buffer) => {
+        const message = parseControllerMessage(chunk.toString());
+        if (message.type === 'activate') messages.push(message);
+        if (message.type === 'activate') socket.send(encodeControllerMessage({
+          version: 2, type: 'result', requestId: message.requestId, outcome: 'activated',
+        }));
       });
       await vi.waitFor(() => expect(server!.terminals()).toHaveLength(received.indexOf(messages) + 1));
     }
@@ -348,7 +323,7 @@ describe('controller real local transport', () => {
     const outcome = await server.activate(target.id);
     expect.soft(outcome).toBe('activated');
     await vi.waitFor(() => expect(received[1]).toEqual([
-      { version: 1, type: 'activate', requestId: expect.any(String) },
+      { version: 2, type: 'activate', requestId: expect.any(String) },
     ]));
     expect(received[0]).toEqual([]);
   });
@@ -361,8 +336,8 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(terminal.received).toHaveLength(2));
     const requests = terminal.received.filter(message => message.type === 'activate');
     expect(new Set(requests.map(request => request.requestId)).size).toBe(2);
-    terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: requests[1].requestId, outcome: 'activated' }));
-    terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: requests[0].requestId, outcome: 'unavailable' }));
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: requests[1].requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: requests[0].requestId, outcome: 'unavailable' }));
     expect(await Promise.all([first, second])).toEqual(['unavailable', 'activated']);
   });
 
@@ -375,7 +350,7 @@ describe('controller real local transport', () => {
     expect.soft(settled).toBe(false);
     const request = terminal.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await result).toBe('activated');
   });
 
@@ -386,7 +361,7 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(terminal.received).toHaveLength(1));
     const request = terminal.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    terminal.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect.soft(await result).toBe('activated');
     const disconnected = new Promise<void>(resolve => {
       let initial = true;
@@ -397,7 +372,7 @@ describe('controller real local transport', () => {
       });
       initial = false;
     });
-    terminal.socket.end();
+    terminal.socket.close();
     await disconnected;
     expect(await result).toBe('activated');
   });
@@ -418,7 +393,7 @@ describe('controller real local transport', () => {
       });
       initial = false;
     });
-    terminal.socket.end();
+    terminal.socket.close();
     await disconnected;
     expect(await result).toBe('unavailable');
     const replacement = await registeredPeer('/work/replaced');
@@ -428,9 +403,9 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(replacement.received.length).toBeGreaterThan(0));
     const barrierRequest = replacement.received.at(-1)!;
     if (barrierRequest.type !== 'activate') throw new Error('Expected activation request');
-    replacement.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
+    replacement.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
     expect(await barrier).toBe('unavailable');
-    expect(replacement.received).toEqual([{ version: 1, type: 'activate', requestId: expect.any(String) }]);
+    expect(replacement.received).toEqual([{ version: 2, type: 'activate', requestId: expect.any(String) }]);
   });
 
   it('bounds an unresponsive activation and ignores its late reply while a new request is pending', async () => {
@@ -438,7 +413,7 @@ describe('controller real local transport', () => {
     const terminal = await registeredPeer('/work/deadline');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let settled = false;
-    const delivered = once(terminal.socket, 'data');
+    const delivered = once(terminal.socket, 'message');
     const result = server.activate(terminal.id).then(value => { settled = true; return value; });
     await delivered;
     const request = terminal.received[0];
@@ -447,17 +422,15 @@ describe('controller real local transport', () => {
     expect.soft(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect.soft(await result).toBe('unavailable');
-    const nextDelivered = once(terminal.socket, 'data');
+    const nextDelivered = once(terminal.socket, 'message');
     let nextSettled = false;
     const next = server.activate(terminal.id).then(value => { nextSettled = true; return value; });
     await nextDelivered;
     const nextRequest = terminal.received[1];
     if (nextRequest.type !== 'activate') throw new Error('Expected activation request');
     expect.soft(nextSettled).toBe(false);
-    terminal.socket.write(
-      encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'unavailable' })
-      + encodeControllerMessage({ version: 1, type: 'result', requestId: nextRequest.requestId, outcome: 'activated' }),
-    );
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'unavailable' }));
+    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: nextRequest.requestId, outcome: 'activated' }));
     expect.soft(await next).toBe('activated');
     expect(await result).toBe('unavailable');
   });
@@ -473,13 +446,11 @@ describe('controller real local transport', () => {
     const request = owner.received[0];
     const barrierRequest = other.received[0];
     if (request.type !== 'activate' || barrierRequest.type !== 'activate') throw new Error('Expected activation requests');
-    other.socket.write(
-      encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' })
-      + encodeControllerMessage({ version: 1, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }),
-    );
+    other.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    other.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
     expect(await barrier).toBe('unavailable');
     expect.soft(settled).toBe(false);
-    owner.socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    owner.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await result).toBe('activated');
   });
 });
