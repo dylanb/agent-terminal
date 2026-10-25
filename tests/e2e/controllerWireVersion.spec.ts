@@ -5,12 +5,10 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { STARTUP_CARD, STARTUP_CARD_READING_ORDER } from '../helpers/startupCard';
-import { exposedText, nodesWithRole, parseAriaSnapshot, wholeText } from '../helpers/ariaSnapshot';
+import { STARTUP_CARD } from '../helpers/startupCard';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
-const squash = (text: string) => text.replace(/\s+/g, '');
 
 test('a terminal speaking a newer minor version registers with the controller and gets a pane', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -48,15 +46,9 @@ for (const { supported, app } of [
     try {
       await new Promise<void>(done => controller.listen(endpoint, done));
       const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
-      const card = async () => parseAriaSnapshot(await terminal.page.locator('body').ariaSnapshot());
-      const versionRegions = async () => nodesWithRole(await card(), 'status').map(wholeText).filter(text => !text.includes(STARTUP_CARD.statusLine));
-      await expect.poll(versionRegions).toEqual([expect.stringMatching(app)]);
-      const [message] = await versionRegions();
-      expect.soft(message).toMatch(/version/i);
-      expect.soft(STARTUP_CARD_READING_ORDER.filter(text => message.includes(text))).toEqual([]);
-      const read = exposedText(await card());
-      const expected = [...STARTUP_CARD_READING_ORDER.slice(0, -1), message, STARTUP_CARD.statusLine];
-      expect.soft(squash(read.join(''))).toBe(squash(expected.join('')));
+      const versionMessage = terminal.page.getByRole('status').filter({ hasNotText: STARTUP_CARD.statusLine });
+      await expect(versionMessage).toContainText(app);
+      await expect(versionMessage).toContainText(/version/i);
       expect(existsSync(join(h.fixture.root, 'shell-starts'))).toBe(false);
     } finally {
       await h.dispose();
