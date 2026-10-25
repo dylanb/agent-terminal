@@ -3,22 +3,25 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardIn, controlName, dismissIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, showsName, statusRowIn } from '../helpers/controllerCards';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
-function mount(terminal: ControllerTerminal) {
+function mount(terminal: ControllerTerminal, expanded = true) {
   const host = document.createElement('div');
   document.body.append(host);
-  const calls = { bringForward: 0, dismiss: 0 };
-  const card = createControllerCard(host, {
+  const calls = { bringForward: 0, dismiss: 0, toggle: 0 };
+  const deps = {
     terminal,
-    fullReasons: new Set(),
+    expanded,
+    fullReasons: new Set<string>(),
+    onToggle() { calls.toggle += 1; },
     onReasonToggle() {},
     onBringForward() { calls.bringForward += 1; },
     onDismiss() { calls.dismiss += 1; },
-  });
+  };
+  const card = createControllerCard(host, deps);
   return { host, calls, card, element: cardIn(host, terminal.launchDirectory) };
 }
 
@@ -47,6 +50,25 @@ describe('controller card header', () => {
   ] as const)('names the card after the final segment of %s and shows the full directory', (_, terminal, name) => {
     const { element } = mount(terminal);
     expect({ card: Boolean(element), name: showsName(element, terminal.launchDirectory, name) }).toEqual({ card: true, name: true });
+  });
+});
+
+describe('controller card header control', () => {
+  it.each([true, false])('exposes expanded=%s on a header control named with the directory, with the status in a collapsed header', expanded => {
+    const { terminal, text } = STATUS_CASES.working;
+    const { element } = mount(terminal, expanded);
+    const header = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    expect({ state: header?.getAttribute('aria-expanded'), label: expanded || (header?.textContent?.includes(text) ?? false) })
+      .toEqual({ state: String(expanded), label: true });
+  });
+
+  it('reports each header click as a toggle and never as Bring forward', () => {
+    const { terminal } = STATUS_CASES.working;
+    const { element, calls } = mount(terminal);
+    const header = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    header?.click();
+    header?.click();
+    expect({ header: Boolean(header), calls }).toEqual({ header: true, calls: { bringForward: 0, dismiss: 0, toggle: 2 } });
   });
 });
 
@@ -110,7 +132,7 @@ describe('controller card body', () => {
     expect({
       named: controlName(control).includes(terminal.launchDirectory),
       calls,
-    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0 } });
+    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0, toggle: 0 } });
   });
 
   it('shows a disconnected card as Disconnected with no work details and Dismiss last, which reports its use once', () => {

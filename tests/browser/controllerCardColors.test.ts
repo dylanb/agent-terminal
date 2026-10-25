@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
-import { accentIn, cardIn, statusRowIn, windowHeaderIn, windowTitleLocator } from '../helpers/controllerCards';
+import { accentIn, cardHeaderIn, cardIn, statusRowIn, windowHeaderIn, windowTitleLocator } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusTerminal, type StatusCaseKey } from '../helpers/controllerStatusFixture';
 import type { StatusToken } from '../helpers/designTokens';
@@ -60,6 +60,25 @@ describe.each(['light', 'dark'])('controller card colours in %s', theme => {
           ...paints(accent ? getComputedStyle(accent).backgroundColor : undefined, `--status-${statusClass}`, `${key} accent`),
           ...paints(status ? getComputedStyle(status).color : undefined, `--status-${statusClass}-text`, `${key} status row`),
         ];
+      })).toEqual([]);
+    } finally { dispose(); }
+  });
+
+  it('paints each collapsed header\'s compact status label in --status-<class>-text', () => {
+    document.documentElement.dataset.theme = theme;
+    const { host, dispose } = mountControllerPanes({ terminals: CLASS_CASES.map(key => STATUS_CASES[key].terminal), oneColumn: true });
+    const header = (directory: string) => { const card = cardIn(host, directory); return card ? cardHeaderIn(card, directory) : undefined; };
+    try {
+      for (const key of CLASS_CASES) {
+        const directory = STATUS_CASES[key].terminal.launchDirectory;
+        if (header(directory)?.getAttribute('aria-expanded') === 'true') header(directory)?.click();
+      }
+      expect(CLASS_CASES.flatMap(key => {
+        const { terminal, text, statusClass } = STATUS_CASES[key];
+        const control = header(terminal.launchDirectory);
+        if (control?.getAttribute('aria-expanded') !== 'false') return [`${key} has no collapsed header`];
+        const label = holders(control, text)[0];
+        return paints(label ? getComputedStyle(label).color : undefined, `--status-${statusClass}-text`, `${key} collapsed label`);
       })).toEqual([]);
     } finally { dispose(); }
   });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardIn, cardsIn, dismissIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusService } from '../helpers/controllerStatusFixture';
 
@@ -126,10 +126,9 @@ describe('controller panes', () => {
       (card && bringForwardIn(card))?.focus();
       const disconnected = { ...terminal, status: 'disconnected' as const };
       service.publish(livePeer ? [disconnected, survivor] : [disconnected]);
-      const focused = document.activeElement as HTMLElement;
-      expect.soft(host.contains(focused)).toBe(true);
-      expect.soft(focused.matches(':disabled, [aria-disabled="true"]')).toBe(false);
-      expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(livePeer ? /disconnected|dismiss|\/right\/project/i : /disconnected|dismiss/i);
+      const after = cardIn(host, terminal.launchDirectory);
+      const header = after ? cardHeaderIn(after, terminal.launchDirectory) : undefined;
+      expect(header !== undefined && document.activeElement === header).toBe(true);
     } finally { dispose(); }
   });
 
@@ -198,9 +197,9 @@ describe('dismiss disconnected cards', () => {
       dismiss?.click();
       await Promise.resolve();
       const focused = document.activeElement as HTMLElement;
-      const name = focused.getAttribute('aria-label') ?? focused.textContent ?? '';
-      expect(host.contains(focused) && !focused.matches(':disabled') &&
-        (livePeer ? name.includes('/other') : /launch.*terminal/i.test(name))).toBe(true);
+      const other = cardIn(host, '/other');
+      const header = other ? cardHeaderIn(other, '/other') : undefined;
+      expect(livePeer ? header !== undefined && focused === header : host.contains(focused) && /launch.*terminal/i.test(focused.textContent ?? '')).toBe(true);
     } finally { dispose(); }
   });
 });
@@ -215,7 +214,7 @@ describe('controller layout after disposal', () => {
 });
 
 describe('focus when the focused control goes away but its card stays', () => {
-  it('moves focus to the same card\'s action, not the first card\'s', () => {
+  it('moves focus to the same card\'s header, not the first card\'s', () => {
     const peer = { ...terminal, id: 'peer', launchDirectory: '/peer/first' };
     const { host, service, dispose } = mountControllerPanes({ terminals: [peer, terminal] });
     try {
@@ -223,7 +222,8 @@ describe('focus when the focused control goes away but its card stays', () => {
       (target && bringForwardIn(target))?.focus();
       service.publish([peer, { ...terminal, status: 'disconnected' }]);
       const after = cardIn(host, terminal.launchDirectory);
-      expect(Boolean(after) && document.activeElement === (after && dismissIn(after))).toBe(true);
+      const header = after ? cardHeaderIn(after, terminal.launchDirectory) : undefined;
+      expect(header !== undefined && document.activeElement === header).toBe(true);
     } finally { dispose(); }
   });
 });

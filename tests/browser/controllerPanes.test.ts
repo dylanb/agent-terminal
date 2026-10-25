@@ -3,9 +3,10 @@ import { userEvent } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { accentIn, bringForwardIn, cardIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
+import { accentIn, bringForwardIn, cardHeaderIn, cardIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
+import { readable } from '../helpers/readableText';
 import { compositeOver, contrastRatio, parseColor, ringOver, type RGBA } from '../helpers/wcag';
 
 function background(element: Element): RGBA {
@@ -147,21 +148,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     const longError = { ...statusTerminal({ error: { reason: LONG_REASON } }), id: 'long-error', launchDirectory: '/long/error' };
     const cases = Object.values(STATUS_CASES);
     const { host, publish, component } = mount([...cases.map(c => c.terminal), noTicket, titleLoading, longHuman, longError]);
-    const grade = (required: readonly string[]): string[] => {
-      const found: string[] = [];
-      const graded: string[] = [];
-      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const element = node.parentElement!;
-        if (!node.textContent?.trim() || element.getClientRects().length === 0) continue;
-        graded.push(node.textContent);
-        const behind = background(element);
-        const ratio = contrastRatio(ringOver(getComputedStyle(element).color, opacity(element), behind), behind);
-        if (ratio < 4.5) found.push(`"${node.textContent.trim().slice(0, 40)}" at ${ratio.toFixed(2)}`);
-      }
-      const all = graded.join('\n');
-      return [...found, ...required.filter(text => !all.includes(text)).map(text => `"${text}" was not graded`)];
-    };
+    const grade = (required: readonly string[]): string[] => gradeTexts(host, required);
     try {
       await vi.waitFor(() => {
         if (![longHuman, longError].every(t => control(host, t.launchDirectory, showFullReasonIn))) throw new Error('no Show full reason yet');
@@ -173,6 +160,22 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
       publish([]);
       expect({ withCards, empty: grade([...SUMMARY_LABELS, 'No terminals connected']) }).toEqual({ withCards: [], empty: [] });
     } finally { component.dispose(); }
+  });
+
+  it('keeps every collapsed header, with its compact status label, at 4.5:1 against what is behind it', () => {
+    document.documentElement.setAttribute('data-theme', theme);
+    const cases = Object.values(STATUS_CASES);
+    const { host, dispose } = mountControllerPanes({ terminals: cases.map(c => c.terminal), oneColumn: true });
+    const header = (directory: string) => { const card = cardIn(host, directory); return card ? cardHeaderIn(card, directory) : undefined; };
+    try {
+      for (const { terminal } of cases) if (header(terminal.launchDirectory)?.getAttribute('aria-expanded') === 'true') header(terminal.launchDirectory)?.click();
+      expect(cases.flatMap(({ terminal, text }) => {
+        const control = header(terminal.launchDirectory);
+        if (!control) return [`${terminal.launchDirectory} has no header`];
+        if (control.getAttribute('aria-expanded') !== 'false') return [`${terminal.launchDirectory} is not collapsed`];
+        return gradeTexts(control, [text]).map(problem => `${terminal.launchDirectory}: ${problem}`);
+      })).toEqual([]);
+    } finally { dispose(); }
   });
 
   it('paints each card accent at 3:1 against the card and the window behind it', () => {
@@ -195,13 +198,15 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     } finally { component.dispose(); }
   });
 
-  it('paints a 3:1 keyboard focus ring on Bring forward, Dismiss and Show full reason', async () => {
+  it('paints a 3:1 keyboard focus ring on the card header, Bring forward, Dismiss and Show full reason', async () => {
     const disconnected = STATUS_CASES.disconnected.terminal;
     const blocked = statusTerminal({ attention: { status: 'complete', reasons: [LONG_REASON] } });
     const { host, component } = mount([STATUS_CASES.working.terminal, disconnected, blocked]);
     try {
+      const working = STATUS_CASES.working.terminal.launchDirectory;
       const controls = {
-        'Bring forward': () => control(host, STATUS_CASES.working.terminal.launchDirectory, bringForwardIn),
+        'card header': () => control(host, working, card => cardHeaderIn(card, working)),
+        'Bring forward': () => control(host, working, bringForwardIn),
         Dismiss: () => control(host, disconnected.launchDirectory, dismissIn),
         'Show full reason': () => vi.waitFor(() => {
           const found = control(host, blocked.launchDirectory, showFullReasonIn);
@@ -240,30 +245,20 @@ describe.each(['aside', 'main'])('the controller organism placed in %s', tag => 
   });
 });
 
-function readable(host: HTMLElement, text: string, root: HTMLElement = host): boolean {
-  const hostBox = host.getBoundingClientRect();
+/** Each painted text node in `root` under 4.5:1 against what is behind it, and each of `required` that no painted text
+ *  node holds. */
+function gradeTexts(root: HTMLElement, required: readonly string[]): string[] {
+  const found: string[] = [];
+  const graded: string[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const start = node.textContent?.indexOf(text) ?? -1;
-    if (start < 0) continue;
-    const range = document.createRange();
-    range.setStart(node, start);
-    range.setEnd(node, start + text.length);
-    const boxes = [...range.getClientRects()];
-    if (boxes.length > 0 && boxes.every(box => box.width > 0 && box.height > 0
-      && box.left >= hostBox.left && box.right <= hostBox.right
-      && box.top >= hostBox.top && box.bottom <= hostBox.bottom
-      && [...ancestors(node.parentElement!)].every(parent => {
-        const style = getComputedStyle(parent);
-        const clip = parent.getBoundingClientRect();
-        return style.visibility === 'visible' && Number(style.opacity) > 0
-          && (style.overflowX === 'visible' || (box.left >= clip.left && box.right <= clip.right))
-          && (style.overflowY === 'visible' || (box.top >= clip.top && box.bottom <= clip.bottom));
-      }))) return true;
+    const element = node.parentElement!;
+    if (!node.textContent?.trim() || element.getClientRects().length === 0) continue;
+    graded.push(node.textContent);
+    const behind = background(element);
+    const ratio = contrastRatio(ringOver(getComputedStyle(element).color, opacity(element), behind), behind);
+    if (ratio < 4.5) found.push(`"${node.textContent.trim().slice(0, 40)}" at ${ratio.toFixed(2)}`);
   }
-  return false;
-}
-
-function* ancestors(element: Element): Generator<Element> {
-  for (let current: Element | null = element; current; current = current.parentElement) yield current;
+  const all = graded.join('\n');
+  return [...found, ...required.filter(text => !all.includes(text)).map(text => `"${text}" was not graded`)];
 }

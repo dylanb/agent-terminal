@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createClampedReason } from '../../src/renderer/src/clampedReason';
-import { cardIn, showFullReasonIn, showFullReasonsIn, showsFullReason } from '../helpers/controllerCards';
+import { cardHeaderIn, cardIn, showFullReasonIn, showFullReasonsIn, showsFullReason, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
 
@@ -130,6 +130,14 @@ describe('a reason across live updates', () => {
   const directory = blocked(LONG).launchDirectory;
   const card = (host: HTMLElement) => cardIn(host, directory);
 
+  /** Lets the browser draw the card, then whether it is collapsed with its body not drawn. */
+  async function drawnCollapsed(host: HTMLElement): Promise<boolean> {
+    for (let frame = 0; frame < 2; frame += 1) await new Promise(requestAnimationFrame);
+    const current = card(host);
+    return Boolean(current) && cardHeaderIn(current!, directory)?.getAttribute('aria-expanded') === 'false'
+      && statusRowIn(current!)?.checkVisibility({ visibilityProperty: true }) === false;
+  }
+
   const control = (host: HTMLElement, directory_ = directory) => settled(() => { const c = cardIn(host, directory_); return c ? showFullReasonIn(c) : undefined; });
 
   it('keeps a reason shown in full when a live update keeps it', async () => {
@@ -142,6 +150,37 @@ describe('a reason across live updates', () => {
         const after = card(host);
         return { lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
       }).toEqual({ lines: 5, control: true });
+    } finally { dispose(); }
+  });
+
+  it('keeps a reason shown in full after its card collapses and expands by its header', async () => {
+    const { host, dispose } = mountControllerPanes({ terminals: [blocked(LONG)] });
+    const header = () => { const current = card(host); return current ? cardHeaderIn(current, directory) : undefined; };
+    try {
+      (await control(host))?.click();
+      await settled(() => { const opened = card(host); return opened ? shownLines(opened) : 0; }, lines => lines === 5);
+      header()?.click();
+      const collapsed = await drawnCollapsed(host);
+      header()?.click();
+      await expect.poll(() => {
+        const after = card(host);
+        return { collapsed, lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
+      }).toEqual({ collapsed: true, lines: 5, control: true });
+    } finally { dispose(); }
+  });
+
+  it('limits a reason that arrived while its card was collapsed to three lines with Show full reason once the card expands', async () => {
+    const { host, service, dispose } = mountControllerPanes({ terminals: [blocked('A short reason')], oneColumn: true });
+    const header = () => { const current = card(host); return current ? cardHeaderIn(current, directory) : undefined; };
+    try {
+      header()?.click();
+      service.publish([blocked(LONG)]);
+      const collapsed = await drawnCollapsed(host);
+      header()?.click();
+      await expect.poll(() => {
+        const after = card(host);
+        return { collapsed, lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
+      }).toEqual({ collapsed: true, lines: 3, control: true });
     } finally { dispose(); }
   });
 
@@ -212,15 +251,16 @@ describe('a reason across live updates', () => {
     } finally { dispose(); }
   });
 
-  it("moves focus by #219's rule when a live update changes the reason", async () => {
+  it("moves focus by #219's rule, to the card's header, when a live update changes the reason", async () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [blocked(LONG)] });
     try {
       (await control(host))?.focus();
       service.publish([blocked('A different short reason')]);
       await expect.poll(() => {
-        const focused = document.activeElement as HTMLElement;
-        return { inside: host.contains(focused), usable: focused.matches('button:not(:disabled), [tabindex]') };
-      }).toEqual({ inside: true, usable: true });
+        const after = card(host);
+        const header = after ? cardHeaderIn(after, directory) : undefined;
+        return header !== undefined && document.activeElement === header;
+      }).toBe(true);
     } finally { dispose(); }
   });
 

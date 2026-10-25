@@ -3,8 +3,9 @@ import { page } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createViewportLayout } from '../../src/renderer/src/controllerFrame';
-import { cardsIn } from '../helpers/controllerCards';
+import { cardHeaderIn, cardIn, cardsIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
+import { readable } from '../helpers/readableText';
 import { STATUS_CASES, statusTerminal } from '../helpers/controllerStatusFixture';
 
 const DEFAULT_VIEWPORT = { width: window.innerWidth, height: window.innerHeight };
@@ -96,11 +97,16 @@ describe('no horizontal scroll', () => {
 describe('no horizontal scroll with a long card name', () => {
   const named = { ...statusTerminal(), launchDirectory: '/work/agent_terminal_issue_243_collapsible_status_cards', repositoryRoot: '/work/agent_terminal_issue_243_collapsible_status_cards' };
 
-  it('does not scroll horizontally at 320 CSS px when the name has no break points', async () => {
+  it('does not scroll horizontally at 320 CSS px when the name has no break points and its card is collapsed', async () => {
     await page.viewport(320, 700);
     const { host, dispose } = mountControllerPanes({ terminals: [named], oneColumn: true });
     try {
-      expect({ cards: cardsIn(host).length, scrolls: horizontalScrollers() }).toEqual({ cards: 1, scrolls: [] });
+      const card = cardIn(host, named.launchDirectory);
+      const header = card && cardHeaderIn(card, named.launchDirectory);
+      const collapsed = header?.getAttribute('aria-expanded') === 'false';
+      const labelReadable = Boolean(header) && readable(host, STATUS_CASES.working.text, header!);
+      expect({ cards: cardsIn(host).length, collapsed, labelReadable, scrolls: horizontalScrollers() })
+        .toEqual({ cards: 1, collapsed: true, labelReadable: true, scrolls: [] });
     } finally { dispose(); }
   });
 });

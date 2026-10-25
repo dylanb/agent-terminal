@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardIn, cardsIn, dismissIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 
 afterEach(() => document.body.replaceChildren());
@@ -37,15 +37,15 @@ it('preserves Dismiss focus and keyboard targeting across an unrelated registrat
   } finally { view.component.dispose(); }
 });
 
-it('moves focus to a remaining actionable control after dismissing a disconnected card', async () => {
+it('moves focus to the remaining card\'s header after dismissing a disconnected card', async () => {
   const view = mount(2);
   try {
     view.dismiss('/work/0')?.focus();
     await userEvent.keyboard('{Enter}');
     expect(view.dismissed).toEqual(['0']);
-    expect.soft(document.activeElement?.getAttribute('aria-label')).toBe('Dismiss disconnected terminal /work/1');
-    await userEvent.keyboard('{Enter}');
-    expect.soft(view.dismissed).toEqual(['0', '1']);
+    const remaining = cardIn(view.host, '/work/1');
+    const header = remaining ? cardHeaderIn(remaining, '/work/1') : undefined;
+    expect(header !== undefined && document.activeElement === header).toBe(true);
   } finally { view.component.dispose(); }
 });
 

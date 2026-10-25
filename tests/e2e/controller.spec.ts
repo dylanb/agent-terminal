@@ -7,7 +7,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
-import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
 
 test('controller explains how to connect the first terminal', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -123,6 +123,12 @@ test('controller reflows real registered terminal controls when its window narro
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(320, 700));
     await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(320);
     await expect.soft.poll(async () => (await measure()).rows).toBeGreaterThan(wide.rows);
+    for (const directory of h.fixture.repositories) {
+      const header = cardHeaderLocator(cardLocator(controller.page, directory), directory);
+      await expect.soft(header).toHaveAttribute('aria-expanded', 'false');
+      if (await header.count()) await header.click();
+      await expect.soft(header).toHaveAttribute('aria-expanded', 'true');
+    }
     const narrow = await measure();
     expect.soft(wide.reachable).toBe(true);
     expect.soft(narrow.reachable).toBe(true);
