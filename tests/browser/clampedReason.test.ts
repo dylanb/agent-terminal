@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createClampedReason } from '../../src/renderer/src/clampedReason';
-import { cardIn, showFullReasonIn, showFullReasonsIn } from '../helpers/controllerCards';
+import { cardIn, showFullReasonIn, showFullReasonsIn, showsFullReason } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
 
@@ -196,6 +196,22 @@ describe('a reason across live updates', () => {
     } finally { dispose(); }
   });
 
+  it('keeps focus on the same reason\'s Show full reason when the card holds two', async () => {
+    const failure = LINES.map((_, index) => `Failure step ${index + 1}`).join('\n');
+    const both = statusTerminal({ attention: { status: 'complete', reasons: [LONG] }, error: { reason: failure } });
+    const { host, service, dispose } = mountControllerPanes({ terminals: [both] });
+    try {
+      const before = await settled(() => { const current = card(host); return current ? showFullReasonsIn(current) : []; }, found => found.length === 2);
+      before[1]?.focus();
+      service.publish([both]);
+      await expect.poll(() => {
+        const after = card(host);
+        const controls = after ? showFullReasonsIn(after) : [];
+        return { controls: controls.length, focused: controls.findIndex(current => current === document.activeElement) };
+      }).toEqual({ controls: 2, focused: 1 });
+    } finally { dispose(); }
+  });
+
   it("moves focus by #219's rule when a live update changes the reason", async () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [blocked(LONG)] });
     try {
@@ -205,6 +221,19 @@ describe('a reason across live updates', () => {
         const focused = document.activeElement as HTMLElement;
         return { inside: host.contains(focused), usable: focused.matches('button:not(:disabled), [tabindex]') };
       }).toEqual({ inside: true, usable: true });
+    } finally { dispose(); }
+  });
+
+  it('starts a reason shortened when it comes back after going away', async () => {
+    const { host, service, dispose } = mountControllerPanes({ terminals: [blocked(LONG)] });
+    try {
+      (await control(host))?.click();
+      service.publish([blocked('A different short reason')]);
+      service.publish([blocked(LONG)]);
+      await expect.poll(() => {
+        const after = card(host);
+        return { lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
+      }).toEqual({ lines: 3, control: true });
     } finally { dispose(); }
   });
 
@@ -225,4 +254,16 @@ describe('a reason across live updates', () => {
       }).toEqual({ changed: 3, changedControl: true, peer: 3 });
     } finally { dispose(); }
   });
+});
+
+it('reports whether the reason is shown in full as the control\'s expanded state', async () => {
+  const host = reasonHost('20rem');
+  createClampedReason(host, { text: LONG, full: false, onToggle() {} });
+  const shownInFull = () => showsFullReason(showFullReasonIn(host));
+  await settled(() => showFullReasonIn(host));
+  const before = shownInFull();
+  showFullReasonIn(host)?.click();
+  const opened = shownInFull();
+  showFullReasonIn(host)?.click();
+  expect({ before, opened, closed: shownInFull() }).toEqual({ before: false, opened: true, closed: false });
 });

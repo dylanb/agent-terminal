@@ -16,6 +16,8 @@ export function fakeLayout(oneColumn = false) {
   };
   return {
     layout,
+    /** Whether any listener is still subscribed to layout changes. */
+    following: (): boolean => listeners.size > 0,
     set(next: boolean): void {
       current = next;
       listeners.forEach(listener => listener());

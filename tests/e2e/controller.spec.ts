@@ -97,8 +97,8 @@ test('controller reflows real registered terminal controls when its window narro
     }
     await expect.soft(cardsLocator(controller.page)).toHaveCount(2);
     // Live snapshots can replace panes between locator resolution and evaluation; query and measure atomically.
-    const measure = () => cardsLocator(controller.page).evaluateAll((cards, directories) => {
-      const elements = cards.filter(element => directories.some(directory => element.textContent?.includes(directory)));
+    const measure = () => controller.page.evaluate(directories => {
+      const elements = [...document.querySelectorAll('article')].filter(element => directories.some(directory => element.textContent?.includes(directory)));
       const boxes = elements.map(element => element.getBoundingClientRect());
       return {
         rows: new Set(boxes.map(box => Math.round(box.top))).size,
@@ -122,8 +122,8 @@ test('controller reflows real registered terminal controls when its window narro
     const wide = await measure();
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(320, 700));
     await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(320);
+    await expect.soft.poll(async () => (await measure()).rows).toBeGreaterThan(wide.rows);
     const narrow = await measure();
-    expect.soft(narrow.rows).toBeGreaterThan(wide.rows);
     expect.soft(wide.reachable).toBe(true);
     expect.soft(narrow.reachable).toBe(true);
     expect.soft(wide.readable && narrow.readable).toBe(true);

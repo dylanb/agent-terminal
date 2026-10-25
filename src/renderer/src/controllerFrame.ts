@@ -6,6 +6,12 @@ export interface ControllerLayout {
 }
 
 export function createViewportLayout(view: Window): ControllerLayout {
-  void view;
-  return { oneColumn: () => false, onChange: () => () => {} };
+  const query = view.matchMedia(`(width < ${ONE_COLUMN_BELOW_PX}px)`);
+  return {
+    oneColumn: () => query.matches,
+    onChange(listener) {
+      query.addEventListener('change', listener);
+      return () => query.removeEventListener('change', listener);
+    },
+  };
 }

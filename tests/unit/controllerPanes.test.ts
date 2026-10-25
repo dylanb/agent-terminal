@@ -204,3 +204,26 @@ describe('dismiss disconnected cards', () => {
     } finally { dispose(); }
   });
 });
+
+describe('controller layout after disposal', () => {
+  it('stops following layout changes once disposed', () => {
+    const { layout, dispose } = mountControllerPanes({ terminals: [terminal] });
+    const mounted = layout.following();
+    dispose();
+    expect({ mounted, disposed: layout.following() }).toEqual({ mounted: true, disposed: false });
+  });
+});
+
+describe('focus when the focused control goes away but its card stays', () => {
+  it('moves focus to the same card\'s action, not the first card\'s', () => {
+    const peer = { ...terminal, id: 'peer', launchDirectory: '/peer/first' };
+    const { host, service, dispose } = mountControllerPanes({ terminals: [peer, terminal] });
+    try {
+      const target = cardIn(host, terminal.launchDirectory);
+      (target && bringForwardIn(target))?.focus();
+      service.publish([peer, { ...terminal, status: 'disconnected' }]);
+      const after = cardIn(host, terminal.launchDirectory);
+      expect(Boolean(after) && document.activeElement === (after && dismissIn(after))).toBe(true);
+    } finally { dispose(); }
+  });
+});

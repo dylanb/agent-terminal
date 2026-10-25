@@ -99,11 +99,12 @@ test('status cards on real terminals', { tag: '@ownapp' }, async () => {
       { label: 'B status row', part: statusRowLocator(cardB), property: 'color', token: '--status-working-text' },
     ])).toEqual([]);
 
-    const cardRows = async (): Promise<number> => {
-      const tops = (await Promise.all([cardA, cardB].map(card =>
-        card.evaluateAll(cards => cards.map(element => Math.round(element.getBoundingClientRect().top)))))).flat();
+    const cardRows = (): Promise<number> => controller.page.evaluate(directories => {
+      const tops = [...document.querySelectorAll('article')]
+        .filter(element => directories.some(directory => element.textContent?.includes(directory)))
+        .map(element => Math.round(element.getBoundingClientRect().top));
       return tops.length === 2 ? new Set(tops).size : 0;
-    };
+    }, [gated, working]);
     await setContentWidth(controller, 639);
     await expect.soft.poll(cardRows).toBe(2);
     await setContentWidth(controller, 640);

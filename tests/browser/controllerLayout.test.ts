@@ -92,3 +92,15 @@ describe('no horizontal scroll', () => {
     } finally { dispose(); }
   });
 });
+
+describe('no horizontal scroll with a long card name', () => {
+  const named = { ...statusTerminal(), launchDirectory: '/work/agent_terminal_issue_243_collapsible_status_cards', repositoryRoot: '/work/agent_terminal_issue_243_collapsible_status_cards' };
+
+  it('does not scroll horizontally at 320 CSS px when the name has no break points', async () => {
+    await page.viewport(320, 700);
+    const { host, dispose } = mountControllerPanes({ terminals: [named], oneColumn: true });
+    try {
+      expect({ cards: cardsIn(host).length, scrolls: horizontalScrollers() }).toEqual({ cards: 1, scrolls: [] });
+    } finally { dispose(); }
+  });
+});

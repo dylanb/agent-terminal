@@ -115,3 +115,10 @@ export const headerLabels = (summary: (label: string) => number, total: number, 
   ['total|terminals?', total], ['connected', connected], ['disconnected', total - connected],
   ...SUMMARY_LABELS.map(label => [label, summary(label)] as [string, number]),
 ];
+/** Whether a Show full reason control reports its reason as shown in full, through whichever of expanded, pressed or
+ *  checked it exposes; a throw when it exposes none. */
+export function showsFullReason(control: Element | undefined): boolean {
+  const state = ['aria-expanded', 'aria-pressed', 'aria-checked'].map(name => control?.getAttribute(name)).find(value => value === 'true' || value === 'false');
+  if (state === undefined) throw new Error('Show full reason exposes no state');
+  return state === 'true';
+}
