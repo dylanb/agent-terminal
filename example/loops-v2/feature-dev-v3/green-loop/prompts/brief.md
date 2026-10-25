@@ -66,7 +66,9 @@ criterion, to the scope, or to a contract the plan names, a change to a RED test
 anything the repository's standards say to escalate — you do not apply: log it under Needs your call with your
 recommendation, and carry on without it. A change to a line of a test RED wrote is yours to decide otherwise:
 when a RED test is wrong, or must be restructured for your change, change it, and log it under `### RED test
-changes`. Only when no choice inside the boundary lets you go on at all, stop as
+changes`. A RED test that pins how something is built rather than what its acceptance criterion names — a DOM
+shape, an update strategy, the moment a measurement lands — is wrong: correct it even when your implementation
+happens to satisfy it, and log it the same way. Only when no choice inside the boundary lets you go on at all, stop as
 blocked, as your progress instructions say: the step then stops for the operator.
 
 Reopen one of your own decisions only when a later finding shows it contradicts the ticket, the plan, the

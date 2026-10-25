@@ -61,6 +61,12 @@ and its cost: size, upkeep, false positives and CI time. One whose value lies on
 follow-up proposal, never built here. Do not over-engineer: a capability that costs more than the judgment it
 replaces is not worth building.
 
+**Renderer UI.** When this ticket's slices test renderer UI, the harness includes the shared test helper the
+tests read the screen through, and the fixture builders they mount, both built to the repository's
+`UI-STANDARDS.md` §3.4 (UI §3.4) where it has one: every control, heading and status is found by role and
+accessible name through one matcher that every query in the helper shares, and each fixture builder gives
+every count and value it sets a different value, so no two cases a test tells apart can be swapped.
+
 **Size.** A capability is small when it uses the repository's existing tooling, adds no dependency or CI job,
 changes no production code outside the files the ticket touches, and needs no rewrite of existing code to
 comply. It is large when it needs any of: a new dependency or tool, a new CI job or command, code changed
