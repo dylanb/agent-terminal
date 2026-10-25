@@ -1,3 +1,5 @@
+> **Changelog v2.217:** **§2/§4/§9.2/§12 — the status strip no longer shows a "paste mode" chip (operator decision 2026-10-25).** Whether the running program has bracketed paste on is a terminal detail most operators never need, and the spec gave no reason to display it. The chip is removed; `monitor:update` still carries `bracketedPaste` (§6) and both paste paths still read the mode live at the moment of each paste (§7.5, §9.3). The §12 Claude Code check now looks for a multi-line insert landing as one paste instead of the chip.
+
 ## #251 slice 3 — maintained audit publication and human handoff
 
 Replace the prior marked audit section without duplicating it, retain surrounding description and closing
