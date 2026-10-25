@@ -179,6 +179,24 @@ branch and closes its PR. The surviving `flow:onAppBootstrapConflict` pair carri
 handler to the identity the message carries (`wireAppBootstrapConflict` takes the `repoKey` and `step` the
 message injects, no cwd dependency), never to a `repoKey()` the handler looks up for itself.
 
+## Published snapshots have explicit ownership and isolate consumers
+
+An API that returns or publishes a state snapshot MUST define who owns the value. A consumer MUST NOT
+be able to mutate the producer's state or another consumer's view through that snapshot, including its
+nested objects and arrays. Detached copies or enforced immutability both satisfy this rule; no particular
+cloning library or mechanism is required. A shallow copy or a TypeScript `readonly` annotation alone
+does not protect shared mutable values at runtime.
+
+The motivating defect was the controller registry and status publisher: consumers could modify nested
+ticket titles or attention reasons and thereby change retained state or another subscriber's delivery.
+The ownership contract applies equally to direct reads and subscription deliveries.
+
+Tests verify the contract through observable behavior: attempt to change a returned or delivered nested
+value, then confirm that subsequent reads and other subscribers still receive the producer's original
+state. An immutable API may reject the attempted mutation; a detached mutable snapshot may accept it
+locally. Tests must allow either mechanism when the public ownership contract allows both, and must
+never assert which clone or freeze function was called.
+
 ## Delayed consent and asynchronous results act only on the exact occurrence they were raised for
 
 Resource identity says *which object*; it does not say *which observed version*. Between inspection and
