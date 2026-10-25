@@ -1,4 +1,3 @@
-// Reads the YAML that Playwright's `locator.ariaSnapshot()` returns.
 // https://playwright.dev/docs/aria-snapshots
 
 export type AriaNode = { readonly role: string; readonly text: readonly string[]; readonly children: readonly AriaNode[] };
