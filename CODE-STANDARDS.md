@@ -179,6 +179,24 @@ branch and closes its PR. The surviving `flow:onAppBootstrapConflict` pair carri
 handler to the identity the message carries (`wireAppBootstrapConflict` takes the `repoKey` and `step` the
 message injects, no cwd dependency), never to a `repoKey()` the handler looks up for itself.
 
+## Published snapshots have explicit ownership and isolate consumers
+
+An API that returns or publishes a state snapshot MUST define who owns the value. A consumer MUST NOT
+be able to mutate the producer's state or another consumer's view through that snapshot, including its
+nested objects and arrays. Detached copies or enforced immutability both satisfy this rule; no particular
+cloning library or mechanism is required. A shallow copy or a TypeScript `readonly` annotation alone
+does not protect shared mutable values at runtime.
+
+The motivating defect was the controller registry and status publisher: consumers could modify nested
+ticket titles or attention reasons and thereby change retained state or another subscriber's delivery.
+The ownership contract applies equally to direct reads and subscription deliveries.
+
+Tests verify the contract through observable behavior: attempt to change a returned or delivered nested
+value, then confirm that subsequent reads and other subscribers still receive the producer's original
+state. An immutable API may reject the attempted mutation; a detached mutable snapshot may accept it
+locally. Tests must allow either mechanism when the public ownership contract allows both, and must
+never assert which clone or freeze function was called.
+
 ## Delayed consent and asynchronous results act only on the exact occurrence they were raised for
 
 Resource identity says *which object*; it does not say *which observed version*. Between inspection and
@@ -307,34 +325,49 @@ absolute: *could a reader delete this comment, read only the code, and recover t
 control-flow step, name) **and** any description of the *current mechanism* — mechanism descriptions drift
 the instant the mechanism changes, and a behavior-preserving refactor must never be able to falsify a
 surviving comment (the stale "single carried slot" beside a per-repo map is the canonical failure this rule
-exists to kill). A comment earns its place only by carrying a fact that originates **outside the code it
-annotates**. Exactly two kinds qualify:
+exists to kill). **The default is no comment.** A comment is allowed in exactly two cases, and nothing
+else qualifies:
 
-- **An external contract or authority.** A spec clause (`§n`), a web standard criterion (WCAG / WAI-ARIA),
-  a wire or terminal protocol (OSC 7/133, bracketed-paste framing), an external file-format or API schema
-  (the agent-loop `state.yaml` vocabulary), a fixed product/workflow constraint ("injects nothing; the
-  human drives agent-loop by hand"). **Cite it — never re-explain it in prose.** The citation is the whole
-  comment; a paragraph restating what the spec says is narration of an external doc and is forbidden.
-  **Mechanically: a comment carrying a `§n`/CWE/WCAG citation contains the citation and nothing that
-  paraphrases the cited text.** A citation followed by a prose gloss is the shape every stale comment in
-  this repo has taken — the citation stays true while the gloss rots beside it.
-- **A cross-module coupling this codebase cannot express through an abstraction.** An implicit dependency
-  between two deep modules where a future edit on one side would silently break the other **and no type,
-  name, test, or assertion can catch it.** This is the *only* license to mention anything internal — and it
-  is conditional: first try to make the coupling unbreakable in code (a shared type, a precise name, a
-  pinning test); comment only the residue no abstraction can hold, and state **what breaks if the coupling
-  is violated**, never how the code currently works.
+- **A citation of an authority outside this repository.** A web standard criterion (WCAG / WAI-ARIA), a
+  CWE, an RFC, a wire or terminal protocol (OSC 7/133, bracketed-paste framing), or a third-party tool's
+  file format or API (git's rebase instruction sheet, Playwright's `page.evaluate` serialization).
+  **The citation is the whole comment** — no prose restating or applying what it says; a citation followed
+  by a gloss is the shape every stale comment in this repo has taken, the citation staying true while the
+  gloss rots beside it. **Nothing inside this repository is cited from code** — not the spec (`§n`, save
+  the one exception in the next case), not `CLAUDE.md` or the standards files, not another module, and
+  never a loop flow document — the plan, the groomed ticket, the impl-report and the other files under
+  `.agent-terminal/loop/artifacts/` are not committed, so a citation of one points at nothing once the
+  branch merges. Issue and PR text are the same:
+  the one sanctioned reference to the tracker is the `// untestable; tracked in #NNN` gap pointer below. An
+  in-repo rule that matters at a site is held there by a type, a name or a test, which a reader finds from
+  the code and which fails when the rule is broken; a citation does neither.
+- **A fact that is near impossible, or very expensive, to recover from the code.** The bar is high: a fact
+  a reader can recover in a few minutes of reading — even across several files — does not qualify. What
+  qualifies needs running the system, reading third-party source, or history to find: an implicit coupling
+  between two modules where an edit on one side silently breaks the other **and no type, name, test or
+  assertion can catch it**, or a reason the obvious simpler code is wrong that only an observed failure
+  revealed. **A spec citation (`§n`) qualifies here and only here:** when the code's behaviour is set by a
+  spec clause that a reader could otherwise find only by reading the whole spec — the clause is the reason
+  the code is as it is, and nothing in the code, its names or its tests leads to it. The citation is the
+  whole comment, with no gloss. A `§n` beside code whose name, test or module already leads to its clause,
+  or used as a label for a feature, does not qualify. Even then, first try to make the fact unbreakable in
+  code (a shared type, a precise name, a pinning test) and comment only the residue; state **what breaks if it is violated**, never how the code
+  currently works.
 
-Everything else goes. Prefer a precise name, a named test, or a `§n` citation over any sentence. Code
+Everything else goes, doc-comments included: a `/** */` on an exported identifier meets the same bar as
+any other comment. Prefer a precise name or a named test over any sentence. This standard governs new and
+changed code; a change that touches an existing comment brings that comment into line, and existing `§n`
+comments elsewhere are not rewritten wholesale. The tightening to outside-the-repository citations came from
+#245, whose test helpers cited "plan R2", "plan R3" and "#245 § Status token contract" — flow-document
+sections that vanish at merge — and kept them through a review that dismissed them as polish. Code
 `TODO`/`FIXME` comments are **forbidden** — deferred work and recorded §12-style gaps go to a tracked GitHub
 issue (optionally pointed at from the site by a plain marker-free comment, e.g. `// untestable; tracked in
 #NNN`), never a code marker; the `local/no-todo-comments` ESLint rule (`eslint.config.mjs`) enforces this in
 the husky pre-commit hook and the CI `pnpm lint` step. The rule is case-sensitive on the uppercase marker, so
-the `todo`/`Todo` domain word (the Todo pane) and identifiers like `TODO_UNDO_MS` are unaffected. **The ban
-never excludes documentation of a legitimate external invariant or contract** — the two comment kinds this
-section sanctions above: the rule scans comment tokens for the uppercase deferral marker only, so a marker-free
-`§n`/protocol citation, a cross-module-coupling note, or a `// untestable; tracked in #NNN` pointer passes
-clean; and on the rare occasion the cited external contract *is* the literal token, an explicit
+the `todo`/`Todo` domain word (the Todo pane) and identifiers like `TODO_UNDO_MS` are unaffected. **The lint
+rule scans comment tokens for the uppercase deferral marker only**, so it never flags the two comment kinds
+this section allows — a marker-free citation, a hard-to-recover-fact note, or a `// untestable; tracked in
+#NNN` pointer passes clean; and on the rare occasion the cited external contract *is* the literal token, an explicit
 `// eslint-disable-next-line local/no-todo-comments` permits that one comment (all three shapes are pinned in
 `tests/unit/noTodoCommentsLint.test.ts`). When in
 doubt, delete: a missing comment costs a code read; a wrong one costs a misled change. Three corollaries close
@@ -349,9 +382,8 @@ the loopholes this rule has actually leaked through:
   directly above code that gated on `errorReason` instead of on `status` — the comment *was* the invariant,
   and the code quietly violated it while the reader was reassured.
 - **A doc-comment must not describe a parameter's domain in prose — put the domain in a named type.**
-  Doc-comments on exported identifiers are allowed and must add the caller-facing contract (obligations,
-  external invariants), never echo the signature. But a doc-comment is the only artifact here that can rot
-  **silently** — types, names, tests and `§n` citations all fail loudly. So when a doc-comment would
+  A doc-comment is held to the same two cases as any comment and never echoes the signature. It is the only
+  artifact here that can rot **silently** — types, names and tests all fail loudly. So when a doc-comment would
   explain what values a `string` may take (`artifact` "names the turn's required output file", `filename`
   is "tree-relative"), that explanation belongs in a type — `ArtifactRef`, `DirRelativeName` — so widening
   the value's meaning breaks compilation instead of quietly falsifying a sentence. Prose about a `string`'s

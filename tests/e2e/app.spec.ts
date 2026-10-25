@@ -302,6 +302,8 @@ test('injection honors bracketed-paste mode read live from the shadow (§9.3)', 
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('off');
   await inject('plain-text-in', true);
   await expect(termRows()).toContainText('plain-text-in');
+  // Wait for cat's output as well as tty echo: the delayed submit CR must not split the next shell command.
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: /^\s*plain-text-in\s*$/ })).toHaveCount(2);
   expect(await termRows().innerText()).not.toContain('200~');
 
   // Mode ON (?2004h): the paste must be fenced by ESC[200~ … ESC[201~.

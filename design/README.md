@@ -14,6 +14,40 @@ UI-inwards build of the flow-management three-view shell. Process: **Mood → Op
   - Shared widgets via `shell/tokens.css` (§22.4 layout-as-data); ⌘1/2/3 views, ⌘K toggles the drawer. Light + dark (theme set in `<head>` to avoid FOUC).
 - **§24.1C Implement — pending** (build `converged.html` as the real app UI, both themes, RED-first).
 
+## Design tokens — `src/renderer/src/tokens.css`
+
+`src/renderer/src/tokens.css` is the source of truth for the app's design tokens. Both the agent-terminal window (`src/renderer/index.html`) and the controller window (`src/renderer/controller.html`) link it before `styles.css`, and no other renderer stylesheet defines a colour token. Each token is set on `:root` (light) and overridden under `[data-theme="dark"]`. `design/shell/tokens.css` is a historical copy kept for the mockups in `shell/`; it is not the app's palette and has drifted from it.
+
+Token roles:
+
+- **Surface:** `--bg`, `--card`, `--hair`, `--hair2` (and the palette names they alias: `--board`, `--leaf`, `--rule`, `--rule-soft`).
+- **Text and dim:** `--text`, `--dim` (`--ink`, `--muted`).
+- **Accents and their `-text` pairs:** `--signal`, `--attn`, `--pass` paint dots, borders and washes; `--signal-text`, `--attn-text`, `--pass-text` are the tones that clear 4.5:1 as small text on `--card`. `--danger` / `--danger-on` are the destructive-action text and the foreground on its fill.
+- **Washes:** `--signal-wash`, `--reveal` / `--reveal-wash` (the §16.8 cross-highlight), `--changed` / `--changed-wash` (code-viewer changed lines).
+- **Terminal:** `--term-bg`, `--term-text`, `--term-dim`.
+- **Syntax:** `--syn-*`, the code-viewer palette (§20.2).
+- **Status:** the controller's pane-status tokens, below.
+- **Non-colour:** `--focus-ring-w`, `--focus-ring-offset`, `--focus-ring-extent`, `--r`.
+
+### Controller status tokens
+
+Each pane status has an accent `--status-<status>` (dots, card accents, rings), a text colour `--status-<status>-text` and a tint `--status-<status>-tint` (card and attention-box backgrounds). Error and needs-human cards also have a border, `--status-error-border` and `--status-needs-human-border`.
+
+| Status | Accent | Text | Tint | Border |
+| --- | --- | --- | --- | --- |
+| error | `var(--attn)` | `var(--danger)` | own value | own value |
+| needs-human | amber, own value | amber, own value | own value | own value |
+| working | `var(--signal)` | `var(--signal-text)` | own value | — |
+| completed | `var(--pass)` | `var(--pass-text)` | own value | — |
+| idle (idle and unassigned) | `var(--dim)` | `var(--dim)` | `var(--hair2)` | — |
+
+The needs-human tokens are defined on their own, never by reference to `--reveal` / `--reveal-wash`, so changing the cross-highlight never changes them and the reverse. In both themes each status text clears 4.5:1 on `--card` and on its painted tint (WCAG 2.2 SC 1.4.3), and each accent clears 3:1 on `--card` (SC 1.4.11); `tests/browser/tokenSheet.test.ts` checks this in Chromium.
+
+### Colour rule
+
+- **Controller status colours:** blue for working, red for errors and action, amber for needs a human, green for completed; everything else is quiet.
+- **Agent-terminal window:** saturated colour is spent on **signal** (blue) and **act** (red), and needs a human is shown in red (the §24.2.3 T0 status-pill and status-bar decisions below).
+
 ## Galley · Lit — token system
 
 - **Palette (light):** board `#FBFCFE` · leaf `#FFFFFF` · ink `#11161D` · muted `#5E6B7A` · **signal (cyan) `#0098DB`** · **act (red) `#E5484D`** · pass `#1F9D6B`.

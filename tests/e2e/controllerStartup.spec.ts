@@ -1,12 +1,14 @@
 import { test, expect } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { createServer, type Socket } from 'node:net';
+import type WebSocket from 'ws';
+import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createControllerHarness } from './controllerHarness';
 import { load } from 'js-yaml';
 import { seedTrustedFlow, autoGateFlowYaml } from './autoGateHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
+import { STARTUP_CARD } from '../helpers/startupCard';
 
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
@@ -22,7 +24,7 @@ for (const theme of ['light', 'dark']) {
     try {
       const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
       await terminal.page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-      await expect.soft(terminal.page.getByText(/start.*controller/i)).toBeVisible();
+      await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
       expect.soft(starts(h.fixture.root)).toBe('');
       await expect.poll(() => terminal.page.evaluate(() => document.readyState)).toBe('complete');
       const startsAtClose = starts(h.fixture.root);
@@ -41,10 +43,17 @@ test('startup automatically registers after controller launch and starts exactly
   const h = createControllerHarness();
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
+    await expect(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+    const statuses = terminal.page.getByRole('status');
+    await expect.soft(statuses).toHaveCount(2);
+    await expect.soft(statuses.filter({ hasText: STARTUP_CARD.statusLine })).toHaveText(STARTUP_CARD.statusLine);
+    await expect.soft(statuses.filter({ hasNotText: STARTUP_CARD.statusLine })).toHaveText('');
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     await expect.soft(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');
     await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
+    await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeHidden();
+    await expect.soft(terminal.page.getByText(STARTUP_CARD.statusLine)).toBeHidden();
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('printf "STARTUP_%s\\n" "READY"');
     await terminal.page.keyboard.press('Enter');
@@ -72,17 +81,17 @@ test('startup with a running controller publishes a usable pane and starts one r
 for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after-close'] as const) {
   test(`startup does not release work for ${mode} registration`, { tag: '@ownapp' }, async () => {
     const h = createControllerHarness();
-    const peers = new Set<Socket>();
-    const registrations: Array<{ socket: Socket }> = [];
+    const peers = new Set<WebSocket>();
+    const registrations: Array<{ socket: WebSocket }> = [];
     const endpoint = resolveControllerEndpoint(h.fixture.home);
     mkdirSync(dirname(endpoint), { recursive: true, mode: 0o700 });
-    const peer = createServer(socket => {
+    const peer = createWebSocketTestServer(socket => {
       peers.add(socket);
-      socket.on('error', () => socket.destroy());
-      socket.once('data', () => {
+      socket.on('error', () => socket.terminate());
+      socket.once('message', () => {
         registrations.push({ socket });
-        if (mode === 'malformed') socket.end('not JSON\n');
-        if (mode === 'interrupted') socket.destroy();
+        if (mode === 'malformed') socket.send('not JSON');
+        if (mode === 'interrupted') socket.terminate();
       });
     });
     try {
@@ -96,7 +105,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
           await expect.soft.poll(() => registrations.length, { timeout: RETRY_OBSERVATION_MS }).toBeGreaterThan(1);
           expect.soft(starts(h.fixture.root)).toBe('');
         }
-        registrations[registrations.length - 1].socket.write('{"version":1,"type":"registered"}\n');
+        registrations[registrations.length - 1].socket.send('{"version":2,"type":"registered"}\n');
         await expect.poll(() => starts(h.fixture.root)).toBe('started\n');
         await delay(UNCONFIRMED_OBSERVATION_MS);
         expect(starts(h.fixture.root)).toBe('started\n');
@@ -105,12 +114,12 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
         const child = terminal.app.process();
         await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
         await expect.poll(() => child.exitCode).not.toBeNull();
-        registrations[0].socket.write('{"version":1,"type":"registered"}\n');
+        registrations[0].socket.send('{"version":2,"type":"registered"}\n');
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
         expect(registrations).toHaveLength(1);
       } else {
-        await expect.soft(terminal.page.getByText(/start.*controller|controller.*start/i)).toBeVisible();
+        await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
         await expect.soft(terminal.page.getByText(/build/i)).toBeVisible();
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe('');
@@ -118,7 +127,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
       }
     } finally {
       await h.dispose();
-      for (const socket of peers) socket.destroy();
+      for (const socket of peers) socket.terminate();
       await new Promise<void>(resolve => peer.close(() => resolve()));
     }
   });

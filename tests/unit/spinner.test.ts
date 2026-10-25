@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSpinner } from '../../src/renderer/src/spinner';
 
-// Activity spinner — a tiny decorative atom (the braille glyph animates via CSS in tokens.css). It
+// Activity spinner — a tiny decorative atom (the braille glyph animates via CSS in styles.css). It
 // carries NO meaning of its own (the phrase beside it does), so it is hidden from assistive tech. Built
 // from the passed ownerDocument, never the global document (UI-STANDARDS §3.3 relocation).
 describe('spinner atom (activity)', () => {

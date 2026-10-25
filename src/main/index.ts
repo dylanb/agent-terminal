@@ -120,7 +120,8 @@ import {
   exampleInstallDirs,
   type InstallDestination,
 } from './installExamples';
-import { provideAppLoopView } from './loopViewV2';
+import { createControllerStatus } from './controllerStatus';
+import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { installedCodexReviewerProblem, installedReviewerProblem } from './reviewerAgents';
@@ -208,15 +209,21 @@ async function createWindow(): Promise<void> {
     return startupReady;
   });
   let finishRegistration!: (accepted: boolean) => void;
-  let incompatibility: StartupIncompatibleMsg | undefined;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
+  const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
+  let currentWork: import('../shared/ipc').ControllerWorkStatus | undefined;
+  let incompatibility: StartupIncompatibleMsg | undefined;
   const unregisterController = registerControllerTerminal(flowGlobalDir, captureControllerIdentity(launchRoot), () => {
     if (win.isDestroyed()) return 'unavailable';
     if (win.isMinimized()) win.restore();
     win.show();
     win.focus();
     return 'activated';
-  }, () => finishRegistration(true), report => {
+  }, () => finishRegistration(true), listener => {
+    statusListeners.add(listener);
+    if (currentWork) listener(currentWork);
+    return () => { statusListeners.delete(listener); };
+  }, report => {
     incompatibility = { sessionId: SESSION_ID, ...report };
     if (!win.isDestroyed()) win.webContents.send(CH.startupIncompatible, incompatibility);
   });
@@ -907,6 +914,33 @@ async function createWindow(): Promise<void> {
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
   const githubRefs = createGithubRefs();
+  const statusFlow = createFlowManager({
+    globalDir: flowGlobalDir,
+    loadDefinition: repoKey => resolveRun(repoKey),
+    readAppLoopView: (repoKey, name) => observeAppLoopView(appEngine, name, appDefContext(repoKey), autoGate.autoGateViewFor),
+  });
+  const controllerStatus = createControllerStatus({
+    current: () => {
+      const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
+      const load = resolveActiveDefinition(repoKey);
+      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity };
+    },
+    issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
+  });
+  controllerStatus.subscribe(work => {
+    currentWork = work;
+    for (const listener of statusListeners) listener(work);
+  });
+  const stopStatusCwd = cwdTracker.onChange(() => controllerStatus.refresh());
+  const statusTimer = setInterval(() => controllerStatus.refresh(), 250);
+  controllerStatus.refresh();
+  win.once('closed', () => {
+    clearInterval(statusTimer);
+    stopStatusCwd();
+    controllerStatus.dispose();
+    statusListeners.clear();
+  });
+
 
   // T4 (§24.2.3): the raise/dedup decision lives in loopNotifier (unit-tested); only the untestable
   // Electron Notification surface is created here.

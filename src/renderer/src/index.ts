@@ -44,7 +44,6 @@ const stopIncompatible = window.term.startup.onIncompatible(({ update, terminalV
     : 'Update Agent Terminal, then open this terminal again.';
   const message = document.getElementById('startup-incompatible')!;
   message.textContent = `This terminal uses controller protocol version ${terminalVersion}, but the running controller supports ${supported}. ${action}`;
-  message.hidden = false;
 });
 
 void window.term.startup.ready().then(() => {

@@ -7,6 +7,7 @@
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
     />
     <title>Agent Terminal</title>
+    <link rel="stylesheet" href="./src/tokens.css" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
@@ -19,11 +20,19 @@
         <circle cx="13.5" cy="5.1" r="1.6" fill="currentColor" />
       </symbol>
     </svg>
-    <section id="startup-waiting" class="startup-waiting" role="status">
-      <h1>Waiting for the controller</h1>
-      <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If the controller is already running, restart it. If this terminal still waits, update both apps to their latest builds.</p>
-      <p id="startup-incompatible" hidden></p>
-      <p>You can close this window while waiting.</p>
+    <section id="startup-waiting" class="startup-waiting">
+      <div class="startup-card">
+        <p class="startup-label">Startup paused</p>
+        <h1 class="startup-heading">Waiting for the controller</h1>
+        <p>Start Agent Terminal Controller to continue. This terminal will connect automatically. If the controller is already running, restart it. If this terminal still waits, update both apps to their latest builds.</p>
+        <ul class="startup-steps">
+          <li>macOS: Open Agent Terminal Controller (<code>agent-terminal-controller.app</code>) from your Applications folder.</li>
+          <li>Linux: Open Agent Terminal Controller (<code>agent-terminal-controller</code>) from your applications menu, or run its AppImage.</li>
+        </ul>
+        <p>You can close this window while waiting.</p>
+        <p id="startup-incompatible" role="status"></p>
+        <p class="startup-status" role="status"><span class="startup-dot" aria-hidden="true"></span>Not connected yet. This terminal will start on its own once the controller confirms.</p>
+      </div>
     </section>
     <div id="app" class="app" hidden>
       <!-- SLIM LEFT CHROME (§24.1C) -->
