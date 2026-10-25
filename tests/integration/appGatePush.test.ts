@@ -96,4 +96,3 @@ describe('createRealAppGatePush — real git (§28.3)', () => {
     expect(tipOf(origin, `refs/heads/${BRANCH}`)).toBe(before);
   });
 });
-

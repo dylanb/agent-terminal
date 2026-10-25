@@ -1,5 +1,8 @@
+import { once } from 'node:events';
+import WebSocket from 'ws';
+import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { connect, type Socket } from 'node:net';
+
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,7 +37,7 @@ const contents = {
     if (channel === CONTROLLER_CH.terminals) { snapshot = value; deliveries++; }
   },
 };
-const sockets: Socket[] = [];
+const sockets: WebSocket[] = [];
 beforeEach(async () => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'at-ipc-')));
   snapshot = { sessionId: SESSION_ID, terminals: [] };
@@ -45,20 +48,21 @@ beforeEach(async () => {
 
 afterEach(async () => {
   dispose?.();
-  for (const socket of sockets.splice(0)) socket.destroy();
+  for (const socket of sockets.splice(0)) socket.terminate();
   await transport?.dispose();
   rmSync(home, { recursive: true, force: true });
 });
 
 async function register(directory: string, disconnect = true) {
-  const socket = connect(resolveControllerEndpoint(home));
+  const socket = connectWebSocket(resolveControllerEndpoint(home));
   sockets.push(socket);
-  socket.on('error', () => socket.destroy());
-  socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+  socket.on('error', () => socket.terminate());
+  await once(socket, 'open');
+  socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
   await vi.waitFor(() => expect(snapshot.terminals.some(item => item.launchDirectory === directory)).toBe(true));
   const terminal = snapshot.terminals.find(item => item.launchDirectory === directory)!;
   if (disconnect) {
-    socket.destroy();
+    socket.terminate();
     await vi.waitFor(() => expect(snapshot.terminals.find(item => item.id === terminal.id)?.status).toBe('disconnected'));
   }
   return terminal.id;

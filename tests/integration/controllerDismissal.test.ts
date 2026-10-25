@@ -1,11 +1,14 @@
+import { once } from 'node:events';
+import WebSocket from 'ws';
+import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, type Socket } from 'node:net';
+
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { createControllerDecoder, encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal } from '../../src/shared/ipc';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
@@ -13,42 +16,41 @@ type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 describe('controller stale representations', () => {
   let home: string;
   let server: Transport;
-  const sockets: Socket[] = [];
+  const sockets: WebSocket[] = [];
   beforeEach(async () => {
     home = realpathSync(mkdtempSync(join(tmpdir(), 'at-dismiss-')));
     server = await startControllerTransport(home);
   });
   afterEach(async () => {
-    for (const socket of sockets.splice(0)) socket.destroy();
+    for (const socket of sockets.splice(0)) socket.terminate();
     await server.dispose();
     rmSync(home, { recursive: true, force: true });
   });
 
   async function peer(directory: string) {
     const before = new Set(server.terminals().map(item => item.id));
-    const socket = connect(resolveControllerEndpoint(home));
+    const socket = connectWebSocket(resolveControllerEndpoint(home));
     sockets.push(socket);
-    socket.on('error', () => socket.destroy());
-    const decoder = createControllerDecoder();
+    socket.on('error', () => socket.terminate());
     let confirmed = false;
     let activations = 0;
-    socket.on('data', (chunk: Buffer) => {
-      for (const message of decoder.push(chunk)) {
-        if (message.type === 'registered') confirmed = true;
-        if (message.type === 'activate') {
-          activations++;
-          socket.write(encodeControllerMessage({ version: 1, type: 'result', requestId: message.requestId, outcome: 'activated' }));
-        }
+    socket.on('message', (chunk: Buffer) => {
+      const message = parseControllerMessage(chunk.toString());
+      if (message.type === 'registered') confirmed = true;
+      if (message.type === 'activate') {
+        activations++;
+        socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: message.requestId, outcome: 'activated' }));
       }
     });
-    socket.write(encodeControllerMessage({ version: 1, minor: 0, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+    await once(socket, 'open');
+    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
     await vi.waitFor(() => expect(confirmed).toBe(true));
     const terminal = server.terminals().find(item => !before.has(item.id) && item.status !== 'disconnected')!;
     return { socket, terminal, activations: () => activations };
   }
 
   async function disconnect(client: Awaited<ReturnType<typeof peer>>) {
-    client.socket.destroy();
+    client.socket.terminate();
     await vi.waitFor(() => expect(server.terminals().find(item => item.id === client.terminal.id)?.status).toBe('disconnected'));
   }
 
