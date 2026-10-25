@@ -235,3 +235,18 @@ describe('the startup card contrast (B-3)', () => {
     });
   }
 });
+
+describe('the startup card version region while empty', () => {
+  it('adds no gap between the close hint and the status line', () => {
+    const { screen } = mountCard('light');
+    const hint = cardTextElement(screen, STARTUP_CARD.closeHint);
+    const statusLine = cardTextElement(screen, STARTUP_CARD.statusLine);
+    const region = statusLine.closest<HTMLElement>('[role="status"]') ?? statusLine;
+    const gap = () => region.getBoundingClientRect().top - hint.getBoundingClientRect().bottom;
+    const versionRegion = screen.querySelector('#startup-incompatible');
+    if (!versionRegion) throw new Error('the mounted wait screen has no #startup-incompatible to measure without');
+    const withEmptyRegion = gap();
+    versionRegion.remove();
+    expect(withEmptyRegion, 'close hint to status line gap, empty version region present minus removed').toBeCloseTo(gap(), 0);
+  });
+});
