@@ -1537,10 +1537,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** §27.3 */
-  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, verdict: ConsolidatorVerdict = 'clean', reason?: string): void => {
+  const routeWorkToGate = (turn: Extract<ActiveAppTurn, { phase: 'work' }>, verdict: ConsolidatorVerdict = 'clean', reason?: string, onSaved: () => void = () => {}): void => {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
-    reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', () => {});
+    reachGate(turn, verdict, 'verdict', 'the work turn finished but could not be saved — retry', onSaved);
   };
 
   /** §27.3 — a leg that checkpointed starts the next one; a blocked session stops for a human. */
@@ -1561,13 +1561,26 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return false;
   };
 
-  /** §27.3 — a goal turn at the gate its block stopped it at, whose session no longer records the block. */
-  const blockResolved = (a: ActiveAppTurn | null): a is Extract<ActiveAppTurn, { phase: 'work' }> => {
-    if (a?.phase !== 'work' || a.run.kind !== 'goal' || runner.state() === 'in-flight') return false;
+  /** §27.3 */
+  let updatingBlockedGoal: ActiveAppTurn | null = null;
+  const updateBlockedGoal = (a: ActiveAppTurn | null): void => {
+    if (a?.phase !== 'work' || a.run.kind !== 'goal' || runner.state() === 'in-flight' || updatingBlockedGoal === a) return;
     const persisted = readAppLoopState(a.repoDir);
-    if (persisted?.turnKey !== a.turnKey || persisted.status !== 'complete' || persisted.verdict !== 'stop for a human') return false;
+    if (persisted?.turnKey !== a.turnKey || persisted.status !== 'complete' || persisted.verdict !== 'stop for a human') return;
     const end = goalEnd(a, a.run);
-    return end.kind === 'shortfall' || end.progress.status !== 'blocked';
+    if (end.kind === 'progress' && end.progress.status === 'blocked') {
+      if (end.progress.blocked !== persisted.verdictReason) {
+        updatingBlockedGoal = a;
+        try {
+          routeWorkToGate(a, 'stop for a human', end.progress.blocked ?? undefined,
+            () => deps.audit(a.repoDir, `§27 goal turn ${a.turnKey} operator block updated`, 0));
+        } finally {
+          updatingBlockedGoal = null;
+        }
+      }
+      return;
+    }
+    resumeResolvedBlock(a);
   };
 
   /** §27.3 */
@@ -1731,7 +1744,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onDoneSignal() {
       if (legPromptPending) return;
       const a = active;
-      if (blockResolved(a)) resumeResolvedBlock(a);
+      updateBlockedGoal(a);
       if (goalStopsShort(a)) {
         runner.onDoneSignal();
       } else if (a?.completion.kind === 'red') {

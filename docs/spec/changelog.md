@@ -1,3 +1,21 @@
+## #251 slice 3 — maintained audit publication and human handoff
+
+Replace the prior marked audit section without duplicating it, retain surrounding description and closing
+references, and move the report below trailing context. Reject malformed/ambiguous ownership and reserved
+delimiters in artifacts before writing. Verify the entire published body through remote readback; write
+or readback failures remain recoverable failures, never successful handoffs. Installed runtime and real
+app journeys exercise retry, changed-report reruns, artifact access and explicit human completion.
+
+## #251 slice 2 — installed audit evidence and first publication
+
+The v3 finalize recipe now requires the complete eight-section audit and matching publication before
+handoff. The installed runtime reads current-run history through shared audit/path semantics and
+publishes the artifact below the existing PR description. Shared reconstruction exposes repeated visits,
+checklist history and incomplete/unavailable coverage. Lifecycle truth and human completion/merge
+ownership remain unchanged. Safe replacement/readback recovery is assigned to slice 3.
+
+> **#251 — autonomous v3 preparation (slice 1):** Replace manual finalize and its additional-review checklist with a reviewerless goal and human gate. Require explicit PR identity, intent-based target reconciliation, commit/push, required local verification, latest-remote-head CI even without a push, and verified implementation-description publication. Preserve blocked continuation and truthful lifecycle state. Full audit publication follows in slice 2; other flows are unchanged.
+
 > **#219 merge reconciliation (2026-10-24):** Retain §23.6 independent upgrades and version mismatch guidance over ws. WebSocket protocol 2.0 includes live status, accepts additive minor fields and reports unsupported majors before closing. Retire newline framing; its migration needs both applications updated once. Preserve the controller icon, combined packaging, gate push/retry, pickup confirmation and UI-planning changes from main.
 
 > **#219 slice 2:** Clear obsolete accessible attention/error announcements on connection loss, preserving focus and current recovery snapshots. Real-socket and real PTY/flow/gate checks cover outage resolution, repeated recovery, stale title/callback rejection, same-directory peers, activation, exit and dismissal.

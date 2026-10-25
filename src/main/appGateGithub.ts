@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createGitHubPullRequestBodies } from './pullRequestBody';
 import { errMsg } from './errno';
 import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
@@ -95,6 +96,7 @@ export function createRealAppGateGitHub(
 ): RunAppGateSideEffect {
   const repositorySource = createGitHubRepositorySource(repoDir);
   const pullRequests = createRealPullRequestLookup(repoDir);
+  const bodies = createGitHubPullRequestBodies(repoDir);
   const repository = (): Promise<GitHubRepositoryIdentity> =>
     repositorySource.resolve();
   const github: AppGateGitHubOperations = {
@@ -144,7 +146,6 @@ export function createRealAppGateGitHub(
       bodyFile,
       closingIssue,
     ) => {
-      const identity = await repository();
       let body: string;
       try {
         body = await readFile(bodyFile, 'utf8');
@@ -154,39 +155,9 @@ export function createRealAppGateGitHub(
       if (body.trim().length === 0) {
         throw new Error('refused to publish an empty PR body artifact');
       }
-      if (closingIssue === null) {
-        await runAppCommand(
-          'gh',
-          [
-            'pr',
-            'edit',
-            String(pullRequest),
-            '--body-file',
-            '-',
-            '--repo',
-            identity.selector,
-          ],
-          repoDir,
-          body,
-        );
-        return;
-      }
-      const artifact = body.trimEnd();
-      const closingLine = `closes #${closingIssue}`;
-      await runAppCommand(
-        'gh',
-        [
-          'pr',
-          'edit',
-          String(pullRequest),
-          '--body-file',
-          '-',
-          '--repo',
-          identity.selector,
-        ],
-        repoDir,
-        `${artifact}\n\n${closingLine}\n`,
-      );
+      await bodies.replaceBody(pullRequest, closingIssue === null
+        ? body
+        : `${body.trimEnd()}\n\ncloses #${closingIssue}\n`);
     },
   };
   return createAppGateGitHub(github);

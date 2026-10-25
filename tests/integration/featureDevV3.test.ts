@@ -54,13 +54,13 @@ describe('feature-dev-v3 grooms in three steps, and approves the implementation 
       ['refactor', 'loop', 'refactor-loop'],
       ['integration-slice', 'loop', 'integration-slice-loop'],
       ['impl-approve', 'loop', 'impl-approve-loop'],
-      ['finalize', 'manual', null],
+      ['finalize', 'loop', expect.any(String)],
     ]);
   });
 
-  it('leaves the operator only the groom approval, the plan approval and the implementation approval', () => {
+  it('retains human approval for grooming, planning, implementation and finalization', () => {
     const humans = flow(V3).steps.filter((s) => s.kind === 'loop' && s.gateAuthority !== 'auto').map((s) => s.id);
-    expect(humans).toEqual(['groom-approve', 'plan-approve', 'impl-approve']);
+    expect(humans).toEqual(['groom-approve', 'plan-approve', 'impl-approve', 'finalize']);
   });
 
   it('asks for the ticket at the interview, and leaves only the approval to a human', () => {
