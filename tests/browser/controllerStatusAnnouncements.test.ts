@@ -1,6 +1,7 @@
 import { page } from 'vitest/browser';
 import { expect, it } from 'vitest';
 import '../../src/renderer/src/styles.css';
+import '../helpers/rendererTokens';
 import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
 import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
 

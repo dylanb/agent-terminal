@@ -1,18 +1,7 @@
-import type { ControllerApi, ControllerTerminal } from '../../src/shared/ipc';
+import type { ControllerApi, ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
+import type { Status } from './designTokens';
 
-export type WorkStatus = {
-  flow: { availability: 'loading' | 'unavailable' } | {
-    availability: 'known'; name: string; step: string;
-    assignment: 'unassigned' | 'assigned' | 'completed' | 'unavailable';
-  };
-  ticket: { availability: 'loading' | 'unavailable' | 'none' } | {
-    availability: 'known'; number: number;
-    title: { availability: 'loading' | 'unavailable' } | { availability: 'known'; text: string };
-  };
-  activity: 'active' | 'quiet' | 'unavailable';
-  attention: null | { status: string; reasons: string[] };
-  error: null | { reason: string };
-};
+export type WorkStatus = ControllerWorkStatus;
 
 export type StatusTerminal = ControllerTerminal & { work: WorkStatus };
 
@@ -28,13 +17,80 @@ export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTermi
   return { id: 'terminal-a', launchDirectory: '/fixed/worktree', repositoryRoot: '/fixed/repository', work: workStatus(overrides) };
 }
 
-export function statusService(initial: StatusTerminal[] = [statusTerminal()]) {
+export const SUMMARY_LABELS = ['errors', 'need a human', 'idle', 'working'] as const;
+export type SummaryLabel = (typeof SUMMARY_LABELS)[number];
+
+/** One terminal and the status the ticket's § Status of a card table gives it (first matching row wins). */
+export interface StatusCase {
+  terminal: ControllerTerminal;
+  text: string;
+  statusClass: Status;
+  summary: SummaryLabel;
+}
+
+const caseTerminal = (key: string, work: WorkStatus | undefined, status?: 'disconnected'): ControllerTerminal => ({
+  id: `case-${key}`, launchDirectory: `/cases/${key}/worktree`, repositoryRoot: `/cases/${key}`,
+  ...(work ? { work } : {}), ...(status ? { status } : {}),
+});
+const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
+const human = { status: 'needs a human', reasons: ['Approve the plan'] };
+const failure = { reason: 'Step exited 1' };
+
+const CASES = {
+  disconnected: [caseTerminal('disconnected', undefined, 'disconnected'), 'Disconnected', 'error', 'errors'],
+  'disconnected-with-error': [caseTerminal('disconnected-with-error', workStatus({ error: failure, attention: human }), 'disconnected'), 'Disconnected', 'error', 'errors'],
+  'flow-error': [caseTerminal('flow-error', workStatus({ error: failure })), 'Flow error', 'error', 'errors'],
+  'flow-error-and-human': [caseTerminal('flow-error-and-human', workStatus({ error: failure, attention: human })), 'Flow error', 'error', 'errors'],
+  'needs-human': [caseTerminal('needs-human', workStatus({ attention: human, activity: 'active' })), 'Needs a human', 'needs-human', 'need a human'],
+  oversized: [caseTerminal('oversized', {
+    flow: { availability: 'unavailable' }, ticket: { availability: 'unavailable' },
+    activity: 'unavailable', attention: null, error: null, unavailableReason: 'message-too-large',
+  }), 'Status unavailable', 'needs-human', 'need a human'],
+  loading: [caseTerminal('loading', undefined), 'Loading', 'idle', 'idle'],
+  'flow-loading': [caseTerminal('flow-loading', workStatus({ flow: { availability: 'loading' } })), 'Status unknown', 'idle', 'idle'],
+  'flow-unavailable': [caseTerminal('flow-unavailable', workStatus({ flow: { availability: 'unavailable' } })), 'Status unknown', 'idle', 'idle'],
+  'assignment-unavailable': [caseTerminal('assignment-unavailable', workStatus({ flow: { ...running, assignment: 'unavailable' } })), 'Status unknown', 'idle', 'idle'],
+  unassigned: [caseTerminal('unassigned', workStatus({ flow: { ...running, assignment: 'unassigned' }, ticket: { availability: 'none' }, activity: 'quiet' })), 'Unassigned', 'idle', 'idle'],
+  'unassigned-active': [caseTerminal('unassigned-active', workStatus({ flow: { ...running, assignment: 'unassigned' }, ticket: { availability: 'none' }, activity: 'active' })), 'Unassigned', 'idle', 'idle'],
+  completed: [caseTerminal('completed', workStatus({ flow: { ...running, assignment: 'completed' }, activity: 'active' })), 'Completed', 'completed', 'idle'],
+  idle: [caseTerminal('idle', workStatus({ activity: 'quiet' })), 'Idle', 'idle', 'idle'],
+  working: [caseTerminal('working', workStatus({ activity: 'active' })), 'Working', 'working', 'working'],
+  'working-activity-unavailable': [caseTerminal('working-activity-unavailable', workStatus({ activity: 'unavailable' })), 'Working', 'working', 'working'],
+} as const satisfies Record<string, readonly [ControllerTerminal, string, Status, SummaryLabel]>;
+
+export type StatusCaseKey = keyof typeof CASES;
+
+/**
+ * Every row of the ticket's status table, plus the overlaps its order settles. Written from the ticket, never
+ * from the production classifier, so it stays an independent oracle.
+ */
+export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.fromEntries(
+  Object.entries(CASES).map(([key, [terminal, text, statusClass, summary]]) => [key, { terminal, text, statusClass, summary }]),
+) as Record<StatusCaseKey, StatusCase>;
+
+export function statusService(
+  initial: ControllerTerminal[] = [statusTerminal()],
+  options: { activation?: 'activated' | 'unavailable' | 'rejected' } = {},
+) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
-  const api: ControllerApi = {
-    subscribeTerminals(listener) { listeners.add(listener); listener(initial); return () => { listeners.delete(listener); }; },
-    async activateTerminal(id) { activated.push(id); return 'activated'; },
-    async dismissTerminal() {},
+  const dismissed: string[] = [];
+  let current = initial;
+  const publish = (items: ControllerTerminal[]): void => {
+    current = items;
+    listeners.forEach(listener => listener(items));
   };
-  return { api, activated, publish(items: StatusTerminal[]) { listeners.forEach(listener => listener(items)); } };
+  const api: ControllerApi = {
+    subscribeTerminals(listener) { listeners.add(listener); listener(current); return () => { listeners.delete(listener); }; },
+    async activateTerminal(id) {
+      activated.push(id);
+      if (options.activation === 'rejected') throw new Error('activation failed');
+      return options.activation ?? 'activated';
+    },
+    async dismissTerminal(id) {
+      dismissed.push(id);
+      publish(current.filter(item => item.id !== id));
+    },
+  };
+  return { api, activated, dismissed, publish };
 }
