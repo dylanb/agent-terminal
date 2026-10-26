@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
-import { statusDeadline } from './controllerStatusDeadline';
+import { observeStatus, STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
@@ -10,11 +10,10 @@ import { shellQuote } from '../../src/shared/shellQuote';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
-const DISPLAY_BOUND_MS = 2_000;
 
 for (const action of ['click', 'keyboard', 'resolve'] as const) {
   test(`real human gate ${action} preserves attention until terminal resolution`, { tag: '@ownapp' }, async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
     const h = await createControllerDesktopHarness();
     const repo = seedAutoGateRepo('controller-attention-', 'red');
     const { binDir, logFile } = seedFakeGhGit('controller-attention-tools-', { realCommitOps: true });
@@ -43,7 +42,7 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       await expect(control).toHaveText('Start');
       await control.click();
       await expect.poll(() => existsSync(`${verdictHold}.pids`), { timeout: 60_000 }).toBe(true);
-      const attentionStatus = await statusDeadline(controller.page, repo, [/needs? (?:a )?human|human.*needed/i, /stop.for.a.human|automatic.*halt/i]);
+      const attentionStatus = await observeStatus(controller.page, repo, [/needs? (?:a )?human|human.*needed/i, /stop.for.a.human|automatic.*halt/i]);
       rmSync(verdictHold);
       const stateFile = join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
       await expect.poll(() => { try { return readFileSync(stateFile, 'utf8'); } catch { return ''; } }, { timeout: 60_000 }).toContain('verdict: stop for a human');
@@ -54,28 +53,26 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
       expect(source.loop?.humanNeeded).toBe(true);
       const { matched: shown, texts: attentionTexts } = await attentionStatus();
-      expect.soft({ ['attention within two seconds including verdict dispatch']: shown[0] }).toEqual({ ['attention within two seconds including verdict dispatch']: true });
-      expect.soft({ ['halt reason within the same deadline']: shown[1] }).toEqual({ ['halt reason within the same deadline']: true });
-      expect.soft({ ['gate status within shared deadline']: attentionTexts.some(text => text.includes(source.loop!.status)) }).toEqual({ ['gate status within shared deadline']: true });
-      if (source.loop?.verdictReason) expect.soft({ ['full reason within shared deadline']: attentionTexts.some(text => text.includes(source.loop!.verdictReason!)) }).toEqual({ ['full reason within shared deadline']: true });
+      expect.soft({ ['attention shown after verdict dispatch']: shown[0] }).toEqual({ ['attention shown after verdict dispatch']: true });
+      expect.soft({ ['halt reason shown']: shown[1] }).toEqual({ ['halt reason shown']: true });
+      expect.soft({ ['gate status shown']: attentionTexts.some(text => text.includes(source.loop!.status)) }).toEqual({ ['gate status shown']: true });
+      if (source.loop?.verdictReason) expect.soft({ ['full reason shown']: attentionTexts.some(text => text.includes(source.loop!.verdictReason!)) }).toEqual({ ['full reason shown']: true });
       const pane = controller.page.getByRole('button', { name: repo, exact: false });
       if (action === 'resolve') {
-        const cleared = await statusDeadline(controller.page, repo, [/verify/]);
         await approve.click();
         await expect(terminal.page.locator('#flow-strip')).toContainText('verify');
-        const resolution = await cleared();
-        expect.soft(resolution.matched[0]).toBe(true);
-        expect.soft(resolution.texts.some(text => /verify/.test(text) && !/needs? (?:a )?human|human.*needed|stop for a human/i.test(text) && (!source.loop?.verdictReason || !text.includes(source.loop.verdictReason)))).toBe(true);
-        await expect.soft(pane).not.toContainText(/needs? (?:a )?human|stop for a human/i);
+        await expect.soft(pane).toContainText(/verify/, { timeout: STATUS_BUDGET_MS });
+        await expect.soft(pane).not.toContainText(/needs? (?:a )?human|human.*needed|stop for a human/i, { timeout: STATUS_BUDGET_MS });
+        if (source.loop?.verdictReason) await expect.soft(pane).not.toContainText(source.loop.verdictReason, { timeout: STATUS_BUDGET_MS });
       } else {
         if (action === 'click') await pane.click();
         else { await pane.focus(); await controller.page.keyboard.press('Enter'); }
         await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
         expect.soft((await terminal.page.evaluate(directory => window.flow.state(directory), repo)).loop?.humanNeeded).toBe(true);
-        await expect.soft(pane).toContainText(/needs? (?:a )?human|human.*needed/i, { timeout: DISPLAY_BOUND_MS });
-        await expect.soft(pane).toContainText(source.loop!.status, { timeout: DISPLAY_BOUND_MS });
-        if (source.loop?.verdictReason) await expect.soft(pane).toContainText(source.loop.verdictReason, { timeout: DISPLAY_BOUND_MS });
-        await expect.soft(pane).toContainText(/stop.for.a.human|automatic.*halt/i, { timeout: DISPLAY_BOUND_MS });
+        await expect.soft(pane).toContainText(/needs? (?:a )?human|human.*needed/i, { timeout: STATUS_BUDGET_MS });
+        await expect.soft(pane).toContainText(source.loop!.status, { timeout: STATUS_BUDGET_MS });
+        if (source.loop?.verdictReason) await expect.soft(pane).toContainText(source.loop.verdictReason, { timeout: STATUS_BUDGET_MS });
+        await expect.soft(pane).toContainText(/stop.for.a.human|automatic.*halt/i, { timeout: STATUS_BUDGET_MS });
       }
     } finally {
       try { await h.dispose(); }

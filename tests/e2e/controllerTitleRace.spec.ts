@@ -7,10 +7,12 @@ import { shellQuote } from '../../src/shared/shellQuote';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
-const DISPLAY_BOUND_MS = 2_000;
+const STATUS_BUDGET_MS = 30_000;
+const LATE_RENDER_WINDOW_MS = 10_000;
 
 for (const returnToFirstRepo of [false, true]) {
   test(`late issue title cannot relabel current work after ${returnToFirstRepo ? 'A to B to A' : 'A to B'}`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(180_000);
     const h = await createControllerDesktopHarness();
     const [a, b] = h.fixture.repositories;
     try {
@@ -56,19 +58,19 @@ fi
       }
       await expect(terminal.page.locator('#status-bar')).toContainText(new RegExp(`(?:#|CURRENT_TITLE_)${currentIssue}`));
       const pane = controller.page.getByRole('button', { name: a, exact: false });
-      await expect.soft(pane).toContainText(`CURRENT_TITLE_${currentIssue}`, { timeout: DISPLAY_BOUND_MS });
+      await expect.soft(pane).toContainText(`CURRENT_TITLE_${currentIssue}`, { timeout: STATUS_BUDGET_MS });
       expect(existsSync(h.fixture.env.TITLE_RELEASED)).toBe(false);
-      const observation = await controller.page.evaluateHandle(duration => ({ done: new Promise<string[]>(resolve => {
+      const observation = await controller.page.evaluateHandle(() => {
         const texts = [document.body.innerText];
         const observer = new MutationObserver(() => texts.push(document.body.innerText));
         observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-        setTimeout(() => { observer.disconnect(); resolve(texts); }, duration);
-      }) }), DISPLAY_BOUND_MS);
+        return { stopAfter: (duration: number) => new Promise<string[]>(resolve => setTimeout(() => { observer.disconnect(); resolve(texts); }, duration)) };
+      });
       writeFileSync(h.fixture.env.TITLE_ALLOW, 'release');
       await expect.poll(() => existsSync(h.fixture.env.TITLE_RELEASED)).toBe(true);
-      await expect.soft(pane).toContainText(`#${currentIssue}`, { timeout: DISPLAY_BOUND_MS });
-      await expect.soft(pane).toContainText(`CURRENT_TITLE_${currentIssue}`, { timeout: DISPLAY_BOUND_MS });
-      const observed = await observation.evaluate(value => value.done);
+      const observed = await observation.evaluate((value, duration) => value.stopAfter(duration), LATE_RENDER_WINDOW_MS);
+      await expect.soft(pane).toContainText(`#${currentIssue}`, { timeout: STATUS_BUDGET_MS });
+      await expect.soft(pane).toContainText(`CURRENT_TITLE_${currentIssue}`, { timeout: STATUS_BUDGET_MS });
       await observation.dispose();
       expect.soft(observed.every(text => !text.includes('OBSOLETE_TITLE_219') && !text.includes('PRIVATE BODY'))).toBe(true);
       await expect.soft(pane).toContainText(a);

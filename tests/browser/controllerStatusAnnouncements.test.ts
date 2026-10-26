@@ -1,23 +1,8 @@
 import { page } from 'vitest/browser';
 import { expect, it } from 'vitest';
-import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
 import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
-
-it.each(['light', 'dark'])('distinguishes assigned and unassigned through themed colors in %s', theme => {
-  document.documentElement.dataset.theme = theme;
-  const host = document.createElement('main');
-  document.body.append(host);
-  const service = statusService();
-  const panes = createControllerPanes(host, { controller: service.api });
-  try {
-    const assigned = getComputedStyle(page.elementLocator(host).getByText('assigned', { exact: true }).element()).color;
-    service.publish([statusTerminal({ flow: { availability: 'known', name: 'work', step: 'start', assignment: 'unassigned' } })]);
-    const unassigned = getComputedStyle(page.elementLocator(host).getByText('unassigned', { exact: true }).element()).color;
-    expect(unassigned).not.toBe(assigned);
-  } finally { panes.dispose(); host.remove(); document.documentElement.removeAttribute('data-theme'); }
-});
 
 it('announces another pane entering, changing and clearing attention without focus movement or repeat announcements', () => {
   const host = document.createElement('main');

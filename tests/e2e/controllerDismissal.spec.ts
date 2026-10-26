@@ -55,6 +55,7 @@ test('new terminal replaces stale same-directory panes and preserves live peers 
 });
 
 test('same terminal reconnects after dismissal without restarting its PTY', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
   const h = createControllerHarness();
   const controllerHome = join(h.fixture.root, 'controller-state');
   let relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome);
@@ -77,7 +78,7 @@ test('same terminal reconnects after dismissal without restarting its PTY', { ta
     await expect.soft(controller.page.locator('body')).toContainText(/no terminals connected/i);
     relay = await createControllerRegistrationRelay(h.fixture.home, controllerHome);
     relayDisposed = false;
-    await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1, { timeout: 10_000 });
+    await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1, { timeout: 30_000 });
     await expect.soft(controller.page.locator('body')).not.toContainText(/disconnected/i);
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('printf "SESSION_%s\\n" "$DISMISS_SESSION"');

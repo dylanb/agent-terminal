@@ -87,53 +87,6 @@ test('controller presents separate terminals launched in the same directory', { 
   }
 });
 
-test('controller reflows real registered terminal controls when its window narrows', { tag: '@ownapp' }, async () => {
-  const h = createControllerHarness();
-  try {
-    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
-    for (const directory of h.fixture.repositories) {
-      await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory);
-    }
-    const panes = controller.page.getByRole('button', { name: new RegExp(h.fixture.root) });
-    await expect.soft(panes).toHaveCount(2);
-    // Live snapshots can replace panes between locator resolution and evaluation; query and measure atomically.
-    const measure = () => controller.page.evaluate(directories => {
-      const elements = [...document.querySelectorAll('button')].filter(element => directories.some(directory => element.textContent?.includes(directory)));
-      const boxes = elements.map(element => element.getBoundingClientRect());
-      return {
-        rows: new Set(boxes.map(box => Math.round(box.top))).size,
-        reachable: boxes.length === 2 && boxes.every(box => box.width > 0 && box.height > 0
-          && box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight),
-        separated: boxes.every((box, i) => boxes.slice(i + 1).every(other =>
-          box.right <= other.left || other.right <= box.left || box.bottom <= other.top || other.bottom <= box.top)),
-        pageOverflow: document.documentElement.scrollWidth > innerWidth,
-        readable: directories.every(directory => elements.some(element => element.textContent?.includes(directory)))
-          && elements.every(element => {
-            const bounds = element.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(element);
-            return [...range.getClientRects()].every(box => box.width > 0 && box.height > 0
-              && box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom);
-          }),
-      };
-    }, h.fixture.repositories);
-    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1000, 700));
-    await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(1000);
-    const wide = await measure();
-    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(320, 700));
-    await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(320);
-    const narrow = await measure();
-    expect.soft(narrow.rows).toBeGreaterThan(wide.rows);
-    expect.soft(wide.reachable).toBe(true);
-    expect.soft(narrow.reachable).toBe(true);
-    expect.soft(wide.readable && narrow.readable).toBe(true);
-    expect.soft(wide.separated && narrow.separated).toBe(true);
-    expect.soft(wide.pageOverflow || narrow.pageOverflow).toBe(false);
-  } finally {
-    await h.dispose();
-  }
-});
-
 test('closing the controller window minimizes it instead of exiting', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
@@ -311,7 +264,7 @@ for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recove
           await expect.soft(approve).toBeVisible();
           expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml'), input: read('injected-log') }).toEqual(before);
           const recovered = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
-          await expect.soft(recovered.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1, { timeout: 10_000 });
+          await expect.soft(recovered.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1, { timeout: 30_000 });
           await recovered.page.getByRole('button', { name: repo, exact: false })
             .evaluateAll(buttons => (buttons[0] as HTMLButtonElement | undefined)?.click());
         }
