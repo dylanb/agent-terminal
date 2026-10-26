@@ -74,7 +74,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const directoryText = element('bdi', '', terminal.launchDirectory);
   directoryText.dir = 'ltr';
   directory.append(directoryText);
-  const label = element('span', 'controller-card-label', status.text);
+  const statusLabel = element('span', 'controller-card-label', status.text);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
   toggle.dataset.control = 'header';
@@ -147,8 +147,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     expanded = next;
     toggle.setAttribute('aria-expanded', String(expanded));
     body.hidden = !expanded;
-    if (expanded) label.remove();
-    else toggle.append(label);
+    if (expanded) statusLabel.remove();
+    else toggle.append(statusLabel);
     if (held && !expanded) toggle.focus();
   }
   setExpanded(expanded);
