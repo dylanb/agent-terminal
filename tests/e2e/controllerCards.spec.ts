@@ -7,7 +7,7 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { bringForwardLocator, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -202,7 +202,7 @@ test('theme survives restart: Dark theme applies at once and after the controlle
   try {
     const { controller, gated, working } = await twoTerminals(h, paths);
     const painted = (page: Page) => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    await use(darkThemeLocator(controller.page, { on: false }), control => control.click());
+    await use(themeControlLocator(controller.page, { on: false }), control => control.click());
     expect.soft(await painted(controller.page)).toBe('dark');
     await expect.soft.poll(() => controller.page.evaluate(() => window.controller.getTheme())).toBe('dark');
 
@@ -210,7 +210,7 @@ test('theme survives restart: Dark theme applies at once and after the controlle
     const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
     const cardA = cardLocator(restarted.page, gated);
     const cardB = cardLocator(restarted.page, working);
-    await expect.soft(darkThemeLocator(restarted.page, { on: true })).toBeVisible();
+    await expect.soft(themeControlLocator(restarted.page, { on: true })).toBeVisible();
     await expect.soft.poll(() => painted(restarted.page)).toBe('dark');
     await expect(statusRowLocator(cardA)).toHaveText('Needs a human', { timeout: 30_000 });
     await expect(statusRowLocator(cardB)).toHaveText('Working', { timeout: 30_000 });

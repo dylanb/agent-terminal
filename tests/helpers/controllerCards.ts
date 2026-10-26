@@ -37,9 +37,9 @@ export const showFullReasonLocator = <L>(card: RoleScope<L>): L => card.getByRol
 export const cardHeaderLocator = <L extends Alternatives<L>>(card: RoleScope<L>, directory: string): L =>
   card.getByRole('button', { name: directoryPattern(directory), expanded: true })
     .or(card.getByRole('button', { name: directoryPattern(directory), expanded: false }));
-export const darkThemeLocator = <L extends Alternatives<L>>(scope: RoleScope<L>, state: { on?: boolean } = {}): L =>
-  scope.getByRole('button', { name: 'Dark theme', exact: true, ...(state.on === undefined ? {} : { pressed: state.on }) })
-    .or(scope.getByRole('switch', { name: 'Dark theme', exact: true, ...(state.on === undefined ? {} : { checked: state.on }) }));
+/** The theme control is named for the theme it switches to, so `on` (dark active) is the one named Light theme. */
+export const themeControlLocator = <L>(scope: RoleScope<L>, state: { on?: boolean } = {}): L =>
+  scope.getByRole('button', { name: state.on === undefined ? /^(Dark|Light) theme$/ : state.on ? 'Light theme' : 'Dark theme', exact: true });
 export const windowTitleLocator = <L>(scope: RoleScope<L>): L => scope.getByRole('heading', { name: 'Controller', exact: true });
 export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector: string, options?: { has?: L }): L }): L =>
   scope.locator('header', { has: windowTitleLocator(scope) });
@@ -86,11 +86,11 @@ export const showFullReasonsIn = (card: ParentNode): HTMLElement[] => controlsIn
 export const windowTitleIn = (root: ParentNode): HTMLElement | undefined =>
   [...root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6, [role="heading"]')]
     .find(heading => !heading.closest(CARD_SELECTOR) && heading.textContent?.trim() === 'Controller');
-export const darkThemeIn = (root: ParentNode) => controlIn(root, 'Dark theme');
+export const themeControlIn = (root: ParentNode) => controlIn(root, 'Dark theme') ?? controlIn(root, 'Light theme');
 export function darkThemeOn(root: ParentNode): boolean {
-  const control = darkThemeIn(root);
-  if (!control) throw new Error('No Dark theme control');
-  return control.getAttribute('aria-pressed') === 'true' || control.getAttribute('aria-checked') === 'true';
+  const control = themeControlIn(root);
+  if (!control) throw new Error('No Dark theme or Light theme control');
+  return controlName(control).trim() === 'Light theme';
 }
 export const cardHeaderIn = (card: ParentNode, directory: string): HTMLElement | undefined =>
   [...card.querySelectorAll<HTMLElement>('button[aria-expanded]')].find(button => holdsDirectory(button, directoryPattern(directory)));

@@ -1,5 +1,14 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
+## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
+
+§23.6: the window header's theme button read **Dark theme** in both themes and showed its state only
+through `aria-pressed`. It now names the theme it switches to — **Dark theme** in light mode, **Light
+theme** in dark mode — with no pressed state, since a toggle's name may not change with its state. In
+the multi-column layout a collapsed card stretched to the tallest card in its row, so its outline looked
+expanded; cards now align to the top of the row and a collapsed card's outline wraps its header. No IPC
+contract change.
+
 ## #256 — tests guard app behaviour only
 
 §28.6 P6b and P6e, §28.10 and §28.11 no longer require a test of charter or recipe wording: the
