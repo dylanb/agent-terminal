@@ -1,3 +1,12 @@
+## #256 — tests guard app behaviour only
+
+§28.6 P6b and P6e, §28.10 and §28.11 no longer require a test of charter or recipe wording: the
+content-parity test, the `ui` charter's demand that contrast be checked in a real browser, and the
+recipe↔predicate canonical-example check are gone. Bundled charters and recipes keep only their
+load-validity tests, and P6e's design-system sentence matches TRACER-BULLET.md: token and stylesheet
+content needs no RED test, and any behaviour a slice adds is still proven RED-first with an `_electron`
+e2e. The rule is CLAUDE.md § Test-driven development.
+
 ## #251 slice 3 — maintained audit publication and human handoff
 
 Replace the prior marked audit section without duplicating it, retain surrounding description and closing
