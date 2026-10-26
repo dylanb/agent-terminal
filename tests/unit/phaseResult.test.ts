@@ -12,7 +12,7 @@ import {
   readPhaseResult,
 } from '../../src/shared/phaseResult';
 
-// §28.5.5 (v2.202) — the phase result is JSON the engine judges (the outcome, GREEN's build, RED's intended
+// §28.5.5 — the phase result is JSON the engine judges (the outcome, GREEN's build, RED's intended
 // failures), and the raw test run is kept verbatim in a file of its own beside it, which the engine requires to
 // be present and non-empty but never parses.
 

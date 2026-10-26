@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { resolveLaunchInvocation } from '../../src/main/cliShim';
+import path from 'node:path';
+import { getConfig } from 'app-builder-lib/out/util/config/config';
+import { resolveLaunchInvocation, CONTROLLER_PRODUCT_NAME, CONTROLLER_OUTPUT_SUBDIR } from '../../src/main/cliShim';
 
 // The launch invocation a fresh instance is started with (§23.4 / #25): the dev-vs-packaged decision
 // the shim encodes, tested as a pure function so it is not buried in untested main-process glue.
@@ -31,5 +33,22 @@ describe('resolveLaunchInvocation (§23.4 / #25)', () => {
       execPath: '/apps/Electron',
       appArgs: [],
     });
+  });
+});
+
+describe('controller launch names match the packaged controller (§23.5)', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const load = (file: string) => getConfig(root, file, null);
+
+  it('looks for the controller binary under the product name the controller is packaged as', async () => {
+    expect((await load('electron-builder.controller.yml')).productName).toBe(CONTROLLER_PRODUCT_NAME);
+  });
+
+  it('looks for the controller build output where the controller package config writes it', async () => {
+    const terminal = await load('electron-builder.yml');
+    const controller = await load('electron-builder.controller.yml');
+    expect(controller.directories?.output).toBe(
+      path.posix.join(terminal.directories?.output ?? '', CONTROLLER_OUTPUT_SUBDIR),
+    );
   });
 });

@@ -6,7 +6,7 @@ import { worktreeStartedness } from '../../src/main/startedness';
 import { readDisposition, readRunBinding } from '../../src/main/runDisposition';
 import { createFlowStateStore } from '../../src/main/flowState';
 
-// §18.7.4 (v2.161) — a first-step rollback returns the run to fully "not started":
+// §18.7.4 — a first-step rollback returns the run to fully "not started":
 // the run record goes with it, so the picker unlocks with no Terminate (which the strip never offers on
 // not_started). A rollback from a later step keeps the record: that run is still begun.
 describe('revertStep and the run record (§18.7.4)', () => {

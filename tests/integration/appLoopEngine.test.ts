@@ -447,12 +447,12 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
-// §B.20a / §B.5 item 6 (AC10) — a step whose bound def declares a `pickup:` block has its skill injected by
+// AC10 — a step whose bound def declares a `pickup:` block has its skill injected by
 // the COORDINATOR after work entry is accepted, so `enter` must ACCEPT the turn WITHOUT REQUESTING it: it
 // answers 'entered' having deferred `start`'s `requestTurn` to a caller-supplied trigger the coordinator fires
 // from the injection's completion. The accepted-but-not-yet-requested turn OCCUPIES the runner (a second entry
 // in the gap is refused), and the deferral is abandonable so the coordinator's deadline-lapse revert frees it.
-describe('§27 engine — deferred work-turn request (§B.20a / §B.5 item 6)', () => {
+describe('§27 engine — deferred work-turn request', () => {
   it('deferRequest accepts the turn WITHOUT requesting it — nothing injected, runner occupied, second entry busy', () => {
     const engine = makeEngine();
     h.hosted = 'idle'; // an idle instance would inject the boundary synchronously on the initial arm — the deferral must not
@@ -2682,7 +2682,7 @@ describe('§28.5.3 — the GREEN completion gate (Option C + non-blocking frozen
     expect(reviewChained()).toBe(false);
   });
 
-  // §28.5.5 (v2.202) — the raw run is evidence the result is required to keep beside it.
+  // §28.5.5 — the raw run is evidence the result is required to keep beside it.
   it('IT-GREEN-3d: passed and built but with no captured run, or an empty one, does NOT complete, naming the run file', async () => {
     for (const captured of [null, '  \n']) {
       const engine = makeEngine(undefined, greenFake());

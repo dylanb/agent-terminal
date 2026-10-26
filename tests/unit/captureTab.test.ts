@@ -308,7 +308,7 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
   });
 });
 
-// §21.1 / v2.27: capture is manual + single-slot — clicking "Capture last report" runs
+// §21.1: capture is manual + single-slot — clicking "Capture last report" runs
 // detection on demand (capture:last) and the pane shows the one returned report's findings,
 // replacing whatever it showed before. Nothing auto-emits.
 describe('Capture last report button (§21.1 — manual single-slot)', () => {

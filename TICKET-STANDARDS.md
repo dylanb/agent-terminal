@@ -1,15 +1,12 @@
 # TICKET-STANDARDS.md
 
-The **Ticket standards** section of `CLAUDE.md` carries the enforceable summary — what
-`agent-loop/ready` means and that a human, not the agent, applies it. This file carries the full
-authoring contract a ticket must satisfy before that label goes on. When the `CLAUDE.md` section links
-here, this file is the authority — cite its section (e.g. "TICKET-STANDARDS.md § Writing rules") rather
-than re-arguing. Nothing here is new: it is the same contract, with the depth that does not need to sit
-in every turn's context.
+The full authoring contract a ticket must satisfy before the `agent-loop/ready` label goes on. `CLAUDE.md`
+carries the summary; this file is the authority — cite its section (e.g. "TICKET-STANDARDS.md § Writing
+rules") rather than re-arguing.
 
 Tickets are GitHub issues. A ticket is **agent-loop-ready** only when a human applies the **`agent-loop/ready`** label — the single "pickable now" signal (`agent-loop available` lists them; `agent-loop pickup <n>` assigns it, strips the label, and opens a draft PR that `closes #<n>`). Do not add `agent-loop/ready` yourself; it means *a human has vetted the ticket against everything below*.
 
-The issue **body is the intent contract** — agent-loop bundles the title, body, and comments verbatim into `.agent-loop/pr-context.md`, which the work agent and all nine persona reviewers read. Vague body → vague plan and reviews.
+The issue **body is the intent contract** — every loop turn is bound to the issue, and the work agent and every persona reviewer grade against its title, body and comments. Vague body → vague plan and reviews.
 
 ## Required content
 

@@ -1,4 +1,4 @@
-// §27.13 v2.211 — a run past its pickup that has no saved pickup is held until the operator confirms the ticket and
+// §27.13 — a run past its pickup that has no saved pickup is held until the operator confirms the ticket and
 // pull request the app works out from the checked-out branch, GitHub and the flow's own ticket input.
 
 import { errMsg } from './errno';

@@ -29,7 +29,7 @@ export interface ScannerEmission {
   type: MonitorEventType;
   source: MonitorEventSource;
   text: string;
-  /** A finding's parent report id; null for top-level events (§15.6 / v2.6). */
+  /** A finding's parent report id; null for top-level events (§15.6). */
   parentId: string | null;
   truncated: boolean;
   /** Where this region sits on screen (absolute buffer rows) so the pane can scroll/
@@ -109,7 +109,7 @@ function isPrefixAtBoundary(a: string, b: string): boolean {
 
 /** A captured top-level region retained for dedup. Identity is positional: `startMarker`
  *  tracks the region's first row through scroll, so a re-detected region at the same row is
- *  the SAME unit (§15.3 / v2.22). `norm`/`key` are the content backstop for when the marker
+ *  the SAME unit (§15.3). `norm`/`key` are the content backstop for when the marker
  *  trims out of scrollback and the position is lost. */
 interface Captured {
   key: string;
@@ -121,7 +121,7 @@ interface Captured {
   startMarker?: ShadowMarker;
 }
 
-/** The dedup decision for a freshly-detected region (§15.3 / v2.22): drop it (already
+/** The dedup decision for a freshly-detected region (§15.3): drop it (already
  *  shown), or emit it after retracting the captures it supersedes (possibly none). */
 type DedupVerdict = { emit: false } | { emit: true; retract: Captured[] };
 
@@ -166,7 +166,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /** A live capture whose first row sits exactly where this region begins — the SAME unit
-   *  re-detected (§15.3 / v2.22). Trimmed markers (line < 0) never match a real row. */
+   *  re-detected (§15.3). Trimmed markers (line < 0) never match a real row. */
   function positionMatch(type: MonitorEventType, startRow: number): Captured | undefined {
     for (const c of captured.values()) {
       if (c.type === type && c.startMarker && c.startMarker.line === startRow) return c;
@@ -175,7 +175,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /**
-   * Dedup decision for a freshly-detected region (§15.3 / v2.22). Positional identity is primary —
+   * Dedup decision for a freshly-detected region (§15.3). Positional identity is primary —
    * a live capture starting on this same row IS this unit re-detected, so only a clean
    * word-boundary growth supersedes; any other edit is an in-place repaint and keeps the first
    * stable capture. With no positional match (new unit, or marker trimmed out of scrollback) it
@@ -218,11 +218,11 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /**
-   * The stability frontier (§15.3 / v2.22, v2.25): the highest row PROVEN immutable this scan,
+   * The stability frontier (§15.3): the highest row PROVEN immutable this scan,
    * never behind the watermark. The bottom-most detected unit stays PROVISIONAL so a streaming
    * report merges instead of splitting.
    *
-   * The bottom unit takes priority over the composer witness (v2.25): Claude Code keeps its
+   * The bottom unit takes priority over the composer witness: Claude Code keeps its
    * rule-framed input composer pinned at the viewport bottom **while it is still streaming** (the
    * strip reads "esc to interrupt"), so a composer below the content is NOT proof the turn is done
    * and the bottom unit can still grow — sealing up to it each quiet pause shredded a streamed
@@ -253,7 +253,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /** The scan window's first row and whether scrollback trimmed under us this tick, by
-   *  watermark state (§15.3 / v2.22):
+   *  watermark state (§15.3):
    *   • no frontier yet — scan from the top; truncated iff a captured unit has since trimmed;
    *   • frontier itself trimmed (line < 0) — scrollback scrolled past the seal, so re-scan
    *     from the top and stamp the whole scan truncated (conservative — A2);

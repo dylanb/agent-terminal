@@ -8,6 +8,7 @@ import { reportNeedsAHuman, roundReportWellFormed } from '../../src/shared/round
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { QUIET_MS } from '../../src/main/quiescence';
 
 const dirs: string[] = [];
 const procs: ChildProcessWithoutNullStreams[] = [];
@@ -228,6 +229,65 @@ describe('the per-step fake agent', () => {
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5000 });
     expect(existsSync(doneFile(repo))).toBe(false);
   });
+
+  it('a keep-active hold prints to its terminal more often than QUIET_MS until the sentinel is deleted, and a plain hold prints nothing', async () => {
+    const sentinel = join(tmp('fake-agent-hold-'), 'hold');
+    const plainSentinel = join(tmp('fake-agent-hold-'), 'hold');
+    writeFileSync(sentinel, '');
+    writeFileSync(plainSentinel, '');
+    const binDir = tmp('fake-agent-bin-');
+    const repo = tmp('fake-agent-repo-');
+    seedFakeAgentSteps(binDir, {
+      h: { artifactRel: '.agent-terminal/loop/artifacts/h.md', work: 'complete', hold: { sentinel, keepActive: true } },
+      p: { artifactRel: '.agent-terminal/loop/artifacts/p.md', work: 'complete', hold: { sentinel: plainSentinel } },
+    });
+    const p = spawn(join(binDir, 'fake-agent'), [], { cwd: repo });
+    procs.push(p);
+    const printedAt: number[] = [];
+    let output = '';
+    p.stdout.on('data', (chunk: Buffer) => {
+      output += chunk.toString();
+      for (const line of chunk.toString().split('\n')) if (line.startsWith('HELD_ACTIVITY')) printedAt.push(performance.now());
+    });
+    const printedNumbers = (): number[] => [...output.matchAll(/^HELD_ACTIVITY (\d+)$/gm)].map(match => Number(match[1]));
+
+    p.stdin.write('turn-done:work-p\n');
+    await vi.waitFor(() => expect(readIf(`${plainSentinel}.pids`)).toMatch(/^\d+\n$/), { timeout: 5000 });
+    p.stdin.write('turn-done:work-h\n');
+    await vi.waitFor(() => expect(printedAt.length).toBeGreaterThanOrEqual(10), { timeout: 5000 });
+    const gaps = printedAt.slice(1).map((at, i) => at - printedAt[i]);
+    expect(Math.max(...gaps)).toBeLessThan(QUIET_MS);
+    expect(existsSync(doneFile(repo))).toBe(false);
+
+    const pid = Number(readIf(`${sentinel}.pids`).trim());
+    rmSync(sentinel);
+    await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe('work-h'), { timeout: 5000 });
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5000 });
+    rmSync(plainSentinel);
+    await vi.waitFor(() => expect(readIf(doneFile(repo))).toBe('work-p'), { timeout: 5000 });
+    const numbers = printedNumbers();
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+  }, 15_000);
+
+  it('a keep-active hold ends without acting once its terminal output is gone', async () => {
+    const sentinel = join(tmp('fake-agent-hold-'), 'hold');
+    writeFileSync(sentinel, '');
+    const binDir = tmp('fake-agent-bin-');
+    const repo = tmp('fake-agent-repo-');
+    seedFakeAgentSteps(binDir, { h: { artifactRel: '.agent-terminal/loop/artifacts/h.md', work: 'complete', hold: { sentinel, keepActive: true } } });
+    // A closed PTY fails the write with EIO rather than raising SIGPIPE, so the hold must end on the failed write itself.
+    const p = spawn('bash', ['-c', 'trap "" PIPE; exec "$0"', join(binDir, 'fake-agent')], { cwd: repo });
+    procs.push(p);
+    let printed = false;
+    p.stdout.on('data', (chunk: Buffer) => { if (chunk.toString().includes('HELD_ACTIVITY')) printed = true; });
+    p.stdin.write('turn-done:work-h\n');
+    await vi.waitFor(() => expect(printed).toBe(true), { timeout: 5000 });
+    const pid = Number(readIf(`${sentinel}.pids`).trim());
+    p.stdout.destroy();
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5000 });
+    expect(existsSync(sentinel)).toBe(true);
+    expect(existsSync(doneFile(repo))).toBe(false);
+  }, 15_000);
 });
 
 describe('the feature-dev-v3 goal agent', () => {

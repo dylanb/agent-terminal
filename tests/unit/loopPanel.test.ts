@@ -159,7 +159,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]'));
   });
 
-  // WCAG 2.4.3 / 2.1.1 (AC 9, §B.9): the two retired controls that used to render on an ERROR view carrying a
+  // WCAG 2.4.3 / 2.1.1 (AC 9): the two retired controls that used to render on an ERROR view carrying a
   // round — the mark-complete button (the panel's last tab stop) and syncRetry's recovery Retry — are BOTH
   // gone. The delta is per branch (two here), the case a single flat tab-stop number would miss: the
   // surviving keyboard-reachable controls are exactly the §27 work-turn route-out group and the Close entry.
@@ -813,11 +813,11 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
   });
 });
 
-// The N8 sweep's split of this organism (§B.9): the surviving State section is relabelled off the retired
+// The N8 sweep's split of this organism: the surviving State section is relabelled off the retired
 // file, the five repo-authored display sinks are stripped (CWE-117 / CWE-1007), the gate row is affirmative
 // on both conjuncts (appTurn present AND appGateDecision injected), and focus routes to the surviving
 // control. AC 3's behavior-preserving rule does not cover the labels an operator reads (AC 9).
-describe('docked loop panel — the sweep split (§B.9)', () => {
+describe('docked loop panel — the sweep split', () => {
   const BIDI = '‮'; // right-to-left override — a DISPLAY_UNSAFE byte that reorders an accessible name
 
   const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
@@ -1216,9 +1216,9 @@ describe('docked loop panel — the S2 auto-gate rows (§27.9.1)', () => {
   });
 });
 
-// §27.12 (v2.201) — a stalled turn is often an agent waiting on the operator. The panel says how to get it
+// §27.12 — a stalled turn is often an agent waiting on the operator. The panel says how to get it
 // going again without restarting anything, one of the ways being to have the agent write its turn-done file.
-describe('docked loop panel — getting a stalled agent going again (§27.12 v2.201)', () => {
+describe('docked loop panel — getting a stalled agent going again (§27.12)', () => {
   const stalled = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
     loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'green', turnKey: 'work-green' }, stalled: true, ...over });
 

@@ -1,7 +1,7 @@
 // A2 (#133) §18.7.4 AC7/AC11 — the active-flow write gate: a new selection (set or clear) is permitted only while
 // the run has never started, and refused once it has begun or (fail-closed, CWE-841) while begun-ness is
 // indeterminate. The started-ness read and the write run under the worktree lock flow:start also takes (CWE-367); the
-// lock-free window when the lock is unusable is an accepted residual (§18.7.4, v2.162). A refusal leaves the prior
+// lock-free window when the lock is unusable is an accepted residual (§18.7.4). A refusal leaves the prior
 // on-disk selection in place; a write fault surfaces a reason, never an unrecoverable state (CODE-STANDARDS.md).
 import { clearActiveFlow, readActiveFlow, writeActiveFlow } from './activeFlowPointer';
 import { worktreeStartedness } from './startedness';

@@ -46,7 +46,7 @@ export function splitFindings(report: string): Finding[] {
 
 /**
  * A report region from already-extracted text. Findings become children only when there are ≥2:
- * a single-segment report stands alone, never duplicated as its own child (§15.6 / v2.6).
+ * a single-segment report stands alone, never duplicated as its own child (§15.6).
  */
 export function buildReportRegion(
   text: string,

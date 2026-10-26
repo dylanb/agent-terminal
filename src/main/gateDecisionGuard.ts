@@ -1,4 +1,4 @@
-// §B.3 (AC 4) — the gate-decision seam's marked-binding refusal. It is the third of the three seams that must
+// AC 4 — the gate-decision seam's marked-binding refusal. It is the third of the three seams that must
 // yield a human-needed error for a step binding no surviving engine (the view provider and the entry
 // dispatcher are the other two). `runAppGateDecision` selects its engine from the persisted run state and
 // reads no namespace, and its IPC entry validates payload shape only — so a step that acquires
@@ -19,7 +19,7 @@ export function stepLoopBinding(steps: FlowStepDef[], stepId: string): LoopBindi
   return step?.kind === 'loop' ? (step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE) : null;
 }
 
-/** §B.3 — the refusal both deciders check at the operation: the reason when `step` binds no surviving engine.
+/** The refusal both deciders check at the operation: the reason when `step` binds no surviving engine.
  *  A null (non-loop / unresolved) binding refuses nothing. */
 export function markedBindingRefusal(bindingOf: (repoKey: string, step: string) => LoopBinding | null, repoKey: string, step: string): string | null {
   const binding = bindingOf(repoKey, step);
@@ -30,7 +30,7 @@ export function markedBindingRefusal(bindingOf: (repoKey: string, step: string) 
  *  was delivered. */
 export type GateDecisionRun = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string) => Promise<boolean>;
 
-/** Wrap `run` with §B.3's refusal: when the named step binds no surviving engine, surface the reason and
+/** Wrap `run` with the marked-binding refusal: when the named step binds no surviving engine, surface the reason and
  *  answer `false` WITHOUT running the decision — so no outward-facing side effect fires for a marked step.
  *  `bindingOf` names the step's binding as a domain concept (the composition root reads it from the loaded
  *  def by id); only a CONFIRMED marked binding refuses, so a null (non-loop / unresolved) defers to `run`. */

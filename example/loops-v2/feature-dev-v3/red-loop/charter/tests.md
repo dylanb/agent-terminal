@@ -23,6 +23,13 @@ actually fail, check the test infrastructure itself is sound (fixtures, fakes, a
 domain concept rather than the mechanism), and confirm every plan acceptance criterion maps to a
 red-then-green test.
 
+A RED test that a correct implementation could fail — one that pins a DOM shape, an update strategy or the
+moment a measurement lands, rather than the behavior its acceptance criterion names — is not a finding for this
+step when its own check still fails now and no wrong implementation passes it. GREEN corrects a RED test that
+rejects a correct implementation, logs the change under `### RED test changes`, and its reviewers and the
+operator judge it there. Mention it as a note for GREEN, never as a finding. A test that asserts private calls,
+call order or internal data structures is still a finding.
+
 Ensure every test needed to prove the in-scope change has actually been run and observed passing — all
 the relevant unit, integration, end-to-end, and any other test types the repository has, not only the
 fastest suite. Work out which tests are relevant, and the command, harness, and environment each must run

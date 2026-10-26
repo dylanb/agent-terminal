@@ -23,7 +23,7 @@ export interface TerminalPane {
 /** Wire the pane's window-level listeners — focus-on-view (§16.2/§22.4) and debounced resize
  *  (§7.1/§14) — and return a disposer that removes them and cancels any pending resize. Split out
  *  from xterm construction so the teardown is unit-testable without a real layout (the xterm bits
- *  need a real DOM; the §F e2e covers those). */
+ *  need a real DOM; the e2e covers those). */
 export function wireTerminalPaneListeners(opts: { focusView: () => void; resize: () => void }): () => void {
   const onFocusView = (e: Event): void => {
     if ((e as CustomEvent<{ view: string }>).detail?.view === TERMINAL_VIEW) opts.focusView();
@@ -145,7 +145,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     window.term.resize({ cols: term.cols, rows: term.rows });
   };
   // untestable under jsdom: the Send→reveal→focus loop needs a real layout (xterm focus) — verified in the
-  // §F e2e; §12 gap tracked in #153.
+  // e2e; §12 gap tracked in #153.
   const unwire = wireTerminalPaneListeners({ focusView: () => term.focus(), resize: sendResize });
   const unwireDrop = wireTerminalDrop(container, {
     pathForFile: (file) => window.term.pathForFile(file),

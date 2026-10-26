@@ -519,7 +519,7 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
   });
 });
 
-// §27.5 (v2.202) — each status is told to the fixer with the meaning the engine reads it with.
+// §27.5 — each status is told to the fixer with the meaning the engine reads it with.
 describe('the reviewer statuses the round report records', () => {
   it('pairs each status with its meaning', () => {
     const p = composeReviewAndFixPrompt({
@@ -537,11 +537,11 @@ describe('the reviewer statuses the round report records', () => {
   });
 });
 
-// §27.3/§27.6 (v2.202) — a fixer that patches one more special case into a parser for a format the repository
+// §27.3/§27.6 — a fixer that patches one more special case into a parser for a format the repository
 // itself defines is how #208 spent rounds on a Markdown grammar: every finding was new, so §27.6's spinning
 // check never fired. The fixer and the work agent are both told to question the design before adding complexity,
 // bounded to the fix at hand and the ticket's scope so it cannot become a licence to redesign.
-describe('the design check, before a fix adds complexity (§27.3/§27.6 v2.202)', () => {
+describe('the design check, before a fix adds complexity (§27.3/§27.6)', () => {
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,

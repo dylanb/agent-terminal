@@ -208,6 +208,18 @@ async function createWindow(): Promise<void> {
     if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
     return startupReady;
   });
+  ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
+    handleCliInstall(m, () => ({
+      home: os.homedir(),
+      shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
+      currentPath: process.env.PATH ?? '',
+      invocation: resolveLaunchInvocation(
+        process.execPath,
+        process.defaultApp === true,
+        process.argv[1],
+        process.cwd(),
+      ),
+    })));
   let finishRegistration!: (accepted: boolean) => void;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
   const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
@@ -234,6 +246,7 @@ async function createWindow(): Promise<void> {
     unregisterController();
     finishRegistration(false);
     ipcMain.removeHandler(CH.startupReady);
+    ipcMain.removeHandler(CH.cliInstall);
   });
   const target = resolveRendererTarget({
     isPackaged: app.isPackaged,
@@ -315,7 +328,7 @@ async function createWindow(): Promise<void> {
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
-  // untestable outside the §F e2e (the OSC-7 → cwd:changed → repo-list-swap loop needs real node-pty + bash)
+  // untestable outside the e2e (the OSC-7 → cwd:changed → repo-list-swap loop needs real node-pty + bash)
   // — §12 gap tracked in #153.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
@@ -347,7 +360,7 @@ async function createWindow(): Promise<void> {
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
-  // untestable outside the §F e2e (watermark/selfInjectWindowMs are tuned against real agent echo + reply)
+  // untestable outside the e2e (watermark/selfInjectWindowMs are tuned against real agent echo + reply)
   // — §12 gap tracked in #153.
   const suppressor = createInjectionSuppressor({
     cursorRow: () => shadow.reader.cursor().y,
@@ -398,11 +411,11 @@ async function createWindow(): Promise<void> {
   // bar's activity via deriveLoopActivity; not authority, only display. Written by the §27 bootstrap
   // coordinator and cleared when the bootstrap resolves.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
-  // §B.5 item 6 / §B.13a — the main-side carrier for a transient notice produced AFTER a transition reply was
+  // The main-side carrier for a transient notice produced AFTER a transition reply was
   // already sent (the coordinator's asynchronous §19.3 busy-shell refusal). It rides the next `flow:state`
   // response for the repo — consumed one-shot when that view is built — because there is no delivery-ack
   // channel to hang it on. The strip then holds it across passive re-pulls and clears it on the next
-  // transition (§B.10). Keyed by repoKey; the receiver never re-derives the target (one payload = one repo).
+  // transition. Keyed by repoKey; the receiver never re-derives the target (one payload = one repo).
   const pendingNotices = createPendingNotices();
   // §27.15 — the §27 (app-namespace) work-turn engine, driving the hosted instance through its own domain
   // ports. Only one turn is ever in flight (one instance). It keeps its run state and done-file in the §27
@@ -624,7 +637,7 @@ async function createWindow(): Promise<void> {
   // shell — a live OSC-133 command span means not at a ready prompt. A loop step binds the §27 engine via the
   // preparer (positions 2/4/5/6) then the dispatch (positions 7/8). Must be built after the injector + tracker.
   let appBootstrapCoordinator: AppLoopBootstrapCoordinator | null = null;
-  // §B.5 positions 2/4/5/6 — resolve the bound def, then REFUSE (with the right operator-facing surface) or
+  // Resolve the bound def, then REFUSE (with the right operator-facing surface) or
   // READY (optionally carrying AC 5's migration notice). The order lives in createLoopBindingPreparer; the
   // effects are wired here to the real resolver, engine, IPC and flow machine (CLAUDE.md injection-seam).
   const prepareLoopBinding = createLoopBindingPreparer({
@@ -664,7 +677,7 @@ async function createWindow(): Promise<void> {
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
     prepareLoopBinding,
-    // §B.5 positions 7/8 (AC 10) — dispatch a READY binding. The coordinator injects the step's `skill`
+    // AC 10 — dispatch a READY binding. The coordinator injects the step's `skill`
     // (submitted, §19.3-refused on a busy shell) strictly BEFORE the engine boundary on BOTH routes: a
     // no-`pickup` def defers the accepted turn and chains the boundary off the skill's submit; a `pickup` def
     // injects after the bootstrap's work entry. So the seam only forwards the collapsed skill line on the job
@@ -752,7 +765,7 @@ async function createWindow(): Promise<void> {
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
   // describes an earlier run until this run's own pickup is accepted; only a run resumed across a relaunch reads it.
   const pickupRecordPredatesRun = new Set<string>();
-  // §27.13 v2.211
+  // §27.13
   const runsBegunHere = new Set<string>();
   const pickupHeldRun = (repoKey: string): HeldPickupRun | null => {
     const run = inProgressRunIdentity(repoKey);
@@ -859,9 +872,9 @@ async function createWindow(): Promise<void> {
       return true;
     },
     enterWork: (repoDir, loopName, stepId, entry, deferRequest, slice) => {
-      // §B.20a — with `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
+      // With `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
       // the coordinator fires `triggerWork` off the skill injection's completion so the boundary preamble is
-      // written strictly after the skill's submit (§B.5 item 6, CWE-74). Non-deferred, the turn requests now.
+      // written strictly after the skill's submit (CWE-74). Non-deferred, the turn requests now.
       const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest, ...(slice !== undefined ? { slice } : {}) });
       if (result === 'entered') {
         armAppTurnDoneWatch(repoDir);
@@ -869,21 +882,21 @@ async function createWindow(): Promise<void> {
       }
       return result;
     },
-    // §B.13c — inject the collapsed skill line submitted, signalling completion once its submit `\r` is written
-    // so the deferred work turn can chain strictly after it (§B.5 item 6).
+    // Inject the collapsed skill line submitted, signalling completion once its submit `\r` is written
+    // so the deferred work turn can chain strictly after it.
     inject: (text, onComplete) => inject(text, { submit: true, onComplete }),
     // §19.3 — a live OSC-133 command span means the shell is not at a ready prompt.
     isShellBusy: () => tracker.summaries().some((s) => s.running),
-    // §B.5 item 6 / §B.13a — the coordinator's async busy-shell refusal is not an error (the work turn runs
+    // The coordinator's async busy-shell refusal is not an error (the work turn runs
     // fine); stash it on the main-side carrier so it rides the next `flow:state` response for the repo.
     emitNotice: ({ repoDir, notice }) => {
       pendingNotices.post(repoDir, notice);
       pushFlowChanged();
     },
-    // §B.20a — request the turn deferred by `enterWork(…, true)`, and abandon one never triggered.
+    // Request the turn deferred by `enterWork(…, true)`, and abandon one never triggered.
     triggerWork: () => appEngine.triggerDeferredTurn(),
     cancelWork: () => appEngine.cancelDeferredTurn(),
-    // §B.20a (CWE-755) — the deadline the deferred turn's skill injection must signal completion within, or the
+    // CWE-755 — the deadline the deferred turn's skill injection must signal completion within, or the
     // coordinator reverts rather than leave the runner occupied by a turn never requested.
     armDeferDeadline: (onLapse) => {
       const timer = setTimeout(onLapse, DEFER_DEADLINE_MS);
@@ -998,7 +1011,7 @@ async function createWindow(): Promise<void> {
 
   // §27.10 — the live "what the loop mechanics are doing now" descriptor, derived fresh on every view so a
   // spinner phrase is never stale. Scoped to the repo the view is for. Only the surviving bootstrap (pickup)
-  // phrase remains; the retired engine's turn-phase arm is gone (§B.21).
+  // phrase remains; the retired engine's turn-phase arm is gone.
   const loopActivityFor = (repoKey: string): LoopActivity | null =>
     deriveLoopActivity({
       pickup: pickupInFlight?.repoKey === repoKey ? { issue: pickupInFlight.issue, wipe: pickupInFlight.wipe } : null,
@@ -1212,7 +1225,7 @@ async function createWindow(): Promise<void> {
   const runAppGateDecisionRaw = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
     runAppGateDecisionImpl(repoKey, step, turnKey, option, approveDepsFor(repoKey), note);
 
-  // §B.3/AC 4 — the gate-decision seam refuses a marked binding at the operation: a step that binds no
+  // AC 4 — the gate-decision seam refuses a marked binding at the operation: a step that binds no
   // surviving engine (loop_namespace: legacy) never reaches the outward-facing side effect, even if its run
   // state already sits at a verdict. The binding is read from the loaded def by the step id the payload names
   // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
@@ -1286,7 +1299,7 @@ async function createWindow(): Promise<void> {
         if (isValidCapture(m)) send(CH.monitorEvent, { sessionId: SESSION_ID, event: store.addCapture(m) });
       },
       // Dismiss removes from the store so a reloaded pane's replay won't resurrect it;
-      // removing a report cascades to its findings (§15.6 / v2.6).
+      // removing a report cascades to its findings (§15.6).
       [CH.monitorDismiss]: (_e, m) => {
         if (isValidDismiss(m)) store.remove(m.eventId);
       },
@@ -1440,7 +1453,7 @@ async function createWindow(): Promise<void> {
       [CH.flowState]: (_e, m) => {
         if (!isValidFlowRequest(m)) return flowRequestError();
         const view = trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
-        // §B.5 item 6 / §B.13a — a coordinator-produced async notice (busy shell at hand-off) rides exactly
+        // A coordinator-produced async notice (busy shell at hand-off) rides exactly
         // ONE state response: attach it when this view carries none, and consume it so it is not re-sent.
         if (view.notice !== undefined) return view;
         const pending = pendingNotices.take(m.repoKey);
@@ -1587,18 +1600,6 @@ async function createWindow(): Promise<void> {
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },
-      [CH.cliInstall]: (_e, m): CliInstallResult =>
-        handleCliInstall(m, () => ({
-          home: os.homedir(),
-          shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
-          currentPath: process.env.PATH ?? '',
-          invocation: resolveLaunchInvocation(
-            process.execPath,
-            process.defaultApp === true,
-            process.argv[1],
-            process.cwd(),
-          ),
-        })),
       // Install bundled examples (§18.1/§23.4/§27.8): bundles resolve build-aware (packaged resources vs
       // the unpackaged app path); the flow lands in the GLOBAL flow home read back as the global fallback by
       // resolveActiveDefinition, and the app loop definitions and commands land in the user-level

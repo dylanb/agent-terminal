@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { resolve, join } from 'node:path';
+import { basename, resolve, join } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
 import { createControllerRegistrationRelay } from './controllerRegistrationRelay';
+import { cardLocator, statusRowLocator } from '../helpers/controllerCards';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 for (const loss of ['shell exit', 'terminal crash', 'connection loss'] as const) {
   test(`last pane retains identifying disconnected error after ${loss}`, { tag: '@ownapp' }, async () => {
@@ -19,7 +21,7 @@ for (const loss of ['shell exit', 'terminal crash', 'connection loss'] as const)
       h.fixture.env.APP_HOME_DIR = h.fixture.home;
       const directory = h.fixture.worktrees[0];
       const terminal = await h.launch(terminalTarget, directory);
-      await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
+      await expect(cardLocator(controller.page, directory)).toHaveCount(1);
       await terminal.page.locator('.xterm-screen').click();
       await terminal.page.keyboard.type("printf 'RETENTION_%s\\n' 'READY'");
       await terminal.page.keyboard.press('Enter');
@@ -33,9 +35,9 @@ for (const loss of ['shell exit', 'terminal crash', 'connection loss'] as const)
         await closed;
       } else if (loss === 'terminal crash') await h.crash(terminal.app);
       else { await relay!.dispose(); relayDisposed = true; }
-      await expect.soft(controller.page.locator('body')).toContainText(/disconnected/i);
+      await expect.soft(statusRowLocator(cardLocator(controller.page, directory))).toHaveText('Disconnected');
       await expect.soft(controller.page.locator('body')).toContainText(directory);
-      await expect.soft(controller.page.locator('body')).toContainText(`Repository: ${directory}`);
+      await expect.soft(cardLocator(controller.page, directory)).toHaveAccessibleName(new RegExp(`${escapeRegExp(basename(directory))}\\s[\\s\\S]*${escapeRegExp(directory)}`));
       await expect.soft(controller.page.locator('body')).not.toContainText(/no terminals (?:are )?connected/i);
     } finally {
       try { await h.dispose(); }

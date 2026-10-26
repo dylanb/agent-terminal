@@ -1,4 +1,4 @@
-// Manual single-slot capture (§21.1 / v2.27): the pane holds ONE report — each capture replaces the prior.
+// Manual single-slot capture (§21.1): the pane holds ONE report — each capture replaces the prior.
 
 import type { MonitorEvent, SessionId } from '../shared/ipc';
 import type { MonitorEventStore } from './eventStore';

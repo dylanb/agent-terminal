@@ -552,12 +552,12 @@ describe('resolveLoopDefV2 — tier precedence + schema independence (AC 7)', ()
   });
 });
 
-// §D.4 rows 2843/2846 + changelog v2.141(2): after the re-point a namespace-less step binds §27, so an
+// After the re-point a namespace-less step binds §27, so an
 // operator's own retired-schema def of that name no longer resolves. When NO tier answers at all and a retired
 // def of that name is PRESENT, the bare "no §27 def named X" is enriched to name the retired schema, on the
 // same per-step loop-error path AC 4 uses — so the operator learns why their def stopped resolving rather
 // than seeing a generic miss. The retired def's content is never read, parsed, moved or deleted.
-describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5, §D.4)', () => {
+describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5)', () => {
   const BARE = 'no §27 def named plan-loop in any tier';
 
   it('enriches the reason to name the retired schema when the retired tier holds a def of that name', () => {

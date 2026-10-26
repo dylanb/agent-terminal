@@ -14,8 +14,8 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
     isShellBusy: vi.fn(() => false),
     inject: vi.fn(),
     enterAppLoop: vi.fn(),
-    // §B.5 positions 2/4/5/6 — resolve + migrate the binding; a refuse's surface/revert/push side effects
-    // live in the index.ts impl (§B.5). Default: a clean ready binding with no migration notice.
+    // Resolve + migrate the binding; a refuse's surface/revert/push side effects
+    // live in the index.ts impl. Default: a clean ready binding with no migration notice.
     prepareLoopBinding: vi.fn(() => ({ kind: 'ready' as const })),
     ...over,
   };
@@ -53,7 +53,7 @@ describe('flow entry actions (§18.6/§19.3 — skill-only)', () => {
 });
 
 // §27.15 / AC 4 / AC 10 — every loop step is the §27 engine's. For a surviving binding the seam runs, in
-// §B.5's order: (1) a `legacy` marking names no surviving engine so entry does NOTHING; (3) an unsatisfied
+// order: (1) a `legacy` marking names no surviving engine so entry does NOTHING; (3) an unsatisfied
 // required input prompts ALONE, hoisted above every producer so answering it re-enters cleanly; then it asks
 // the injected `prepareLoopBinding` seam (positions 2/4/5/6 — resolve + migrate; a `refuse`'s surface/revert/
 // push side effects live in the index.ts impl) and, only on `ready`, dispatches via `enterAppLoop` (positions
@@ -92,14 +92,14 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     expect(d.enterAppLoop).toHaveBeenCalled();
   });
 
-  it('forwards the migration notice a ready binding accumulates onto the transition reply (§B.5 position 6)', () => {
+  it('forwards the migration notice a ready binding accumulates onto the transition reply', () => {
     const d = deps({ prepareLoopBinding: vi.fn(() => ({ kind: 'ready' as const, notice: 'moved plan-loop into your config' })) });
     const result = createFlowEntryActions(d)(appStep(), {});
     expect(d.enterAppLoop).toHaveBeenCalled();
     expect(result.notice).toBe('moved plan-loop into your config');
   });
 
-  it('a refused binding dispatches nothing and returns no notice — the impl already surfaced/reverted (§B.5 pos 2/4/5)', () => {
+  it('a refused binding dispatches nothing and returns no notice — the impl already surfaced/reverted', () => {
     const d = deps({ prepareLoopBinding: vi.fn(() => ({ kind: 'refuse' as const })) });
     const result = createFlowEntryActions(d)(appStep(), {});
     expect(d.prepareLoopBinding).toHaveBeenCalled();
@@ -109,7 +109,7 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     expect(result.prompt).toBeUndefined();
   });
 
-  it('prompts (alone) before preparing the binding when a required typed input is unresolved (§B.5 position 3)', () => {
+  it('prompts (alone) before preparing the binding when a required typed input is unresolved', () => {
     const d = deps();
     const result = createFlowEntryActions(d)(
       appStep({ inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }),
@@ -160,7 +160,7 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     expect(d.inject).not.toHaveBeenCalled();
   });
 
-  it('a legacy-marked loop step names no surviving engine: nothing prepared, entered, or injected (§B.5 position 1)', () => {
+  it('a legacy-marked loop step names no surviving engine: nothing prepared, entered, or injected', () => {
     const d = deps();
     const s = step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'legacy' });
     const result = createFlowEntryActions(d)(s, {});
@@ -188,7 +188,7 @@ describe('skillInvocation', () => {
   });
 });
 
-// §B.5 item 3 / AC 10 / CWE-74: a loop step's skill is injected as ONE submitted line (the app supplies the
+// AC 10 / CWE-74: a loop step's skill is injected as ONE submitted line (the app supplies the
 // final Enter for a loop step), so a repo-authored multi-line `skill:` scalar must collapse to a single line
 // before it reaches the PTY. The collapse lives on a DEDICATED function so the manual-step arm — where the
 // operator presses Enter — keeps `skillInvocation`'s value byte-identical (#98 flow-step-schema non-goal).

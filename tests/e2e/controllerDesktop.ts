@@ -8,6 +8,8 @@ import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 
 const exec = promisify(execFile);
 const DESKTOP_POLL_MS = 50;
+const WINDOW_MANAGER_STARTS = 2;
+type Command = readonly [string, ...string[]];
 
 async function stop(process: ChildProcess): Promise<void> {
   if (process.exitCode !== null || process.signalCode !== null) return;
@@ -16,7 +18,31 @@ async function stop(process: ChildProcess): Promise<void> {
   await closed;
 }
 
-export async function createControllerDesktopHarness() {
+async function windowManagerReady(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { stdout } = await exec('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { env });
+  return /window id # 0x[1-9a-f]/i.test(stdout);
+}
+
+async function startWindowManager([command, ...args]: Command, env: NodeJS.ProcessEnv): Promise<ChildProcess> {
+  const deadline = Date.now() + WINDOW_TIMEOUT_MS;
+  for (let start = 1; ; start++) {
+    const wm = spawn(command, args, { env, stdio: 'ignore' });
+    for (;;) {
+      if (await windowManagerReady(env)) return wm;
+      if (wm.exitCode !== null || wm.signalCode !== null) break;
+      if (Date.now() >= deadline) {
+        await stop(wm);
+        throw new Error('Controller test window manager did not become ready');
+      }
+      await delay(DESKTOP_POLL_MS);
+    }
+    if (start >= WINDOW_MANAGER_STARTS) throw new Error('Controller test window manager did not become ready');
+  }
+}
+
+export async function createControllerDesktopHarness(
+  { windowManager = ['openbox', '--sm-disable'] }: { windowManager?: Command } = {},
+) {
   if (process.platform !== 'linux') return createControllerHarness();
   const xvfb = spawn('Xvfb', ['-displayfd', '1', '-screen', '0', '1280x1024x24', '-nolisten', 'tcp'], { stdio: ['ignore', 'pipe', 'inherit'] });
   let wm: ChildProcess | undefined;
@@ -34,14 +60,7 @@ export async function createControllerDesktopHarness() {
     if (!/^\d+$/.test(number)) throw new Error(`Invalid X display number: ${number}`);
     const display = `:${number}`;
     const env = { ...process.env, DISPLAY: display };
-    wm = spawn('openbox', ['--sm-disable'], { env, stdio: 'ignore' });
-    const deadline = Date.now() + WINDOW_TIMEOUT_MS;
-    for (;;) {
-      const { stdout } = await exec('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { env });
-      if (/window id # 0x[1-9a-f]/i.test(stdout)) break;
-      if (Date.now() >= deadline || wm.exitCode !== null) throw new Error('Controller test window manager did not become ready');
-      await delay(DESKTOP_POLL_MS);
-    }
+    wm = await startWindowManager(windowManager, env);
     const harness = createControllerHarness();
     harness.fixture.env.DISPLAY = display;
     return {

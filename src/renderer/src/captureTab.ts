@@ -194,7 +194,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     if (rendered.has(event.id)) return;
     rendered.add(event.id);
 
-    // Newest-first: prepend cards (§15.6 / v2.6).
+    // Newest-first: prepend cards (§15.6).
     blocksEl.insertBefore(renderCard(event), blocksEl.firstChild);
     publishRange(event); // anchor the terminal's marker for this span (§16.8)
   }

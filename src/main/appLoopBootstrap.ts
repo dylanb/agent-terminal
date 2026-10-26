@@ -36,7 +36,7 @@ export interface AppLoopBootstrapRequest {
   confirmedWipe?: AppBootstrapConflictTarget;
 }
 
-// Def tiers carry no trust distinction (v2.129): a bootstrap spec is exactly the resolved def's pickup
+// Def tiers carry no trust distinction: a bootstrap spec is exactly the resolved def's pickup
 // contract, with no tier/origin label gating it.
 export type AppLoopBootstrapSpec = PickupContractV2;
 
@@ -389,7 +389,7 @@ export interface AppLoopBootstrapJob {
   // the turn's result artifact off it (`red-result.slice-N.json`) so a loop-back re-entry writes fresh.
   slice?: number;
   bootstrap: AppLoopBootstrapSpec | null;
-  // §B.5 item 6 / AC10: present when the step's bound def declares a `pickup:` block AND carries a skill —
+  // Present when the step's bound def declares a `pickup:` block AND carries a skill —
   // the coordinator injects it AFTER work entry is accepted so it is submitted ahead of the boundary
   // preamble (CWE-74). Absent when the def declares no `pickup:` block (the seam injects it) or has no skill.
   skill?: string;
@@ -413,17 +413,17 @@ export interface AppLoopBootstrapCoordinatorDeps {
     slice?: number,
   ): AppLoopEnterResult;
   /** Inject the job's (already-collapsed) skill line, submitted, calling `onComplete` once its submit `\r`
-   *  has been written (§B.13c). The deferred work turn chains off that signal (§B.5 item 6, AC10). */
+   *  has been written. The deferred work turn chains off that signal (AC10). */
   inject(text: string, onComplete: () => void): void;
   /** True iff the shell is mid-command (§19.3): the skill is refused rather than typed into live stdin. */
   isShellBusy(): boolean;
   /** Surface a transient §19.3 notice on a later state push — distinct from `emitError`'s blocking dialog,
-   *  because a refusal on a step whose work turn is running fine is not an error (§B.5 item 6). */
+   *  because a refusal on a step whose work turn is running fine is not an error. */
   emitNotice(notice: { repoDir: string; stepId: string; notice: string }): void;
   /** Fire the work turn that `enterWork(…, true)` accepted but did not request — the engine requests it
-   *  now, chaining its boundary strictly after the skill's submit (§B.20a). */
+   *  now, chaining its boundary strictly after the skill's submit. */
   triggerWork(job: AppLoopBootstrapJob): void;
-  /** Abandon a deferred-but-never-triggered work turn, freeing the runner (§B.20a). */
+  /** Abandon a deferred-but-never-triggered work turn, freeing the runner. */
   cancelWork(job: AppLoopBootstrapJob): void;
   /** Arm the deferral deadline: `onLapse` fires if the injection never signals completion; the returned
    *  canceller is invoked when completion does arrive (CWE-755 — never leave a turn accepted-but-unrequested). */
@@ -510,7 +510,7 @@ export function createAppLoopBootstrapCoordinator(
       emitError(job, combined);
     }
   };
-  // §B.5 item 6 / §B.20a: the turn was accepted-but-not-requested; inject the step's skill and chain its
+  // The turn was accepted-but-not-requested; inject the step's skill and chain its
   // request off the injection's completion, so the repo-authored skill line is submitted before any boundary
   // preamble (CWE-74). A deadline guards the gap: if completion never signals, revert rather than leave the
   // step in_progress with a turn that occupies the runner but is never requested (CWE-755).
@@ -558,7 +558,7 @@ export function createAppLoopBootstrapCoordinator(
       rollbackJob(job, reason);
     }
   };
-  // §B.5 item 6: a bound def declaring a `pickup:` block has its skill injected AFTER work entry is
+  // A bound def declaring a `pickup:` block has its skill injected AFTER work entry is
   // accepted, not at the seam — so no synchronous revert arm below the injection can roll back a step whose
   // agent turn is already live. Over a busy shell (§19.3) the skill is refused and BUSY_NOTICE surfaced, and
   // the turn starts on the synchronous arm instead (item 4's no-injection case).

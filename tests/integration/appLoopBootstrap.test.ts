@@ -1024,7 +1024,7 @@ function job(over: Partial<AppLoopBootstrapJob> = {}): AppLoopBootstrapJob {
   };
 }
 
-// §B.13a deferred-skill deps: inert no-ops so a coordinator built for a skill-less job satisfies the widened
+// Deferred-skill deps: inert no-ops so a coordinator built for a skill-less job satisfies the widened
 // dep set without exercising the hand-off. Specs that drive the hand-off (deferHarness) override these.
 function deferDepDefaults() {
   return {
@@ -2045,7 +2045,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
   });
 });
 
-describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (§B.13a / §B.5 item 6, AC10)', () => {
+describe('createAppLoopBootstrapCoordinator — deferred skill hand-off (AC10)', () => {
   const successOwnership = {
     base: 'main',
     branch: 'plan-loop/issue-78',

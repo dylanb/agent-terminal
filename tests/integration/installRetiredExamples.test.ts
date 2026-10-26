@@ -15,7 +15,7 @@ import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { SESSION_ID, type InstallDestinationId, type RetiredExample } from '../../src/shared/ipc';
 
-// §18.1 v2.212 — Install examples offers to remove what the retired feature-dev and feature-dev-v2 flows left
+// §18.1 — Install examples offers to remove what the retired feature-dev and feature-dev-v2 flows left
 // in an installation: their catalog entries, their loop folders, and the reviewer agents of the loops only they
 // shipped. Removal is opt-in, limited to what the preview listed, and never touches anything else.
 
