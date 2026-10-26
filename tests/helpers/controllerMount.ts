@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
-import type { ControllerApi, ControllerTerminal } from '../../src/shared/ipc';
+import type { ControllerApi, ControllerTerminal, Theme } from '../../src/shared/ipc';
 import { statusService } from './controllerStatusFixture';
 
 /** The `layout` dependency's fake: whether the window is in the one-column layout, flipped by the test. */
@@ -30,10 +30,14 @@ interface MountOptions {
   terminals?: ControllerTerminal[];
   oneColumn?: boolean;
   parent?: HTMLElement;
+  /** The theme the controller fake holds as saved; `unreadable` makes reading it reject. */
+  theme?: Theme | 'unreadable';
 }
 interface Mounted {
   host: HTMLElement;
   layout: ReturnType<typeof fakeLayout>;
+  /** Each theme the organism painted on the document, in order. */
+  applied: Theme[];
   dispose(): void;
 }
 
@@ -43,12 +47,13 @@ export function mountControllerPanes(options: Omit<MountOptions, 'terminals'> & 
 export function mountControllerPanes(options: MountOptions & { controller?: ControllerApi } = {}): Mounted & { service: StatusService | undefined } {
   const host = document.createElement('main');
   (options.parent ?? document.body).append(host);
-  const service = options.controller ? undefined : statusService(options.terminals);
+  const service = options.controller ? undefined : statusService(options.terminals, { theme: options.theme });
   const layout = fakeLayout(options.oneColumn);
-  const deps = { controller: options.controller ?? service!.api, layout: layout.layout };
+  const applied: Theme[] = [];
+  const deps = { controller: options.controller ?? service!.api, layout: layout.layout, applyTheme: (theme: Theme) => { applied.push(theme); } };
   const panes = createControllerPanes(host, deps);
   return {
-    host, service, layout,
+    host, service, layout, applied,
     dispose() {
       panes.dispose();
       host.remove();

@@ -1,3 +1,5 @@
+import type { Theme } from '../../shared/ipc';
+
 export const ONE_COLUMN_BELOW_PX = 640;
 
 export interface ControllerLayout {
@@ -15,3 +17,5 @@ export function createViewportLayout(view: Window): ControllerLayout {
     },
   };
 }
+
+export function applyDocumentTheme(_root: HTMLElement, _theme: Theme): void {}

@@ -3,7 +3,7 @@ import { userEvent } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { accentIn, bringForwardIn, cardHeaderIn, cardIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
+import { accentIn, bringForwardIn, cardHeaderIn, cardIn, darkThemeIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
 import { readable } from '../helpers/readableText';
@@ -152,13 +152,14 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     try {
       await vi.waitFor(() => {
         if (![longHuman, longError].every(t => control(host, t.launchDirectory, showFullReasonIn))) throw new Error('no Show full reason yet');
+        if (!darkThemeIn(host)) throw new Error('no Dark theme control yet');
       }).catch(() => undefined);
       const withCards = grade([
         ...new Set(cases.map(c => c.text)), ...SUMMARY_LABELS,
-        'No flow run started', 'No ticket', 'Title loading', 'Approve the plan', 'Step exited 1', 'Show full reason',
+        'No flow run started', 'No ticket', 'Title loading', 'Approve the plan', 'Step exited 1', 'Show full reason', 'Dark theme',
       ]);
       publish([]);
-      expect({ withCards, empty: grade([...SUMMARY_LABELS, 'No terminals connected']) }).toEqual({ withCards: [], empty: [] });
+      expect({ withCards, empty: grade([...SUMMARY_LABELS, 'No terminals connected', 'Dark theme']) }).toEqual({ withCards: [], empty: [] });
     } finally { component.dispose(); }
   });
 
@@ -198,7 +199,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     } finally { component.dispose(); }
   });
 
-  it('paints a 3:1 keyboard focus ring on the card header, Bring forward, Dismiss and Show full reason', async () => {
+  it('paints a 3:1 keyboard focus ring on the card header, Bring forward, Dismiss, Show full reason and Dark theme', async () => {
     const disconnected = STATUS_CASES.disconnected.terminal;
     const blocked = statusTerminal({ attention: { status: 'complete', reasons: [LONG_REASON] } });
     const { host, component } = mount([STATUS_CASES.working.terminal, disconnected, blocked]);
@@ -210,6 +211,11 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
         Dismiss: () => control(host, disconnected.launchDirectory, dismissIn),
         'Show full reason': () => vi.waitFor(() => {
           const found = control(host, blocked.launchDirectory, showFullReasonIn);
+          if (!found) throw new Error('no control yet');
+          return found;
+        }).catch(() => undefined),
+        'Dark theme': () => vi.waitFor(() => {
+          const found = darkThemeIn(host);
           if (!found) throw new Error('no control yet');
           return found;
         }).catch(() => undefined),

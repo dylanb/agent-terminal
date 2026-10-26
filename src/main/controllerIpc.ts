@@ -1,10 +1,12 @@
 import { ipcMain, type WebContents } from 'electron';
 import { CONTROLLER_CH, SESSION_ID, type ControllerActivation, type ControllerSnapshot } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
+import type { ControllerSettingsStore } from './controllerSettings';
 
 export function installControllerIpc(
   contents: Pick<WebContents, 'isDestroyed' | 'send'>,
   controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss'>,
+  _settings?: ControllerSettingsStore,
 ): () => void {
   const send = (terminals: ControllerSnapshot['terminals']) => {
     if (!contents.isDestroyed()) contents.send(CONTROLLER_CH.terminals, { sessionId: SESSION_ID, terminals } satisfies ControllerSnapshot);

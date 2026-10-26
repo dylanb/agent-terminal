@@ -158,9 +158,8 @@ describe('controller panes', () => {
     const pending = new Promise<'unavailable'>((done, fail) => { resolve = done; reject = fail; });
     const requested: string[] = [];
     const { host, dispose } = mountControllerPanes({ controller: {
-      subscribeTerminals(listener) { listener([terminal]); return () => {}; },
+      ...statusService([terminal]).api,
       activateTerminal(id) { requested.push(id); return pending; },
-      async dismissTerminal() {},
     } });
     const card = cardIn(host, terminal.launchDirectory);
     (card && bringForwardIn(card))?.click();

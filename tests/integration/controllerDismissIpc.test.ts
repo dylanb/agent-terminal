@@ -11,6 +11,7 @@ import { encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot } from '../../src/shared/ipc';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import { installControllerIpc } from '../../src/main/controllerIpc';
+import { createControllerSettingsStore } from '../../src/main/controllerSettings';
 
 const boundary = vi.hoisted(() => ({
   handlers: new Map<string, (event: { sender: unknown }, payload: unknown) => unknown>(),
@@ -43,7 +44,7 @@ beforeEach(async () => {
   snapshot = { sessionId: SESSION_ID, terminals: [] };
   deliveries = 0;
   transport = await startControllerTransport(home);
-  dispose = installControllerIpc(contents, transport);
+  dispose = installControllerIpc(contents, transport, createControllerSettingsStore(home));
 });
 
 afterEach(async () => {

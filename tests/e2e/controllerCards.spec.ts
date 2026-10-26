@@ -7,8 +7,8 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { accentLocator, bringForwardLocator, cardHeaderLocator, cardLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
-import { expectedColor, type StatusToken } from '../helpers/designTokens';
+import { accentLocator, bringForwardLocator, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { expectedColor, type StatusToken, type Theme } from '../helpers/designTokens';
 import { mismatchedTokens, paintColors } from '../helpers/tokenProbe';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
@@ -19,9 +19,9 @@ async function paintedColor(part: Locator, property: 'background-color' | 'color
   return values[0];
 }
 
-/** Each card part whose painted colour is not its light status token, or that is not painted at all. */
-async function offToken(page: Page, reads: { label: string; part: Locator; property: 'background-color' | 'color'; token: StatusToken }[]): Promise<string[]> {
-  const expected = await page.evaluate(paintColors, reads.map(read => expectedColor(read.token, 'light')));
+/** Each card part whose painted colour is not its status token in `theme`, or that is not painted at all. */
+async function offToken(page: Page, theme: Theme, reads: { label: string; part: Locator; property: 'background-color' | 'color'; token: StatusToken }[]): Promise<string[]> {
+  const expected = await page.evaluate(paintColors, reads.map(read => expectedColor(read.token, theme)));
   const violations: string[] = [];
   for (const [index, read] of reads.entries()) {
     const painted = await paintedColor(read.part, read.property);
@@ -147,7 +147,7 @@ test('status cards on real terminals', { tag: '@ownapp' }, async () => {
     const summary = { 'need a human': 1, working: 1 } as Record<string, number>;
     await expect.soft.poll(async () => unshownCounts((await windowHeaderLocator(controller.page).allTextContents()).join(' '),
       headerLabels(label => summary[label] ?? 0, 2, 2))).toEqual([]);
-    expect.soft(await offToken(controller.page, [
+    expect.soft(await offToken(controller.page, 'light', [
       { label: 'A accent', part: accentLocator(cardA), property: 'background-color', token: '--status-needs-human' },
       { label: 'A status row', part: statusRowLocator(cardA), property: 'color', token: '--status-needs-human-text' },
       { label: 'B accent', part: accentLocator(cardB), property: 'background-color', token: '--status-working' },
@@ -229,6 +229,37 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
     await expect.soft(headerB).toHaveAttribute('aria-expanded', 'true');
     await expect.soft(headerB).toBeFocused();
     await noneCameForward();
+  } finally {
+    try { await h.dispose(); }
+    finally { removeAll(paths); }
+  }
+});
+
+test('theme survives restart: Dark theme paints the dark tokens at once and after the controller restarts', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const paths: string[] = [];
+  try {
+    const { controller, gated, working } = await twoTerminals(h, paths);
+    const painted = (page: Page) => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    await use(darkThemeLocator(controller.page, { on: false }), control => control.click());
+    expect.soft(await painted(controller.page)).toBe('dark');
+    await expect.soft.poll(() => controller.page.evaluate(() => window.controller.getTheme())).toBe('dark');
+
+    await controller.app.close();
+    const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
+    const cardA = cardLocator(restarted.page, gated);
+    const cardB = cardLocator(restarted.page, working);
+    await expect.soft(darkThemeLocator(restarted.page, { on: true })).toBeVisible();
+    await expect.soft.poll(() => painted(restarted.page)).toBe('dark');
+    await expect(statusRowLocator(cardA)).toHaveText('Needs a human', { timeout: 30_000 });
+    await expect(statusRowLocator(cardB)).toHaveText('Working', { timeout: 30_000 });
+    expect.soft(await offToken(restarted.page, 'dark', [
+      { label: 'A accent', part: accentLocator(cardA), property: 'background-color', token: '--status-needs-human' },
+      { label: 'A status row', part: statusRowLocator(cardA), property: 'color', token: '--status-needs-human-text' },
+      { label: 'B accent', part: accentLocator(cardB), property: 'background-color', token: '--status-working' },
+      { label: 'B status row', part: statusRowLocator(cardB), property: 'color', token: '--status-working-text' },
+    ])).toEqual([]);
   } finally {
     try { await h.dispose(); }
     finally { removeAll(paths); }

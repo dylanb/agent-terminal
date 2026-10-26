@@ -1350,6 +1350,8 @@ export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
   dismissTerminal(id: string): Promise<void>;
+  getTheme(): Promise<Theme>;
+  setTheme(theme: Theme): Promise<void>;
 }
 
 export const CONTROLLER_CH = {
@@ -1357,11 +1359,15 @@ export const CONTROLLER_CH = {
   terminals: 'controller:terminals',
   activate: 'controller:activate',
   dismiss: 'controller:dismiss',
+  getTheme: 'controller:getTheme',
+  setTheme: 'controller:setTheme',
 } as const;
 export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
 
 export interface ControllerSnapshot { sessionId: SessionId; terminals: ControllerTerminal[] }
 export interface ControllerActivation { sessionId: SessionId; id: string }
+export interface ControllerThemeRequest { sessionId: SessionId }
+export interface ControllerThemeChoice { sessionId: SessionId; theme: Theme }
 
 
 export interface ControllerVersionRange { min: number; max: number }

@@ -10,4 +10,6 @@ export const controllerApi: ControllerApi = {
   },
   dismissTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.dismiss, { sessionId: SESSION_ID, id }),
   activateTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.activate, { sessionId: SESSION_ID, id }),
+  getTheme: async () => 'light',
+  setTheme: async () => {},
 };

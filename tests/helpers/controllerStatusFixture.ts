@@ -1,4 +1,4 @@
-import type { ControllerApi, ControllerTerminal, ControllerWorkStatus } from '../../src/shared/ipc';
+import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
 import type { Status } from './designTokens';
 
 export type WorkStatus = ControllerWorkStatus;
@@ -70,11 +70,14 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
-  options: { activation?: 'activated' | 'unavailable' | 'rejected' } = {},
+  options: { activation?: 'activated' | 'unavailable' | 'rejected'; theme?: Theme | 'unreadable' } = {},
 ) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
   const dismissed: string[] = [];
+  /** Each theme the controller was asked to save, in order. */
+  const savedThemes: Theme[] = [];
+  let theme = options.theme;
   let current = initial;
   const publish = (items: ControllerTerminal[]): void => {
     current = items;
@@ -91,6 +94,14 @@ export function statusService(
       dismissed.push(id);
       publish(current.filter(item => item.id !== id));
     },
+    async getTheme() {
+      if (theme === 'unreadable') throw new Error('theme unreadable');
+      return theme ?? 'light';
+    },
+    async setTheme(next) {
+      savedThemes.push(next);
+      theme = next;
+    },
   };
-  return { api, activated, dismissed, publish };
+  return { api, activated, dismissed, publish, savedThemes };
 }
