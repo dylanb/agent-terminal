@@ -5,6 +5,8 @@ import { createClampedReason, type ClampedReason } from './clampedReason';
 
 export interface ControllerCardDeps {
   terminal: ControllerTerminal;
+  expanded: boolean;
+  onToggle(expanded: boolean): void;
   fullReasons: ReadonlySet<string>;
   onReasonToggle(reason: string, full: boolean): void;
   onBringForward(): void;
@@ -12,6 +14,7 @@ export interface ControllerCardDeps {
 }
 
 export interface ControllerCard {
+  setExpanded(expanded: boolean): void;
   dispose(): void;
 }
 
@@ -35,7 +38,7 @@ const ACTIVITY_TEXT: Readonly<Record<ControllerWorkStatus['activity'], string>> 
   active: 'Active', quiet: 'Idle', unavailable: 'Activity unavailable',
 };
 
-let nextHeadingId = 0;
+let nextCardId = 0;
 
 function finalSegment(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
@@ -57,7 +60,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   card.dataset.terminalId = terminal.id;
   card.dataset.status = status.statusClass;
   if (terminal.status === 'disconnected') card.classList.add('is-disconnected');
-  const headingId = `controller-card-heading-${nextHeadingId += 1}`;
+  const cardId = `controller-card-${nextCardId += 1}`;
+  const headingId = `${cardId}-heading`;
   card.setAttribute('aria-labelledby', headingId);
 
   const header = element('header', 'controller-card-header');
@@ -70,10 +74,17 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const directoryText = element('bdi', '', terminal.launchDirectory);
   directoryText.dir = 'ltr';
   directory.append(directoryText);
-  heading.append(element('span', 'controller-card-name', finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)), ' ', directory);
+  const label = element('span', 'controller-card-label', status.text);
+  const toggle = element('button', 'controller-card-toggle');
+  toggle.type = 'button';
+  toggle.dataset.control = 'header';
+  toggle.setAttribute('aria-controls', `${cardId}-body`);
+  toggle.append(element('span', 'controller-card-name', finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)), ' ', directory);
+  heading.append(toggle);
   header.append(accent, heading);
 
   const body = element('div', 'controller-card-body');
+  body.id = `${cardId}-body`;
   const statusRow = element('p', 'controller-card-status', status.text);
   statusRow.dataset.testid = 'card-status';
   body.append(statusRow);
@@ -130,7 +141,24 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     }
   }
 
+  let expanded = deps.expanded;
+  function setExpanded(next: boolean): void {
+    const held = body.contains(doc.activeElement);
+    expanded = next;
+    toggle.setAttribute('aria-expanded', String(expanded));
+    body.hidden = !expanded;
+    if (expanded) label.remove();
+    else toggle.append(label);
+    if (held && !expanded) toggle.focus();
+  }
+  setExpanded(expanded);
+  toggle.addEventListener('click', () => {
+    setExpanded(!expanded);
+    deps.onToggle(expanded);
+  });
+
   return {
+    setExpanded,
     dispose() {
       reasons.forEach(reason => reason.dispose());
       card.remove();

@@ -1,4 +1,4 @@
-import { cardStatus, SUMMARY_CLASS, SUMMARY_LABELS } from '../../shared/controllerCardStatus';
+import { cardStatus, SUMMARY_CLASS, SUMMARY_LABELS, type CardStatusClass } from '../../shared/controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import { captureSubtreeFocus } from './dom';
 import type { ControllerApi, ControllerTerminal } from '../../shared/ipc';
@@ -10,7 +10,8 @@ export interface ControllerPanesDeps {
   layout: ControllerLayout;
 }
 
-const ACTIONS = '[data-control="bring-forward"], [data-control="dismiss"]';
+const HEADER = '[data-control="header"]';
+const EXPANDED_IN_ONE_COLUMN: ReadonlySet<CardStatusClass> = new Set(['error', 'needs-human']);
 
 function windowHeader(doc: Document): { element: HTMLElement; render(terminals: readonly ControllerTerminal[]): void } {
   const element = doc.createElement('header');
@@ -61,13 +62,19 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   status.setAttribute('role', 'status');
   status.setAttribute('aria-atomic', 'true');
   let previousAttention = new Map<string, string>();
-  let cards: ControllerCard[] = [];
+  let cards: { terminal: ControllerTerminal; card: ControllerCard }[] = [];
   const fullReasons = new Map<string, Set<string>>();
+  const toggled = new Map<string, boolean>();
   host.append(header.element, list, alert, status);
 
+  const expandedFor = (terminal: ControllerTerminal): boolean => toggled.get(terminal.id)
+    ?? (!deps.layout.oneColumn() || EXPANDED_IN_ONE_COLUMN.has(cardStatus(terminal).statusClass));
   const applyLayout = () => { host.dataset.layout = deps.layout.oneColumn() ? 'one-column' : 'multi-column'; };
   applyLayout();
-  const unsubscribeLayout = deps.layout.onChange(applyLayout);
+  const unsubscribeLayout = deps.layout.onChange(() => {
+    applyLayout();
+    for (const { terminal, card } of cards) card.setExpanded(expandedFor(terminal));
+  });
 
   const announce = () => {
     if (disposed) return;
@@ -114,10 +121,12 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     const focusedId = focused?.closest<HTMLElement>('article')?.dataset.terminalId;
     const focusedControl = focused?.dataset.control;
     const focusedReason = focused?.closest<HTMLElement>('[data-reason]')?.dataset.reason;
-    cards.forEach(card => card.dispose());
+    cards.forEach(({ card }) => card.dispose());
     list.replaceChildren();
-    cards = terminals.map(terminal => createControllerCard(list, {
+    cards = terminals.map(terminal => ({ terminal, card: createControllerCard(list, {
       terminal,
+      expanded: expandedFor(terminal),
+      onToggle(expanded) { toggled.set(terminal.id, expanded); },
       fullReasons: fullReasons.get(terminal.id) ?? new Set(),
       onReasonToggle(reason, full) {
         const shown = fullReasons.get(terminal.id) ?? new Set<string>();
@@ -134,7 +143,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       onDismiss() {
         void deps.controller.dismissTerminal(terminal.id).catch(announce);
       },
-    }));
+    }) }));
     if (!terminals.length) {
       const empty = doc.createElement('p');
       empty.textContent = 'No terminals connected. Launch a terminal while the controller is running.';
@@ -144,9 +153,9 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
     restoreFocus(() => {
       const card = [...list.querySelectorAll<HTMLElement>('article')].find(element => element.dataset.terminalId === focusedId);
       const controls = card ? [...card.querySelectorAll<HTMLElement>('[data-control]')] : [];
-      return controls.find(control => control.dataset.control === focusedControl
+      return controls.find(control => control.dataset.control === focusedControl && !control.closest('[hidden]')
         && control.closest<HTMLElement>('[data-reason]')?.dataset.reason === focusedReason)
-        ?? card?.querySelector<HTMLElement>(ACTIONS) ?? list.querySelector<HTMLElement>(ACTIONS) ?? list.querySelector('p');
+        ?? card?.querySelector<HTMLElement>(HEADER) ?? list.querySelector<HTMLElement>(HEADER) ?? list.querySelector('p');
     });
   });
   return {
@@ -154,7 +163,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
-      cards.forEach(card => card.dispose());
+      cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();
       host.classList.remove('controller-panes');
       delete host.dataset.layout;

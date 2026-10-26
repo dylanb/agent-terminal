@@ -120,13 +120,21 @@ test('controller reflows real registered terminal controls when its window narro
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1000, 700));
     await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(1000);
     const wide = await measure();
+    const expandedInOneColumn = ['Disconnected', 'Flow error', 'Needs a human', 'Status unavailable'];
+    const ruleOpens = new Map<string, boolean>();
+    for (const directory of h.fixture.repositories) {
+      const statusRow = statusRowLocator(cardLocator(controller.page, directory));
+      await expect.soft(statusRow).not.toHaveText(/^(Loading|Status unknown)$/);
+      ruleOpens.set(directory, expandedInOneColumn.includes((await statusRow.textContent())?.trim() ?? ''));
+    }
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(320, 700));
     await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(320);
     await expect.soft.poll(async () => (await measure()).rows).toBeGreaterThan(wide.rows);
     for (const directory of h.fixture.repositories) {
       const header = cardHeaderLocator(cardLocator(controller.page, directory), directory);
-      await expect.soft(header).toHaveAttribute('aria-expanded', 'false');
-      if (await header.count()) await header.click();
+      const opens = ruleOpens.get(directory) ?? false;
+      await expect.soft(header).toHaveAttribute('aria-expanded', String(opens));
+      if (!opens && await header.count()) await header.click();
       await expect.soft(header).toHaveAttribute('aria-expanded', 'true');
     }
     const narrow = await measure();
