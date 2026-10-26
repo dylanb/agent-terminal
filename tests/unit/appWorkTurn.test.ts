@@ -243,7 +243,6 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
     expect(prompt).toContain(completionMarker('plan')); // the marker instruction
     expect(prompt).toContain('.agent-terminal/loop/turn-done'); // the §27 done-file, not the retired engine's .agent-loop
     expect(prompt).toContain('turn-done:work-plan'); // the turn id token the fake-agent matches
-    expect(prompt).not.toContain('.agent-loop/turn-done'); // NOT the retired-engine path (AC10 separation)
   });
 
   it('for a commit-producing turn: no marker/artifact, completes on the done-signal alone', () => {

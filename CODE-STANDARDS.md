@@ -92,26 +92,23 @@ hostile numeric family (`-1`, `NaN`, `±Inf`, non-integer), the decision over `c
 retired engine and its persisted iteration cap are gone (the surviving engine's consolidator stops for a
 human instead); the rule they illustrate does not depend on either surviving.
 
-## An agent-produced artifact contract — one vocabulary, a self-validating example, a minimal predicate
+## An agent-produced artifact contract — one vocabulary, a minimal predicate, a self-check
 
 §27's review-and-fix turn is the first place a **composed prompt instructs an LLM subagent to produce a
 serialized artifact that a predicate then gates completion on** (`composeReviewAndFixPrompt` writes it,
 `roundReportProblems` validates it). A prompt is a *writer* in the shared-semantics contract — an
 instruction to a model, not a second process — and it desyncs the same way two copies of a wire format do.
-Four disciplines hold it, the middle two easy to drop:
+Three disciplines hold it, the middle one easy to drop:
 
 1. **One descriptor feeds both sides.** The disposition set, the reviewer statuses and the JSON keys live
-   once in `src/shared/roundReport.ts`; the composer and the predicate both read it. The trap is not
-   seeing "a prompt" as a side of the contract.
-2. **The prompt's few-shot is asserted well-formed against the gating predicate.** `exampleRoundReport(...)`
-   is run through `roundReportProblems` in a test (`reviewTurn.test.ts` — "no prompt↔predicate drift").
-   Without it the example and the predicate are two hand-maintained copies and no code test catches the
-   drift.
-3. **The predicate validates the minimal contract, not a rigid layout.** It checks the declared sections,
+   once in `src/shared/roundReport.ts`; the composer and the predicate both read it, and the prompt's
+   few-shot is that module's canonical example (`exampleRoundReport(...)`). The trap is not seeing "a prompt"
+   as a side of the contract.
+2. **The predicate validates the minimal contract, not a rigid layout.** It checks the declared sections,
    the full roster, and each issue's required fields with a disposition from the closed set — never key order,
    extra fields or formatting. Over-constrain it and the test's fake agent passes while a real model's legitimate
    variation is rejected: mocking the VT parser, one layer out.
-4. **The artifact is structured data, and the agent can run the predicate itself.** A format the loop both
+3. **The artifact is structured data, and the agent can run the predicate itself.** A format the loop both
    writes (through a prompt) and reads is JSON, parsed by the platform parser and judged by the shared
    predicate, never a hand-written grammar over Markdown. The prompt hands the agent a command that runs that
    same predicate (the bundled checker, §27.12) and tells it to fix the file until the check passes before it

@@ -5,7 +5,10 @@ content-parity test, the `ui` charter's demand that contrast be checked in a rea
 recipe↔predicate canonical-example check are gone. Bundled charters and recipes keep only their
 load-validity tests, and P6e's design-system sentence matches TRACER-BULLET.md: token and stylesheet
 content needs no RED test, and any behaviour a slice adds is still proven RED-first with an `_electron`
-e2e. The rule is CLAUDE.md § Test-driven development.
+e2e. §27.15, §28.5.5 and §28.6 P6c no longer require a prompt's canonical example to be asserted
+well-formed against its predicate, and drop the predicate happy-path test from what the example anchors:
+the example still anchors the prompt few-shot and the fake-agent e2e, and the agent's self-check command
+runs the same predicate. The rule is CLAUDE.md § Test-driven development.
 
 ## #251 slice 3 — maintained audit publication and human handoff
 
