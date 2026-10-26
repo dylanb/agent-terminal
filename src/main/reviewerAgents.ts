@@ -1,4 +1,4 @@
-// §27.4, §18.1 v2.199.
+// §27.4, §18.1.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,7 +32,7 @@ function checkReviewerSpec(spec: ReviewerAgentSpec): void {
   if (spec.tools !== 'all' && spec.tools.length === 0) throw new Error(`reviewer ${spec.persona} in ${spec.loop} declares no tools`);
 }
 
-/** §18.1 v2.199: Codex rejects an agent name holding anything but lowercase letters, digits and underscores. */
+/** §18.1: Codex rejects an agent name holding anything but lowercase letters, digits and underscores. */
 export function codexReviewerAgentName(loop: string, persona: string): string {
   return reviewerAgentName(loop, persona).replaceAll('-', '_');
 }
@@ -41,7 +41,7 @@ const CODEX_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glo
 export const CODEX_REVIEWER_PREAMBLE = 'You are a reviewer. Never create, edit or delete any file: report your findings only.';
 const TOML_MULTILINE_LITERAL_QUOTES = "'''";
 
-/** §18.1 v2.199. */
+/** §18.1. */
 export function renderCodexReviewerAgent(spec: ReviewerAgentSpec): string {
   checkReviewerSpec(spec);
   const granted = spec.tools === 'all' ? [] : spec.tools.filter((t) => !CODEX_READ_ONLY_TOOLS.has(t));

@@ -1,4 +1,4 @@
-// §18.1 v2.212.
+// §18.1.
 
 import { readDirEntries } from './dirEntries';
 import type { ReviewerAgentFormat } from './reviewerAgents';

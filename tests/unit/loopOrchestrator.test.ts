@@ -99,7 +99,7 @@ describe('loop turn runner (§27.12/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('forceChained defers an INITIAL turn to a fresh settle instead of injecting on the current quiet (§B.5 item 4b)', () => {
+  it('forceChained defers an INITIAL turn to a fresh settle instead of injecting on the current quiet', () => {
     // A default initial turn injects synchronously against the already-idle agent (test above). Forced
     // chained, it must re-arm quiescence and wait for a FRESH active→quiet edge, so a work turn requested
     // in the same tick as a just-submitted skill injection cannot race that injection (CWE-74).

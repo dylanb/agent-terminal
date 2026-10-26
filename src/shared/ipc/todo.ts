@@ -117,8 +117,7 @@ export interface TodoTemplateList {
 }
 
 /** todoTemplate:list request (§6): the templates co-located with the repo's flow.yaml (§18.6).
- *  `repoKey` resolves the flow dir local-first-then-global (deviates from the v2.27 global-only
- *  sketch, since templates are now co-located). */
+ *  `repoKey` resolves the flow dir local-first-then-global, since templates are co-located. */
 export interface TodoTemplateListMsg {
   sessionId: SessionId;
   repoKey: string;

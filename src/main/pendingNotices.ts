@@ -1,5 +1,3 @@
-// §B.5 item 6 / §B.13a
-
 export interface PendingNotices {
   post(repoKey: string, text: string): void;
   /** The repo's pending notice, consumed: a second take returns undefined. */

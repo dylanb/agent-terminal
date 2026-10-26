@@ -82,7 +82,7 @@ function readInputs(raw: unknown): Record<string, string> | null {
 
 /** Null unless the value is a real instant: an ill-typed or non-positive `started_at` degrades to
  *  absent on the lenient read path, and rejects the whole document on the strict write path so
- *  `writeTitle` throws rather than silently discarding it (§H.2's decode-tolerance boundary). */
+ *  `writeTitle` throws rather than silently discarding it (the decode-tolerance boundary). */
 function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }
@@ -96,7 +96,7 @@ const isRepeatCount = (v: unknown): v is number => typeof v === 'number' && Numb
 
 /** Null when absent/empty (so the round-trip omits the key). Keeps only positive-integer counts on the
  *  lenient read path; the strict write path rejects a document carrying an ill-typed one, mirroring
- *  readInputs/readStartedAt (§H.2 decode-tolerance boundary). */
+ *  readInputs/readStartedAt (the decode-tolerance boundary). */
 function readRepeatCounts(raw: unknown): Record<string, number> | null {
   if (!isRecord(raw)) return null;
   const out: Record<string, number> = Object.create(null); // null-proto: a `__proto__` key stores as own data

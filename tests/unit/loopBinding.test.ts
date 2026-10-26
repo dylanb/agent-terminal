@@ -3,7 +3,7 @@ import { createLoopBindingPreparer, type LoopBindingPreparerDeps } from '../../s
 import type { FlowStepDef } from '../../src/main/flow';
 import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 
-// §B.5 positions 2/4/5/6 — the loop entry seam's ONE domain answer for a bound loop step. The ORDER and the
+// The loop entry seam's ONE domain answer for a bound loop step. The ORDER and the
 // decisions live in this preparer; the operator-facing EFFECTS (the resolver reason on the loop-error path,
 // the deferred revert + push, the tree copy) are injected, so the branching is tested at its own boundary
 // without the flow machine or the filesystem (CLAUDE.md injection-seam). Positions 1 (marked) and 3 (missing
@@ -31,7 +31,7 @@ function deps(over: Partial<LoopBindingPreparerDeps> = {}): LoopBindingPreparerD
   };
 }
 
-describe('createLoopBindingPreparer (§B.5 positions 2/4/5/6)', () => {
+describe('createLoopBindingPreparer', () => {
   it('position 2 — an unresolved def surfaces its reason on the loop-error path, does NOT revert, and refuses', () => {
     const d = deps({ resolveDef: vi.fn((): LoopDefV2Result => ({ ok: false, reason: 'no §27 def named plan-loop in any tier' })) });
     const result = createLoopBindingPreparer(d)(loopStep());

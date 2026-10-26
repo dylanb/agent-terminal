@@ -11,7 +11,7 @@ import '../../src/preload/index';
 import { isValidFlowConfirmRunPickup as isValid } from '../../src/main/ipcValidation';
 import { SESSION_ID, type FlowApi } from '../../src/shared/ipc';
 
-// §27.13 v2.211 §6 — `flow:confirmRunPickup` names the worktree and the run whose hold it releases, and the numbers
+// §27.13 §6 — `flow:confirmRunPickup` names the worktree and the run whose hold it releases, and the numbers
 // the operator confirmed; main rejects any other shape before it asks GitHub anything.
 
 const invoke = ipcRenderer.invoke as unknown as ReturnType<typeof vi.fn>;

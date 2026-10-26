@@ -597,7 +597,7 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
   });
 });
 
-// §18.1 v2.212 — the leftover removal is a second group beside the replacement one, with its own long manifest, so
+// §18.1 — the leftover removal is a second group beside the replacement one, with its own long manifest, so
 // both must stay inside the card's column at zoom and neither may collapse its checkbox out of sight.
 describe('the consent dialog with both replacements and retired leftovers survives a short viewport (WCAG 1.4.4, 1.4.10, 2.4.11)', () => {
   let host: HTMLElement;
@@ -1011,12 +1011,12 @@ describe('focusRing (the helper the ring pins are graded through)', () => {
   });
 });
 
-// §B.10a — the retired cost read-out (`.loop-cost`) is removed from the grouped rail rule it
+// The retired cost read-out (`.loop-cost`) is removed from the grouped rail rule it
 // shared with the surviving iteration read-out (`.loop-iter`). Editing the wrong line would leave
 // `.loop-iter,` dangling onto the next selector (`.car`), silently inheriting its 8px / margin-left:auto
 // and LOSING white-space:nowrap + flex-shrink:0 — breaking values mid-token in the 200px rail (WCAG
 // 1.4.10 Reflow, 1.4.4 Resize Text). This grades the PAINTED box, per CLAUDE.md's no-mock-CSS rule.
-describe('flow strip rail geometry (§B.10a — Reflow 1.4.10 / Resize 1.4.4)', () => {
+describe('flow strip rail geometry (Reflow 1.4.10 / Resize 1.4.4)', () => {
   beforeEach(() => {
     card = document.createElement('div');
     card.style.background = 'var(--card)';

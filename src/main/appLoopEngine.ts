@@ -204,19 +204,19 @@ export interface AppLoopEngine {
    *  refactor round, S3/S4/S5). */
   completionPredicates: LoopCompletionPredicates;
   /** §27.10 — free to accept a new turn: the runner is idle AND no accepted-but-not-yet-requested turn
-   *  occupies it (the §B.20a deferral gap counts as in-flight, so a second entry in the gap is refused). */
+   *  occupies it (the deferral gap counts as in-flight, so a second entry in the gap is refused). */
   canEnter(): boolean;
-  /** §27.10 — enter a work turn. With `opts.deferRequest` (§B.20a / §B.5 item 6) the turn is ACCEPTED
+  /** §27.10 — enter a work turn. With `opts.deferRequest` the turn is ACCEPTED
    *  (answers `'entered'`, occupies the runner, persists `working`) but its `requestTurn` is DEFERRED to a
    *  caller-supplied trigger — the coordinator fires `triggerDeferredTurn` from the skill injection's own
    *  completion so the two injections never share the agent's input line (AC10/CWE-74). Without the flag the
    *  request fires synchronously on the initial arm, exactly as before. */
   enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry, opts?: { deferRequest?: boolean; slice?: number }): AppLoopEnterResult;
-  /** §B.20a — fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm (§B.5 item 4b): re-arm
+  /** Fire a turn deferred by `enter({ deferRequest })` on the CHAINED arm: re-arm
    *  quiescence and wait for a fresh settle before injecting the boundary, so the deferred turn cannot race
    *  the skill injection whose completion triggered it. Inert if no turn is awaiting its trigger. */
   triggerDeferredTurn(): void;
-  /** §B.20a / §B.5 item 6(a) — abandon a turn deferred by `enter({ deferRequest })` without requesting it,
+  /** Abandon a turn deferred by `enter({ deferRequest })` without requesting it,
    *  freeing the runner. The coordinator calls this on the deferral's deadline lapse before it reverts the
    *  step, so a turn is never left un-requested with the runner occupied. Inert if no turn is awaiting. */
   cancelDeferredTurn(): void;
@@ -529,9 +529,9 @@ function activeTurnFor(
 
 export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let active: ActiveAppTurn | null = null;
-  // §B.20a — a turn accepted by `enter({ deferRequest })` whose `requestTurn` is deferred to a caller
+  // A turn accepted by `enter({ deferRequest })` whose `requestTurn` is deferred to a caller
   // trigger. Set true from `entered` until `triggerDeferredTurn`/`cancelDeferredTurn`; while true the runner
-  // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle (§B.5 item 6(b)).
+  // reads as occupied (canEnter/enter refuse) even though `runner.state()` is still idle.
   let awaitingTrigger = false;
   // §28.5.3 — the RED/GREEN turn whose async completion gate is currently in flight. The host done-file watcher
   // (turnDoneFile) is NOT debounced — it leans on the runner being synchronously idempotent — but the async gate
@@ -1361,9 +1361,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
     }
     persist('working');
-    // §B.20a — with `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
+    // With `defer`, ACCEPT the turn but hold its request for a caller trigger: the coordinator fires
     // it from the skill injection's completion so the two never share the input line (AC10/CWE-74). The
-    // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap (§B.5 item 6(b)).
+    // `awaitingTrigger` flag makes canEnter/enter treat the turn as in-flight across the gap.
     if (defer) {
       awaitingTrigger = true;
       return;
@@ -1686,13 +1686,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     triggerDeferredTurn() {
       if (!awaitingTrigger || !active) return;
       awaitingTrigger = false;
-      // §B.5 item 4b — the chained arm: re-arm quiescence and wait for a fresh settle, never inject on the
+      // The chained arm: re-arm quiescence and wait for a fresh settle, never inject on the
       // stale quiet the just-submitted skill left behind.
       runner.requestTurn(active.turnKey, { preamble: active.boundaryCmd, forceChained: true });
     },
     cancelDeferredTurn() {
       if (!awaitingTrigger) return;
-      // §B.5 item 6(a) — the deadline lapsed with no completion signal: drop the accepted-but-unrequested
+      // The deadline lapsed with no completion signal: drop the accepted-but-unrequested
       // turn so the runner is free, then the coordinator reverts the flow step. No request was ever issued.
       awaitingTrigger = false;
       active = null;

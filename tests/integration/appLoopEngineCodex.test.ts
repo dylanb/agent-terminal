@@ -5,7 +5,7 @@ import type { AgentKind } from '../../src/main/agentKind';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { createAppLoopEngineHarness } from '../helpers/appLoopEngineHarness';
 
-// §27.4 (v2.201) — the engine names each reviewer the way the hosted agent installs it: a Claude Code
+// §27.4 — the engine names each reviewer the way the hosted agent installs it: a Claude Code
 // sub-agent by its subagent_type, a Codex custom agent by its Codex name.
 
 const h = createAppLoopEngineHarness();
@@ -35,7 +35,7 @@ const reviewPrompt = (): string => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('under Codex the turns name each reviewer as its Codex agent (§27.4 v2.201)', () => {
+describe('under Codex the turns name each reviewer as its Codex agent (§27.4)', () => {
   it('a review-and-fix round spawns the Codex agents by name, never a Claude Code subagent_type', () => {
     const engine = engineFor('codex');
     driveToReviewInjected(engine);

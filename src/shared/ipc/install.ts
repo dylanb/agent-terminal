@@ -73,7 +73,7 @@ export type InstallExamplesPreview =
       previewId: InstallPreviewId;
       destinations: InstallDestinationPreview[];
       retired: RetiredExample[];
-      /** §18.1 v2.212: the retired flow the installed fallback flow.yaml still is, or null. */
+      /** §18.1: the retired flow the installed fallback flow.yaml still is, or null. */
       retiredFallback: string | null;
     }
   | { ok: false; error: string };
@@ -86,7 +86,7 @@ export interface InstallExamplesApplyMsg {
   removeRetired: boolean;
 }
 
-/** §18.1 v2.212. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
+/** §18.1. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
 export interface RetiredExample {
   destination: InstallDestinationId;
   rel: DestRelativePath;
@@ -115,7 +115,7 @@ export interface InstallExamplesWritten {
 }
 
 /** A destination skipped because the tool it installs for is absent: `root` is that tool's home, which does
- *  not exist (§18.1 v2.199). */
+ *  not exist (§18.1). */
 export interface InstallDestinationNotInstalled {
   destination: InstallDestinationId;
   root: string;

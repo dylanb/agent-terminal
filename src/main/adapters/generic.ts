@@ -1,4 +1,4 @@
-// Baseline capture (§15.3). Coupling with the scanner (§15.3 / v2.22): this relies on the window
+// Baseline capture (§15.3). Coupling with the scanner (§15.3): this relies on the window
 // already opening at the stability frontier or a provisional run's own start, so it never walks up
 // past startRow; the scanner's positional dedup merges a run re-gathered across a quiet pause.
 // Buffer-agnostic: it reads whatever rows the scanner hands it, so on-demand capture (§21.1) drives

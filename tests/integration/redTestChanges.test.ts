@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { readRedTestChanges, recordRedTestChanges, redTestChangesArtifact } from '../../src/main/redTestChanges';
 import { MAX_CHANGED_TEST_PATHS } from '../../src/main/appLoopState';
 
-// §28.5.1 (v2.210) — the record of every RED test a later step changed, kept for the whole branch so the
+// §28.5.1 — the record of every RED test a later step changed, kept for the whole branch so the
 // implementation approval can list each one. Real temp files, no fs mocks.
 
 describe('the RED test change record', () => {

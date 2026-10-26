@@ -138,7 +138,7 @@ describe('§28.4/§28.5.5 — the work.completion discriminator', () => {
   });
 });
 
-// §28.5.1 (v2.210) — a loop with no frozen-check completion opts its `auto` approve into the engine's frozen check.
+// §28.5.1 — a loop with no frozen-check completion opts its `auto` approve into the engine's frozen check.
 describe('work.frozen_check', () => {
   const addFrozenCheck = (value: string) => (y: string): string => y.replace(ARTIFACT_LINE, `${ARTIFACT_LINE}  frozen_check: ${value}\n`);
 

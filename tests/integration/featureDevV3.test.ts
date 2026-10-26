@@ -11,7 +11,7 @@ import { GOAL_NO_CHANGE_CLAUSE } from '../../src/main/reviewTurn';
 import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 import { redTestChangesArtifact } from '../../src/main/redTestChanges';
 
-// feature-dev-v3 (v2.200, v2.201) — grooming in three steps: an interview that settles
+// feature-dev-v3 — grooming in three steps: an interview that settles
 // the intent and what may be decided without the operator, a goal session that grooms and reviews until a review
 // pass finds nothing, and a presentation the operator approves as is or fixes in that same session. Each
 // implementation step is then a goal session that reviews its own work and logs its decisions, and one final
@@ -132,7 +132,7 @@ describe('the three groom loops', () => {
   });
 });
 
-describe('each implementation step is a goal session that reviews its own work (v2.201)', () => {
+describe('each implementation step is a goal session that reviews its own work', () => {
   const CODE_LOOP_SHAPE: Record<string, { completion: string | null; polish: string; personas: string[] }> = {
     'infra-loop': {
       completion: null,

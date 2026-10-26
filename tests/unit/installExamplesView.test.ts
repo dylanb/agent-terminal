@@ -175,7 +175,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(prompt()).toBeNull();
   });
 
-  describe('removing what the retired flows left behind (§18.1 v2.212)', () => {
+  describe('removing what the retired flows left behind (§18.1)', () => {
     const retiredBox = (): HTMLInputElement | null => host.querySelector('.flow-modal input[type="checkbox"][data-retired]');
 
     async function openWithRetired(conflicts: InstallDestinationId[], apply: InstallExamplesDeps['apply']): Promise<void> {
@@ -341,7 +341,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(reportGroup('commands')?.textContent).not.toContain('plan-loop.yaml');
   });
 
-  it('reports a destination skipped because its tool is not installed, naming the missing directory (§18.1 v2.199)', async () => {
+  it('reports a destination skipped because its tool is not installed, naming the missing directory (§18.1)', async () => {
     const apply = vi.fn(async () => okResult({ notInstalled: [{ destination: 'codexLoops', root: '/home/u/.codex' }] }));
     createInstallExamples(host, deps({ apply }));
     button().click();

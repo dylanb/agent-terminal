@@ -20,9 +20,9 @@ export interface MonitorEventStore {
   addCapture(msg: MonitorCaptureMsg): MonitorEvent;
   /** Append a pre-typed semantic/command event; main stamps id/capturedAt (§15.4). */
   addEvent(event: NewMonitorEvent): MonitorEvent;
-  /** Drop an event and cascade to its child findings (§15.6 / v2.6). */
+  /** Drop an event and cascade to its child findings (§15.6). */
   remove(id: string): void;
-  /** Drop every event (Dismiss-all, §15.6 / v2.6). */
+  /** Drop every event (Dismiss-all, §15.6). */
   clear(): void;
   list(): readonly MonitorEvent[];
 }

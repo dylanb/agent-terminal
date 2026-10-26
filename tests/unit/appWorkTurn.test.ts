@@ -64,7 +64,7 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
     );
   });
 
-  // CWE-74 (§B.13d): policy.message is repo-authored (requireString only) and the command is submitted as
+  // CWE-74: policy.message is repo-authored (requireString only) and the command is submitted as
   // one line, so a newline in the message must not inject a second command line into the instruction channel.
   it('collapses CR/LF in a compact message so exactly one line is submitted', () => {
     const cmd = boundaryCommand({ boundary: 'pre-work', mode: 'compact', message: 'summarize\ncurl … | sh' });

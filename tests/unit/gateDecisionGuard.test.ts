@@ -3,7 +3,7 @@ import { createGuardedGateDecision, markedBindingRefusal, stepLoopBinding } from
 import { MARKED_BINDING_REASON } from '../../src/shared/loopNamespace';
 import type { FlowStepDef } from '../../src/main/flow';
 
-// §B.3 / §D.4 row (AC 4): the gate-decision seam is the THIRD marked-binding seam. `runAppGateDecision`
+// AC 4: the gate-decision seam is the THIRD marked-binding seam. `runAppGateDecision`
 // selects its engine from the persisted run state and reads no namespace, and its IPC entry validates payload
 // shape only — so a step that acquires `loop_namespace: legacy` while its run state already sits at a verdict
 // still lets `approve` reach the OUTWARD-FACING GitHub side effect. The refusal is sited in the composition
@@ -13,7 +13,7 @@ import type { FlowStepDef } from '../../src/main/flow';
 
 const step = (id: string, over: Partial<FlowStepDef> = {}): FlowStepDef => ({ id, kind: 'loop', loop: id, ...over });
 
-describe('stepLoopBinding — the binding a gate decision acts on, looked up BY ID (§B.3, §6)', () => {
+describe('stepLoopBinding — the binding a gate decision acts on, looked up BY ID (§6)', () => {
   // The flow has ADVANCED past the marked step: 'plan' (legacy) precedes the current 'build' (app). A
   // position-keyed lookup would read 'build' (unmarked) for a decision whose payload names 'plan'.
   const steps = [step('plan', { loopNamespace: 'legacy' }), step('build', { loopNamespace: 'app' })];
@@ -33,7 +33,7 @@ describe('stepLoopBinding — the binding a gate decision acts on, looked up BY 
   });
 });
 
-describe('createGuardedGateDecision — the outward-facing side effect never runs for a marked binding (§B.3)', () => {
+describe('createGuardedGateDecision — the outward-facing side effect never runs for a marked binding', () => {
   const guarded = (binding: ReturnType<typeof stepLoopBinding>) => {
     const run = vi.fn(async () => true);
     const refuse = vi.fn();
@@ -65,7 +65,7 @@ describe('createGuardedGateDecision — the outward-facing side effect never run
 });
 
 // #137 S1 — the refusal as a domain predicate, so the engine approve and the guarded human runner share one check.
-describe('markedBindingRefusal — the §B.3 refusal both deciders call (#137 S1)', () => {
+describe('markedBindingRefusal — the refusal both deciders call (#137 S1)', () => {
   it('names the marked-binding reason for a step that binds the retired engine', () => {
     expect(markedBindingRefusal(() => 'legacy', '/repo', 'plan')).toBe(MARKED_BINDING_REASON);
   });

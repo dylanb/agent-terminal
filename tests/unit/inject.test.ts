@@ -128,7 +128,7 @@ describe('createInjector (§9.3)', () => {
   });
 });
 
-describe('createInjector completion channel (§B.13c — causal chaining off injection, not a timer)', () => {
+describe('createInjector completion channel (causal chaining off injection, not a timer)', () => {
   let written: string[];
   let inject: ReturnType<typeof createInjector>;
 

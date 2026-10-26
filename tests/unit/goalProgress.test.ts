@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { exampleGoalProgress, GOAL_PROGRESS_STATUSES, goalLegEnd, parseGoalProgress, readGoalProgress } from '../../src/shared/goalProgress';
 
-// §27.3 (v2.201) — a goal session records the state the engine acts on as JSON, and keeps its own notes apart.
+// §27.3 — a goal session records the state the engine acts on as JSON, and keeps its own notes apart.
 // The engine reads the leg, the status and, when blocked, what the session needs from the operator.
 
-describe('the goal progress the engine reads (§27.3 v2.201)', () => {
+describe('the goal progress the engine reads (§27.3)', () => {
   it.each(GOAL_PROGRESS_STATUSES)('the %s example is well-formed and reads back as itself', (status) => {
     expect(parseGoalProgress(exampleGoalProgress(3, status))).toMatchObject({ leg: 3, status });
   });
@@ -50,7 +50,7 @@ describe('the goal progress the engine reads (§27.3 v2.201)', () => {
   });
 });
 
-describe('whether a progress file ends this leg (§27.3 v2.201)', () => {
+describe('whether a progress file ends this leg (§27.3)', () => {
   it.each([
     ['done', 2, true],
     ['checkpoint', 2, true],

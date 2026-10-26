@@ -911,7 +911,7 @@ describe('autoGate — S1 fail-closed halts from real captures (N9b.6)', () => {
     expect(rig.approvals.map((a) => a.decider)).toEqual(['engine']);
   });
 
-  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included (v2.184 (9)).
+  // AC5 — `auto` is honoured whatever LoopDef tier supplies the step's def, the repo's own included.
   it('a def only in the repo tier: the clean gate is engine-decided with no halt', async () => {
     rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
     plantDef(DEF_YAML, join(repoDir, 'loops'));
@@ -1819,7 +1819,7 @@ describe('autoGate — the engine approve\'s advance is step-scoped (#137 S1)', 
 });
 
 // Plan row "Engine shares the human approve's deps and guard" (S1): the engine approve goes through
-// `composeEngineApprove`, so the §B.3 marked-binding refusal and the per-worktree deps factory are the human path's own.
+// `composeEngineApprove`, so the marked-binding refusal and the per-worktree deps factory are the human path's own.
 describe('autoGate — the engine approve shares the human approve\'s deps and guard (#137 S1)', () => {
   let git: ReturnType<typeof createGitRepoFixture>;
   beforeEach(() => {
@@ -2797,7 +2797,7 @@ describe('autoGate — the approve-time frozen check (AC12, N9b.7, #137 S4)', { 
     expect(lines.filter((l) => !l.startsWith('0 '))).toEqual([]);
   });
 
-  it('every git read of the check runs under the repo\'s own git config: no hooks-path or fsmonitor override (v2.184 (10))', async () => {
+  it('every git read of the check runs under the repo\'s own git config: no hooks-path or fsmonitor override', async () => {
     const log = join(scratch('autogate-config-'), 'git.log');
     const stub = installPathGitStub([{ argvPrefix: [], script: `printf '%s\\n' "$*" >> ${shellQuote(log)}` }]);
     disposers.push(stub.dispose);

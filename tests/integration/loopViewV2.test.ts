@@ -341,7 +341,7 @@ describe('deriveAppLoopView — live-error fallback when the persisted state can
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
   });
 
-  it('says a stalled turn is stalled, so the panel can say how to get the agent going (§27.12 v2.201)', () => {
+  it('says a stalled turn is stalled, so the panel can say how to get the agent going (§27.12)', () => {
     plant('plan-loop', ['approve']);
     const live = { kind: 'turn-error' as const, loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'stalled: no terminal activity' };
     expect(deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir }, { ...live, stalled: true }).stalled).toBe(true);

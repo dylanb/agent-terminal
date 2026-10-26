@@ -147,7 +147,7 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    // Keyed on the EFFECTIVE notices the strip holds (§B.10 carrier), NOT `state.notice`: a passive
+    // Keyed on the EFFECTIVE notices the strip holds, NOT `state.notice`: a passive
     // re-pull whose only delta is the absent transport notice leaves the effective set unchanged, so the
     // signature is unchanged, the held `.flow-notice` node stays, and the notice is not re-announced
     // into the role=status region (WCAG 4.1.3).
@@ -239,8 +239,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
   let refreshGeneration = 0;
-  // §B.10 carrier (AC 5): a transition-supplied notice — and the coordinator's asynchronous §19.3 refusal
-  // (§B.5 item 6) — is held here rather than in `state.notice`, because the ordinary success push drives a
+  // AC 5: a transition-supplied notice — and the coordinator's asynchronous §19.3 refusal
+  // — is held here rather than in `state.notice`, because the ordinary success push drives a
   // passive `flow:state` re-pull whose view carries no `notice`, which would otherwise wipe the migration
   // line before the operator reads it. Held across passive re-pulls, cleared by the next TRANSITION (or a
   // repo change). A re-pull carrying its OWN notice JOINS it — the two arrive on different responses, so the
@@ -428,7 +428,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(terminateButton());
     }
 
-    // §B.10 carrier (AC 5): a notice rides a transition response, OR a `state` response when an
+    // AC 5: a notice rides a transition response, OR a `state` response when an
     // asynchronous producer (the coordinator's §19.3 refusal) has one pending; the strip holds it across
     // passive re-pulls and clears it at the next transition. Each held notice renders its own line so a
     // migration notice and a later busy-refusal both show (neither drops the other).
@@ -465,7 +465,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  close if absent). Distinct from a plain render: a `state()` re-pull repaints without touching
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
-    // A TRANSITION resets the held notice set to whatever it carries (§B.10 carrier): the prior held
+    // A TRANSITION resets the held notice set to whatever it carries: the prior held
     // notices — a migration line, the coordinator's async refusal — clear here, never on a passive re-pull.
     heldNotices = view.notice ? [view.notice] : [];
     render(view);
@@ -519,7 +519,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return; // keep the last rendered UI
     }
     if (disposed || repoKey !== key || generation !== refreshGeneration) return;
-    // §B.10 carrier: a passive re-pull carrying its OWN notice (the coordinator's async §19.3 refusal)
+    // A passive re-pull carrying its OWN notice (the coordinator's async §19.3 refusal)
     // joins the held set before the signature is computed, so it forces a render and both lines show; a
     // re-pull with no notice leaves the set unchanged and self-clears nothing.
     absorbNotice(view.notice);
@@ -549,7 +549,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const changed = repoKey !== key;
       repoKey = key;
       lastSig = null; // force a full structural render for the new repo — never patch across repos
-      heldNotices = []; // §B.10 — a notice never survives a repo change (it belongs to the prior repo's step)
+      heldNotices = []; // a notice never survives a repo change (it belongs to the prior repo's step)
       if (changed) {
         host.replaceChildren();
         deps.onStatusBar(IDLE_STATUS_BAR, null);

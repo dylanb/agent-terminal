@@ -81,9 +81,9 @@ export interface MonitorCaptureMsg {
 }
 
 /**
- * Typed semantic/command regions plus the manual `capture` (§15.4 / v2.6). `report` is an agent
+ * Typed semantic/command regions plus the manual `capture` (§15.4). `report` is an agent
  * report group; `finding` is one individually-actionable item inside it (linked via `parentId`).
- * `completion` is reserved/unused — permission/question detection was removed in v2.6.
+ * `completion` is reserved/unused — permission/question detection was removed.
  */
 export type MonitorEventType =
   | 'capture'
@@ -105,7 +105,7 @@ export interface MonitorEvent {
   source: MonitorEventSource;
   text: string;
   range: SelectionRange | null;
-  /** A `finding`'s parent `report` id; null for top-level events (§15.4 / v2.6). */
+  /** A `finding`'s parent `report` id; null for top-level events (§15.4). */
   parentId: string | null;
   /** True when scrollback trim lost part of the region before extraction (§15.2). */
   truncated: boolean;
@@ -118,13 +118,13 @@ export interface CaptureLastMsg {
   sessionId: SessionId;
 }
 
-/** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6 / v2.6). */
+/** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6). */
 export interface DismissMsg {
   sessionId: SessionId;
   eventId: string;
 }
 
-/** Dismiss every captured event in the pane (§15.6 / v2.6). */
+/** Dismiss every captured event in the pane (§15.6). */
 export interface DismissAllMsg {
   sessionId: SessionId;
 }

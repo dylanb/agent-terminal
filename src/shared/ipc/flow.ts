@@ -288,7 +288,7 @@ export interface FlowStateView {
   /** A one-shot transient notice — the §19.3 running-process refusal when a skill couldn't be injected
    *  over a busy shell, or AC 5's migration notice (§24.2.2 S4). Carried on a transition response, or on a
    *  `state` response when an asynchronous producer (the bootstrap coordinator) has one pending; the strip
-   *  holds it across passive re-pulls and clears it on the next transition (§B.5 carrier). */
+   *  holds it across passive re-pulls and clears it on the next transition. */
   notice?: string;
   /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
    *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
@@ -322,12 +322,12 @@ export interface FlowStateView {
   runStarted: StartednessSignal;
   /** §18.7.3 */
   runHold?: HeldRunView;
-  /** §27.13 v2.211 — present while the run is held for the operator to confirm its ticket and pull request. */
+  /** §27.13 — present while the run is held for the operator to confirm its ticket and pull request. */
   pickupConfirm?: PickupConfirmView;
 }
 
 
-/** §27.13 v2.211 */
+/** §27.13 */
 export type PickupConfirmView =
   | { run: RunIdentity; state: 'looking' }
   | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
@@ -433,7 +433,7 @@ export interface FlowRequestMsg {
   repoKey: string;
 }
 
-/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.185. */
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional. */
 export interface FlowAdvanceMsg extends FlowRequestMsg {
   step?: string;
 }
@@ -649,7 +649,7 @@ export interface FlowApi {
   /** not_started → in_progress; rejects if not currently not_started. */
   start(repoKey: string): Promise<FlowStateView>;
   /** in_progress → done; rejects if not currently in_progress. `step`, when given, names the step the caller
-   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6 v2.185). */
+   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6). */
   advance(repoKey: string, step?: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
@@ -677,7 +677,7 @@ export interface FlowApi {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** §18.7.3 */
   rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
-  /** §27.13 v2.211 */
+  /** §27.13 */
   confirmRunPickup(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */

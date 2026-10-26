@@ -484,10 +484,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     ...(notice ? { notice } : {}),
   });
 
-  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (§B.10 carrier, AC5)', async () => {
+  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (AC5)', async () => {
     // AC 5's migration notice arrives on the transition that enters the step; the ordinary success push
     // then drives a passive state re-pull carrying NO notice. Under the pre-sweep one-shot rule that
-    // re-pull erased it before the operator could read it — the defect §B.5 position 6 names. The strip
+    // re-pull erased it before the operator could read it . The strip
     // now holds it across passive re-pulls and drops it only on the next transition.
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()), // passive pulls carry no notice
@@ -510,7 +510,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const noticeNode = host.querySelector('.flow-notice'); // the node the transition created
 
     await strip.refresh(); // passive re-pull, state() carries no notice → HELD, not erased
-    // §D.4 row 2838(c) / WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
+    // WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
     // role=status region would re-announce the unchanged notice to assistive tech. Identity, not presence.
     expect(host.querySelector('.flow-notice')).toBe(noticeNode);
 
@@ -518,9 +518,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
   });
 
-  it('joins a passive re-pull\'s own notice to the held transition notice — both render (§B.10 carrier, AC5+AC10)', async () => {
-    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal (§B.5 item
-    // 6) arrives on a LATER passive state push. They are on different responses, so the seam cannot join
+  it('joins a passive re-pull\'s own notice to the held transition notice — both render (AC5+AC10)', async () => {
+    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal
+    // arrives on a LATER passive state push. They are on different responses, so the seam cannot join
     // them — the strip must, and neither may drop the other.
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
@@ -548,7 +548,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(notices).toContain('agent is busy');
   });
 
-  it('clears the held notice on a repo change — it belongs to the prior repo\'s step (§B.10 carrier)', async () => {
+  it('clears the held notice on a repo change — it belongs to the prior repo\'s step', async () => {
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
       start: vi.fn(),

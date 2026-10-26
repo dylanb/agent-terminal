@@ -5,7 +5,7 @@ import { assertRendersFromHostDocument } from './relocatable';
 import type { ConfirmRunPickupResult, FlowStateView, PickupConfirmView } from '../../src/shared/ipc';
 import type { FlowViewArgs } from '../../src/renderer/src/flowView';
 
-// §27.13 v2.211 — a run held for its ticket and pull request asks the operator to confirm (or correct) what the app
+// §27.13 — a run held for its ticket and pull request asks the operator to confirm (or correct) what the app
 // found, and keeps asking until a confirm GitHub backs.
 
 const RUN = { flow: 'feature-dev-v3', startedAt: 1792407818398 };
