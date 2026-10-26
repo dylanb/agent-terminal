@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { generateShim } from '../../src/main/cliShim';
+import { dirname, join, resolve } from 'node:path';
+import { generateShim, type LaunchInvocation } from '../../src/main/cliShim';
 
 // Process-level behavior of the generated shim (§23.4 / #25): run the REAL generated script through
 // /bin/sh and observe what it forwards across the OS boundary, with a recorder standing in for the app
@@ -119,5 +119,106 @@ describe('shim injection safety (§23.4 trust boundary, CWE-78)', () => {
   it('treats a leading -- argument as a directory operand, not a launcher flag', async () => {
     recorderShim();
     expect(await runShim(['--foo'])).toBe(join(realCwd, '--foo'));
+  });
+});
+
+describe('shim --controller (§23.5)', () => {
+  /** A stand-in binary at `file` that records `<label>:<args>` to recOut, then exits. */
+  function recorderAt(file: string, label: string, extra = ''): void {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `#!/bin/sh\n${extra}printf '%s' "${label}:$*" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
+    chmodSync(file, 0o755);
+  }
+
+  function shimFor(invocation: LaunchInvocation): void {
+    shimPath = join(work, 'agent-terminal');
+    writeFileSync(shimPath, generateShim(invocation));
+    chmodSync(shimPath, 0o755);
+  }
+
+  const macBinary = (dir: string, name: string): string => join(dir, `${name}.app`, 'Contents', 'MacOS', name);
+
+  it('launches the macOS controller from the build output beside the terminal build', async () => {
+    const terminal = macBinary(join(work, 'dist', 'mac-arm64'), 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    recorderAt(macBinary(join(work, 'dist', 'controller', 'mac-arm64'), 'agent-terminal-controller'), 'controller');
+    shimFor({ execPath: terminal, appArgs: [] });
+    expect(await runShim(['--controller'])).toBe('controller:');
+  });
+
+  it('launches a macOS controller app installed next to the terminal app', async () => {
+    const terminal = macBinary(join(work, 'Applications'), 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    recorderAt(macBinary(join(work, 'Applications'), 'agent-terminal-controller'), 'controller');
+    shimFor({ execPath: terminal, appArgs: [] });
+    expect(await runShim(['--controller'])).toBe('controller:');
+  });
+
+  it('launches the Linux controller from the build output beside the terminal build', async () => {
+    const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    recorderAt(join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'), 'controller');
+    shimFor({ execPath: terminal, appArgs: [] });
+    expect(await runShim(['--controller'])).toBe('controller:');
+  });
+
+  it('launches a Linux controller installed next to the terminal install', async () => {
+    const terminal = join(work, 'opt', 'agent-terminal', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    recorderAt(join(work, 'opt', 'agent-terminal-controller', 'agent-terminal-controller'), 'controller');
+    shimFor({ execPath: terminal, appArgs: [] });
+    expect(await runShim(['--controller'])).toBe('controller:');
+  });
+
+  it('launches the dev controller entry with the same Electron as the dev terminal', async () => {
+    const electron = join(work, 'electron');
+    recorderAt(electron, 'electron');
+    const mainDir = join(work, 'out', 'main');
+    mkdirSync(mainDir, { recursive: true });
+    writeFileSync(join(mainDir, 'index.js'), '');
+    writeFileSync(join(mainDir, 'controller.js'), '');
+    shimFor({ execPath: electron, appArgs: [join(mainDir, 'index.js')] });
+    expect(await runShim(['--controller'])).toBe(`electron:${join(mainDir, 'controller.js')}`);
+  });
+
+  it('finds a controller that appeared after the launcher was installed', async () => {
+    const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    shimFor({ execPath: terminal, appArgs: [] });
+    recorderAt(join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'), 'controller');
+    expect(await runShim(['--controller'])).toBe('controller:');
+  });
+
+  it('returns immediately without waiting for the controller to exit', async () => {
+    const go = join(work, 'go');
+    const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    recorderAt(
+      join(work, 'dist', 'controller', 'linux-arm64-unpacked', 'agent-terminal-controller'),
+      'controller',
+      `while [ ! -f "${go}" ]; do sleep 0.05; done\n`,
+    );
+    shimFor({ execPath: terminal, appArgs: [] });
+    execFileSync(shimPath, ['--controller'], { cwd: fixtureCwd, timeout: 5000 });
+    expect(existsSync(recOut)).toBe(false);
+    writeFileSync(go, '');
+    expect(await readWhenReady(recOut)).toBe('controller:');
+  });
+
+  it('fails visibly, launching nothing, when no controller is found', async () => {
+    const terminal = join(work, 'dist', 'linux-arm64-unpacked', 'agent-terminal');
+    recorderAt(terminal, 'terminal');
+    shimFor({ execPath: terminal, appArgs: [] });
+    const run = spawnSync(shimPath, ['--controller'], { cwd: fixtureCwd, timeout: 5000, encoding: 'utf8' });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toMatch(/controller/i);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(recOut)).toBe(false);
+  });
+
+  it('still treats a directory named --controller as a target when spelled as a path', async () => {
+    mkdirSync(join(fixtureCwd, '--controller'));
+    recorderShim();
+    expect(resolve(await runShim(['./--controller']))).toBe(join(realCwd, '--controller'));
   });
 });
