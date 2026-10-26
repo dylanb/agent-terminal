@@ -1063,7 +1063,7 @@ describe('§28.4.2 slice brief — persisted independently of the run-state docu
   });
 });
 
-describe('a goal session id (§27.3 v2.201)', () => {
+describe('a goal session id (§27.3)', () => {
   it('a new one is always one the run state keeps and reads back', async () => {
     const { newGoalSession, isGoalSession, serializeAppLoopState, parseAppLoopState } = await import('../../src/main/appLoopState');
     for (let i = 0; i < 20; i++) {

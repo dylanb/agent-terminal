@@ -71,7 +71,7 @@ export function composerTop(
 }
 
 /**
- * The highest row sealed final by a turn-complete composer (§15.3 / v2.22), or null when no
+ * The highest row sealed final by a turn-complete composer (§15.3), or null when no
  * composer frames the bottom — the turn may still be streaming, so nothing is witnessed sealed.
  */
 export function completedTurnFrontier(

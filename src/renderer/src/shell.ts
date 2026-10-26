@@ -1,8 +1,7 @@
 // The converged three-view shell frame (§22 / §24.1C): the app frame organism (UI-STANDARDS §1.3) —
 // touches only its host subtree plus the document element it themes, takes theme persistence as an
 // injected seam, and signals siblings only through the contract. The drawer docks as a layout column
-// (no scrim) so the terminal stays visible beside the capture pane for cross-highlight (§16.8, amends
-// §22.2 per v2.29).
+// (no scrim) so the terminal stays visible beside the capture pane for cross-highlight (§16.8, §22.2).
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';

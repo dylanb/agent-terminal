@@ -5,7 +5,7 @@ import { readPhaseResult } from '../../src/shared/phaseResult';
 import { consolidatorOutputProblems } from '../../src/shared/consolidatorOutput';
 import { roundReportProblems } from '../../src/shared/roundReport';
 
-// §27.12 (v2.202) — every agent-written JSON artifact the engine gates on is read the same way: a byte order mark
+// §27.12 — every agent-written JSON artifact the engine gates on is read the same way: a byte order mark
 // is tolerated, and text that is not a JSON object is named in the same fixed words, never the file's own.
 
 describe('reading an agent-written JSON artifact', () => {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { migrateBundledLoopDef, migrateBundledLoopDefOnEntry } from '../../src/main/migrateLoopDef';
 
-// §B.6 / AC 5 — the first time a loop step binds a def that resolves from the app bundle, the whole def tree
+// AC 5 — the first time a loop step binds a def that resolves from the app bundle, the whole def tree
 // is copied into the operator's config tier so they can edit it, and they are told ONCE. The copy is
 // best-effort: a failure degrades to "no copy, the step still runs on the bundle" and NEVER throws into the
 // transition path (CWE-703). These are integration tests over a real filesystem — no fs mock (CLAUDE.md).
@@ -12,7 +12,7 @@ import { migrateBundledLoopDef, migrateBundledLoopDefOnEntry } from '../../src/m
 const NAME = 'plan-loop';
 
 // A def is a DIRECTORY: `<name>.yaml` plus `charter/` and `prompts/` subtrees. The whole tree must copy —
-// a partial copy is precisely the def that parses and cannot compose (§B.6).
+// a partial copy is precisely the def that parses and cannot compose.
 function seedBundledDef(appBundledDir: string): void {
   const def = path.join(appBundledDir, NAME);
   mkdirSync(path.join(def, 'charter'), { recursive: true });
@@ -41,7 +41,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
+describe('migrateBundledLoopDef (AC 5)', () => {
   it('copies the WHOLE def tree into the operator tier and returns a notice naming the def', () => {
     seedBundledDef(appBundledDir);
 
@@ -131,7 +131,7 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
   });
 });
 
-// §D.4 (row 2842) / §B.6 — the position-6 migration TRIGGER. The write fires ONLY when resolution stopped at
+// The position-6 migration TRIGGER. The write fires ONLY when resolution stopped at
 // the app-bundled tier root the caller supplied, never on the operator tier's silence: resolveLoopDefV2 pushes
 // a repo `.agent-loop.yaml` override FIRST, so keying on silence would copy the bundle into the operator's own
 // tier at a cloned repo's request, where it then outranks the bundle for every repo forever (CWE-829/CWE-732).

@@ -66,7 +66,7 @@ describe('error dialog (§27.10 bootstrap-failure alert)', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it('strips display-control characters from the repo-authored title and message (CWE-117, §B.13e)', () => {
+  it('strips display-control characters from the repo-authored title and message (CWE-117)', () => {
     // Both fields are now first-time producers of repo-authored bytes: a cloned repo's in-repo v2 def can
     // reach `flow:onBootstrapError` (the origin refusal that stopped it is gone), and the step id lands in
     // the title. A U+202E (RTL override) must be neutralised at both sinks, exactly as the strip the

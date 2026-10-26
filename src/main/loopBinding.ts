@@ -1,4 +1,4 @@
-// §B.5 positions 2/4/5/6 — the loop entry seam's ONE domain answer for a bound loop step: resolve the def,
+// The loop entry seam's ONE domain answer for a bound loop step: resolve the def,
 // then either REFUSE (no def resolves; a declared bootstrap the def cannot satisfy; the §27 runner cannot
 // accept a turn now) or READY (optionally carrying AC 5's def-migration notice). The ORDER and the decisions
 // live here; the operator-facing EFFECTS — the resolver reason on the loop-error path, the deferred revert +
@@ -21,7 +21,7 @@ export interface LoopBindingPreparerDeps {
    *  app-namespace step with an unresolved def keeps the step today, so reverting would be an AC 2 change. */
   refuseUnresolved(reason: string): void;
   /** Positions 4/5 — surface the reason, and schedule the deferred, identity-guarded revert + push that rolls
-   *  the step back off the synchronous entry (§B.5 item 2), so the flow never sits `in_progress` with no run. */
+   *  the step back off the synchronous entry, so the flow never sits `in_progress` with no run. */
   refuseAndRevert(reason: string): void;
   /** Position 6 — copy the resolved def into the operator tier when it resolved from the app-bundled tier
    *  (AC 5), returning its one-shot notice; `null` for any other tier or when there is nothing to say. */
@@ -54,7 +54,7 @@ export function createLoopBindingPreparer(
 }
 
 /** The flow's identity for a repo at a moment — the tuple the deferred revert re-checks so a revert scheduled
- *  for one entry never lands on a different step/status/issue the flow has since moved to (§B.5 item 2). */
+ *  for one entry never lands on a different step/status/issue the flow has since moved to. */
 export interface FlowEntryIdentity {
   step: string;
   status: string;

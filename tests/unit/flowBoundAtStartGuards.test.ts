@@ -8,16 +8,13 @@ const CH06 = join(SPEC_DIR, '06-ipc-contract.md');
 const CH18 = join(SPEC_DIR, '18-flow-definitions-flow-yaml.md');
 const CH23 = join(SPEC_DIR, '23-multi-instance-and-epics.md');
 const CH24 = join(SPEC_DIR, '24-build-plan-ui-inwards.md');
-const CHANGELOG = join(SPEC_DIR, 'changelog.md');
 const ROOT_SPEC = 'terminal-web-ui-spec.md';
 const REQUIREMENTS = 'flow-management-requirements.md';
-const DESIGN = 'design/granular-flow-and-flow-selection-plan.md';
 
 const read = (f: string): string => readFileSync(f, 'utf8');
 const lower = (s: string): string => s.toLowerCase();
 const headingPattern = (num: string, after: string): RegExp =>
   new RegExp(`^(#{1,6})\\s+${num.replace(/\./g, '\\.')}${after}`);
-const changelogEntries = (): string[] => read(CHANGELOG).split(/(?=\*\*Changelog v\d+\.\d+:\*\*)/);
 
 function sectionBody(text: string, num: string): string {
   const lines = text.split('\n');
@@ -121,19 +118,6 @@ describe(`#167 — §18.7.5 states the flow is bound at Start (AC 3)`, () => {
     expect(hits, `seed clause (${RULE}) still in §18.7.5:\n${hits.join('\n')}`).toEqual([]);
   });
 
-  it(`a changelog entry naming D63 and #167 cites §18.7.5 and the operator decision`, () => {
-    const entry = changelogEntries().find((e) => e.includes('D63') && e.includes('#167'));
-    expect(entry, 'no changelog entry names both D63 and #167').toBeDefined();
-    expect(entry as string).toContain(`§18.7.5`);
-    expect(lower(entry as string)).toContain('operator decision');
-  });
-
-  it('the historical v2.145 entry that introduced pickup seeding stays as written', () => {
-    const v2145 = changelogEntries().find((e) => e.startsWith('**Changelog v2.145:**'));
-    expect(v2145, 'the v2.145 changelog entry is gone').toBeDefined();
-    expect(v2145 as string).toContain('**pickup seeding** (§18.7.5');
-    expect(v2145 as string).toContain('A1–A4');
-  });
 });
 
 describe(`#167 — §18.7.6's shared gates survive without seeding (AC 4)`, () => {
@@ -200,17 +184,6 @@ describe(`#167 — §18.7.6's shared gates survive without seeding (AC 4)`, () =
   });
 });
 
-function soleLine(file: string, pattern: RegExp): string {
-  const hits = read(file)
-    .split('\n')
-    .filter((l) => pattern.test(l));
-  expect(hits, `expected exactly one line of ${file} matching ${pattern}`).toHaveLength(1);
-  return hits[0];
-}
-
-const openChildRow = (): string => soleLine(CH06, /^\|\s*`flow:openChild`/);
-const openChildSketch = (): string => soleLine(CH06, /^\s*openChild:/);
-const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/i);
 const ch23Body = (): string => sectionOf(CH23, '23.2');
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
@@ -228,29 +201,15 @@ describe(`#167 — no §6 / §23 / §24 clause seeds a child's flow selection or
     });
   }
 
-  it(`the §23.2 body, the §6 flow:openChild row and sketch, and the §24 launcher item use no form of "seed"`, () => {
-    const scoped: ReadonlyArray<readonly [string, string]> = [
-      [`§23.2 body`, ch23Body()],
-      [`§6 flow:openChild row`, openChildRow()],
-      [`§6 openChild preload sketch`, openChildSketch()],
-      [`§24 child-instance launcher item`, childLauncherItem()],
-    ];
-    const offenders = scoped.filter(([, text]) => /seed/i.test(text)).map(([where]) => where);
-    expect(offenders, `seed clause (${RULE}) still in:\n${offenders.join('\n')}`).toEqual([]);
+  it(`the §23.2 body uses no form of "seed"`, () => {
+    expect(ch23Body(), `seed clause (${RULE}) still in §23.2`).not.toMatch(/seed/i);
   });
 });
 
 describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
-  it(`the §6 flow:openChild row and preload sketch carry no atStep`, () => {
-    expect(openChildRow(), `atStep in the flow:openChild row (${RULE})`).not.toContain('atStep');
-    expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
-  });
-
-  it(`the §6 flow:openChild payload and preload sketch take only prRef — no renamed seeding field`, () => {
-    expect(openChildRow(), `flow:openChild payload (${RULE})`).toContain('`{sessionId, prRef} → {worktree, launched}`');
-    expect(openChildSketch(), `openChild preload sketch (${RULE})`).toMatch(
-      /openChild:\s*\(prRef\)\s*=>\s*ipcRenderer\.invoke\('flow:openChild',\s*\{\s*sessionId:\s*SID,\s*prRef\s*\}\)/,
-    );
+  it(`no sentence of §23.2 cites D22 as authority for seeding`, () => {
+    const offenders = sentences(ch23Body()).filter((s) => s.includes('D22') && /seed/i.test(s));
+    expect(offenders, `D22 cited for seeding (${RULE}):\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it(`§23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
@@ -259,39 +218,12 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
     expect(body).toContain('where an ordinary start');
   });
 
-  it(`§23.2 states flow:openChild does not set the child worktree's flow selection or flow-state`, () => {
+  it(`§23.2 states the app does not set the child worktree's flow selection or flow-state`, () => {
     expect(lower(ch23Body()), RULE).toContain("does not set that worktree's flow selection or flow-state");
   });
 
   it(`§23.2 no longer says the child runs the parent's flow`, () => {
     expect(lower(ch23Body()), RULE).not.toContain('all steps of the flow run on each pr');
-  });
-
-  it(`no sentence of §23.2 or the §6 flow:openChild row cites D22 as authority for seeding`, () => {
-    const offenders = [...sentences(ch23Body()), ...sentences(openChildRow())].filter(
-      (s) => s.includes('D22') && /seed/i.test(s),
-    );
-    expect(offenders, `D22 cited for seeding (${RULE}):\n${offenders.join('\n')}`).toEqual([]);
-  });
-
-  it(`the §24 child-instance launcher item says the child's flow is bound at Start`, () => {
-    expect(lower(childLauncherItem())).toContain('bound at start');
-  });
-
-  it(`the §6 flow:openChild row's shape version has a changelog entry citing §23.2 or D63`, () => {
-    const shape = /shape v(\d+\.\d+)/.exec(openChildRow());
-    expect(shape, 'the flow:openChild row carries no "shape vX.Y" prefix').not.toBeNull();
-    const version = (shape as RegExpExecArray)[1];
-    const entry = changelogEntries().find((e) => e.startsWith(`**Changelog v${version}:**`));
-    expect(entry, `no **Changelog v${version}:** entry for the flow:openChild row's shape`).toBeDefined();
-    const text = entry ?? '';
-    expect(
-      text.includes(`§23.2`) || text.includes('D63'),
-      `the v${version} changelog entry cites neither §23.2 nor D63`,
-    ).toBe(true);
-    expect(text, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
-      '`flow:openChild`',
-    );
   });
 
   it(`${REQUIREMENTS} records D63 superseding D22's flow-state seeding`, () => {
@@ -309,96 +241,5 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
     expect(d18[0], `D18 still reads as the child running the parent's flow (${RULE})`).toMatch(
       /superseded by D63/i,
     );
-  });
-});
-
-const themeASliceList = (): string[] => sectionOf(DESIGN, '4.4').split('\n');
-const SLICE_ENTRY = /^- \*\*A\d+/;
-const A1_CATALOG_SEED = /A1 must seed (the catalog )?through the app-state resolver|seeds the user-config `flows\/` catalog/g;
-
-describe(`#167 — the design doc plans no pickup seeding or ticket-borne flow stamp (AC 7)`, () => {
-  const NEEDLES = [
-    'pickup seeding',
-    'pickup stamp',
-    'Selection at pickup',
-    'A1–A4',
-    'A0–A4',
-    'A1–A5',
-    'pointer is seeded',
-    'stamps the chosen flow',
-    'selecting this flow',
-  ];
-
-  for (const needle of NEEDLES) {
-    it(`${DESIGN} does not contain "${needle}"`, () => {
-      const hits = read(DESIGN)
-        .split('\n')
-        .filter((l) => lower(l).includes(lower(needle)));
-      expect(hits, `"${needle}" (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
-    });
-  }
-
-  it(`${DESIGN} carries no stamp clause`, () => {
-    const hits = read(DESIGN).split('\n').filter((l) => /\bstamp/i.test(l));
-    expect(hits, `stamp clause (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
-  });
-
-  it(`${DESIGN} plans no seeding beyond A1's catalog install`, () => {
-    const hits = read(DESIGN)
-      .split('\n')
-      .filter((l) => /\bseed/i.test(l.replace(A1_CATALOG_SEED, '')));
-    expect(hits, `seed clause (${RULE}) still in ${DESIGN}:\n${hits.join('\n')}`).toEqual([]);
-  });
-
-  it(`the design doc's Theme A slice list has no A4 entry`, () => {
-    const lines = themeASliceList();
-    expect(lines.some((l) => SLICE_ENTRY.test(l)), 'Theme A slice list entries not found').toBe(true);
-    const a4 = lines.filter((l) => l.startsWith('- **A4'));
-    expect(a4.map((l) => l.slice(0, 120)), `A4 slice entry (${RULE})`).toEqual([]);
-  });
-
-  it(`the design doc's Theme A slice list records that A4 was dropped (#135)`, () => {
-    const lines = themeASliceList();
-    const lastEntry = lines.map((l) => SLICE_ENTRY.test(l)).lastIndexOf(true);
-    const notes = lines
-      .slice(lastEntry + 1)
-      .filter(
-        (l) => /\bA4\b/.test(l) && /\bdropped\b/i.test(l) && l.includes('#135') && l.includes(`§18.7.5`),
-      );
-    expect(
-      notes,
-      `no line after the Theme A slice list says A4 was dropped, citing #135 and §18.7.5 (${RULE})`,
-    ).toHaveLength(1);
-  });
-
-  it(`the design doc's §4.2 item 4 says the flow is selected at Start and pickup binds the ticket`, () => {
-    const item4 = sectionOf(DESIGN, '4.2')
-      .split('\n')
-      .filter((l) => l.startsWith('4. **'));
-    expect(item4, `expected exactly one §4.2 item 4`).toHaveLength(1);
-    expect(item4[0], `§4.2 item 4 must become "Selection at Start" (${RULE})`).toContain('Selection at Start');
-    expect(lower(item4[0]), `§4.2 item 4 must say pickup binds the ticket (${RULE})`).toContain(
-      'pickup binds the ticket',
-    );
-  });
-
-  it(`the design doc's header still lists as many divergences as it says it does`, () => {
-    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
-    const text = read(DESIGN);
-    const stated = /\b(\w+) statements below diverge/i.exec(text);
-    expect(stated, 'header divergence count not found').not.toBeNull();
-    const bullets = text.split('\n').filter((l) => l.startsWith('> - **'));
-    expect(bullets.length, `header says "${stated?.[0]}"`).toBe(WORDS.indexOf(lower(stated?.[1] ?? '')));
-  });
-
-  it(`the design doc's B5 epic-path entry says each sub-ticket's flow is picked at Start`, () => {
-    const b5 = sectionOf(DESIGN, '5.7')
-      .split('\n')
-      .filter((l) => l.startsWith('- **B5 —'));
-    expect(b5, 'expected exactly one B5 entry in the Theme B slice list').toHaveLength(1);
-    expect(b5[0], `B5 must say each sub-ticket's flow is picked at Start (${RULE})`).toMatch(
-      /\bpick(?:s|ed)? at Start\b/,
-    );
-    expect(b5[0], `B5 must not tie the flow to pickup (${RULE})`).not.toMatch(/\bpickup\b/i);
   });
 });

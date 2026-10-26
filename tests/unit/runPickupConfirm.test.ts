@@ -11,7 +11,7 @@ import type { PullRequestLookup, PullRequest } from '../../src/main/pullRequestL
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
 import type { RunIdentity } from '../../src/main/gateRunState';
 
-// §27.13 v2.211 — a run past its pickup with no saved pickup is held until the operator confirms the ticket and PR
+// §27.13 — a run past its pickup with no saved pickup is held until the operator confirms the ticket and PR
 // the app worked out from the branch, GitHub and the flow's ticket input.
 
 const BRANCH = 'plan-loop/issue-218';

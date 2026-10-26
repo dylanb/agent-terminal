@@ -9,7 +9,7 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { APP_LOOP_DIR_SEGMENTS } from '../../src/main/appLoopPaths';
 import { createAppLoopEngineHarness, flushRedGate, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
-// §27.3 (v2.201) — a goal session keeps its progress in a file the engine reads at its done-signal. A leg
+// §27.3 — a goal session keeps its progress in a file the engine reads at its done-signal. A leg
 // that ran its passes checkpoints: the engine compacts the session and starts the next leg's /goal, which
 // resumes from that file. A session that cannot go on without the operator is blocked, and its step stops
 // for a human. A session that finished goes to the gate as before.
@@ -66,7 +66,7 @@ const signalAndDrain = (engine: ReturnType<typeof makeEngine>): void => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
+describe('a goal session keeps a progress file (§27.3)', () => {
   it('the prompt tells the session where its progress file is and which leg this is', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -206,7 +206,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
   });
 });
 
-describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3 v2.201)', () => {
+describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3)', () => {
   it('compacts the session, then starts leg 2 from the progress file', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -339,7 +339,7 @@ describe('a leg that ran its passes checkpoints and the next leg resumes (§27.3
   });
 });
 
-describe('the leg change itself (§27.3 v2.201)', () => {
+describe('the leg change itself (§27.3)', () => {
   const doneFile = (): string => join(h.repo, ...APP_LOOP_DIR_SEGMENTS, TURN_DONE_FILENAME);
 
   it('the finished leg done-signal no longer reads as this turn once the next leg is requested', () => {
@@ -385,7 +385,7 @@ describe('the leg change itself (§27.3 v2.201)', () => {
   });
 });
 
-describe('Accept on a stalled goal session follows what its progress file records (§27.3/§27.12c v2.201)', () => {
+describe('Accept on a stalled goal session follows what its progress file records (§27.3/§27.12c)', () => {
   const stalledWith = (progress: string | null): ReturnType<typeof makeEngine> => {
     const gateReaching = vi.fn();
     const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
@@ -450,7 +450,7 @@ describe('Accept on a stalled goal session follows what its progress file record
   });
 });
 
-describe('the stall help shows only while the turn can still finish by itself (§27.12 v2.201)', () => {
+describe('the stall help shows only while the turn can still finish by itself (§27.12)', () => {
   const failingComplete = (repoDir: string, state: Parameters<typeof writeAppLoopState>[1]): void => {
     if (state.status === 'complete') throw new Error('ENOSPC: no space left on device');
     writeAppLoopState(repoDir, state);
@@ -503,7 +503,7 @@ describe('the stall help shows only while the turn can still finish by itself (�
   });
 });
 
-describe('a blocked goal session stops its step for a human (§27.3 v2.201)', () => {
+describe('a blocked goal session stops its step for a human (§27.3)', () => {
   const BLOCKED = JSON.stringify({ leg: 1, status: 'blocked', blocked: 'The plan asks for both a modal and a page.' });
 
   it('reaches the gate with the verdict stop for a human and the reason it gave', () => {
@@ -673,7 +673,7 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
   });
 });
 
-describe('a stalled turn says it is stalled, and nothing restarts it (§27.12 v2.201)', () => {
+describe('a stalled turn says it is stalled, and nothing restarts it (§27.12)', () => {
   it('a turn that went quiet after its prompt is held as stalled, and its own done-signal still finishes it', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));

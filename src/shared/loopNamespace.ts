@@ -21,7 +21,7 @@ export const APP_LOOP_NAMESPACE: LoopNamespace = 'app';
 export const DEFAULT_LOOP_NAMESPACE: LoopNamespace = APP_LOOP_NAMESPACE;
 
 /** The retired in-terminal loop engine's namespace literal. It is no longer a legal MEMBER of the closed set, but the
- *  loader still RECOGNIZES it (§H.5) so a flow file that names it LOADS and fails per-step (AC 4) rather
+ *  loader still RECOGNIZES it so a flow file that names it LOADS and fails per-step (AC 4) rather
  *  than being rejected whole — tolerance for flow files that were valid until this release. It selects NO
  *  surviving engine. */
 export const RETIRED_LOOP_NAMESPACE = 'legacy';
@@ -32,13 +32,13 @@ export const RETIRED_LOOP_NAMESPACE = 'legacy';
 export type LoopBinding = LoopNamespace | typeof RETIRED_LOOP_NAMESPACE;
 
 /** True for a member of the surviving set only — the affirmative SELECTION test (never the negation of the
- *  deleted member), so a marked binding is unbindable by construction (§B.4). */
+ *  deleted member), so a marked binding is unbindable by construction. */
 export function isLoopNamespace(v: unknown): v is LoopNamespace {
   return typeof v === 'string' && (LOOP_NAMESPACES as readonly string[]).includes(v);
 }
 
 /** True for a value the loader can PARSE onto a step: a surviving namespace, or the retired `legacy` literal
- *  the loader still recognizes (§H.5). Any other value is an unrecognized namespace — a whole-file rejection
+ *  the loader still recognizes. Any other value is an unrecognized namespace — a whole-file rejection
  *  (AC 4). */
 export function isRecognizedLoopBinding(v: unknown): v is LoopBinding {
   return isLoopNamespace(v) || v === RETIRED_LOOP_NAMESPACE;

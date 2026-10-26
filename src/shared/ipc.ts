@@ -250,9 +250,9 @@ export interface MonitorCaptureMsg {
 }
 
 /**
- * Typed semantic/command regions plus the manual `capture` (§15.4 / v2.6). `report` is an agent
+ * Typed semantic/command regions plus the manual `capture` (§15.4). `report` is an agent
  * report group; `finding` is one individually-actionable item inside it (linked via `parentId`).
- * `completion` is reserved/unused — permission/question detection was removed in v2.6.
+ * `completion` is reserved/unused — permission/question detection was removed.
  */
 export type MonitorEventType =
   | 'capture'
@@ -274,7 +274,7 @@ export interface MonitorEvent {
   source: MonitorEventSource;
   text: string;
   range: SelectionRange | null;
-  /** A `finding`'s parent `report` id; null for top-level events (§15.4 / v2.6). */
+  /** A `finding`'s parent `report` id; null for top-level events (§15.4). */
   parentId: string | null;
   /** True when scrollback trim lost part of the region before extraction (§15.2). */
   truncated: boolean;
@@ -287,13 +287,13 @@ export interface CaptureLastMsg {
   sessionId: SessionId;
 }
 
-/** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6 / v2.6). */
+/** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6). */
 export interface DismissMsg {
   sessionId: SessionId;
   eventId: string;
 }
 
-/** Dismiss every captured event in the pane (§15.6 / v2.6). */
+/** Dismiss every captured event in the pane (§15.6). */
 export interface DismissAllMsg {
   sessionId: SessionId;
 }
@@ -600,7 +600,7 @@ export interface FlowStateView {
   /** A one-shot transient notice — the §19.3 running-process refusal when a skill couldn't be injected
    *  over a busy shell, or AC 5's migration notice (§24.2.2 S4). Carried on a transition response, or on a
    *  `state` response when an asynchronous producer (the bootstrap coordinator) has one pending; the strip
-   *  holds it across passive re-pulls and clears it on the next transition (§B.5 carrier). */
+   *  holds it across passive re-pulls and clears it on the next transition. */
   notice?: string;
   /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
    *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
@@ -634,12 +634,12 @@ export interface FlowStateView {
   runStarted: StartednessSignal;
   /** §18.7.3 */
   runHold?: HeldRunView;
-  /** §27.13 v2.211 — present while the run is held for the operator to confirm its ticket and pull request. */
+  /** §27.13 — present while the run is held for the operator to confirm its ticket and pull request. */
   pickupConfirm?: PickupConfirmView;
 }
 
 
-/** §27.13 v2.211 */
+/** §27.13 */
 export type PickupConfirmView =
   | { run: RunIdentity; state: 'looking' }
   | { run: RunIdentity; state: 'proposed'; branch: string | null; pr: number | null; ticket: number | null; problems: string[] };
@@ -745,7 +745,7 @@ export interface FlowRequestMsg {
   repoKey: string;
 }
 
-/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional since §6 v2.185. */
+/** flow:advance request: `step` is the step the strip showed (§27.9.1 N9b.5(e)); optional. */
 export interface FlowAdvanceMsg extends FlowRequestMsg {
   step?: string;
 }
@@ -970,8 +970,7 @@ export interface TodoTemplateList {
 }
 
 /** todoTemplate:list request (§6): the templates co-located with the repo's flow.yaml (§18.6).
- *  `repoKey` resolves the flow dir local-first-then-global (deviates from the v2.27 global-only
- *  sketch, since templates are now co-located). */
+ *  `repoKey` resolves the flow dir local-first-then-global, since templates are co-located. */
 export interface TodoTemplateListMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -1043,7 +1042,7 @@ export type InstallExamplesPreview =
       previewId: InstallPreviewId;
       destinations: InstallDestinationPreview[];
       retired: RetiredExample[];
-      /** §18.1 v2.212: the retired flow the installed fallback flow.yaml still is, or null. */
+      /** §18.1: the retired flow the installed fallback flow.yaml still is, or null. */
       retiredFallback: string | null;
     }
   | { ok: false; error: string };
@@ -1056,7 +1055,7 @@ export interface InstallExamplesApplyMsg {
   removeRetired: boolean;
 }
 
-/** §18.1 v2.212. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
+/** §18.1. `rel` is one entry directly under the destination's root: a whole folder or a single file. */
 export interface RetiredExample {
   destination: InstallDestinationId;
   rel: DestRelativePath;
@@ -1085,7 +1084,7 @@ export interface InstallExamplesWritten {
 }
 
 /** A destination skipped because the tool it installs for is absent: `root` is that tool's home, which does
- *  not exist (§18.1 v2.199). */
+ *  not exist (§18.1). */
 export interface InstallDestinationNotInstalled {
   destination: InstallDestinationId;
   root: string;
@@ -1196,7 +1195,7 @@ export interface FlowApi {
   /** not_started → in_progress; rejects if not currently not_started. */
   start(repoKey: string): Promise<FlowStateView>;
   /** in_progress → done; rejects if not currently in_progress. `step`, when given, names the step the caller
-   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6 v2.185). */
+   *  showed: an Advance naming a step the flow has left advances nothing (§27.9.1 N9b.5(e), §6). */
   advance(repoKey: string, step?: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
@@ -1224,7 +1223,7 @@ export interface FlowApi {
   listCatalog(repoKey: string): Promise<FlowCatalogListResult>;
   /** §18.7.3 */
   rebindHeldRun(repoKey: string, choice: RebindChoice, ifStepMissing: StepMissingConsent): Promise<RebindResult>;
-  /** §27.13 v2.211 */
+  /** §27.13 */
   confirmRunPickup(repoKey: string, run: RunIdentity, pr: number, ticket: number): Promise<ConfirmRunPickupResult>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */

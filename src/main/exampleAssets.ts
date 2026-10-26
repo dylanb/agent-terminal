@@ -32,7 +32,7 @@ export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'loops-v2');
 }
 
-/** §18.1 v2.199. */
+/** §18.1. */
 export function resolveExampleCodexSkillsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'codex-skills');
 }

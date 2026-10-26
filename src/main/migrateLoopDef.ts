@@ -1,4 +1,4 @@
-// §B.6 / AC 5 — copy a resolved app-bundled §27 loop def into the operator tier the first time a loop step
+// AC 5 — copy a resolved app-bundled §27 loop def into the operator tier the first time a loop step
 // binds it, so the operator can edit it, and tell them ONCE. Best-effort: a failure degrades to "no copy,
 // the step still runs on the app bundle" (CWE-703), never a throw into the transition path. The trigger — the
 // def resolved from `ctx.tiers.appBundled` — is the composition root's; this module only performs the copy.
@@ -11,7 +11,7 @@ import { readDirEntries } from './dirEntries';
 import { errMsg } from './errno';
 
 export interface MigrateBundledLoopDefParams {
-  /** The def name. Held to a single safe path segment by `resolveLoopDefV2` upstream (§B.6); both tier-root
+  /** The def name. Held to a single safe path segment by `resolveLoopDefV2` upstream; both tier-root
    *  joins below are independently confined (`confinedRealPath`), so a direct caller cannot escape either root. */
   name: string;
   /** The def directory relative to both tier roots: `<name>`, or `<flow>/<name>` for a flow's own folder
@@ -65,8 +65,8 @@ function confinedChild(rootDir: string, seg: string): string | null {
   return jail === null ? null : confinedRealPath(jail, path.join(jail, seg));
 }
 
-/** Copy `<appBundledDir>/<defRel>/**` into `<operatorDir>/<defRel>/` once, all-or-nothing (§B.6). Returns the
- *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
+/** Copy `<appBundledDir>/<defRel>/**` into `<operatorDir>/<defRel>/` once, all-or-nothing. Returns the
+ *  one-shot operator-facing notice to accumulate on the transition reply, or `null` when
  *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
  *  a tier root does not resolve or its `<root>/<defRel>` escapes it, or the source raced away after it
  *  resolved. NEVER throws. */
@@ -75,7 +75,7 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
   try {
     // The bundle is an installed artifact this build did not necessarily write, so the read is confined
     // exactly as the write is: a `..` or a symlink at `<root>/<defRel>` that escapes yields no path, so the
-    // read walks only what stays inside the bundle and the copy lands only inside the operator tier (§B.6).
+    // read walks only what stays inside the bundle and the copy lands only inside the operator tier.
     const destDir = confinedChild(operatorDir, defRel);
     const srcDir = confinedChild(appBundledDir, defRel);
     if (destDir === null || srcDir === null) return null;
@@ -84,10 +84,10 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
     const result = atomicWriteTreeSync(destDir, members, stageDir ? { stageDir } : {});
     if (result.ok) return migratedNotice(name);
     // A non-writable resolved tier root (0o555, the managed-machine case): the step still runs on the app
-    // bundle, so this carries a notice, not a refusal (§B.6). A benign already-present def is the silent case.
+    // bundle, so this carries a notice, not a refusal. A benign already-present def is the silent case.
     return result.cause === 'container-refused' ? containerRefusedNotice(name, operatorDir) : null;
   } catch (e) {
-    // errMsg alone (§B.6): the classification is answered inside the primitive off the destination's shape,
+    // errMsg alone: the classification is answered inside the primitive off the destination's shape,
     // so `isErrno` at the caller is both unimplementable (EACCES/ENOSPC are outside the closed union) and
     // wrong (it would re-key on errno the primitive deliberately does not). A failed write degrades to "no
     // copy, step still runs" and reports the real message rather than a bare failure.
@@ -95,7 +95,7 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
   }
 }
 
-/** The position-6 migration TRIGGER (§B.5/§B.6): decide whether entering `step` migrates its def, then do it.
+/** The position-6 migration TRIGGER: decide whether entering `step` migrates its def, then do it.
  *  The affirmative test is on WHERE RESOLUTION STOPPED — the app-bundled tier root the caller supplied — never
  *  on the operator tier's silence. `resolveLoopDefV2` pushes a repo `.agent-loop.yaml` `loops:` override FIRST,
  *  so keying on silence would copy the app bundle into the operator's own tier at a cloned repo's request,

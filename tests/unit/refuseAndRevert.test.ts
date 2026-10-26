@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRefuseAndRevert, type FlowEntryIdentity } from '../../src/main/loopBinding';
 
-// §B.5 positions 4/5 (AC 10) — the bootstrap-refusal EFFECT: surface the durable error, then DEFER an
+// AC 10 — the bootstrap-refusal EFFECT: surface the durable error, then DEFER an
 // identity-guarded revert + push so the flow never sits `in_progress` with no run. The entry action fires
 // inside advance's enter(view()), whose reply view was captured at the entered step; a synchronous revert's
 // push would be overwritten by that stale reply, so the revert rides a later tick and re-checks the entry
@@ -30,7 +30,7 @@ function harness(opts: { atEmit?: FlowEntryIdentity; atDefer?: FlowEntryIdentity
   return { refuse, emitError, revert, push, runDeferred: () => deferred?.() };
 }
 
-describe('createRefuseAndRevert — surface the error, then an identity-guarded deferred revert (§B.5 4/5)', () => {
+describe('createRefuseAndRevert — surface the error, then an identity-guarded deferred revert', () => {
   it('emits the durable bootstrap error for the entered step, synchronously', () => {
     const h = harness({ atEmit: ID({ step: 'build' }) });
     h.refuse('no pickup to run');

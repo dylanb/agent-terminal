@@ -1,4 +1,4 @@
-// §18.1 v2.199.
+// §18.1.
 
 import os from 'node:os';
 import path from 'node:path';

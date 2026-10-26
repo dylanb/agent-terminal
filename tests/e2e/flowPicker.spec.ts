@@ -177,7 +177,7 @@ function seedFailingPickupEntry(root: string, id: string, stepId: string): void 
   );
 }
 
-test('a first-step bootstrap failure leaves no run record: the picker unlocks with no Terminate, and a new Start runs (§18.7.4, v2.161)', { tag: '@ownapp' }, async () => {
+test('a first-step bootstrap failure leaves no run record: the picker unlocks with no Terminate, and a new Start runs (§18.7.4)', { tag: '@ownapp' }, async () => {
   const harness = createFlowPickerHarness();
   h = harness;
   seedFailingPickupEntry(harness.home, 'pickup-flow', 'p-first');

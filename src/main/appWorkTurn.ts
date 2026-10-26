@@ -23,7 +23,7 @@ import { ARTIFACT_CHECK_PASSED, checkerLines } from './artifactCheck';
 export function boundaryCommand(policy: BoundaryPolicy): string {
   // policy.message is repo-authored (loopDefV2 applies requireString only) and this command is submitted as
   // one line, so collapse every CR/LF before interpolating — a newline would otherwise inject a second
-  // command line into the agent's instruction channel (CWE-74, §B.13d).
+  // command line into the agent's instruction channel (CWE-74).
   return policy.mode === 'compact' ? `/compact ${(policy.message ?? '').replace(/[\r\n]+/g, ' ')}` : '/clear';
 }
 

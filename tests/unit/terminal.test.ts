@@ -4,7 +4,7 @@ import { wireTerminalPaneListeners, RESIZE_DEBOUNCE_MS } from '../../src/rendere
 import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 
 // §7.1 / UI-STANDARDS clean teardown. xterm construction needs a real layout and is covered by the
-// §F e2e (recorded gap); this unit pins listener wiring + disposer, the teardown boundary.
+// e2e (recorded gap); this unit pins listener wiring + disposer, the teardown boundary.
 describe('terminal pane listeners (§7.1 / clean teardown)', () => {
   afterEach(() => vi.useRealTimers());
 

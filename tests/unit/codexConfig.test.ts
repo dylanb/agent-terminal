@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { codexAgentsDir, codexHomeFrom, codexLoopsV2Dir, codexSkillsDir } from '../../src/main/codexConfig';
 
-// Codex's home is ONE definition (§18.1 v2.199): every Codex destination the installer writes hangs off it,
+// Codex's home is ONE definition (§18.1): every Codex destination the installer writes hangs off it,
 // so a single CODEX_HOME redirect moves all of them together.
 
 describe('codexHomeFrom', () => {

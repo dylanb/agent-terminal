@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 // change is described. A header, a changelog entry, and a row tag that disagree leave the reader unable to
 // say when the contract moved — so the two version facts the document states about ITSELF are pinned here.
 
-// The spec was split into per-section files under docs/spec/ (v2.136): the front-matter `Document status`
+// The spec was split into per-section files under docs/spec/: the front-matter `Document status`
 // stays on the top-level index, and the changelog moved to docs/spec/changelog.md. Both facts are still the
 // document's statement ABOUT ITSELF, so each is read from wherever the split now keeps it.
 const spec = readFileSync(path.join(__dirname, '../../terminal-web-ui-spec.md'), 'utf8');

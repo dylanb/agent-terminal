@@ -1,10 +1,8 @@
 # TRACER-BULLET.md
 
-The **Tracer-bullet development** section of `CLAUDE.md` carries the enforceable planning gate — every
-§24.2 plan is sliced this way before code is written. This file carries the definition of a slice and
-the four criteria each must satisfy. When the `CLAUDE.md` gate links here, this file is the authority —
-cite it (e.g. "TRACER-BULLET.md § criteria") rather than re-arguing. Nothing here is new: it is the same
-rule, with the depth that does not need to sit in every turn's context.
+The definition of a tracer-bullet slice and the four criteria each must satisfy. `CLAUDE.md` carries the
+planning gate; this file is the authority a plan is graded against — cite it (e.g. "TRACER-BULLET.md §
+criteria") rather than re-arguing.
 
 A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`pnpm run dev`) and demoable on its own.
 

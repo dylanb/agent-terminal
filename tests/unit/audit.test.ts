@@ -742,7 +742,7 @@ describe('auto-halt entries name every reason that holds (N9b.9)', () => {
     expect(parseAutoHaltReasons(autoHaltAuditCmd([{ reason: 'engine-input-missing' }, { reason: 'interrupt-armed' }, { reason: 'engine-input-missing', detail: 'x' }]))).toEqual(['interrupt-armed', 'engine-input-missing']);
   });
 
-  // #137 S2 — v2.184 retired (f) and (g); the letters are not reused.
+  // (f) and (g) are retired; the letters are not reused.
   it('(f) and (g) are not halt reasons', () => {
     expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: f — x')).toBeNull();
     expect(parseAutoHaltReasons('§27 gate (engine-decided) halted: g — x')).toBeNull();

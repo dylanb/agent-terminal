@@ -250,7 +250,7 @@ export function isValidFlowRebindHeldRun(m: unknown): m is FlowRebindHeldRunMsg 
   );
 }
 
-/** flow:confirmRunPickup (§27.13 v2.211, §6) */
+/** flow:confirmRunPickup (§27.13, §6) */
 export function isValidFlowConfirmRunPickup(m: unknown): m is FlowConfirmRunPickupMsg {
   return (
     isRecord(m) &&

@@ -8,14 +8,14 @@ import { reviewerHandoffLines, type ReviewerHandoffReq } from '../../src/main/re
 import { ASSEMBLED_MARKER, sectionFile } from '../../src/main/reportSections';
 import { REPORT_SECTION_HEADING } from '../../src/main/appWorkTurn';
 
-// §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
+// §18.1 — the bundled Codex skill is a writer of names and paths other installed files must match: every
 // agent name and loop path it gives as an example is checked against the bundle, so a renamed convention breaks
 // this test rather than the Codex session that follows the skill.
 const SKILL_DIR = path.resolve('example', 'codex-skills', 'agent-terminal-loops');
 const BUNDLE_LOOPS = path.resolve('example', 'loops-v2');
 const skill = (): string => readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
 
-// §27.4 v2.198 — the skill's hand-off is the engine's, with each value the engine fills in written as a placeholder.
+// §27.4 — the skill's hand-off is the engine's, with each value the engine fills in written as a placeholder.
 const PLACEHOLDERS: [string, string][] = [
   ['424242', '<n>'],
   ['SUBJECT_PATH', '<artifact>'],

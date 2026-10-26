@@ -1,4 +1,4 @@
-// §27.13 v2.211 — the operator's confirm of a held run's ticket and pull request: a status line with a way back
+// §27.13 — the operator's confirm of a held run's ticket and pull request: a status line with a way back
 // into the dialog, and the blocking dialog itself (UI-STANDARDS §5) the app raises on its own.
 
 import type { ConfirmRunPickupResult, PickupConfirmView } from '../../shared/ipc';

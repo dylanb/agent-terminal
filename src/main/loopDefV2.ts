@@ -61,7 +61,7 @@ export interface BoundaryPolicy {
  *  an open def-declared set. NOT the §27.8 executable capability: a program a def names is declared once,
  *  on the top-level `exec` field (`ExecSideEffect`), which `toGate` refuses to let a gate side-effect name —
  *  one surface, not scattered (CWE-829). Def tiers carry no trust distinction and the executable side-effect
- *  is unshipped; shipping it requires deciding trust afresh (v2.129). */
+ *  is unshipped; shipping it requires deciding trust afresh. */
 export interface GateSideEffect {
   kind: string;
   args: Record<string, unknown>;
@@ -159,7 +159,7 @@ export interface ReportStructure {
 
 /** The def-supplied executable side-effect (§27.8): a def MAY name a program to run. INERT in this slice —
  *  no execution surface runs one. Def tiers carry no trust distinction; shipping the executable side-effect
- *  requires deciding trust afresh (v2.129). */
+ *  requires deciding trust afresh. */
 export interface ExecSideEffect {
   program: string;
 }
@@ -332,7 +332,7 @@ function toGate(raw: unknown): GateOptionDef[] {
       const kind = requireString(seRec.kind, `gate option ${option} side-effect kind`);
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
       // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
-      // tiers carry no trust distinction (v2.129).
+      // tiers carry no trust distinction.
       if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
@@ -504,7 +504,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
  *  EXISTING file wins). The loop name is held to a single safe segment BEFORE it is joined to any tier root.
  *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. Each
  *  candidate carries the jail its own construction site resolved and a plain display name used only to
- *  compose failure messages — no tier carries a trust label (v2.129). */
+ *  compose failure messages — no tier carries a trust label. */
 interface DefCandidate {
   tierRoot: string;
   defDir: string;
@@ -597,12 +597,12 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;
-  // AC 5 (§B.6): with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
+  // AC 5: with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
   // turns the bare miss into a reason naming why it stopped resolving, on the same per-step loop-error path
   // AC 4 uses. PRESENCE only: the retired def's content is never read, parsed, moved or deleted. The retired
   // root is the operator's own ground and may be absent on a first run, so it jails through resolveOwnedDirJail
   // (a null jail — no ~/.claude — is simply "no retired def", the bare reason); the reason-surfacing branch
-  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape (§B.6).
+  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape.
   if (ctx.tiers.retired !== null) {
     const retiredJail = resolveOwnedDirJail(ctx.tiers.retired);
     if (retiredJail !== null) {

@@ -28,7 +28,7 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom-ticket', status: 'done' });
   });
 
-  // Retained only to DECODE pre-sweep documents (§H.2): no producer writes startedAt now — the cost meter
+  // Retained only to DECODE pre-sweep documents: no producer writes startedAt now — the cost meter
   // that once stamped it is gone — but a persisted store may still carry it, so the round-trip must hold.
   it('round-trips the instant the flow started', () => {
     const store = createFlowStateStore(dir);
