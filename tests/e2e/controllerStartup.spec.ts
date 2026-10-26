@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type WebSocket from 'ws';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
@@ -40,15 +40,35 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
+test('the waiting card installs the agent-terminal command before any controller has run', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  try {
+    const home = join(h.fixture.root, 'user-home');
+    const userBin = join(home, '.local', 'bin');
+    mkdirSync(userBin, { recursive: true, mode: 0o755 });
+    const terminal = await h.launch(terminalTarget, h.fixture.nonGit, {
+      env: { HOME: home, PATH: `${userBin}:${h.fixture.env.PATH}` },
+    });
+    const card = terminal.page.locator('#startup-waiting');
+    await expect(card.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+    await card.getByRole('button', { name: 'Install the agent-terminal command-line launcher' }).click();
+    const launcher = join(userBin, 'agent-terminal');
+    await expect(card.getByRole('status').filter({ hasText: launcher })).toContainText(`Installed agent-terminal at ${launcher}`);
+    expect(statSync(launcher).mode & 0o111).not.toBe(0);
+    expect(readFileSync(launcher, 'utf8')).toContain('--controller');
+    await expect(card.getByText('agent-terminal --controller', { exact: false }).first()).toBeVisible();
+    expect(starts(h.fixture.root)).toBe('');
+  } finally { await h.dispose(); }
+});
+
 test('startup automatically registers after controller launch and starts exactly once', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
     await expect(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
-    const statuses = terminal.page.getByRole('status');
-    await expect.soft(statuses).toHaveCount(2);
+    const statuses = terminal.page.locator('#startup-waiting').getByRole('status');
     await expect.soft(statuses.filter({ hasText: STARTUP_CARD.statusLine })).toHaveText(STARTUP_CARD.statusLine);
-    await expect.soft(statuses.filter({ hasNotText: STARTUP_CARD.statusLine })).toHaveText('');
+    await expect.soft(statuses.filter({ hasNotText: STARTUP_CARD.statusLine })).toHaveText(['', '']);
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');

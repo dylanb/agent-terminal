@@ -21,14 +21,14 @@ export function createControllerHarness() {
     async launch(
       target: ControllerTestApplication,
       launchDir: string,
-      options: { profile?: ControllerProfile } = {},
+      options: { profile?: ControllerProfile; env?: Record<string, string> } = {},
     ): Promise<{ app: ElectronApplication; page: Page; profile: ControllerProfile }> {
       const profile = options.profile ?? join(fixture.root, `profile-${nextProfile++}`) as ControllerProfile;
       const app = await electron.launch({
         ...(target.kind === 'packaged' ? { executablePath: target.executablePath } : {}),
         args: [...(target.kind === 'development' ? [target.entry] : []), `--user-data-dir=${profile}`],
         cwd: fixture.nonGit,
-        env: { ...fixture.env, APP_LAUNCH_DIR: launchDir },
+        env: { ...fixture.env, ...options.env, APP_LAUNCH_DIR: launchDir },
         timeout: WINDOW_TIMEOUT_MS,
       });
       apps.push(app);

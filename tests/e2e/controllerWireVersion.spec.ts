@@ -7,7 +7,6 @@ import { dirname, join, resolve } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { cardLocator } from '../helpers/controllerCards';
-import { STARTUP_CARD } from '../helpers/startupCard';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
@@ -48,7 +47,7 @@ for (const { supported, app } of [
     try {
       await new Promise<void>(done => controller.listen(endpoint, done));
       const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
-      const versionMessage = terminal.page.getByRole('status').filter({ hasNotText: STARTUP_CARD.statusLine });
+      const versionMessage = terminal.page.locator('#startup-waiting').getByRole('status').filter({ hasText: /protocol version/i });
       await expect(versionMessage).toContainText(app);
       await expect(versionMessage).toContainText(/version/i);
       expect(existsSync(join(h.fixture.root, 'shell-starts'))).toBe(false);

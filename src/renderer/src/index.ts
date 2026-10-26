@@ -34,6 +34,7 @@ import type { GateDecisionOption } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
+import { createCliInstallAction } from './cliInstallAction';
 import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
@@ -45,6 +46,8 @@ const stopIncompatible = window.term.startup.onIncompatible(({ update, terminalV
   const message = document.getElementById('startup-incompatible')!;
   message.textContent = `This terminal uses controller protocol version ${terminalVersion}, but the running controller supports ${supported}. ${action}`;
 });
+
+createCliInstallAction(document.getElementById('startup-cli-install')!, { install: () => window.cli.install() });
 
 void window.term.startup.ready().then(() => {
   stopIncompatible();
