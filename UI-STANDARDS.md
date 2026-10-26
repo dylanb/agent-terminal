@@ -135,6 +135,42 @@ mount(createArtifactExplorer, frameB-host)  → same assertions pass, zero impl 
 If the assertions need different setup per placement beyond "a different host element + the
 same wired contract," the contract has leaked — fix the component, not the test.
 
+### 3.4 How a UI test reads the screen
+§3's litmus asks two questions of every UI test: **what wrong implementation would still pass it,
+and what correct implementation would fail it?** A test with an answer to either is not done. The
+rules below are the answers reviewers find most often. Each holds in jsdom, the `browser` project and
+the e2e alike.
+
+1. **Find elements by role and accessible name**, the way assistive technology does (the Testing
+   Library query priority): `getByRole('button', { name })`, a heading by its role, a status by its
+   text. Never by tag (`button`, `h1…h6`), class, `id`, a single naming attribute (`aria-label` alone),
+   or how the text is split into elements. Each component's tests go through **one** helper, and every
+   query in it shares one matcher, so a `role="button"` element is found everywhere or nowhere.
+2. **Check inside the element that owns the fact.** Read a card's status from that card's status row,
+   not the whole host or page, whenever the same word can appear elsewhere (a header count, a label,
+   an activity line). A pattern that a neighbouring element can satisfy proves nothing.
+3. **Read painted or measured state after it settles**: `expect.poll` or `vi.waitFor`, never in the
+   same task as the render, publish or click that changes it. When a component measures (at render, in
+   a `ResizeObserver`, on the next frame) is its own business. A state that must hold across time (still
+   hidden, still open after an update) is held for at least two animation frames before it is checked.
+4. **Choose test data that can tell the cases apart.** Every count and value a test compares is
+   different from the others, so two cannot be swapped unnoticed. Include the boundary itself (exactly
+   the limit, not only under and over it), the opposite direction (a connected card is *not* dashed), and
+   more than one item where the rule is per item (two reasons in one box).
+5. **A check fails when it finds nothing to check.** A walk over painted text or controls lists what it
+   must grade and reports each one it did not find; it never passes because nothing was rendered. Every
+   state a check grades actually renders in its fixture. A long reason is there if the "Show full reason"
+   control's contrast is graded.
+6. **When renderer code sets a colour, grade every pairing that is actually painted.** Each text against
+   each background it sits on, tints and controls included. Each non-text indicator (accent, border, focus
+   ring) against every colour it touches (WCAG 2.2 SC 1.4.3, 1.4.11). A colour the stylesheet alone sets
+   gets no test (§3).
+7. **No conditional assertions.** A fixture is deterministic, so an `if` around an `expect` only hides
+   the check when it should fail.
+8. **When a behaviour changes, rewrite the old test from the new requirement.** A carried-over test
+   that still checks the old behaviour (the full directory visible, when the new rule cuts it) fails a
+   correct implementation and passes only the old one.
+
 ---
 
 ## 4. Transient announcements — the WAI-ARIA Alert pattern
@@ -262,6 +298,7 @@ focus-restored-to-opener, and accept-is-not-dismiss.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
 - [ ] A box that can outgrow its scroll container keeps both edges in scroll reach when it overflows — never plain flex or grid centring (UI §6, WCAG 2.2 SC 1.4.10).
+- [ ] Its tests read the screen by role and name through one helper, check inside the owning element, wait for painted state to settle, and use test data that tells the cases apart (UI §3.4).
 - [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4.5–4.6).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).

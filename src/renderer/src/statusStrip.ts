@@ -36,7 +36,6 @@ export function createStatusStrip(statusEl: HTMLElement, now: () => number = Dat
       ['session', alive ? 'alive' : 'exited', alive],
       ['agent', state === 'active' ? 'working' : 'quiet', state === 'active'],
       ['full-screen', last?.altScreen ? 'yes' : 'no', !!last?.altScreen],
-      ['paste mode', last?.bracketedPaste ? 'on' : 'off', !!last?.bracketedPaste],
     ];
     for (const [label, value, on] of items) {
       const chip = document.createElement('span');

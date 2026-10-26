@@ -26,6 +26,14 @@ restructure the test so its own check is the one that fails, by splitting it, by
 check reports, or by making the stub do enough to get there. Never leave GREEN an instruction to see that check
 fail later; the RED is not done until it has been seen failing here.
 
+Before the first review, ask two questions of each test you wrote or changed, and fix what they turn up: what
+wrong implementation would still pass it, and what correct implementation would fail it? A wrong implementation
+that passes means the check is too weak: check inside the element that owns the fact, give the fixture values
+that tell the cases apart, add the boundary case and the opposite direction. A correct implementation that fails
+means the test pins one way of building it: check the behaviour its acceptance criterion names, not a DOM shape,
+an update strategy or the moment a measurement lands. For renderer UI, the repository's `UI-STANDARDS.md` §3.4
+(UI §3.4), where it has one, lists the rules these questions most often turn up.
+
 No acceptance criterion may be deferred or left without an authored failing test. You may never self-defer an
 AC: the only way an AC leaves scope is explicit, prior operator permission — a non-goal recorded in the
 ticket or plan, or a split into an already-filed sub-ticket of the same epic. There is no excuse for
