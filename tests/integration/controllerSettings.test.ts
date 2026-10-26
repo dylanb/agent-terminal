@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
@@ -70,5 +70,19 @@ describe('the controller theme store', () => {
     store.saveTheme('dark');
     expect.soft(unsaved).toBe('light');
     expect(readFileSync(uiSettings, 'utf8')).toBe(agentTerminal);
+  });
+});
+
+describe('the controller theme store over a userData it refuses to write through', () => {
+  it('logs a save into a userData that is a symlink, saves nothing, and does not throw', () => {
+    const target = mkdtempSync(join(tmpdir(), 'controller-settings-target-'));
+    try {
+      const linked = join(userData, 'linked-user-data');
+      symlinkSync(target, linked);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect.soft(() => createControllerSettingsStore(linked).saveTheme('dark')).not.toThrow();
+      expect({ logged: logged.mock.calls.length > 0, written: readdirSync(target), theme: createControllerSettingsStore(linked).theme() })
+        .toEqual({ logged: true, written: [], theme: 'light' });
+    } finally { rmSync(target, { recursive: true, force: true }); }
   });
 });

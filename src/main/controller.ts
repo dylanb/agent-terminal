@@ -6,6 +6,7 @@ import { resolveAppHome } from './launchRoot';
 import { installNavigationGuards } from './windowGuards';
 import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import { installControllerIpc } from './controllerIpc';
+import { createControllerSettingsStore } from './controllerSettings';
 import { errMsg } from './errno';
 import { applyDockIcon, resolveWindowIconPath } from './appIcon';
 import type { BundleLocation } from './bundleLocation';
@@ -32,7 +33,7 @@ void app.whenReady().then(async () => {
   });
   try {
     const transport = await startControllerTransport(resolveAppHome(process.env, homedir()));
-    const disposeIpc = installControllerIpc(window.webContents, transport);
+    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')));
     window.once('closed', () => {
       disposeIpc();
       void transport.dispose().catch(error => console.error(errMsg(error)));

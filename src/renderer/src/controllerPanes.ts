@@ -1,13 +1,15 @@
 import { cardStatus, SUMMARY_CLASS, SUMMARY_LABELS, type CardStatusClass } from '../../shared/controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import { captureSubtreeFocus } from './dom';
-import type { ControllerApi, ControllerTerminal } from '../../shared/ipc';
+import type { ControllerApi, ControllerTerminal, Theme } from '../../shared/ipc';
 import { createControllerCard, workConditions, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
+import { createThemeToggle } from './themeToggle';
 
 export interface ControllerPanesDeps {
   controller: ControllerApi;
   layout: ControllerLayout;
+  applyTheme(theme: Theme): void;
 }
 
 const HEADER = '[data-control="header"]';
@@ -66,6 +68,19 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const fullReasons = new Map<string, Set<string>>();
   const toggled = new Map<string, boolean>();
   host.append(header.element, list, alert, status);
+  let themeToggle: { dispose(): void } | undefined;
+  void deps.controller.getTheme().catch((): Theme => 'light').then(theme => {
+    if (disposed) return;
+    deps.applyTheme(theme);
+    header.element.append(' ');
+    themeToggle = createThemeToggle(header.element, {
+      theme,
+      onChange(next) {
+        deps.applyTheme(next);
+        void deps.controller.setTheme(next).catch(error => console.error(`Controller theme not saved: ${error instanceof Error ? error.message : String(error)}`));
+      },
+    });
+  });
 
   const expandedFor = (terminal: ControllerTerminal): boolean => toggled.get(terminal.id)
     ?? (!deps.layout.oneColumn() || EXPANDED_IN_ONE_COLUMN.has(cardStatus(terminal).statusClass));
@@ -163,6 +178,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
+      themeToggle?.dispose();
       cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();
       host.classList.remove('controller-panes');

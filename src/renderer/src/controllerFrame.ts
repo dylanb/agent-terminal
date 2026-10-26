@@ -18,4 +18,6 @@ export function createViewportLayout(view: Window): ControllerLayout {
   };
 }
 
-export function applyDocumentTheme(_root: HTMLElement, _theme: Theme): void {}
+export function applyDocumentTheme(root: HTMLElement, theme: Theme): void {
+  root.dataset.theme = theme;
+}

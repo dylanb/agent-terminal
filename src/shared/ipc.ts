@@ -90,6 +90,7 @@ export const CH = {
 export type TabId = 'capture' | 'todo';
 
 export type Theme = 'light' | 'dark';
+export const isTheme = (value: unknown): value is Theme => value === 'light' || value === 'dark';
 
 /** The user's keymap profile choice (§7.7): `auto` resolves to `mac` on macOS else `pc`; `mac`/`pc`
  *  force that profile regardless of OS (e.g. a Mac keyboard on Linux). */
