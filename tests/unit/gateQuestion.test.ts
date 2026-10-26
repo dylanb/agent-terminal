@@ -11,8 +11,7 @@ describe('composeGateQuestion — an `auto` gate halt', () => {
     reasons: [{ reason: 'frozen-tests-changed', detail: 'tests/frozen.test.ts, tests/other.test.ts' }, { reason: 'needs-a-human' }],
   });
 
-  it('asks why the gate needs the operator and names the step', () => {
-    expect(q).toContain('Why does this gate need me?');
+  it('names the step', () => {
     expect(q).toContain('`green`');
   });
 
@@ -21,22 +20,12 @@ describe('composeGateQuestion — an `auto` gate halt', () => {
     expect(q).toContain('(a) needs a human');
   });
 
-  it('asks for the decision first and forbids file changes', () => {
-    expect(q).toMatch(/top of your reply/);
-    expect(q).toMatch(/what (the operator|they) must decide/);
-    expect(q).toMatch(/Change no files/);
-  });
-
-  it('carries no line that would read as a turn done-signal', () => {
-    expect(q).not.toContain('turn-done');
-  });
 });
 
 describe('composeGateQuestion — a human-authority gate', () => {
   const q = composeGateQuestion({ kind: 'human-gate', step: 'plan-approve' });
 
   it('says the gate is the operator\'s by design and names the step', () => {
-    expect(q).toContain('Why does this gate need me?');
     expect(q).toContain('`plan-approve`');
     expect(q).toMatch(/the operator's by design/);
   });

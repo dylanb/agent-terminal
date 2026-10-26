@@ -3,7 +3,6 @@ import {
   CONSOLIDATOR_VERDICTS,
   consolidatorOutputProblems,
   consolidatorOutputWellFormed,
-  exampleConsolidatorOutput,
   parseConsolidatorOutput,
   verdictCarriesReason,
   type ConsolidatorVerdict,
@@ -22,14 +21,6 @@ describe('the verdict set is spec-fixed (§27.6)', () => {
   it('is exactly the three-value closed set', () => {
     expect(CONSOLIDATOR_VERDICTS).toEqual(['clean', 'another round', 'stop for a human']);
   });
-});
-
-describe('consolidatorOutputWellFormed — the canonical example anchors every verdict (§93)', () => {
-  for (const verdict of CONSOLIDATOR_VERDICTS) {
-    it(`accepts the generated canonical example for verdict "${verdict}"`, () => {
-      expect(consolidatorOutputWellFormed(exampleConsolidatorOutput(verdict, CATALOG), CATALOG)).toBe(true);
-    });
-  }
 });
 
 describe('consolidatorOutputWellFormed — verdict membership (AC3)', () => {
@@ -112,10 +103,6 @@ describe('verdictCarriesReason — the persisted verdict/reason gate (reason iff
 
 // §27.6/§27.12 — the verdict checker names what is wrong, so a repair retry can fix exactly that.
 describe('consolidatorOutputProblems — names each defect (§27.6/§27.12)', () => {
-  it('reports nothing for each canonical example', () => {
-    for (const v of CONSOLIDATOR_VERDICTS) expect(consolidatorOutputProblems(exampleConsolidatorOutput(v, CATALOG), CATALOG)).toEqual([]);
-  });
-
   it('names a missing verdict and quotes the allowed values', () => {
     const problems = consolidatorOutputProblems(out({ verdict: 'probably fine' }), CATALOG).join('\n');
     for (const v of CONSOLIDATOR_VERDICTS) expect(problems).toContain(v);

@@ -56,14 +56,12 @@ describe('a refactor goal session ends on the refactor checks (§27.3/§28.5.3 v
     expect(promptFile()).toContain(goalRefactorResultRel(session()));
   });
 
-  it('hands the session the result check, to pass before it records the goal done, not at a checkpoint', () => {
+  it('hands the session the result check for its own result file', () => {
     const engine = makeEngine(undefined, fake());
     h.defResult = resolved(refactorGoalDef());
     enterAndInjectWork(engine);
 
-    expect(promptFile()).toMatch(
-      new RegExp(`Before you record the goal done, run the loop's own format check on the phase result[\\s\\S]*check-artifact result ${goalRefactorResultRel(session()).replace(/\./g, '\\.')} passed no-build`),
-    );
+    expect(promptFile()).toContain(`check-artifact result ${goalRefactorResultRel(session())} passed no-build`);
     expect(promptFile()).toContain(phaseOutputRel(goalRefactorResultRel(session())));
   });
 

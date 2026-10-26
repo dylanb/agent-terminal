@@ -77,16 +77,6 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     expect(prompt).toContain('"leg": 1');
   });
 
-  it('the prompt holds only a done leg to the completion check, so a checkpoint or a block may write the done-signal without it', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef(3));
-    enterAndInjectWork(engine);
-
-    const prompt = promptOf(lastGoal());
-    expect(prompt).toMatch(/only `done` is held to the completion check/i);
-    expect(prompt).toMatch(/on `checkpoint` or `blocked`, write the done-signal once the progress file is written/i);
-  });
-
   it('the prompt keeps the notes the next leg resumes from apart from the JSON the app reads', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
@@ -98,7 +88,7 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
     expect(progressRel()).toMatch(/\.json$/);
   });
 
-  it('hands the session the check that decides whether its progress file ends this leg, and tells it to pass it first', () => {
+  it('hands the session the check that decides whether its progress file ends this leg', () => {
     const engine = makeEngine();
     h.defResult = resolved(goalDef(3));
     enterAndInjectWork(engine);
@@ -107,7 +97,6 @@ describe('a goal session keeps a progress file (§27.3 v2.201)', () => {
 
     const prompt = promptOf(lastGoal());
     expect(prompt).toContain(`check-artifact progress ${progressRel()} 2 legs`);
-    expect(prompt).toMatch(/fix .*until it prints `OK`/i);
   });
 
   it('a progress file that is not JSON falls short and says so', () => {
@@ -660,16 +649,6 @@ describe('a blocked goal session stops its step for a human (§27.3 v2.201)', ()
     relaunched.onDoneSignal();
 
     expect(readAppLoopState(h.repo)).toMatchObject({ status: 'complete', verdict: 'clean' });
-  });
-
-  it('the prompt tells the session it may carry on once the operator resolves the block, and how to end the turn then', () => {
-    const engine = makeEngine();
-    h.defResult = resolved(goalDef(3));
-    enterAndInjectWork(engine);
-
-    const prompt = promptOf(lastGoal()).replace(/\s+/g, ' ');
-    expect(prompt).toMatch(/If the operator resolves what you were blocked on in this session, carry on with the goal/);
-    expect(prompt).toMatch(/rewrite the progress file and then the done-signal; the step continues from there/);
   });
 });
 

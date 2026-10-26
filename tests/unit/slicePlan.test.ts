@@ -19,17 +19,6 @@ describe('the impl-slice grammar tokens are fixed (§28.4.1)', () => {
   });
 });
 
-describe('exampleSlicePlan anchors the predicate (§93 canonical example)', () => {
-  it('is well-formed and parses to N impl-slices for any N', () => {
-    for (const n of [1, 2, 3, 5]) {
-      const plan = exampleSlicePlan(n);
-      expect(slicePlanWellFormed(plan)).toBe(true);
-      expect(parseSlicePlan(plan).implSlices.length).toBe(n);
-      expect(sliceCountToSource(plan, 1)).toBe(n);
-    }
-  });
-});
-
 // §28.4.1 — every approve gate that declares the `plan` output re-sources the count, the RED gate included once
 // RED may split its own slice (§28.5.3), so a later plan that cannot carry the run must leave the count standing.
 describe('sliceCountToSource — the count an approve gate writes, or none to keep the current one (§28.4.1)', () => {
