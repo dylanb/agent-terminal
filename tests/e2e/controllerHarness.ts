@@ -14,13 +14,13 @@ export function createControllerHarness() {
   let nextProfile = 0;
   return {
     fixture,
-    async launch(target: ControllerTestApplication, launchDir: string): Promise<{ app: ElectronApplication; page: Page }> {
+    async launch(target: ControllerTestApplication, launchDir: string, env: Record<string, string> = {}): Promise<{ app: ElectronApplication; page: Page }> {
       const profile = join(fixture.root, `profile-${nextProfile++}`);
       const app = await electron.launch({
         ...(target.kind === 'packaged' ? { executablePath: target.executablePath } : {}),
         args: [...(target.kind === 'development' ? [target.entry] : []), `--user-data-dir=${profile}`],
         cwd: fixture.nonGit,
-        env: { ...fixture.env, APP_LAUNCH_DIR: launchDir },
+        env: { ...fixture.env, ...env, APP_LAUNCH_DIR: launchDir },
         timeout: WINDOW_TIMEOUT_MS,
       });
       apps.push(app);
