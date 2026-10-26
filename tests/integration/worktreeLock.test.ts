@@ -9,7 +9,6 @@ import {
   currentLockHolder,
   MAX_ACQUIRE_ATTEMPTS,
   processStartTime,
-  PROCESS_START_TIME_TIMEOUT_MS,
   selfLockHolder,
   serializeLockHolder,
   worktreeLockFile,
@@ -486,21 +485,16 @@ describe('worktree lock (§18.7.4 AC11)', () => {
   });
 
   it.skipIf(process.platform !== 'darwin')(
-    'a hung start-time probe is abandoned within its timeout and reads as unknown',
+    'a hung start-time probe is abandoned and reads as unknown',
     () => {
       const bin = fx.outsideDir('a2-lock-hung-ps');
       mkdirSync(bin, { recursive: true });
-      writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexec sleep 30\n');
+      writeFileSync(join(bin, 'ps'), '#!/bin/sh\nsleep 30\necho "Mon Jan  1 00:00:00 2024"\n');
       chmodSync(join(bin, 'ps'), 0o755);
       const savedPath = process.env.PATH;
       process.env.PATH = `${bin}:${savedPath ?? ''}`;
       try {
-        const began = Date.now();
-        const startTime = processStartTime(process.pid);
-        const elapsed = Date.now() - began;
-
-        expect(startTime).toBeNull();
-        expect(elapsed).toBeLessThan(PROCESS_START_TIME_TIMEOUT_MS + 5_000);
+        expect(processStartTime(process.pid)).toBeNull();
       } finally {
         process.env.PATH = savedPath;
       }

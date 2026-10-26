@@ -118,7 +118,7 @@ A malformed result takes §27.12's retry-then-`error` path.
 
 #### 28.5.5 Shared-semantics placement (P5c)
 
-The outcome vocabulary is single-sourced in `src/shared/phaseOutcome.ts` (closed, exact-string, never normalized) and the result grammar in `src/shared/phaseResult.ts`, consumed by the prompt composer, the completion predicate and the tests. A recipe that tells the agent to write a result file is a *writer* in the shared-semantics contract (CODE-STANDARDS): its vocabulary derives from that module and it embeds a canonical example asserted well-formed against the predicate.
+The outcome vocabulary is single-sourced in `src/shared/phaseOutcome.ts` (closed, exact-string, never normalized) and the result grammar in `src/shared/phaseResult.ts`, consumed by the prompt composer, the completion predicate and the tests. A recipe that tells the agent to write a result file is a *writer* in the shared-semantics contract (CODE-STANDARDS): its vocabulary derives from that module and it embeds the canonical example.
 
 **The result is JSON and the raw run is kept beside it** (`red-result.json` + `red-result.output.txt`). The engine requires the output file to exist and never parses it, so evidence never has to be escaped into the JSON and nothing in it can be read as a classification. The agent runs the same predicate as a command before signalling done (§27.12).
 
@@ -130,14 +130,14 @@ The outcome vocabulary is single-sourced in `src/shared/phaseOutcome.ts` (closed
 
 ### 28.6 Personas — reuse, repurpose, create (P6)
 
-The code-producing loops reuse the existing implementation personas; the charters §28 adds are about **planning artifacts** and **phase discipline**. Which loop reviews with which charters is the `charter/` directory of each loop under `example/loops-v2/`. Each §28 charter carries a distinctive marker the content-parity test pins:
+The code-producing loops reuse the existing implementation personas; the charters §28 adds are about **planning artifacts** and **phase discipline**. Which loop reviews with which charters is the `charter/` directory of each loop under `example/loops-v2/`. Each §28 charter carries a distinctive marker:
 
 1. **`test-architect`** ("AC-to-test bijection"): every acceptance criterion maps to a test of observable behavior at the right layer, RED-first, with injection seams naming domain concepts — the CLAUDE.md test rules turned into a reviewer.
 2. **`determinism`** ("Scriptable-per-turn"): the test infrastructure is hermetic and the fake agent scriptable per turn; a first-run writer's test deletes the target root first.
 3. **`tracer-slicer`** ("Thin-but-complete"): every impl-slice is a thin but complete vertical slice (TRACER-BULLET.md), with a final integration slice; a horizontal layer is a finding.
 4. **`red-authenticity`** ("Fails for the right reason"): RED tests fail by assertion, not by a missing import or compile error, and the outcome classification is correct; a verification-only RED is graded as strictly. A RED test a correct implementation could fail is left to GREEN to correct when its own check fails now and no wrong implementation passes it. This is the human-judgment complement that bounds "marks its own homework" (§28.5.2c).
 5. **`regression-guard`** ("No vacuous green"): GREEN satisfies the intent of the RED tests, not just their letter; it grades every logged RED test change as correction or weakening and every test GREEN added. The machine proves *which* files changed; this persona judges *why*.
-6. **`ui`** ("Design-system-first", plan loops): a plan touching renderer UI has a `## Design system` section, schedules that work before its first use on a surface the operator can already see, uses tokens rather than one-off values, follows `UI-STANDARDS.md`, and accounts for WCAG 2.2 AA contrast, keyboard, focus and name/role/value, checked through a real browser. It does not grade visual taste.
+6. **`ui`** ("Design-system-first", plan loops): a plan touching renderer UI has a `## Design system` section, schedules that work before its first use on a surface the operator can already see, uses tokens rather than one-off values, follows `UI-STANDARDS.md`, and accounts for WCAG 2.2 AA contrast, keyboard, focus and name/role/value. It does not grade visual taste.
 
 **Work recipes (P6c).** Each phase loop's `prompts/work.md` references `loop-capabilities.yaml` as guidance; refactor needs none, since it *is* the review-and-fix cycle.
 
@@ -171,7 +171,7 @@ A picked-up sub-ticket **reconstructs the groomed ticket and the coarse epic pla
 
 ### 28.10 Build — tracer-bullet slices (S0–S8)
 
-The S-numbers cited in tests name the order §28 was built in; every slice has shipped. A UI-bearing slice is proven by a Playwright `_electron` e2e through an existing control; a foundational or content-only slice is proven at its own boundary (git fixtures, the content-parity test) rather than forced through a renderer path it does not touch.
+The S-numbers cited in tests name the order §28 was built in; every slice has shipped. A UI-bearing slice is proven by a Playwright `_electron` e2e through an existing control; a foundational or content-only slice is proven at its own boundary (git fixtures; for charter and recipe content, the bundled flows' load-validity tests) rather than forced through a renderer path it does not touch.
 
 ### 28.11 What §28 adds to §27 (the additive-change map)
 
@@ -183,5 +183,5 @@ Everything §28 introduces is additive; nothing narrows an existing §27 contrac
 | phase-as-a-loop (P4) | §27.3 loop shape, §27.10 chaining | loop defs chained as sub-chains; the one `repeat` step primitive (§28.4.1) |
 | completion predicates (P5) | §27.12(b) artifact check | per-turn artifact-check clauses; `phaseOutcome.ts` |
 | `loop-capabilities.yaml` (P5b) | none — data only | a per-repo data file referenced by defs |
-| charters + recipes (P6) | §27.4 pull model, §27.8 def catalog | def content, pinned by content-parity tests |
+| charters + recipes (P6) | §27.4 pull model, §27.8 def catalog | def content |
 | epic overlay (P7) | §27.10 promotion | an epic classification path |

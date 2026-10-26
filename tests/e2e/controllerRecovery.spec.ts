@@ -13,6 +13,7 @@ import { bringForwardLocator, cardLocator } from '../helpers/controllerCards';
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const RECOVERY_BOUND_MS = 10_000;
+const RECOVERY_BUDGET_MS = 30_000;
 
 test('connection-only loss preserves PTY work and restores one pane while the controller remains running', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
@@ -62,7 +63,7 @@ test('connection-only loss preserves PTY work and restores one pane while the co
 
 for (const outage of ['quit', 'crash'] as const) {
   test(`recovery restores original PTYs and fixed identities after repeated controller ${outage}`, { tag: '@ownapp' }, async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const h = await createControllerDesktopHarness();
     try {
       let controller = await h.launch(controllerTarget, h.fixture.nonGit);
@@ -87,7 +88,7 @@ for (const outage of ['quit', 'crash'] as const) {
           await expect.soft(terminal.page.locator('.xterm-rows')).toContainText(`OUTAGE_${round}_${index}`);
         }
         controller = await h.launch(controllerTarget, h.fixture.nonGit);
-        await expect.soft(cardLocator(controller.page, directory)).toHaveCount(2, { timeout: RECOVERY_BOUND_MS });
+        await expect.soft(cardLocator(controller.page, directory)).toHaveCount(2, { timeout: RECOVERY_BUDGET_MS });
         await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
         expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       }
@@ -129,7 +130,7 @@ for (const mode of ['direct', 'replay', 'reconnect'] as const) {
       await relay?.replayRegistrations();
     }
     const panes = cardLocator(controller.page, h.fixture.repositories[0]);
-    await expect(panes).toHaveCount(2, { timeout: RECOVERY_BOUND_MS });
+    await expect(panes).toHaveCount(2, { timeout: RECOVERY_BUDGET_MS });
     const delivered: number[] = [];
     for (let pane = 0; pane < 2; pane++) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());

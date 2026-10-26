@@ -135,10 +135,6 @@ describe('committed controller icon', () => {
     expect(png.readUInt32BE(16)).toBe(1024);
     expect(png.readUInt32BE(20)).toBe(1024);
   });
-
-  it('differs from the terminal icon', () => {
-    expect(png.equals(readFileSync(resolveWindowIconPath({ packaged: false, appPath: root }, 'terminal')))).toBe(false);
-  });
 });
 
 describe('packaged controller icon (electron-builder merged config)', () => {

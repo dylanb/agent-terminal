@@ -5,6 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { load } from 'js-yaml';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, type ReviewerStatus } from '../../src/shared/roundReport';
@@ -172,18 +173,12 @@ export function seedFakeGhGit(prefix: string, opts: { realCommitOps?: boolean } 
   return { binDir, logFile };
 }
 
-// The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
-// the round report must account for and the sections it must carry (example/loops-v2/plan-only/plan-loop/plan-loop.yaml).
-export const PLAN_V2_ROSTER = [
-  'review-plan-principal',
-  'review-plan-security',
-  'review-plan-architecture',
-  'review-plan-intent',
-  'review-plan-maintainability',
-  'review-plan-contracts',
-  'review-plan-ui',
-];
-export const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
+const planLoopDef = load(readFileSync(join(exampleConfigDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'), 'utf8')) as {
+  reviewers: { persona: string }[];
+  report: { sections: string[] };
+};
+export const PLAN_V2_ROSTER = planLoopDef.reviewers.map((r) => r.persona);
+export const PLAN_V2_SECTIONS = planLoopDef.report.sections;
 export const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
 /** Shell that writes a §28.5.5 phase result at `pathExpr` and its raw captured run beside it, where the engine reads
  *  it. */

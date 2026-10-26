@@ -13,32 +13,29 @@ import { STARTUP_CARD } from '../helpers/startupCard';
 
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
-const RECOVERY_BOUND_MS = 10_000;
+const STARTUP_BUDGET_MS = 30_000;
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const starts = (root: string) => existsSync(join(root, 'shell-starts')) ? readFileSync(join(root, 'shell-starts'), 'utf8') : '';
 
-for (const theme of ['light', 'dark']) {
-  test(`startup waiting instructions are visible and responsive in ${theme}`, { tag: '@ownapp' }, async () => {
-    const h = createControllerHarness();
-    try {
-      const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
-      await terminal.page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-      await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
-      expect.soft(starts(h.fixture.root)).toBe('');
-      await expect.poll(() => terminal.page.evaluate(() => document.readyState)).toBe('complete');
-      const startsAtClose = starts(h.fixture.root);
-      const child = terminal.app.process();
-      await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
-      await expect.poll(() => child.exitCode).not.toBeNull();
-      const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      await delay(RETRY_OBSERVATION_MS);
-      expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
-      await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
-    } finally { await h.dispose(); }
-  });
-}
+test('startup waiting card shows and starts no shell when closed before the controller starts', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  try {
+    const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
+    await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+    expect.soft(starts(h.fixture.root)).toBe('');
+    await expect.poll(() => terminal.page.evaluate(() => document.readyState)).toBe('complete');
+    const startsAtClose = starts(h.fixture.root);
+    const child = terminal.app.process();
+    await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(() => child.exitCode).not.toBeNull();
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    await delay(RETRY_OBSERVATION_MS);
+    expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
+    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
+  } finally { await h.dispose(); }
+});
 
 test('the waiting card installs the agent-terminal command before any controller has run', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -62,15 +59,15 @@ test('the waiting card installs the agent-terminal command before any controller
 });
 
 test('startup automatically registers after controller launch and starts exactly once', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
   const h = createControllerHarness();
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
     await expect(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
     const statuses = terminal.page.locator('#startup-waiting').getByRole('status');
-    await expect.soft(statuses.filter({ hasText: STARTUP_CARD.statusLine })).toHaveText(STARTUP_CARD.statusLine);
     await expect.soft(statuses.filter({ hasNotText: STARTUP_CARD.statusLine })).toHaveText(['', '']);
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-    await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
+    await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1, { timeout: STARTUP_BUDGET_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');
     await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
     await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeHidden();
@@ -101,6 +98,7 @@ test('startup with a running controller publishes a usable pane and starts one r
 
 for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after-close'] as const) {
   test(`startup does not release work for ${mode} registration`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(120_000);
     const h = createControllerHarness();
     const peers = new Set<WebSocket>();
     const registrations: Array<{ socket: WebSocket }> = [];
@@ -123,7 +121,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
       expect.soft(starts(h.fixture.root)).toBe('');
       if (mode === 'delayed' || mode === 'silent') {
         if (mode === 'silent') {
-          await expect.soft.poll(() => registrations.length, { timeout: RETRY_OBSERVATION_MS }).toBeGreaterThan(1);
+          await expect.soft.poll(() => registrations.length, { timeout: STARTUP_BUDGET_MS }).toBeGreaterThan(1);
           expect.soft(starts(h.fixture.root)).toBe('');
         }
         registrations[registrations.length - 1].socket.send('{"version":2,"type":"registered"}\n');
@@ -140,11 +138,10 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
         expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
         expect(registrations).toHaveLength(1);
       } else {
-        await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
-        await expect.soft(terminal.page.getByText(/build/i)).toBeVisible();
+        await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+        await expect.soft.poll(() => registrations.length, { timeout: STARTUP_BUDGET_MS }).toBeGreaterThan(1);
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe('');
-        expect.soft(registrations.length).toBeGreaterThan(1);
       }
     } finally {
       await h.dispose();

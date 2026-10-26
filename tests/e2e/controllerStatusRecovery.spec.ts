@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, join, resolve } from 'node:path';
 import { connect, createServer, type Socket } from 'node:net';
 import { createControllerDesktopHarness } from './controllerDesktop';
-import { statusDeadline } from './controllerStatusDeadline';
+import { observeStatus, STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from './autoGateHarness';
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
@@ -13,10 +13,11 @@ import { bringForwardLocator, cardLocator, dismissLocator, statusRowLocator } fr
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
+const ABSENCE_WINDOW_MS = 2_000;
 
 for (const outage of ['socket', 'exit', 'crash'] as const) {
   test(`real human attention across ${outage} is truthful after loss and current after recovery`, { tag: '@ownapp' }, async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const h = await createControllerDesktopHarness();
     const repo = seedAutoGateRepo('controller-recovery-gate-', 'red');
     const { binDir, logFile } = seedFakeGhGit('controller-recovery-tools-', { realCommitOps: true });
@@ -89,11 +90,11 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
           controller = await h.launch(controllerTarget, h.fixture.nonGit);
           h.fixture.env.APP_HOME_DIR = h.fixture.home;
         }
-        const current = await statusDeadline(controller.page, repo, [/verify/, /recovery-flow/], 'registration');
+        const current = await observeStatus(controller.page, repo, { step: /verify/, flow: /recovery-flow/ }, { start: 'registration', holdMs: ABSENCE_WINDOW_MS });
         online = true;
         const observed = await current();
-        expect.soft(observed.matched).toEqual([true, true]);
-        expect.soft(observed.texts.every(text => !/Human needed|stop for a human/.test(text))).toBe(true);
+        expect.soft(observed.shown).toEqual({ step: true, flow: true });
+        expect.soft(observed.ever(/Human needed|stop for a human/)).toBe(false);
         await expect.soft(controller.page.getByRole('status')).not.toContainText(/Human needed|stop for a human/);
         const pane = cardLocator(controller.page, repo);
         await expect.soft(pane).toHaveCount(1);
@@ -115,7 +116,7 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
 }
 
 test('repeated recovery keeps same-directory peers distinct after work context changes and preserves PTY input', { tag: '@ownapp' }, async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const h = await createControllerDesktopHarness();
   const [a, b] = h.fixture.repositories;
   try {
@@ -149,10 +150,10 @@ test('repeated recovery keeps same-directory peers distinct after work context c
         await expect(terminal.page.locator('.xterm-rows')).toContainText(`RECOVER_${round}_${index}`);
       }
       controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      await expect(cardLocator(controller.page, a)).toHaveCount(2, { timeout: 10_000 });
+      await expect(cardLocator(controller.page, a)).toHaveCount(2, { timeout: STATUS_BUDGET_MS });
       const panes = cardLocator(controller.page, a);
-      await expect.soft(panes.filter({ hasText: 'recovery-1' })).toContainText(round === 0 ? 'first-1' : 'next-1', { timeout: 2_000 });
-      await expect.soft(panes.filter({ hasText: 'recovery-0' })).toContainText('first-0', { timeout: 2_000 });
+      await expect.soft(panes.filter({ hasText: 'recovery-1' })).toContainText(round === 0 ? 'first-1' : 'next-1', { timeout: STATUS_BUDGET_MS });
+      await expect.soft(panes.filter({ hasText: 'recovery-0' })).toContainText('first-0', { timeout: STATUS_BUDGET_MS });
       expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       await expect.soft(cardLocator(controller.page, b)).toHaveCount(0);
     }

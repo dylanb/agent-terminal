@@ -1,27 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   composeRedCheckInstruction,
-  exampleIntendedFailures,
-  exampleRedCheckReport,
   parseRedCheckReport,
   redCheckReportRel,
   redCheckVerdict,
   verificationCheckVerdict,
   type RedCheckReport,
 } from '../../src/shared/redCheck';
-import { PHASE_RESULT_FIELDS, examplePhaseResult, readPhaseResult, type IntendedFailure } from '../../src/shared/phaseResult';
 
 const report = (tests: RedCheckReport['tests']): string => JSON.stringify({ version: 1, tests });
 const parsed = (text: string): RedCheckReport => {
   const r = parseRedCheckReport(text);
   if (!r.ok) throw new Error(r.reason);
   return r.report;
-};
-const resultWith = (intendedFailures: IntendedFailure[]): string => examplePhaseResult('failed-assertion', { intendedFailures });
-const intendedOf = (text: string): IntendedFailure[] => {
-  const r = readPhaseResult(text);
-  if (!r.ok) throw new Error(r.problem);
-  return r.result.intendedFailures ?? [];
 };
 
 describe('parseRedCheckReport (§28.5.2)', () => {
@@ -139,31 +130,10 @@ describe('the red-check writer and reader agree (CLAUDE.md shared semantics)', (
     );
   });
 
-  it('the canonical example the prompt embeds passes the verdict it will be held to', () => {
-    const v = redCheckVerdict({
-      report: parsed(exampleRedCheckReport()),
-      intended: intendedOf(resultWith(exampleIntendedFailures())),
-      addedTestPaths: ['tests/adder.test.ts'],
-    });
-    expect(v).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
-  });
-
-  it('the instruction names the command, the report path, and the intended-failures field', () => {
+  it('the instruction names the command and the report path', () => {
     const text = composeRedCheckInstruction({ command: 'node scripts/red-check.mjs', reportRel: 'r.check.json', resultRel: 'r.json' }).join('\n');
     expect(text).toContain('node scripts/red-check.mjs');
     expect(text).toContain('r.check.json');
-    expect(text).toContain(`"${PHASE_RESULT_FIELDS.intendedFailures}"`);
-  });
-
-  it('the result the instruction shows declares the failures its example report observes', () => {
-    const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.json' }).join('\n');
-    const shown = text.slice(text.lastIndexOf('{\n  "outcome"'));
-    expect(redCheckVerdict({ report: parsed(exampleRedCheckReport()), intended: intendedOf(shown), addedTestPaths: ['tests/adder.test.ts'] })).toEqual({ ok: true, claim: 'declared-failures', unchecked: [] });
-  });
-
-  it('the instruction says a declared failure in a file the check does not run is still declared, and recorded as unchecked', () => {
-    const text = composeRedCheckInstruction({ command: 'c', reportRel: 'r.check.json', resultRel: 'r.md' }).join(' ');
-    expect(text).toMatch(/does not run[\s\S]*still declare[\s\S]*not independently checked/i);
   });
 });
 

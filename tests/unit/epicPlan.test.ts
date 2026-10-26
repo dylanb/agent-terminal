@@ -28,7 +28,7 @@ describe('the classification token is spec-fixed (§28.7)', () => {
 
 describe('isEpicPlan — the classification token drives everything (§28.7)', () => {
   it('is true when the plan is classified an epic', () => {
-    expect(isEpicPlan(exampleEpicPlan())).toBe(true);
+    expect(isEpicPlan('Classification: epic\n\n# plan\n')).toBe(true);
   });
   it('is false for a plan with no classification line', () => {
     expect(isEpicPlan('# plan\n\njust a single-ticket plan\n')).toBe(false);
@@ -36,18 +36,6 @@ describe('isEpicPlan — the classification token drives everything (§28.7)', (
   it('is false for a plan explicitly classified single-ticket', () => {
     expect(isEpicPlan('Classification: single-ticket\n\n# plan\n')).toBe(false);
   });
-});
-
-describe('exampleEpicPlan anchors the predicate (§93 canonical example)', () => {
-  for (const n of [1, 2, 3]) {
-    it(`generates a well-formed ${n}-sub-ticket epic plan`, () => {
-      const plan = exampleEpicPlan(n);
-      expect(epicPlanWellFormed(plan)).toBe(true);
-      const parsed = parseEpicPlan(plan);
-      expect(parsed).not.toBeNull();
-      expect(parsed?.subTickets).toHaveLength(n);
-    });
-  }
 });
 
 describe('parseEpicPlan — ordered sub-ticket extraction (§27.10 "copied as authored")', () => {

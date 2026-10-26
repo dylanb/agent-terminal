@@ -1,13 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from '../../src/main/consolidateTurn';
-import { CONSOLIDATOR_VERDICTS, consolidatorOutputWellFormed } from '../../src/shared/consolidatorOutput';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.6/§27.7 — the pure, data-driven pieces of the §27 consolidator turn: the pre-consolidate boundary
 // (data from the def, defaulting to clear which §27.7 prefers), the last-two-report window (a fixed window
-// off the versioned report series, never growing with round depth), and the consolidator prompt — composed
-// from the SHARED verdict vocabulary so the shape the actor is told to write and the shape the completion
-// predicate accepts derive from one source (§93).
+// off the versioned report series, never growing with round depth), and the consolidator prompt.
 
 function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
   return {
@@ -55,7 +52,7 @@ describe('lastTwoReportRounds — a fixed window that does not grow with depth (
   });
 });
 
-describe('composeConsolidatePrompt — single-sourced from the shared verdict vocabulary (§93)', () => {
+describe('composeConsolidatePrompt — what it carries from its inputs', () => {
   const catalog = ['review-plan-principal', 'review-plan-security'];
   const req = {
     recipeBody: '# plan-loop — consolidator\nJudge the round.',
@@ -85,19 +82,9 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
     expect(composeConsolidatePrompt(req)).toContain(req.outputRel);
   });
 
-  it('conveys every verdict of the closed set and the catalog personas for the roster choice', () => {
+  it('conveys the catalog personas for the roster choice', () => {
     const prompt = composeConsolidatePrompt(req);
-    for (const v of CONSOLIDATOR_VERDICTS) expect(prompt).toContain(v);
     for (const p of catalog) expect(prompt).toContain(p);
-  });
-
-  it('embeds a canonical example that is itself well-formed against the shared predicate (no prompt↔predicate drift)', () => {
-    const prompt = composeConsolidatePrompt(req);
-    // Slice the ACTUAL example the composer embedded and validate THAT — a drift in exampleConsolidatorOutput as
-    // embedded (wrong label, a roster persona outside the catalog) must fail here, mirroring reviewTurn's pattern.
-    const lead = 'A well-formed example:';
-    expect(prompt).toContain(lead);
-    expect(consolidatorOutputWellFormed(prompt.slice(prompt.indexOf(lead) + lead.length), catalog)).toBe(true);
   });
 
   it('ends with the shared done-signal instruction keyed to the consolidate turn, verifying the output first', () => {

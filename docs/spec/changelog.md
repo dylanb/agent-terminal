@@ -1,6 +1,25 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
-> **Changelog v2.224:** **§23.6 — the controller's theme button is named for the theme it switches to, and a collapsed card shrinks to its header.** The button kept the label **Dark theme** and reported its state only through `aria-pressed`, so in dark mode it still read Dark theme on screen. It now reads **Dark theme** in light mode and **Light theme** in dark mode, with no pressed state, since a toggle's name may not change with its state. In the multi-column layout a collapsed card was stretched to the height of the tallest card in its row, so its outline looked expanded; cards now align to the top of the row and a collapsed card's outline wraps its header. No IPC contract change.
+## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
+
+§23.6: the window header's theme button read **Dark theme** in both themes and showed its state only
+through `aria-pressed`. It now names the theme it switches to — **Dark theme** in light mode, **Light
+theme** in dark mode — with no pressed state, since a toggle's name may not change with its state. In
+the multi-column layout a collapsed card stretched to the tallest card in its row, so its outline looked
+expanded; cards now align to the top of the row and a collapsed card's outline wraps its header. No IPC
+contract change.
+
+## #256 — tests guard app behaviour only
+
+§28.6 P6b and P6e, §28.10 and §28.11 no longer require a test of charter or recipe wording: the
+content-parity test, the `ui` charter's demand that contrast be checked in a real browser, and the
+recipe↔predicate canonical-example check are gone. Bundled charters and recipes keep only their
+load-validity tests, and P6e's design-system sentence matches TRACER-BULLET.md: token and stylesheet
+content needs no RED test, and any behaviour a slice adds is still proven RED-first with an `_electron`
+e2e. §27.15, §28.5.5 and §28.6 P6c no longer require a prompt's canonical example to be asserted
+well-formed against its predicate, and drop the predicate happy-path test from what the example anchors:
+the example still anchors the prompt few-shot and the fake-agent e2e, and the agent's self-check command
+runs the same predicate. The rule is CLAUDE.md § Test-driven development.
 
 > **Changelog v2.223:** **Spec, standards and design docs describe the current system and its reasons, not its history.** The code says what the system does; these documents say why. Each section is cut to the decision, constraint or accepted risk behind the code, and restated mechanism, finished build plans, superseded designs and version narration are removed. Every heading the code cites keeps its number. CLAUDE.md makes `src/shared/ipc.ts` authoritative over §6 prose for wire shapes. §10 and §11 are deleted (nothing cited them); §27.14 and §25.8 are deleted; §27.15 keeps only its test-seam sentence. The N8 deletion list, the granular-flow plan, the new-loop brief and the unreferenced design mockups are deleted. Claims the code contradicted are corrected, including the feature sections that still specified channels no code implements (`flow:openChild` §23.2, `flow:composeFeedback` §19.4, `viewer:ghRefresh` §20.3, `flow:list` §18), the never-built `layout.json` (§22.4) and cross-instance guard (§23.3), and the live done-todo cap (§16.4). Changelog entries older than v2.200 are dropped from this file. No IPC contract shape change.
 

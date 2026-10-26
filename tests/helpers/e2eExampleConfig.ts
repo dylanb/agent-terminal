@@ -20,6 +20,22 @@ function asReviewRounds(dir: string, loop: string): void {
   writeFileSync(join(dir, 'prompts', 'consolidate.md'), 'Consolidate this round\'s reviewer reports into one verdict.\n');
 }
 
+// The plan-loop gate the fixture runs: the gate options and approve side effect the e2e assert are this fixture's
+// input, not the shipped def's configuration.
+const PLAN_LOOP_GATE = [
+  { option: 'approve', side_effects: [{ kind: 'gh', action: 'mark-ready' }] },
+  { option: 'request-changes' },
+  { option: 'redo' },
+  { option: 'polish' },
+];
+
+function ownPlanLoopGate(dir: string): void {
+  const defPath = join(dir, 'plan-loop.yaml');
+  const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
+  def.gate = PLAN_LOOP_GATE;
+  writeFileSync(defPath, dump(def));
+}
+
 /** An operator config whose shared loops-v2/<loop>/ folder holds the bundled defs, so a fixture flow of any
  *  name resolves the real shipped loops (§27.8 fallback). The bundle groups defs by flow; a loop shipped by
  *  more than one flow takes the global-fallback flow's copy. Each of ROUND_PHASE_LOOPS runs as review rounds,
@@ -35,6 +51,7 @@ export function seedSharedExampleConfig(): string {
     }
   }
   for (const loop of ROUND_PHASE_LOOPS) asReviewRounds(join(root, 'loops-v2', loop), loop);
+  ownPlanLoopGate(join(root, 'loops-v2', 'plan-loop'));
   cpSync(join(process.cwd(), 'example', 'commands'), join(root, 'commands'), { recursive: true });
   const agents = userConfigAgentsDir(root);
   if (agents === null) throw new Error(`no agents directory under ${root}`);

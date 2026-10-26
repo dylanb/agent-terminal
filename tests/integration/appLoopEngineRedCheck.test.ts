@@ -4,7 +4,6 @@ import type { LoopCompletionPredicates } from '../../src/main/loopCompletionPred
 import type { createAppLoopEngine } from '../../src/main/appLoopEngine';
 import { exampleCapturedOutput, examplePhaseResult } from '../../src/shared/phaseResult';
 import { RED_CHECK_MISSING_WARNING } from '../../src/shared/redCheck';
-import { PHASE_RESULT_FIELDS } from '../../src/shared/phaseResult';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 import { CONSOLIDATE_KEY, REVIEW_KEY, ROSTER, STEP, TURN_KEY, createAppLoopEngineHarness, flushRedGate } from '../helpers/appLoopEngineHarness';
 
@@ -53,11 +52,10 @@ const finishRound = async (engine: Engine): Promise<void> => {
 const consolidating = (engine: Engine): boolean => engine.activeTurnKey() === CONSOLIDATE_KEY;
 
 describe('the RED work turn and the red check (§28.5.3)', () => {
-  it('tells the agent to run the repo red check and declare its intended failures when one is configured', () => {
+  it('tells the agent to run the repo red check when one is configured', () => {
     const engine = h.makeEngine(undefined, predicates({ command: COMMAND }));
     enterRed(engine);
     expect(h.injected[1]).toContain(COMMAND);
-    expect(h.injected[1]).toContain(`"${PHASE_RESULT_FIELDS.intendedFailures}"`);
   });
 
   it('holds the RED turn when the red check refuses, surfacing its reason', async () => {
@@ -179,10 +177,9 @@ describe('a verification-only RED (§28.5.3)', () => {
     engine.onInjectable();
   };
 
-  it('tells the agent how to write it, and hands it a result check that accepts it', () => {
+  it('hands the agent a result check that accepts it', () => {
     const engine = h.makeEngine(undefined, predicates({}));
     enterRed(engine);
-    expect(h.injected[1]).toContain(`"${PHASE_RESULT_FIELDS.verificationOnly}": true`);
     expect(h.injected[1]).toMatch(/check-artifact result \S+ failed-assertion no-build verification-only/);
   });
 

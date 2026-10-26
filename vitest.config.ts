@@ -20,8 +20,6 @@ export default defineConfig({
         },
       },
       {
-        // The contrast pins resolve var(), color-mix() and the cascade — the engine's job, not a
-        // regex's. Chromium computes the painted value; the test only does the WCAG arithmetic.
         test: {
           name: 'browser',
           include: ['tests/browser/**/*.test.ts'],

@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe('installing the examples installs each bundled reviewer as a sub-agent carrying its charter', () => {
-  it('writes <config>/agents/<loop>--<persona>.md for every reviewer, named so, with every tool and its charter as the body', () => {
+  it('writes <config>/agents/<loop>--<persona>.md for every reviewer, named so, with front-matter tools matching its definition and its charter as the body', () => {
     const res = applyInstallExamples(dirs, []);
     if (!res.ok) throw new Error(res.error);
     const reviewers = bundledReviewers(BUNDLE_LOOPS);
@@ -80,8 +80,7 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
       expect(existsSync(file), file).toBe(true);
       const { front, body } = parseAgent(readFileSync(file, 'utf8'));
       expect(front.name).toBe(name);
-      expect(r.tools, `${name} declares a tools list`).toBeUndefined();
-      expect(front.tools, `${name} restricts its tools`).toBeUndefined();
+      expect(front.tools, `${name} tools`).toBe(r.tools?.join(', '));
       expect(typeof front.description).toBe('string');
       expect(body).toBe(readFileSync(r.charterPath, 'utf8'));
     }
@@ -120,7 +119,7 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
     if (!res.ok) throw new Error(res.error);
   };
 
-  it('writes <codex>/agents/<loop>__<persona>.toml for every reviewer: valid TOML, named so, a no-file-changes line then its charter', () => {
+  it('writes <codex>/agents/<loop>__<persona>.toml for every reviewer: valid TOML, named so, ending with its charter', () => {
     install();
     const reviewers = bundledReviewers(BUNDLE_LOOPS);
     for (const r of reviewers) {
@@ -131,9 +130,7 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
       const agent = parseToml(readFileSync(file, 'utf8')) as Record<string, unknown>;
       expect(agent.name).toBe(name);
       expect(typeof agent.description).toBe('string');
-      const instructions = String(agent.developer_instructions);
-      expect(instructions.endsWith(readFileSync(r.charterPath, 'utf8'))).toBe(true);
-      expect(instructions.slice(0, instructions.length - readFileSync(r.charterPath, 'utf8').length)).toMatch(/never create, edit or delete/i);
+      expect(String(agent.developer_instructions).endsWith(readFileSync(r.charterPath, 'utf8'))).toBe(true);
     }
   });
 
@@ -151,10 +148,9 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
     expect(res.notInstalled).toContainEqual({ destination: 'codexAgents', root: codexHome() });
   });
 
-  it('installs a reviewer that has every tool (§27.4), carrying the no-file-changes line', () => {
+  it('installs a reviewer that has every tool (§27.4)', () => {
     const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: 'all', charter: 'c' })) as Record<string, unknown>;
     expect(agent.name).toBe('green_loop__impl_review_tests');
-    expect(String(agent.developer_instructions)).toMatch(/never create, edit or delete/i);
   });
 
   it('refuses a reviewer whose explicit tool list grants more than reading, since a Codex agent cannot be narrowed to it', () => {

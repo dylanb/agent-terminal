@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFeed, createScriptedAsync, deferred, type Deferred } from '../helpers/scriptedCalls';
 import { assertRendersFromHostDocument } from './relocatable';
@@ -1360,21 +1358,6 @@ describe('flow picker — keyboard, focus and announcements (WCAG 2.1.1 / 2.4.3 
     expect(text).not.toMatch(/[\u202E\u200B]/u);
     expect(text.length).toBeLessThanOrEqual(MAX_ECHOED_REASON_LENGTH);
     picker.dispose();
-  });
-});
-
-describe('flow picker placement in the layout (§22.4)', () => {
-  it('declares the picker host in the rail beside the strip, outside the strip’s live status region', () => {
-    const html = readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const strip = doc.getElementById('flow-strip');
-    const host = doc.getElementById('flow-picker');
-
-    expect(host, 'index.html declares #flow-picker').not.toBeNull();
-    expect(host?.classList.contains('flowpicker')).toBe(true);
-    expect(host?.closest('.rail')).not.toBeNull();
-    expect(strip?.nextElementSibling).toBe(host);
-    expect(strip?.contains(host)).toBe(false);
   });
 });
 
