@@ -208,6 +208,18 @@ async function createWindow(): Promise<void> {
     if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
     return startupReady;
   });
+  ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
+    handleCliInstall(m, () => ({
+      home: os.homedir(),
+      shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
+      currentPath: process.env.PATH ?? '',
+      invocation: resolveLaunchInvocation(
+        process.execPath,
+        process.defaultApp === true,
+        process.argv[1],
+        process.cwd(),
+      ),
+    })));
   let finishRegistration!: (accepted: boolean) => void;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
   const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
@@ -234,6 +246,7 @@ async function createWindow(): Promise<void> {
     unregisterController();
     finishRegistration(false);
     ipcMain.removeHandler(CH.startupReady);
+    ipcMain.removeHandler(CH.cliInstall);
   });
   const target = resolveRendererTarget({
     isPackaged: app.isPackaged,
@@ -1587,18 +1600,6 @@ async function createWindow(): Promise<void> {
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },
-      [CH.cliInstall]: (_e, m): CliInstallResult =>
-        handleCliInstall(m, () => ({
-          home: os.homedir(),
-          shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
-          currentPath: process.env.PATH ?? '',
-          invocation: resolveLaunchInvocation(
-            process.execPath,
-            process.defaultApp === true,
-            process.argv[1],
-            process.cwd(),
-          ),
-        })),
       // Install bundled examples (§18.1/§23.4/§27.8): bundles resolve build-aware (packaged resources vs
       // the unpackaged app path); the flow lands in the GLOBAL flow home read back as the global fallback by
       // resolveActiveDefinition, and the app loop definitions and commands land in the user-level

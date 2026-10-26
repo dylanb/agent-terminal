@@ -23,6 +23,7 @@
     "src/renderer/src/keymapController.ts",
     "src/renderer/src/keyboardSettings.ts",
     "src/renderer/src/cliInstall.ts",
+    "src/renderer/src/cliInstallAction.ts",
     "src/renderer/src/installExamples.ts",
     "src/renderer/src/menuActions.ts",
     "src/renderer/src/dom.ts",
