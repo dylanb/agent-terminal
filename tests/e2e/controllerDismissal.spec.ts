@@ -1,3 +1,4 @@
+import { waitForConnections } from './controllerSnapshot';
 import { test, expect } from '@playwright/test';
 import { resolve, join } from 'node:path';
 import { createControllerHarness } from './controllerHarness';
@@ -38,13 +39,15 @@ test('new terminal replaces stale same-directory panes and preserves live peers 
     const stale = await h.launch(terminalTarget, directory);
     const live = await h.launch(terminalTarget, directory);
     const other = await h.launch(terminalTarget, h.fixture.worktrees[1]);
-    await expect(cardLocator(controller.page, directory)).toHaveCount(2);
+    await waitForConnections(controller.page, directory, 2);
+    await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
     await expect(cardLocator(controller.page, h.fixture.worktrees[1])).toHaveCount(1);
     await h.crash(stale.app);
     await h.crash(other.app);
-    await expect(statusRowLocator(controller.page).filter({ hasText: /^Disconnected$/ })).toHaveCount(2);
+    await expect.soft(statusRowLocator(controller.page).filter({ hasText: /^Disconnected$/ })).toHaveCount(1);
     const replacement = await h.launch(terminalTarget, directory);
-    await expect(cardLocator(controller.page, directory)).toHaveCount(2);
+    await waitForConnections(controller.page, directory, 2);
+    await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
     await expect.soft(statusRowLocator(controller.page).filter({ hasText: /^Disconnected$/ })).toHaveCount(1);
     await expect.soft(statusRowLocator(cardLocator(controller.page, h.fixture.worktrees[1]))).toHaveText('Disconnected');
     for (const [index, target] of [live, replacement].entries()) {

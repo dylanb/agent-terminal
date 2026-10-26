@@ -121,7 +121,7 @@ export function unshownCounts(text: string, counts: ReadonlyArray<readonly [stri
   return best.map(([label, count]) => `${label} does not show ${count}`);
 }
 export const headerLabels = (summary: (label: string) => number, total: number, connected: number): Array<[string, number]> => [
-  ['total|terminals?', total], ['connected', connected], ['disconnected', total - connected],
+  ['total|cards?|terminals?', total], ['connected', connected], ['disconnected', total - connected],
   ...SUMMARY_LABELS.map(label => [label, summary(label)] as [string, number]),
 ];
 /** Whether a Show full reason control reports its reason as shown in full, through whichever of expanded, pressed or

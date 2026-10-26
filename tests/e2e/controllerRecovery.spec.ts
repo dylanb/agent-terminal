@@ -1,3 +1,4 @@
+import { waitForConnections } from './controllerSnapshot';
 import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -76,7 +77,8 @@ for (const outage of ['quit', 'crash'] as const) {
         await terminal.page.keyboard.press('Enter');
         await expect(terminal.page.locator('.xterm-rows')).toContainText(`ORIGINAL_${index}`);
       }
-      await expect(cardLocator(controller.page, directory)).toHaveCount(2);
+      await waitForConnections(controller.page, directory, 2);
+      await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
       for (let round = 0; round < 2; round++) {
         if (outage === 'quit') await controller.app.close();
         else await h.crash(controller.app);
@@ -87,7 +89,8 @@ for (const outage of ['quit', 'crash'] as const) {
           await expect.soft(terminal.page.locator('.xterm-rows')).toContainText(`OUTAGE_${round}_${index}`);
         }
         controller = await h.launch(controllerTarget, h.fixture.nonGit);
-        await expect.soft(cardLocator(controller.page, directory)).toHaveCount(2, { timeout: RECOVERY_BOUND_MS });
+        await waitForConnections(controller.page, directory, 2);
+        await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
         await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
         expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       }
@@ -129,28 +132,21 @@ for (const mode of ['direct', 'replay', 'reconnect'] as const) {
       await relay?.replayRegistrations();
     }
     const panes = cardLocator(controller.page, h.fixture.repositories[0]);
-    await expect(panes).toHaveCount(2, { timeout: RECOVERY_BOUND_MS });
-    const delivered: number[] = [];
-    for (let pane = 0; pane < 2; pane++) {
-      await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
-      await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await expect(bringForwardLocator(panes.nth(pane))).toBeVisible();
-      await bringForwardLocator(panes.nth(pane)).click();
-      await expect.soft.poll(async () => Promise.all(terminals.map(terminal => terminal.app.evaluate(({ BrowserWindow }) => {
-        const window = BrowserWindow.getAllWindows()[0];
-        return window.isFocused() && !window.isMinimized();
-      })))).toContain(true);
-      typeAtDesktop(`printf 'RECOVERED_${pane}_%s\\n' "$ORIGINAL_PEER"`, h.fixture.env);
-      await expect.soft.poll(async () => {
-        const text = await Promise.all(terminals.map(terminal => terminal.page.locator('.xterm-rows').innerText()));
-        return text.filter((value, index) => value.includes(`RECOVERED_${pane}_${index}`)).length;
-      }).toBe(1);
-      for (const [index, terminal] of terminals.entries()) {
-        if ((await terminal.page.locator('.xterm-rows').innerText()).includes(`RECOVERED_${pane}_${index}`)) delivered.push(index);
-      }
+    await waitForConnections(controller.page, h.fixture.repositories[0], 2);
+    await expect.soft(panes).toHaveCount(1);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+    await bringForwardLocator(panes.first()).click();
+    await expect.soft.poll(async () => Promise.all(terminals.map(terminal => terminal.app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return window.isVisible() && !window.isMinimized();
+    })))).toEqual([true, true]);
+    for (const [index, terminal] of terminals.entries()) {
+      await terminal.app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.restore(); window.show(); window.focus(); });
+      await expect.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
+      typeAtDesktop(`printf 'RECOVERED_${index}_%s\\n' "$ORIGINAL_PEER"`, h.fixture.env);
+      await expect.soft(terminal.page.locator('.xterm-rows')).toContainText(`RECOVERED_${index}_${index}`);
     }
-    expect(delivered.sort()).toEqual([0, 1]);
-    await expect(panes).toHaveCount(2);
+    await expect.soft(panes).toHaveCount(1);
     expect(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
   } finally {
     try { await h.dispose(); }

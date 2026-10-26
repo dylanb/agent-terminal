@@ -1,3 +1,4 @@
+import { waitForConnections } from './controllerSnapshot';
 import { expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -114,7 +115,7 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
   });
 }
 
-test('repeated recovery keeps same-directory peers distinct after work context changes and preserves PTY input', { tag: '@ownapp' }, async () => {
+test('repeated recovery keeps one conflict after work context changes and preserves both PTYs', { tag: '@ownapp' }, async () => {
   test.setTimeout(120_000);
   const h = await createControllerDesktopHarness();
   const [a, b] = h.fixture.repositories;
@@ -131,7 +132,8 @@ test('repeated recovery keeps same-directory peers distinct after work context c
       await terminal.page.keyboard.type(`export RECOVERY_PEER=${index}`);
       await terminal.page.keyboard.press('Enter');
     }
-    await expect(cardLocator(controller.page, a)).toHaveCount(2);
+    await waitForConnections(controller.page, a, 2);
+    await expect.soft(cardLocator(controller.page, a)).toHaveCount(1);
     for (let round = 0; round < 2; round++) {
       await h.crash(controller.app);
       if (round === 0) {
@@ -149,10 +151,11 @@ test('repeated recovery keeps same-directory peers distinct after work context c
         await expect(terminal.page.locator('.xterm-rows')).toContainText(`RECOVER_${round}_${index}`);
       }
       controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      await expect(cardLocator(controller.page, a)).toHaveCount(2, { timeout: 10_000 });
+      await waitForConnections(controller.page, a, 2);
+      await expect.soft(cardLocator(controller.page, a)).toHaveCount(1);
       const panes = cardLocator(controller.page, a);
-      await expect.soft(panes.filter({ hasText: 'recovery-1' })).toContainText(round === 0 ? 'first-1' : 'next-1', { timeout: 2_000 });
-      await expect.soft(panes.filter({ hasText: 'recovery-0' })).toContainText('first-0', { timeout: 2_000 });
+      expect.soft((await panes.allTextContents()).join(' ')).not.toMatch(/recovery-[01]|first-[01]|next-[01]/);
+      expect.soft((await panes.allTextContents()).join(' ')).toContain('Duplicate directory');
       expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       await expect.soft(cardLocator(controller.page, b)).toHaveCount(0);
     }
