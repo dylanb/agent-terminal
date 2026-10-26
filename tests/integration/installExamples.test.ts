@@ -84,7 +84,7 @@ const commandRel = 'groom-ticket.md';
 // actual bundled trees; home/configRoot give the temp install targets. Tests that need a broken bundle
 // swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
 /** Codex's home under the temp HOME, absent unless a test creates it — so no fixture can ever reach the
- *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1 v2.199). */
+ *  developer's own ~/.codex, and Codex counts as not installed by default (§18.1). */
 const codexHomeOf = (): string => path.join(home, '.codex');
 const seam = (over: Partial<InstallRoots> = {}): InstallDestination[] =>
   exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: codexHomeOf(), ...over });
@@ -674,7 +674,7 @@ describe('applyInstallExamples — first run seeds a config root that does not e
   });
 });
 
-describe('Codex destinations are installed only where Codex is (§18.1 v2.199)', () => {
+describe('Codex destinations are installed only where Codex is (§18.1)', () => {
   it('copies the whole loops-v2 bundle tree into an existing Codex home, byte for byte', () => {
     mkdirSync(codexHomeOf());
     const res = okOf(applyInstallExamples(dirs, []));

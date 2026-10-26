@@ -8,7 +8,7 @@ import {
   type ConsolidatorVerdict,
 } from '../../src/shared/consolidatorOutput';
 
-// §27.6 (v2.202) — the consolidator's output is JSON with one writer (the consolidator actor) and
+// §27.6 — the consolidator's output is JSON with one writer (the consolidator actor) and
 // readers (the completion validator that gates the turn, the branch that reads the verdict + roster). One
 // definition in the shared layer so the prompt composer, the completion gate, and the loop-state
 // reader/provider cannot drift. It grades the CLOSED verdict set and the roster⊆catalog relationship — never

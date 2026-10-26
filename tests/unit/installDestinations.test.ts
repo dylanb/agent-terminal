@@ -68,7 +68,7 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
   });
 });
 
-describe('exampleInstallDirs — the Codex destinations hang off the Codex home (§18.1 v2.199)', () => {
+describe('exampleInstallDirs — the Codex destinations hang off the Codex home (§18.1)', () => {
   it('targets the loops-v2 directory under the supplied Codex home', () => {
     expect(targetOf(exampleInstallDirs(loc, ROOTS), 'codexLoops')).toBe(codexLoopsV2Dir(CODEX_HOME));
   });

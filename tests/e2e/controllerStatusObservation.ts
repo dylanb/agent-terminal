@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { CARD_SELECTOR } from '../helpers/controllerCards';
 
 export const STATUS_BUDGET_MS = 30_000;
 
@@ -22,7 +23,7 @@ export interface StatusObservation<K extends string> {
 export async function observeStatus<K extends string>(page: Page, identity: string, patterns: Record<K, RegExp>, options: StatusObservationOptions = {}): Promise<() => Promise<StatusObservation<K>>> {
   const { start = 'now', holdMs = 0 } = options;
   const named = Object.entries<RegExp>(patterns).map(([name, pattern]) => ({ name, source: pattern.source, flags: pattern.flags }));
-  const observation = await page.evaluateHandle(({ identity, named, start, holdMs }) => {
+  const observation = await page.evaluateHandle(({ identity, named, start, holdMs, cardSelector }) => {
     const checks = named.map(({ source, flags }) => new RegExp(source, flags));
     let began = false;
     let held = holdMs === 0;
@@ -34,7 +35,7 @@ export async function observeStatus<K extends string>(page: Page, identity: stri
     const finish = () => { observer.disconnect(); unsubscribe(); unsubscribe = () => {}; resolveDone(); };
     const sample = () => {
       if (!began) return;
-      const pane = [...document.querySelectorAll('button')].find(button => button.textContent?.includes(identity));
+      const pane = [...document.querySelectorAll<HTMLElement>(cardSelector)].find(card => card.textContent?.includes(identity));
       if (pane) {
         const text = pane.innerText;
         if (texts.at(-1) !== text) texts.push(text);
@@ -55,7 +56,7 @@ export async function observeStatus<K extends string>(page: Page, identity: stri
     });
     sample();
     return { done, finish, result: () => ({ seen: [...seen], texts: [...texts] }) };
-  }, { identity, named, start, holdMs });
+  }, { identity, named, start, holdMs, cardSelector: CARD_SELECTOR });
   return async () => {
     try {
       const { seen, texts } = await observation.evaluate(async (value, budget) => {

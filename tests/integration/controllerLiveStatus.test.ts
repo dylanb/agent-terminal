@@ -12,6 +12,7 @@ import type { ControllerIdentity } from '../../src/main/controllerIdentity';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot } from '../../src/shared/ipc';
 import { installControllerIpc } from '../../src/main/controllerIpc';
+import { createControllerSettingsStore } from '../../src/main/controllerSettings';
 import { workStatus, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 vi.mock('electron', () => ({ ipcMain: {
@@ -98,7 +99,7 @@ it('carries real-socket status through the actual controller IPC snapshot bounda
   disposeIpc = installControllerIpc({
     isDestroyed: () => false,
     send(channel: string, value: ControllerSnapshot) { if (channel === CONTROLLER_CH.terminals) snapshot = value; },
-  }, server);
+  }, server, createControllerSettingsStore(root));
   publish(socket, work);
   await expect.poll(() => snapshot).toMatchObject({ sessionId: SESSION_ID, terminals: [expect.objectContaining({ launchDirectory: '/repo/ipc', work })] });
 });

@@ -314,7 +314,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
   });
 
   it('merges a report streamed across a quiet pause into one capture, retracting the partial (§15.3 seal-on-witness)', async () => {
-    // Seal-on-witness (§15.3 / v2.22): a bottom-most unit with no witness below it — no
+    // Seal-on-witness (§15.3): a bottom-most unit with no witness below it — no
     // following content and no turn-complete composer — is PROVISIONAL, not sealed. When the
     // stream resumes and that same buffer position grows, the partial is retracted and the
     // fuller capture replaces it: a report paused mid-stream is ONE capture, not two.
@@ -412,7 +412,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(removed).toContain('1');
   });
 
-  it('merges a report streamed with the input composer pinned below it, not one chunk per pause (§15.3 / v2.25)', async () => {
+  it('merges a report streamed with the input composer pinned below it, not one chunk per pause (§15.3)', async () => {
     // Claude Code keeps its rule-framed composer (────/❯/────/strip) pinned at the viewport
     // bottom WHILE STREAMING (the strip reads "esc to interrupt"). A composer below the output
     // is therefore NOT proof the turn is done — the bottom unit can still grow. Sealing up to
@@ -626,7 +626,7 @@ describe('self-injection suppression end-to-end (§16.5 — real shadow + inject
   });
 });
 
-// §21.1 / v2.27: the app retired auto-emit-on-quiet — a "Capture last report" button drives
+// §21.1: the app retired auto-emit-on-quiet — a "Capture last report" button drives
 // captureLast() on demand. The scanner only subscribes to onQuiet when one is supplied (tests
 // still do, above), so these dormant scanners prove the button path alone.
 describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)', () => {

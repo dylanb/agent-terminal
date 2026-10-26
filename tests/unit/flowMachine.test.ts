@@ -276,7 +276,7 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
 // half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
 // re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
 // PRESERVING resolved inputs so the operator can fix the cause and re-advance; from the first step there is no
-// previous step, so it resets the run to never-started as a Terminate does (§18.7.4, v2.161). It is a no-op guard, not
+// previous step, so it resets the run to never-started as a Terminate does (§18.7.4). It is a no-op guard, not
 // a throwing transition: it fires from an async pickup `.then()`, so a stale call (the flow already
 // moved on) must be inert rather than an unhandled rejection.
 describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)', () => {
@@ -346,7 +346,7 @@ describe('flow state machine — revertStep (§18.3 bootstrap-failure rollback)'
     expect(flow.revertStep('implement').status).toBe('done');
   });
 
-  it('resets a first-step rollback to never-started as a Terminate does, discarding resolved inputs (§18.7.4, v2.161)', () => {
+  it('resets a first-step rollback to never-started as a Terminate does, discarding resolved inputs (§18.7.4)', () => {
     const FIRST_LOOP: FlowLoad = {
       ok: true,
       definition: {
@@ -412,7 +412,7 @@ describe('flow state machine — loop-step §27 loop view (§27.15)', () => {
 // github-ticket / pr typed inputs surface only once the step that requests them is entered, and stay
 // until a terminate/restart resets the flow. Numbers only — descriptions are fetched lazily by the
 // renderer. Refs come from the flow's typed inputs ALONE; the retired engine's state-mirror
-// linked_issues/pr fallback went with its bridge (§B.3, recorded as a removed capability in §F).
+// linked_issues/pr fallback went with its bridge.
 describe('flow state machine — ticket/PR refs (progress-gated)', () => {
   const APP_LOOP_VIEW: FlowLoopView = { status: 'planning', iteration: 1, pr: null, branch: null, ready: false, actionable: false, humanNeeded: false };
   const TICKET_FLOW: FlowLoad = {

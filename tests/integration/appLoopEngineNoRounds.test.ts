@@ -7,7 +7,7 @@ import type { LoopDefV2 } from '../../src/main/loopDefV2';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { createAppLoopEngineHarness, STEP, TURN_KEY } from '../helpers/appLoopEngineHarness';
 
-// §27.3 (v2.200) — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
+// §27.3 — a loop whose def runs no engine review rounds goes from its work turn straight to its gate,
 // and a goal work turn is submitted as one `/goal` command whose condition names the full work prompt, written
 // to a file the engine owns, so the session keeps working, running the loop's reviewers itself, until it holds.
 
@@ -34,7 +34,7 @@ const goalDef = (): LoopDefV2 => {
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('a loop with no review rounds goes from its work turn straight to its gate (§27.3 v2.200)', () => {
+describe('a loop with no review rounds goes from its work turn straight to its gate (§27.3)', () => {
   it('reaches the gate as clean on the work turn, and injects nothing after the work prompt', () => {
     const gateReaching = vi.fn();
     const engine = makeEngine(undefined, undefined, undefined, { gateReaching });
@@ -80,7 +80,7 @@ describe('a loop with no review rounds goes from its work turn straight to its g
   });
 });
 
-describe('a goal work turn is one /goal command naming the full work prompt on disk (§27.3 v2.200)', () => {
+describe('a goal work turn is one /goal command naming the full work prompt on disk (§27.3)', () => {
   const goalCommand = (): string => {
     const cmd = h.injected.find((p) => p.startsWith('/goal '));
     if (cmd === undefined) throw new Error(`no /goal command was injected: ${JSON.stringify(h.injected)}`);
@@ -145,7 +145,7 @@ describe('a goal work turn is one /goal command naming the full work prompt on d
   });
 });
 
-describe('a goal session reviews by the same rules as an engine round (§27.3/§27.8 v2.201)', () => {
+describe('a goal session reviews by the same rules as an engine round (§27.3/§27.8)', () => {
   const goalPrompt = (): string => {
     const cmd = h.injected.find((p) => p.startsWith('/goal '));
     const rel = cmd === undefined ? undefined : /\.agent-terminal\/\S+\.md/.exec(cmd)?.[0];

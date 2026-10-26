@@ -392,13 +392,13 @@ describe('audit recorder — terminate finalization (§25.4 / #26)', () => {
   });
 });
 
-// §H.1 — `loop.cost` and `loop.ci` are CLOSED to new writers. The READER still folds both (audit.test.ts)
-// so a pre-sweep stream reconstructs whole, but the writer half is retired (§B.14): NO production emitter may
+// `loop.cost` and `loop.ci` are CLOSED to new writers. The READER still folds both (audit.test.ts)
+// so a pre-sweep stream reconstructs whole, but the writer half is retired: NO production emitter may
 // produce either kind, or one union member would carry two meanings on the unversioned, never-migrated
 // append-only log and `reconstructTimeline` would merge pre- and post-sweep records (N7/#92 takes distinct
 // `app.cost`/`app.ci` names instead). This guards the failure mode the sweep left unpinned: a re-added emitter
 // method on the §25 writer compiles clean and leaves the behavioural suite green because nothing drives it.
-describe('audit writer — the retired cost/ci kinds stay closed to new writers (§H.1)', () => {
+describe('audit writer — the retired cost/ci kinds stay closed to new writers', () => {
   const writerSrc = readFileSync(new URL('../../src/main/auditRecorder.ts', import.meta.url), 'utf8');
 
   // The writer neither declares the retired union (that is the reader, `audit.ts`) nor reads these kinds, so

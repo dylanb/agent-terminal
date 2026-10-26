@@ -1,31 +1,32 @@
-import { page } from 'vitest/browser';
 import { expect, it } from 'vitest';
 import '../../src/renderer/src/styles.css';
-import { createControllerPanes } from '../../src/renderer/src/controllerPanes';
-import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
+import { bringForwardIn, cardIn, statusRowIn } from '../helpers/controllerCards';
+import { mountControllerPanes } from '../helpers/controllerMount';
+import { statusTerminal } from '../helpers/controllerStatusFixture';
 
 it('does not retain live attention after disconnect, dismissal or recovery', () => {
-  const host = document.createElement('main');
-  document.body.append(host);
+  const parent = document.createElement('main');
+  document.body.append(parent);
   const blocked = statusTerminal({ attention: { status: 'complete', reasons: ['OUTDATED_HALT'] }, error: { reason: 'OUTDATED_ERROR' } });
   const peer = { ...statusTerminal(), id: 'peer', launchDirectory: '/peer' };
-  const service = statusService([blocked, peer]);
-  const panes = createControllerPanes(host, { controller: service.api });
+  const { host, service, dispose } = mountControllerPanes({ terminals: [blocked, peer], parent });
+  const peerButton = () => { const card = cardIn(host, '/peer'); return card ? bringForwardIn(card) : undefined; };
   try {
     expect(host.textContent).toContain('OUTDATED_HALT');
-    const peerButton = page.elementLocator(host).getByRole('button', { name: /\/peer/ });
-    (peerButton.element() as HTMLElement).focus();
+    const focusTarget = peerButton();
+    focusTarget?.focus();
     service.publish([{ ...blocked, status: 'disconnected' }, peer]);
-    expect.soft(host.textContent).toMatch(/disconnected/i);
+    const gone = cardIn(host, blocked.launchDirectory);
+    expect.soft(gone ? statusRowIn(gone)?.textContent?.trim() : undefined).toBe('Disconnected');
     expect.soft(!/OUTDATED_HALT|OUTDATED_ERROR/.test(host.textContent ?? '') || /last.known/i.test(host.textContent ?? ''), 'disconnected details must be absent or explicitly last-known').toBe(true);
-    expect.soft(document.activeElement).toBe(peerButton.element());
+    expect.soft({ peer: Boolean(focusTarget), focused: focusTarget !== undefined && document.activeElement === peerButton() }).toEqual({ peer: true, focused: true });
     service.publish([peer]);
     expect.soft(host.textContent, 'dismissal removes the ended terminal attention').not.toMatch(/OUTDATED_HALT|OUTDATED_ERROR/);
     const recovered = { ...statusTerminal({ flow: { availability: 'known', name: 'current-flow', step: 'verify', assignment: 'assigned' } }), id: 'recovered' };
     service.publish([recovered, peer]);
     expect.soft(host.textContent).toContain('current-flow');
     expect.soft(host.textContent, 'recovery cannot replay obsolete attention').not.toMatch(/OUTDATED_HALT|OUTDATED_ERROR/);
-    expect.soft(document.activeElement).toBe(peerButton.element());
+    expect.soft({ peer: Boolean(peerButton()), focused: document.activeElement === peerButton() }).toEqual({ peer: true, focused: true });
     expect(service.activated).toEqual([]);
-  } finally { panes.dispose(); host.remove(); }
+  } finally { dispose(); parent.remove(); }
 });

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { observeStatus, STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { autoGateFlowYaml, seedTrustedFlow } from './autoGateHarness';
+import { cardLocator, dismissLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -39,13 +40,14 @@ fi
       await initial.app.close();
       rmSync(h.fixture.env.TITLE_ALLOW, { force: true });
       rmSync(h.fixture.env.TITLE_STARTED, { force: true });
-      await controller.page.getByRole('button', { name: `Dismiss disconnected terminal ${repo}`, exact: true }).click();
+      await expect(dismissLocator(cardLocator(controller.page, repo))).toBeVisible();
+      await dismissLocator(cardLocator(controller.page, repo)).click();
       const initialPatterns: Record<string, RegExp> = { issue: /#219/, flow: /ticket-flow/, step: /implement/, ...(title === 'slow' ? {} : { title: title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i }) };
       const initialStatus = await observeStatus(controller.page, repo, initialPatterns, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Advance');
       await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ runStarted: 'started', refs: { ticket: 219, pr: 236 } });
-      const pane = controller.page.getByRole('button', { name: repo, exact: false });
+      const pane = cardLocator(controller.page, repo);
       const { shown } = await initialStatus();
       expect.soft({ ['issue in the initial status']: shown.issue }).toEqual({ ['issue in the initial status']: true });
       expect.soft({ ['flow in the initial status']: shown.flow }).toEqual({ ['flow in the initial status']: true });
@@ -79,7 +81,7 @@ test('real malformed flow remains an error rather than an unassigned terminal', 
     await expect(terminal.page.locator('#flow-strip .flow-error')).toBeVisible();
     await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ status: 'error' });
     const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
-    const pane = controller.page.getByRole('button', { name: repo, exact: false });
+    const pane = cardLocator(controller.page, repo);
     const errorShown = await errorStatus();
     expect.soft({ ['error in the initial status']: errorShown.shown.error }).toEqual({ ['error in the initial status']: true });
     expect(source.error).toBeTruthy();
@@ -104,7 +106,7 @@ test('real PTY activity remains visible without a started flow and never implies
     const activityStatus = await observeStatus(controller.page, repo, { active: /active/i, unassigned: /unassigned/i });
     await terminal.page.keyboard.press('Enter');
     await expect(terminal.page.locator('.xterm-rows')).toContainText('SCREEN_ACTIVITY_');
-    const pane = controller.page.getByRole('button', { name: repo, exact: false });
+    const pane = cardLocator(controller.page, repo);
     const { shown: activityShown } = await activityStatus();
     expect.soft({ ['active shown']: activityShown.active }).toEqual({ ['active shown']: true });
     expect.soft({ ['unassigned shown']: activityShown.unassigned }).toEqual({ ['unassigned shown']: true });

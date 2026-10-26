@@ -622,12 +622,12 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
 
-test('a printed Claude-style permission box produces no semantic capture card (v2.6)', async () => {
+test('a printed Claude-style permission box produces no semantic capture card', async () => {
   await typeCommand(
     "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
   );
   await expect(termRows()).toContainText('Do you want to proceed?');
-  // Permission/question detection was removed (v2.6): a box is chrome, so capture surfaces no finding.
+  // Permission/question detection was removed: a box is chrome, so capture surfaces no finding.
   await clickCaptureLast();
   await expect(page.locator('#monitor-blocks .finding')).toHaveCount(0);
 });
@@ -1729,7 +1729,7 @@ function seedServedTicket(ticket: ServedTicket): { dir: string; env: Record<stri
 }
 
 // §24.2.3 T7 — refs come from the flow's TYPED INPUTS now (§18.4); the retired engine's state-mirror
-// source (linked_issues/pr) went with the bridge (§F item 12). A pre-loop MANUAL `groom` step then a
+// source (linked_issues/pr) went with the bridge. A pre-loop MANUAL `groom` step then a
 // `work` step declaring the ticket/PR typed inputs, whose values are pre-resolved in flow-state.yaml, so
 // the refs are progress-gated on entering `work` (they render as the §24.2.3 T7 "Flow" refs read-out). A
 // residual `.agent-terminal/loop/run-state.yaml` sits on disk that the app never writes — a test proves the
@@ -2219,7 +2219,7 @@ test('todo edits during an active flow are recorded; none when no flow is active
 // state; its status changes append live.
 test('a §27 loop step records its run-state and its status changes append loop.status + an empty outputs.snapshot (§25.5)', { tag: '@ownapp' }, async () => {
   // The §27 engine's OWN run-state changes (through `working` to the `complete` gate) are what the §25
-  // recorder observes now — the retired external state-mirror source is gone (§F). Driven by a real turn.
+  // recorder observes now — the retired external state-mirror source is gone. Driven by a real turn.
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-audit-loop-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-audit-loop-bin-');
@@ -2237,7 +2237,7 @@ test('a §27 loop step records its run-state and its status changes append loop.
 
   const file = (): string => auditRunFiles(home, repo)[0];
   // loop.status appends on each run-state status change; the round the consolidator judged appends
-  // loop.iteration. pr.assoc CANNOT fire — the §27 run-state carries no PR number (§F).
+  // loop.iteration. pr.assoc CANNOT fire — the §27 run-state carries no PR number.
   await expect
     .poll(() => readAuditRun(home, repo, file()).events.map((e) => e.type))
     .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration']));
@@ -2247,7 +2247,7 @@ test('a §27 loop step records its run-state and its status changes append loop.
     .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'loop.status').length)
     .toBeGreaterThanOrEqual(2);
   // Each status change still snapshots the retired .agent-loop/ area read-only (§25.5); a §27 repo has no
-  // such directory, so the snapshot is empty — a documented residue of the retired engine (§F).
+  // such directory, so the snapshot is empty — a documented residue of the retired engine.
   const snap = readAuditRun(home, repo, file()).events.find(
     (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
   );
@@ -2402,7 +2402,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   const reviewerAgent = readIf(join(configDir, 'agents', 'green-loop--impl-review-principal.md'));
   expect(reviewerAgent).toContain('name: green-loop--impl-review-principal');
   expect(reviewerAgent).toContain(readFileSync(join('example', 'loops-v2', 'feature-dev-v3', 'green-loop', 'charter', 'principal.md'), 'utf8'));
-  // §18.1 v2.199 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
+  // §18.1 — Codex is installed here, so the bundled loops landed in its home too, byte for byte.
   const codexLoopRel = join('loops-v2', 'feature-dev-v3', 'integration-slice-loop', 'integration-slice-loop.yaml');
   expect(readIf(join(codexHome, codexLoopRel))).toBe(readFileSync(join('example', codexLoopRel), 'utf8'));
   await expect(installReportGroup('codexLoops')).toContainText('integration-slice-loop.yaml');
@@ -2431,7 +2431,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   rmSync(codexHome, { recursive: true, force: true });
 });
 
-test('with no Codex home, installing the examples creates nothing for Codex and says why (§18.1 v2.199)', { tag: '@ownapp' }, async () => {
+test('with no Codex home, installing the examples creates nothing for Codex and says why (§18.1)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-nocodex-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-nocodex-cfg-'));
   const codexHome = join(home, '.codex');
@@ -3834,11 +3834,11 @@ test('a pickup still in flight when its held run is resumed onto another flow is
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
-test('a def resolved from the REPOSITORY tier declaring a pickup contract bootstraps — branch, draft PR and its own initial_labels reach gh (§B.13a / §F item 18)', { tag: '@ownapp' }, async () => {
-  // The operator's origin decision made visible (§F item 18): the executor no longer refuses a
+test('a def resolved from the REPOSITORY tier declaring a pickup contract bootstraps — branch, draft PR and its own initial_labels reach gh', { tag: '@ownapp' }, async () => {
+  // The operator's origin decision made visible: the executor no longer refuses a
   // non-operator-tier def, so a repo whose .agent-loop.yaml maps the bound name to an IN-REPO v2 def with a
   // pickup: block reaches branch creation and the draft PR. The repo def's initial_labels are DISTINCT from
-  // the app-bundled def's, so a passing label assertion can only have come from the repo def (§B.13a).
+  // the app-bundled def's, so a passing label assertion can only have come from the repo def.
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-repo-pickup-');
   const repoDef = join(repo, 'loops', 'plan-loop');
   cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), repoDef, { recursive: true });
@@ -3897,13 +3897,13 @@ test('a def resolved from the REPOSITORY tier declaring a pickup contract bootst
 
 // AC 6 tracer, assertion (a) + the bootstrap half of (f) — the sweep's grep-invisible AC 10 change made
 // visible end-to-end. A pre-N1 flow file that names NO loop_namespace now binds the SURVIVING §27 engine
-// (absence → app, §B.4) and runs to its gate; before the sweep the same file bound the retired in-terminal
+// (absence → app) and runs to its gate; before the sweep the same file bound the retired in-terminal
 // engine. Its `bootstrap: pickup` entry action still sets up the branch + draft PR (AC 10). Full-stack
 // acceptance pin; its RED sibling is the committed namespace-vocabulary unit test (a namespace-less binding
-// selected the retired engine pre-sweep, §B.4) and the position-4 bootstrap-preparer test. A hosted agent
+// selected the retired engine pre-sweep) and the position-4 bootstrap-preparer test. A hosted agent
 // holds the shell here (busy, §19.3), so a
 // `skill` would be refused — the skill half of (f) is proven at a ready prompt in the next test.
-test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (§B.4 / AC 10)', { tag: '@ownapp' }, async () => {
+test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (AC 10)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
@@ -3911,7 +3911,7 @@ test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branc
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-a\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
-      // NO loop_namespace on this loop step — absence binds the surviving engine (§B.4).
+      // NO loop_namespace on this loop step — absence binds the surviving engine.
       '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
       '    bootstrap: pickup\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
@@ -3960,11 +3960,11 @@ test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branc
 
 // AC 6 tracer, the skill half of (f) — a namespace-less step's `skill` entry action is honoured too. At a
 // READY prompt (no hosted agent holding the shell, so the §19.3 refusal does not fire) the coordinator
-// injects the skill on its bootstrap-success hand-off (§B.5 item 6), so its invocation reaches the PTY while
+// injects the skill on its bootstrap-success hand-off, so its invocation reaches the PTY while
 // the SAME step's `bootstrap: pickup` sets up the branch. Before the sweep the app dispatch short-circuited
-// both (§D.4 row 2844 RED). A raised submit delay keeps the injected skill line alone in the viewport: its
+// both. A raised submit delay keeps the injected skill line alone in the viewport: its
 // own submit `\r` — and the work prompt the coordinator chains after it — land after this test observes it.
-test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pickup sets up the branch — AC 6 tracer (f) (§B.5 item 6 / AC 10)', { tag: '@ownapp' }, async () => {
+test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pickup sets up the branch — AC 6 tracer (f) (AC 10)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
@@ -3972,7 +3972,7 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
     join(repo, '.agent-terminal', 'flow.yaml'),
     'name: tracer-f\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
-      // NO loop_namespace → binds §27 (§B.4) — declaring BOTH per-step entry actions AC 10 preserves.
+      // NO loop_namespace → binds §27 — declaring BOTH per-step entry actions AC 10 preserves.
       '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
       '    skill: /tracer-skill\n    bootstrap: pickup\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
@@ -4004,7 +4004,7 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
   await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
   expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
 
-  // The skill invocation reached the PTY on the coordinator's success hand-off (§B.5 item 6).
+  // The skill invocation reached the PTY on the coordinator's success hand-off.
   await expect(termRows()).toContainText('/tracer-skill', { timeout: 15_000 });
 
   await app.close();
@@ -4015,8 +4015,8 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
 // migrated its config, and the named cost of the re-point is PAID by migrating rather than failing (AC 5).
 // The config carries ONLY the retired operator tier (loops/), no loops-v2/, so the app-namespace step
 // resolves plan-loop from the APP BUNDLE, writes its own copy into the surviving loops-v2 tier, tells the
-// operator once, and runs to its gate — while the retired tree is left byte-for-byte untouched (§B.6).
-test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its def, notifies once and drives to its gate — AC 6 tracer (c)/(d) (§B.6 / AC 5)', { tag: '@ownapp' }, async () => {
+// operator once, and runs to its gate — while the retired tree is left byte-for-byte untouched.
+test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its def, notifies once and drives to its gate — AC 6 tracer (c)/(d) (AC 5)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-tracer-cd-');
   // Named as the shipped flow whose bundled folder carries plan-loop, so the bundle answers (§27.8).
   const flowFile = join(repo, '.agent-terminal', 'flow.yaml');
@@ -4064,8 +4064,8 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
 
 // AC 6 tracer, assertion (b) — a step that names the RETIRED namespace fails per-step with a route out and
 // strands nothing, while a MISSPELLED namespace fails the whole load with a reason naming the real cause
-// (§B.3/§B.4 / AC 4). RED siblings: the committed namespace-vocabulary + flowDefinition load-reason units.
-test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (§B.4 / AC 4)', { tag: '@ownapp' }, async () => {
+// (AC 4). RED siblings: the committed namespace-vocabulary + flowDefinition load-reason units.
+test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (AC 4)', { tag: '@ownapp' }, async () => {
   const legacyRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-legacy-'));
   mkdirSync(join(legacyRepo, '.agent-terminal'), { recursive: true });
   writeFileSync(
@@ -4084,7 +4084,7 @@ test('a legacy-bound step surfaces a per-step reason with a route out; a misspel
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  // The legacy-bound step LOADS (the retired namespace is still recognized, §B.4) and enters, but its loop
+  // The legacy-bound step LOADS (the retired namespace is still recognized) and enters, but its loop
   // view is an error naming the retired engine — with the rest of the flow still operable (Advance routes out).
   await typeCommand(`cd "${legacyRepo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
@@ -4999,7 +4999,7 @@ test('a §27 polish stands the orchestrator down, survives a relaunch, and appro
   expect(existsSync(polishFile)).toBe(true); // still standing down
 
   // AC6 — approve ends polish: it clears the stand-down, runs the loop's gh side-effect (plan → PR non-draft
-  // flip) on the PR this run's pickup opened, which the relaunch kept (§27.13 v2.211), reaches the terminal
+  // flip) on the PR this run's pickup opened, which the relaunch kept (§27.13), reaches the terminal
   // accept, and the flow advances off the loop step.
   await loopPanel().locator('[data-gate-option="approve"]').click();
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
@@ -5825,7 +5825,7 @@ test('a symlinked .agent-terminal degrades the flow to a blocking error and neve
   // land" device: that transition-write surfacing + retryability is covered at the unit boundary
   // (flowStrip.test.ts injects a throwing start()), and no real write-fail device is reachable in the
   // rootless-Podman e2e without tripping this same read gate (container-root bypasses chmod; any read
-  // perturbation of flow-state trips the gate first). See changelog v2.156.
+  // perturbation of flow-state trips the gate first).
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-symlink-real-'));
@@ -7685,7 +7685,7 @@ async function driveToEpicPlanApproveGate(repo: string, home: string): Promise<v
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
 }
 
-// ---- §27.3 v2.200 — feature-dev-v3 grooms in three steps: interview, one goal session, then the operator's approval ----
+// ---- §27.3 — feature-dev-v3 grooms in three steps: interview, one goal session, then the operator's approval ----
 // The fake agent answers the interview and approval work prompts by their done-signal key, and the groom step by the
 // one-line `/goal` command, keeping the prompt file that command names so the test can read what the session was told.
 function seedGroomV3Agent(binDir: string): void {
@@ -7707,7 +7707,7 @@ function seedGroomV3Agent(binDir: string): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and moves on when the operator approves', { tag: '@ownapp' }, async () => {
+test('§27.3 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and moves on when the operator approves', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-groomv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7756,7 +7756,7 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('§27.12 v2.201 — a stalled goal session shows how to get it going, and the session it resumes stops its auto step for a human when it is blocked', { tag: '@ownapp' }, async () => {
+test('§27.12 — a stalled goal session shows how to get it going, and the session it resumes stops its auto step for a human when it is blocked', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-stallv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7803,7 +7803,7 @@ test('§27.12 v2.201 — a stalled goal session shows how to get it going, and t
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('§27.3 v2.207 — once the operator resolves a blocked goal session in the session, its rewritten done-signal takes the step on through its auto gate', { tag: '@ownapp' }, async () => {
+test('§27.3 — once the operator resolves a blocked goal session in the session, its rewritten done-signal takes the step on through its auto gate', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-unblock-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7843,7 +7843,7 @@ test('§27.3 v2.207 — once the operator resolves a blocked goal session in the
 });
 
 // Without shell integration there is no command span, so the agent is read from the terminal's foreground process.
-for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detected from what the terminal runs (shell integration ${integration === '1' ? 'on' : 'off'}), a goal session spawns its reviewers as their Codex agents`, { tag: '@ownapp' }, async () => {
+for (const integration of ['1', '0']) test(`§27.4 — under Codex, detected from what the terminal runs (shell integration ${integration === '1' ? 'on' : 'off'}), a goal session spawns its reviewers as their Codex agents`, { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-codexv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7894,7 +7894,7 @@ function seedV3Config(prefix: string): string {
   return cfg;
 }
 
-test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal sessions that review their own work, compacts them between legs, approves the plan once, lets the operator send the slice back to RED from the final approval, and finishes on approve', { tag: '@ownapp' }, async () => {
+test('§27.3/#212 — feature-dev-v3 plans and implements in goal sessions that review their own work, compacts them between legs, approves the plan once, lets the operator send the slice back to RED from the final approval, and finishes on approve', { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(13));
   const repo = seedV3ChainRepo('agent-term-e2e-implv3-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
@@ -7949,7 +7949,7 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   const stepsInReport = (): string[] => implReport().split('\n').filter((l) => l.startsWith('## ')).map((l) => l.slice(3));
   await expect.poll(stepsInReport, { timeout: EPIC_GATE_WAIT.gate }).toEqual([...implSteps, 'impl-approve']);
   expect(implReport()).toContain('run 1 of red');
-  // §27.12 v2.202 — each session ran the real bundled check its prompt handed it, after writing its file, and
+  // §27.12 — each session ran the real bundled check its prompt handed it, after writing its file, and
   // every check passed: each goal session's progress and result.
   const checks = readIf(join(repo, '.agent-terminal', 'checker-log'));
   for (const file of [

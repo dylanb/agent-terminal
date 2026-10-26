@@ -5,6 +5,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { seedTrustedFlow } from './autoGateHarness';
 import { STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { cardLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -57,7 +58,7 @@ fi
         currentIssue = 219;
       }
       await expect(terminal.page.locator('#status-bar')).toContainText(new RegExp(`(?:#|CURRENT_TITLE_)${currentIssue}`));
-      const pane = controller.page.getByRole('button', { name: a, exact: false });
+      const pane = cardLocator(controller.page, a);
       await expect.soft(pane).toContainText(`CURRENT_TITLE_${currentIssue}`, { timeout: STATUS_BUDGET_MS });
       expect(existsSync(h.fixture.env.TITLE_RELEASED)).toBe(false);
       const observation = await controller.page.evaluateHandle(() => {
@@ -74,7 +75,7 @@ fi
       await observation.dispose();
       expect.soft(observed.every(text => !text.includes('OBSOLETE_TITLE_219') && !text.includes('PRIVATE BODY'))).toBe(true);
       await expect.soft(pane).toContainText(a);
-      await expect.soft(controller.page.getByRole('button', { name: b, exact: false })).toHaveCount(0);
+      await expect.soft(cardLocator(controller.page, b)).toHaveCount(0);
     } finally {
       if (h.fixture.env.TITLE_ALLOW) writeFileSync(h.fixture.env.TITLE_ALLOW, 'release during cleanup');
       await h.dispose();

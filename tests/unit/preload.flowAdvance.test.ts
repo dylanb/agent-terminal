@@ -22,7 +22,7 @@ function exposedFlow(): FlowApi {
 
 beforeEach(() => invoke.mockClear());
 
-describe('window.flow.advance (§6, changelog v2.185)', () => {
+describe('window.flow.advance (§6)', () => {
   it('advances without a step, sending a request main accepts', async () => {
     invoke.mockResolvedValueOnce({ stepName: 'green' });
 

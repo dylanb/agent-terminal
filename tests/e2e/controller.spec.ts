@@ -7,6 +7,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
+import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
 
 test('controller explains how to connect the first terminal', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -34,7 +35,7 @@ test('controller launches separately and identifies two independent terminals', 
     }
     expect(new Set([controller, ...terminals].map(instance => instance.app.process().pid)).size).toBe(3);
     for (const directory of h.fixture.repositories) {
-      await expect.soft(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
+      await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
     }
   } finally {
     await h.dispose();
@@ -53,8 +54,8 @@ test('controller keeps launch identity after real shell navigation', { tag: '@ow
     await terminal.page.keyboard.type(`cd ${shellQuote(destination)} && printf 'NAVIGATED_%s\\n' "$PWD"`);
     await terminal.page.keyboard.press('Enter');
     await expect(terminal.page.locator('.xterm-rows')).toContainText(`NAVIGATED_${destination}`);
-    await expect.soft(controller.page.getByRole('button', { name: original, exact: false })).toHaveCount(1);
-    await expect(controller.page.getByRole('button', { name: destination, exact: false })).toHaveCount(0);
+    await expect.soft(cardLocator(controller.page, original)).toHaveCount(1);
+    await expect(cardLocator(controller.page, destination)).toHaveCount(0);
   } finally {
     await h.dispose();
   }
@@ -68,7 +69,7 @@ test('controller distinguishes two worktrees and a non-Git launch', { tag: '@own
       await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory);
     }
     for (const directory of [...h.fixture.worktrees, h.fixture.nonGit]) {
-      await expect.soft(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
+      await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
     }
   } finally {
     await h.dispose();
@@ -81,7 +82,7 @@ test('controller presents separate terminals launched in the same directory', { 
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
     await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
-    await expect(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(2);
+    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(2);
   } finally {
     await h.dispose();
   }
@@ -112,7 +113,7 @@ test('terminals continue real PTY work after the controller explicitly quits', {
     const terminals = await Promise.all(h.fixture.repositories.map(directory =>
       h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory)));
     for (const directory of h.fixture.repositories) {
-      await expect.soft(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
+      await expect.soft(cardLocator(controller.page, directory)).toHaveCount(1);
     }
     await controller.app.close();
     for (const [index, terminal] of terminals.entries()) {
@@ -130,14 +131,15 @@ test('controller retains disconnected identities while another terminal remains 
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     const terminals = await Promise.all(h.fixture.repositories.map(directory =>
       h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory)));
-    await expect.soft(controller.page.getByRole('button')).toHaveCount(2);
+    await expect.soft(cardsLocator(controller.page)).toHaveCount(2);
     await terminals[0].app.close();
     await expect.soft(controller.page.locator('body')).toContainText(h.fixture.repositories[0]);
-    await expect.soft(controller.page.locator('body')).toContainText(/disconnected/i);
-    await expect.soft(controller.page.getByRole('button', { name: h.fixture.repositories[1], exact: false })).toHaveCount(1);
+    await expect.soft(statusRowLocator(cardLocator(controller.page, h.fixture.repositories[0]))).toHaveText('Disconnected');
+    await expect.soft(cardLocator(controller.page, h.fixture.repositories[1])).toHaveCount(1);
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
     await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-    await controller.page.getByRole('button', { name: h.fixture.repositories[1], exact: false }).click();
+    await expect(bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[1]))).toBeVisible();
+    await bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[1])).click();
     await expect.soft.poll(() => terminals[1].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
     await terminals[1].page.locator('.xterm-screen').click();
     await terminals[1].page.keyboard.type("printf 'SURVIVOR_%s\\n' 'ALIVE'");
@@ -149,7 +151,7 @@ test('controller retains disconnected identities while another terminal remains 
   } finally { await h.dispose(); }
 });
 
-test('clicking each pane focuses its original terminal after shell navigation', { tag: '@ownapp' }, async () => {
+test('Bring forward focuses each original terminal after shell navigation', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
@@ -162,21 +164,23 @@ test('clicking each pane focuses its original terminal after shell navigation', 
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await controller.page.getByRole('button', { name: directory, exact: false }).click();
+      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
+      await bringForwardLocator(cardLocator(controller.page, directory)).click();
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
       expect.soft(await terminals[1 - index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(false);
     }
   } finally { await h.dispose(); }
 });
 
-test('clicking a pane restores its minimized terminal window', { tag: '@ownapp' }, async () => {
+test('Bring forward restores its minimized terminal window', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.repositories[0]);
     await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
     await expect.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
-    await controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false }).click();
+    await expect(bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[0]))).toBeVisible();
+    await bringForwardLocator(cardLocator(controller.page, h.fixture.repositories[0])).click();
     await expect.soft(async () => {
       expect(await terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(false);
     }).toPass({ timeout: 10_000 });
@@ -190,7 +194,7 @@ test('controller retains its connected terminals across close and restore and ca
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     const terminals = await Promise.all(h.fixture.repositories.map(directory =>
       h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory)));
-    await expect(controller.page.getByRole('button')).toHaveCount(2);
+    await expect(cardsLocator(controller.page)).toHaveCount(2);
     const identities = () => controller.page.evaluate(async () => {
       let unsubscribe!: () => void;
       const ids = await new Promise<string[]>(resolve => {
@@ -207,7 +211,8 @@ test('controller retains its connected terminals across close and restore and ca
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await controller.page.getByRole('button', { name: directory, exact: false }).click();
+      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
+      await bringForwardLocator(cardLocator(controller.page, directory)).click();
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
     }
   } finally { await h.dispose(); }
@@ -233,7 +238,7 @@ for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recove
       });
       const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
       const terminal = await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, repo);
-      await expect(controller.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1);
+      await expect(cardLocator(controller.page, repo)).toHaveCount(1);
       await expect(terminal.page.locator('.xterm-rows')).not.toHaveText('');
       await terminal.page.locator('.xterm-screen').click();
       await terminal.page.keyboard.type('fake-agent');
@@ -250,13 +255,14 @@ for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recove
       expect(before.input.length).toBeGreaterThan(0);
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       if (action === 'activate') {
-        await controller.page.getByRole('button', { name: repo, exact: false }).click();
+        await expect(bringForwardLocator(cardLocator(controller.page, repo))).toBeVisible();
+        await bringForwardLocator(cardLocator(controller.page, repo)).click();
         await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
       } else if (action === 'close-and-restore') {
         await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
         await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
         await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
-        await expect(controller.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1);
+        await expect(cardLocator(controller.page, repo)).toHaveCount(1);
       } else {
         if (action === 'crash-and-recover') await h.crash(controller.app);
         else await controller.app.close();
@@ -264,8 +270,8 @@ for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recove
           await expect.soft(approve).toBeVisible();
           expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml'), input: read('injected-log') }).toEqual(before);
           const recovered = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
-          await expect.soft(recovered.page.getByRole('button', { name: repo, exact: false })).toHaveCount(1, { timeout: 30_000 });
-          await recovered.page.getByRole('button', { name: repo, exact: false })
+          await expect.soft(cardLocator(recovered.page, repo)).toHaveCount(1, { timeout: 30_000 });
+          await bringForwardLocator(cardLocator(recovered.page, repo))
             .evaluateAll(buttons => (buttons[0] as HTMLButtonElement | undefined)?.click());
         }
       }
@@ -305,7 +311,8 @@ test('pane activation delivers desktop keyboard input only to the selected termi
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await controller.page.getByRole('button', { name: directory, exact: false }).click();
+      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
+      await bringForwardLocator(cardLocator(controller.page, directory)).click();
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
       typeAtDesktop(`printf 'DESKTOP_TARGET_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
       await expect.soft(terminals[index].page.locator('.xterm-rows')).toContainText(`DESKTOP_TARGET_${index}`);

@@ -13,6 +13,9 @@ clipboard works.
 ```sh
 ./scripts/e2e-podman.sh              # whole suite
 ./scripts/e2e-podman.sh "Terminate"  # filter (-g) passed to playwright
+E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
+                                     # red-check run (§28.5.2): runs the tests listed in
+                                     # <dir>/select.txt, writes a JSON report to <dir>/report.json
 ```
 
 ## One-time setup

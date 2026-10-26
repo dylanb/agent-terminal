@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
 
-// §27.3 (v2.201) — a goal work turn may run in legs: `work.checkpoint.passes` is how many review passes a leg
+// §27.3 — a goal work turn may run in legs: `work.checkpoint.passes` is how many review passes a leg
 // runs before the session saves its progress and the engine compacts and starts the next leg.
 
 function def(work: string): string {
@@ -42,7 +42,7 @@ afterEach(() => {
   for (const d of [appDir, repoDir]) rmSync(d, { recursive: true, force: true });
 });
 
-describe('a goal work turn declares how many review passes each leg runs (§27.3 v2.201)', () => {
+describe('a goal work turn declares how many review passes each leg runs (§27.3)', () => {
   it('reads the passes per leg', () => {
     const r = resolve(def(`${GOAL}  checkpoint:\n    passes: 3\n`));
     expect(r.ok && r.def.work.checkpoint).toEqual({ passes: 3 });

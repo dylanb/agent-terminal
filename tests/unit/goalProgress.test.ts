@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { exampleGoalProgress, goalLegEnd, parseGoalProgress, readGoalProgress } from '../../src/shared/goalProgress';
 
-// §27.3 (v2.201) — a goal session records the state the engine acts on as JSON, and keeps its own notes apart.
+// §27.3 — a goal session records the state the engine acts on as JSON, and keeps its own notes apart.
 // The engine reads the leg, the status and, when blocked, what the session needs from the operator.
 
-describe('the goal progress the engine reads (§27.3 v2.201)', () => {
+describe('the goal progress the engine reads (§27.3)', () => {
   it('reads the blocked reason as written, whatever Markdown it holds', () => {
     const blocked = '## Question\nModal or page?\n```sh\n# wipes local data\n```\n#208 asks for both.';
     expect(parseGoalProgress(JSON.stringify({ leg: 1, status: 'blocked', blocked }))?.blocked).toBe(blocked);
@@ -42,7 +42,7 @@ describe('the goal progress the engine reads (§27.3 v2.201)', () => {
   });
 });
 
-describe('whether a progress file ends this leg (§27.3 v2.201)', () => {
+describe('whether a progress file ends this leg (§27.3)', () => {
   it.each([
     ['done', 2, true],
     ['checkpoint', 2, true],

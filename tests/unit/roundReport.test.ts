@@ -13,7 +13,7 @@ import {
 } from '../../src/shared/roundReport';
 import { roundReportWithDisposition } from '../helpers/roundReports';
 
-// §27.5 (v2.202) — the round report is JSON with ONE writer (the fixer) and several readers (the completion
+// §27.5 — the round report is JSON with ONE writer (the fixer) and several readers (the completion
 // validator, the agent's own check, the clean-guard, the auto gate, the consolidator). It grades structure and
 // never quality: the def-declared sections, a record for every roster reviewer with a status from the closed
 // set, and each issue's fields with a disposition from the closed set.

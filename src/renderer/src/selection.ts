@@ -95,7 +95,7 @@ export function wireSelection(
   // link (the §7.4 marker-anchoring guarantee). A marker trimmed out of scrollback disposes itself
   // → that capture reveals nothing (best-effort, §7.3).
   // untestable under jsdom: the marker layer (registerMarker/scrollToLine/reveal, getSelectionPosition) needs
-  // a real terminal — verified in the §F e2e; §12 gap tracked in #153.
+  // a real terminal — verified in the e2e; §12 gap tracked in #153.
   const captureMarkers = new Map<string, { start: IMarker; end: IMarker }>();
   function disposeMarkers(id: string): void {
     const m = captureMarkers.get(id);

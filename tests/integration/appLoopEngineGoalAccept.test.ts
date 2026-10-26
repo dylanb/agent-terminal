@@ -12,7 +12,7 @@ import { examplePhaseResult } from '../../src/shared/phaseResult';
 import { binding, createAppLoopEngineHarness, STEP, TEST_BRANCH, TURN_KEY } from '../helpers/appLoopEngineHarness';
 import { makeFakeCompletionPredicates } from '../helpers/fakeCompletionPredicates';
 
-// §27.3/§27.12c (v2.201) — an Accept that waits on a phase's machine check reads the goal progress again once the
+// §27.3/§27.12c — an Accept that waits on a phase's machine check reads the goal progress again once the
 // check returns, and acts on what it then records, as an Accept that did not wait would.
 
 const h = createAppLoopEngineHarness();
@@ -87,7 +87,7 @@ const PHASES: Phase[] = [
 beforeEach(h.setUp);
 afterEach(h.tearDown);
 
-describe('an Accept reads the goal progress again after its machine check (§27.3/§27.12c v2.201)', () => {
+describe('an Accept reads the goal progress again after its machine check (§27.3/§27.12c)', () => {
   it.each(PHASES)('$name: a session that turned blocked while the check ran reaches the gate as stop for a human', async (phase) => {
     const engine = makeEngine(undefined, makeFakeCompletionPredicates(phase.predicates(() => writeProgress(BLOCKED))));
     recordBaselineCommit(h.repo, TEST_BRANCH, 'a'.repeat(40));

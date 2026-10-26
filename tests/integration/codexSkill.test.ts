@@ -5,7 +5,7 @@ import { load as parseYaml } from 'js-yaml';
 import { codexAgentsDir, codexLoopsV2Dir } from '../../src/main/codexConfig';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 
-// §18.1 v2.199 — the bundled Codex skill is a writer of names and paths other installed files must match: every
+// §18.1 — the bundled Codex skill is a writer of names and paths other installed files must match: every
 // agent name and loop path it gives as an example is checked against the bundle, so a renamed convention breaks
 // this test rather than the Codex session that follows the skill.
 const SKILL_DIR = path.resolve('example', 'codex-skills', 'agent-terminal-loops');

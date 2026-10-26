@@ -202,6 +202,13 @@ export type FakeReviewMode = 'full' | 'omit-persona' | 'none' | 'failed' | 'omit
 //   review: full — a report accounting for the whole roster → the review turn completes (default).
 //           omit-persona — a report dropping a roster persona → one review retry then error.
 //           none — write nothing on the review turn → review stall/retry→error.
+export interface HoldSpec {
+  sentinel: string;
+  // Prints a line to the terminal on every poll so the terminal stays active (QUIET_MS). Such a hold has no time
+  // cap, so within a test only the sentinel or `.abandon` ends it; it also ends once its terminal is gone.
+  keepActive?: boolean;
+}
+
 export interface StepScript {
   artifactRel: string;
   work: FakeWorkMode;
@@ -209,9 +216,9 @@ export interface StepScript {
   // (the agent keeps reading its input) and first appends its pid to `<sentinel>.pids`; then, polled every
   // 50 ms: `<sentinel>.abandon` present → exits with no action; the sentinel gone → does the `work` action;
   // 30 s elapsed → exits with no action, so an unreleased hold fails its test on that test's own assertion.
-  hold?: { sentinel: string };
+  hold?: HoldSpec;
   // Holds every consolidate turn of this step the same way, with its own sentinel.
-  holdConsolidate?: { sentinel: string };
+  holdConsolidate?: HoldSpec;
   // The review roster/sections the step's loop declares (default: the plan-loop's).
   roster?: string[];
   sections?: string[];
@@ -263,16 +270,20 @@ const byTurn = (counter: string, entries: string[] | undefined): string =>
   entries && entries.length > 0 ? `case "$${counter}" in ${entries.map((e, i) => `${i + 1}) ${e} ;;`).join(' ')} esac` : ':';
 
 /** Runs `action` in the background once `sentinel` is deleted (see `StepScript.hold`), so the agent keeps reading. */
-function heldAction(sentinelPath: string, action: string): string {
+function heldAction(hold: HoldSpec, action: string): string {
+  // `|| exit 0`: once the terminal's PTY is gone the write fails, so a leaked hold ends with its app.
+  const print = hold.keepActive ? `printf 'HELD_ACTIVITY %s\\n' "$i" || exit 0; i=$((i + 1)); ` : '';
+  const capped = hold.keepActive ? '' : `if [ "$SECONDS" -ge "$end" ]; then exit 0; fi; `;
+  const sentinelPath = hold.sentinel;
   const sentinel = shellQuote(sentinelPath);
   const abandon = shellQuote(`${sentinelPath}.abandon`);
   const pids = shellQuote(`${sentinelPath}.pids`);
   return (
     `( pid=$(exec sh -c 'echo $PPID'); printf '%s\\n' "$pid" >> ${pids}; ` +
-    `end=$((SECONDS + ${HOLD_CAP_S})); while :; do ` +
+    `end=$((SECONDS + ${HOLD_CAP_S})); i=1; while :; do ${print}` +
     `if [ -e ${abandon} ]; then exit 0; fi; ` +
     `if [ ! -e ${sentinel} ]; then [ -e ${abandon} ] && exit 0; ${action}; exit 0; fi; ` +
-    `if [ "$SECONDS" -ge "$end" ]; then exit 0; fi; sleep 0.05; done ) </dev/null &`
+    `${capped}sleep 0.05; done ) </dev/null &`
   );
 }
 
@@ -336,7 +347,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
       : [...workBody, byTurn('n', opts.extraShell?.work), ...(signals ? [doneSignal(turnKey)] : [])]
           .filter((s) => s.length > 0)
           .join('; ');
-  const workAct = opts.hold ? `${count(turnKey, 'n')}; ${heldAction(opts.hold.sentinel, workAction)}` : `${count(turnKey, 'n')}; ${workAction}`;
+  const workAct = opts.hold ? `${count(turnKey, 'n')}; ${heldAction(opts.hold, workAction)}` : `${count(turnKey, 'n')}; ${workAction}`;
 
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
@@ -381,7 +392,7 @@ function stepArms(stepId: string, opts: StepScript): string[] {
     'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.json; ' +
     `${byTurn('n', opts.extraShell?.consolidate)}; ${doneSignal(consolidateKey)}`;
   const consolidateAct = opts.holdConsolidate
-    ? `${count(consolidateKey, 'n')}; ${heldAction(opts.holdConsolidate.sentinel, consolidateAction)}`
+    ? `${count(consolidateKey, 'n')}; ${heldAction(opts.holdConsolidate, consolidateAction)}`
     : `${count(consolidateKey, 'n')}; ${consolidateAction}`;
 
   return [

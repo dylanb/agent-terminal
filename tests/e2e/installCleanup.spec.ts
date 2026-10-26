@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { electron } from './registeredElectron';
 
-// §18.1 v2.212 — Install examples offers, behind its own unchecked box, to remove what the retired feature-dev and
+// §18.1 — Install examples offers, behind its own unchecked box, to remove what the retired feature-dev and
 // feature-dev-v2 flows left in an installation.
 
 let app: ElectronApplication | undefined;

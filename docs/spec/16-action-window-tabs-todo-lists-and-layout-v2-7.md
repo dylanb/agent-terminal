@@ -1,64 +1,56 @@
-## 16. Action window — tabs, todo lists, and layout (v2.7)
+## 16. Action window — tabs, todo lists, and layout
 
-> Builds on §9 (monitor pane) and §15 (capture). The monitor pane becomes the **action window**: a tabbed surface whose **Capture** tab is the §15 live-detection view and whose **Todo** tab is a persistent, repo-scoped work queue. Everything still obeys §9.1 — the pane talks only to `window.monitor.*` / main-process APIs, never to the terminal pane or its xterm/selection state.
+The monitor pane is the **action window**: a tabbed surface whose **Capture** tab holds the one captured report (§15, §21.1) and whose **Todo** tab is a persistent, repo-scoped work queue. It obeys §9.1 — it talks only to `window.monitor.*` / main-process APIs, never to the terminal pane or its xterm state, which is what keeps it relocatable. The same two tabs are the body of the quick-send overlay (§22.2).
 
 ### 16.1 Tabs
 
-- Two tabs: **Capture** (live detection — reports, findings, command history; session-scoped, §15) and **Todo** (persistent, repo-scoped — §16.3). **Amended v2.132:** command history was removed from the Capture tab with its IPC channels (§15.4/§15.5) — the tab shows reports and findings only.
-- The Capture tab shows an **unread dot** when a new `monitor:event` arrives while another tab is active; the Todo tab shows the **active-todo count**.
-- The last-selected tab is remembered **globally** (`UiSettings.lastTab`, §16.6), not per repo.
-- **Amended v2.27 (§21/§22, D39/D40):** the Capture tab becomes **manual single-slot** — a **"Capture last report"** button plus the one current captured report (findings individually Add-to-todo-able); no growing list, no unread dot driven by auto-emit (nothing auto-emits). In the **task-flow UI** (§22) these same two tabs (`Todo | Capture`) are the body of the **quick-send overlay** and of the Todos+Status view — placement-agnostic widgets positioned by layout config (§22.4).
+- **Capture** (session-scoped, §15) and **Todo** (persistent, repo-scoped, §16.3).
+- The Capture tab shows an unread dot when a capture arrives while another tab is active; the Todo tab shows the count of todos not yet done.
+- The last-selected tab is remembered **globally**, not per repo (§16.6).
 
-### 16.2 Injection model (supersedes the §9.2 / §15.6 "every block injects" posture)
+### 16.2 Injection model
 
-- **Semantic captures** (`report`, `finding`): **no inject**. Each offers **Add to todo** (item-level — a finding adds that finding; a report group adds the whole report) and **Dismiss**. Add-to-todo appends a todo and then shows an **in-place Undo** on the block for `TODO_UNDO_MS` (60 000 ms). The block is **dismissed and removed only when that window elapses** (committing the add); clicking **Undo** within the window **deletes the just-added todo** (`todo:delete`, by the new item's own `repoKey`) and restores the block's **Add to todo** action — the source is **never dismissed on undo**. **Amended v2.27 (§21/D39):** the captured report comes from the manual **"Capture last report"** action (`capture:last`, §6), is **single-slot** (a new capture replaces it), and **Dismiss** is dropped (replace, don't dismiss). **Add to todo + Undo** are unchanged; the Add-to-todo path is what feeds curated **review todos** into the request-changes feedback composer (§19.4).
-- **Add-to-todo** (from the **Artifacts** view, §20.2): appends the todo through the `captureToTodo` helper (text-only since v2.132) and signals the action window via a decoupled `app:todos-changed` window event (same bus as `app:focus-terminal`) so the repo-scoped **todo count/list refreshes immediately**; without it the count would lag until the next re-pull. (Item-level Add-to-todo from a semantic capture uses the capture path in the bullet above — `addFromCapture`, source `capture`, with the Undo window — not this helper.) (The terminal-pane **Capture selection** route — selected text, else the latest command's output — that also used this signal was **removed in v2.132**, along with the renderer command-history list and its **Clear commands** action; the OSC-133 command tracker itself is unchanged and now main-process-only, §15.5.)
-- **Todo items**: **Insert / Insert & submit** (§16.4).
-- **Focus rule:** **Insert** moves focus to the terminal pane (the user finishes/submits in the agent); **Insert & submit** leaves focus in the action window (fire-and-forget — keep curating). Renderer-side focus only — the §9.3 injection path and contract are unchanged.
+- **Captures never inject.** A report or finding offers **Add to todo**; injection happens only from the Todo tab. Curating first is the point: the curated todos are what feed the request-changes feedback (§19.4).
+- **Add to todo is undoable in place** for a minute. Undo deletes the just-added todo by its own `repoKey` and restores the action; the source capture is never dismissed by an undo.
+- Other surfaces (the Artifacts view, §20.2) add todos too and announce it on the renderer's decoupled window-event bus, so the repo-scoped count refreshes at once without coupling those views to the action window.
+- **Todo items** offer **Insert** and **Insert & submit** (§9.3).
+- **Focus rule:** **Insert** moves focus to the terminal (the user finishes and submits in the agent); **Insert & submit** leaves focus in the action window (fire-and-forget — keep curating).
 
 ### 16.3 Todo data model, scope, and persistence
 
-- `TodoItem = { id, repoKey, text, status: 'active' | 'in_progress' | 'done', order, createdAt, source?: { type, eventId? } }`, strict-typed in `src/shared/ipc.ts` (no `any`).
-- **Scope = git repo root.** The store is keyed by the **git repo root** of the agent's cwd; any subdirectory of the same repo shares one list. A non-repo cwd keys on the directory itself. Before the first OSC 7 the scope falls back to the **launch root L** (§23.4), so a launched instance scopes todos to its target directory's repo — or, when that directory is not in a repo, to the directory itself.
-- **Persistence = in-repo file.** Each list persists to `.agent-terminal/todos.json` at the repo root (non-repo: at that directory). The app **does not** modify `.gitignore` — committing the file is the user's choice. This is the app's first on-disk persistence; writes are atomic, and a missing/corrupt file degrades to an empty list (never a throw).
-- **cwd tracking = OSC 7.** The shell-integration script (§15.5) additionally emits **OSC 7** (`file://…` cwd) on each prompt; a main-process cwd tracker parses it from the shadow (`shadow.onOsc`), resolves the repo key, and broadcasts `cwd:changed` (§6) only when the key changes.
-- **Swap on cd is silent** (no header / notice). **Exception — mid-edit:** while a todo edit is open, a repo change is **blocked** (the displayed list does not swap) until the edit is saved or cancelled. Todo mutations carry their target `repoKey`, so an in-flight edit always writes to the repo it belongs to regardless of cwd.
+- **Status is tri-state** — `active`, `in_progress`, `done` (`TodoItem`, `src/shared/ipc.ts`).
+- **Scope = git repo root** of the agent's cwd, so every subdirectory of one repo shares one list; a non-repo cwd keys on the directory itself. Before the first cwd report the scope is the launch root (§23.4).
+- **cwd tracking uses OSC 7**, emitted by the shell integration (§15.5) on each prompt and parsed from the shadow in main; `cwd:changed` is broadcast only when the repo key changes.
+- **Persistence is an in-repo file**, `.agent-terminal/todos.json` at the repo root, written atomically. A missing or corrupt file degrades to an empty list, never a throw. The app never modifies `.gitignore` — committing the file is the user's choice (CODE-STANDARDS.md).
+- **Every todo mutation carries its target `repoKey`.** A `cd` swaps the displayed list silently, except while an edit is open: then the swap waits until the edit is saved or cancelled. Together these mean an in-flight edit always writes to the repo it belongs to.
 
 ### 16.4 Todo tab interactions
 
-- **Active list** (status `active`), newest **appended to the bottom**. **Manual add** creates a fresh todo from typed text.
-- **Reorder** via a **drag handle** *and* **up/down buttons** (keyboard / a11y); the new order persists (`todo:reorder`).
-- **Edit in place:** the row's text becomes **`contenteditable` in place** (no textarea-box swap) with Save/Cancel + Enter-commits/Escape-cancels; Save persists (`todo:update`). Edits are **todo-only** — independent of any source capture. *(Amended §24.2.1/v2.45: replaced the original auto-growing-textarea affordance.)*
-- **Completion:** toggling the checkbox sets the item `done`. *(Amended §24.2.1/v2.32+v2.45: done todos render **inline (dimmed)** in the one flat list — the original collapsible **Done** section and its `APP_MAX_DONE_TODOS` cap were dropped, not backlogged.)*
+- Manual add appends to the bottom. Reorder by drag handle **and** up/down buttons (keyboard access). Text is edited in place (Enter commits, Escape cancels); edits never touch the source capture.
+- Checking a todo marks it `done`; done todos stay inline, dimmed, in the one list. Only the newest `APP_MAX_DONE_TODOS` (default 50) done todos are kept — older ones are pruned on write, so a long-lived repo's list does not grow without bound.
 
-### 16.5 Self-injection suppression (the capture fix — amends §15.3)
+### 16.5 Self-injection suppression
 
-- Text the app injects (both the §9.3 monitor path and the §7.5 renderer paste path) is echoed back into the session and must **not** be re-captured as a `report`/`finding`. Exact-byte dedup is insufficient: the agent renders long pasted input as a `[Pasted text #N +k lines]` placeholder, so the echoed bytes differ from the injected bytes.
-- The inject paths seed a **suppression signal** — an injection watermark (buffer position at inject time) plus a short time window — that the scanner consults at the next quiet transition to exclude the echoed user-input region from emission. The agent's **reply** to the injected text is **not** suppressed (it is genuine new agent output).
-- **Chosen signal (implemented):** the inject path (`onInject`, seeded at paste time *before* the echo returns, so the cursor still sits at the pre-echo row) registers a **shadow marker** at the cursor row — exactly where the echoed input renders — paired with a timestamp. On the next quiet scan the scanner suppresses any detected region whose `[startRow, endRow]` **contains** a live, unexpired watermark (and remembers its dedup key so it never re-emits). The agent's reply renders at rows *below* the echo, so its region does not contain the watermark and is emitted. The watermark retires when its row trims out of scrollback (`marker.line < 0`) or the window lapses; window default `APP_SELF_INJECT_WINDOW_MS` (§15.7, 30 000 ms) must exceed the active→quiet gap of the agent's reply.
-- The contract fixed here is **behavioral: injected input is never re-emitted; the agent's response still is.** *Recorded gap (per §12):* the watermark→reply row separation and the window default are tuned against scripted/bash echo; the real Claude Code `[Pasted text #N]` placeholder + reply layout is verified in the §F e2e (plan PR5) — flagged with a `TODO(dylan)` at the wiring site until then.
+- Text the app injects (either path, §7.5 and §9.3) echoes back into the session and must not be captured as a report; the agent's **reply** to it must be.
+- **Byte-matching cannot do this.** Claude Code renders long pasted input as a `[Pasted text #N +k lines]` placeholder, so the echoed bytes differ from the injected ones.
+- So injection drops a **shadow marker at the cursor row before the echo returns** — exactly where the echoed input renders — with a timestamp. A detected region containing a live marker is the user's own input and is not captured; the reply renders below it and is. A marker retires when its row trims out of scrollback or the window (`APP_SELF_INJECT_WINDOW_MS`) lapses; the window must outlast the gap between the echo and the agent's reply finishing.
 
-### 16.6 Layout — resizable splitter & global UI settings
+### 16.6 Global UI settings
 
-- The terminal pane and action window are separated by a **draggable vertical splitter** that sets their width ratio. **Min widths** on both panes; **double-click** resets to the default ratio; the divider is a focusable `role="separator"` (`aria-valuenow` / `aria-valuemin` / `aria-valuemax`) movable with ←/→.
-- The split ratio and last tab are **global UI preferences** — `UiSettings = { splitRatio: number, lastTab: 'capture' | 'todo', theme: 'light' | 'dark', artifactTreeWidth: number, artifactFullscreenTreeWidth?: number }` (grown over v2.30/v2.39/v2.43; `src/shared/ipc.ts` is the source of truth) — persisted to `app.getPath('userData')/ui-settings.json`, the one piece of state outside the repo (it is app-wide, not per-repo). Channels: `ui:getSettings` (invoke), `ui:setSettings` (§6).
+UI preferences — last tab, theme, artifact-tree widths (`UiSettings`, `src/shared/ipc.ts`) — are **app-wide, not per repo**, so they persist to `ui-settings.json` under Electron's `userData`, the one piece of app state kept outside the repo.
 
-### 16.7 Out of scope (delta on §15.9)
+### 16.7 Out of scope
 
-- Captures (reports / findings / command history) stay **in-memory / session-scoped** — only todos and UI prefs persist.
-- Todo sync across machines, todo export, and reconciling a committed `.agent-terminal/todos.json` across branches/merges — deferred.
-- Multi-session routing, ML classification, alt-screen region parsing — still deferred (§15.9).
+- Persisting or exporting captures (§13.6).
+- Syncing todos across machines, exporting them, or reconciling a committed `todos.json` across branches and merges.
 
-### 16.8 Cross-highlight between the terminal and the capture pane (v2.23)
+### 16.8 Cross-highlight between the terminal and the capture pane
 
-The capture pane and the terminal carry the **same content** at different stations, so a user who sees one should be able to jump to the other. Both directions are driven by a **double-click** and ride the decoupled `window`-event bus (the same mechanism as `app:focus-terminal`, §16.2), so the monitor pane never imports terminal modules and stays relocatable (§9.1).
+The capture pane and the terminal show the same content at different places, so a double-click on either jumps to the other. Both directions ride the renderer's decoupled window-event bus, so the capture pane never imports terminal modules (§9.1).
 
-- **The coordinate, marker-anchored (v2.28).** A scan-emitted event carries its on-screen span in `MonitorEvent.range` (a `SelectionRange`: absolute buffer rows from the detected region, plus `baseY`/`bufferType`). Absolute rows are **scan-time** coordinates, and a window resize **reflows** the transcript — lines re-wrap, so those rows then name different content. So the **terminal pane owns the coordinates**: when the capture pane renders a ranged block/finding it publishes the span (`app:capture-range-add { id, range }`) and the terminal **anchors an xterm marker** to its first and last rows; markers track their buffer lines through scroll **and** reflow (the §7.4 guarantee), so the link survives resizes. When a block is dropped the pane publishes `app:capture-range-remove { id }` and the markers are disposed. **A report and each of its findings carry their own span** (the report text has one line per buffer row, so a finding's line range maps straight back to absolute rows); **manual captures** carry the selection range they were made from. The capture pane itself holds **no coordinates** — it deals only in capture **ids** — so it stays relocatable (§9.1).
-- **Terminal → capture** (`app:reveal-capture { id }`): a double-click word-selects in xterm; the terminal pane reads the selected row (`getSelectionPosition().start.y`, absolute) and resolves it against the markers' **live** lines to the **most specific** capture whose span covers it — a **finding** in preference to its enclosing report (`pickRevealTarget`) — then dispatches that **id**. The capture pane **scrolls it into view** and gives it a **revealed** outline for `REVEAL_HIGHLIGHT_MS` (10 s); a row no capture covers, or an id no longer rendered, reveals nothing.
-- **Capture → terminal** (`app:reveal-terminal { id }`): double-clicking a **finding** dispatches that chunk's **id** (and stops there, so it does not bubble up to reveal the whole report); double-clicking elsewhere in a report dispatches the report's id. The terminal reads that capture's **current marker rows**, `scrollToLine`s to them, and draws a **self-clearing amber reveal decoration** over them — distinct from the blue selection highlight, and on its own decoration list so clearing one never wipes the other — for the same 10 s. A capture with no range (a manual capture made without a stored span) anchors no marker and asks for nothing.
-- **Best-effort.** Like all `SelectionRange` provenance (§7.3/§8.4) these coordinates are never used to re-extract content; a marker trimmed out of scrollback disposes itself, so a capture whose rows have scrolled away before the reveal simply highlights nothing.
-
-> **§24.1 note:** the mockup-exact capture panel (v2.32) renders findings as flat `.finding` cards, not report-nested ones, and publishes/​reveals exactly as above; a double-click on a finding card dispatches `app:reveal-terminal { id }`, and the terminal resolves a double-clicked row back to the covering card's id.
+- **The terminal owns the coordinates, anchored by markers.** A capture's range is in scan-time absolute rows, and a window resize reflows the transcript so those rows then name different content. The capture pane therefore holds only capture **ids**: it publishes each rendered capture's span, the terminal anchors xterm markers to the first and last rows, and markers follow their lines through scroll and reflow (§7.4). A report and each of its findings carry their own span.
+- **Terminal → capture:** the double-clicked row resolves, against the markers' live lines, to the **most specific** covering capture (a finding before its report); the capture pane scrolls to it and outlines it briefly.
+- **Capture → terminal:** the terminal scrolls to the capture's current marker rows and draws a self-clearing amber highlight, on its own decoration list so it never clears the user's selection.
+- **Best-effort.** These coordinates are never used to re-extract content (§7.3). A capture whose rows have trimmed out of scrollback highlights nothing; a capture with no range anchors nothing.
 
 ---
-

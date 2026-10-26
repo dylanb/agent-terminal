@@ -16,7 +16,7 @@ export interface SpawnConfig {
   };
 }
 
-/** Resolve a shell path: `APP_SHELL`, else `$SHELL`, else `loginShell`, else `bash` (§5, v2.79).
+/** Resolve a shell path: `APP_SHELL`, else `$SHELL`, else `loginShell`, else `bash` (§5).
  *  `loginShell` is an optional caller-supplied fallback, NOT always consulted: the session-spawn
  *  callers omit it (a no-`$SHELL` GUI session falls through to `bash`), while the installer passes
  *  the passwd-db login shell so a no-`$SHELL` GUI launch edits the profile that shell actually
@@ -91,7 +91,7 @@ export function mergePaths(currentPath: string, probedPath: string): string {
   return merged.join(':');
 }
 
-/** The Linux GUI-launch PATH probe command (§5, v2.82), or undefined off Linux (macOS recovers
+/** The Linux GUI-launch PATH probe command (§5), or undefined off Linux (macOS recovers
  *  PATH via the `-l` login shell). Targets the resolved session shell so the probed PATH matches
  *  the shell the session runs. */
 export function probeShellCommand(

@@ -240,7 +240,7 @@ test('auto clean gate advances with its phase commit; no alert is raised and the
   expect(entries.filter((e) => parseAutoHaltReasons(e.cmd) !== null)).toEqual([]);
 });
 
-test('an auto RED whose new tests verify behavior that already exists is engine-approved with its commit, and the run log says so (v2.215)', { tag: '@ownapp' }, async () => {
+test('an auto RED whose new tests verify behavior that already exists is engine-approved with its commit, and the run log says so', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 0));
   const home = tmp('agent-term-e2e-verify-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-verify-', 'red');
@@ -336,7 +336,7 @@ test('auto GREEN halts on frozen-test change and on unavailable check: a control
   expect(entries.filter((e) => gateDecisionKind(e.cmd)?.kind === 'auto-halt')).toEqual([]);
 });
 
-test('auto GREEN that changed a RED test is engine-approved, and the RED test change record lists the file under its step and slice (v2.210)', { tag: '@ownapp' }, async () => {
+test('auto GREEN that changed a RED test is engine-approved, and the RED test change record lists the file under its step and slice', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(2, 1));
   const { home, repo } = await startAutoGreen('agent-term-e2e-red-change-', greenAgent({ touchTest: true }));
 
@@ -781,7 +781,7 @@ test('the strip\'s manual Advance at a gate showing the failed-effect marker cle
   expect(auditGateEntries(home, repo, { step: 'red2' }).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision' && gateDecisionDecider(e.cmd) === 'engine')).toHaveLength(1);
 });
 
-test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances, and one naming no step advances the current step (N9b.5(d), §6 v2.185)', { tag: '@ownapp' }, async () => {
+test('flow:advance through the preload carries the step the strip showed: an Advance naming a step the flow has left moves nothing, the shown step advances, and one naming no step advances the current step (N9b.5(d), §6)', { tag: '@ownapp' }, async () => {
   test.setTimeout(loopTestBudget(3, 1));
   const home = tmp('agent-term-e2e-137-staleadv-home-');
   const repo = seedAutoGateRepo('agent-term-e2e-137-staleadv-', 'groom', { ticket: '176' });
@@ -805,7 +805,7 @@ test('flow:advance through the preload carries the step the strip showed: an Adv
   expect(flowState(repo)).toMatch(/^step: groom$/m);
   await advance('groom');
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: finalize$/m);
-  // §6 v2.185 — a request naming no step advances the current one.
+  // §6 — a request naming no step advances the current one.
   await page.evaluate((key) => window.flow.advance(key), repo);
   await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
 });

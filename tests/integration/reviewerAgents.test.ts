@@ -110,7 +110,7 @@ describe('installing the examples installs each bundled reviewer as a sub-agent 
   });
 });
 
-// §18.1 v2.199 — the same reviewers, installed as Codex custom agents where Codex is.
+// §18.1 — the same reviewers, installed as Codex custom agents where Codex is.
 describe('installing the examples installs each bundled reviewer as a Codex custom agent', () => {
   const codexHome = (): string => path.join(home, '.codex');
   const install = (): void => {
@@ -148,7 +148,7 @@ describe('installing the examples installs each bundled reviewer as a Codex cust
     expect(res.notInstalled).toContainEqual({ destination: 'codexAgents', root: codexHome() });
   });
 
-  it('installs a reviewer that has every tool (§27.4 v2.198)', () => {
+  it('installs a reviewer that has every tool (§27.4)', () => {
     const agent = parseToml(renderCodexReviewerAgent({ loop: 'green-loop', persona: 'impl-review-tests', tools: 'all', charter: 'c' })) as Record<string, unknown>;
     expect(agent.name).toBe('green_loop__impl_review_tests');
   });

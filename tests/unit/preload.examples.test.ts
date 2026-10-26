@@ -57,7 +57,7 @@ describe('examplesApi routing (§6 / §18.1)', () => {
     });
   });
 
-  it('apply forwards the answer to removing the retired examples (§18.1 v2.212)', async () => {
+  it('apply forwards the answer to removing the retired examples (§18.1)', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [], removed: [] });
     await examplesApi.apply(previewId, [], true);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, expect.objectContaining({ removeRetired: true }));

@@ -22,7 +22,7 @@ export interface AdapterContext {
   isClaimed?(row: number): boolean;
 }
 
-/** A finding inside a report, emitted as a child event linked by parentId (§15.6 / v2.6).
+/** A finding inside a report, emitted as a child event linked by parentId (§15.6).
  *  Its absolute-row span backs cross-highlight (§16.8). */
 export interface DetectedChild {
   type: MonitorEventType;

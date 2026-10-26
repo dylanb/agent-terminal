@@ -272,7 +272,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(card.querySelector('.m')!.textContent).toContain('mystery-type');
   });
 
-  it('shows top-level cards newest-first (v2.6)', async () => {
+  it('shows top-level cards newest-first', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'a', text: 'first' }));

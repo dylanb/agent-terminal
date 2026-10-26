@@ -8,6 +8,7 @@ import { typeAtDesktop } from './controllerKeyboard';
 import { createControllerRegistrationRelay } from './controllerRegistrationRelay';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
+import { bringForwardLocator, cardLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -35,7 +36,7 @@ test('connection-only loss preserves PTY work and restores one pane while the co
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     h.fixture.env.APP_HOME_DIR = h.fixture.home;
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
-    const pane = controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false });
+    const pane = cardLocator(controller.page, h.fixture.nonGit);
     await expect(pane).toHaveCount(1);
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('export SURVIVING_WORK=original; printf "BEFORE_%s\\n" "$SURVIVING_WORK"');
@@ -48,7 +49,7 @@ test('connection-only loss preserves PTY work and restores one pane while the co
       await expect.soft(terminal.page.locator('.xterm-rows')).toContainText(`AFTER_${round}_original`);
       await delay(RECOVERY_BOUND_MS);
       expect.soft(controller.app.process().exitCode).toBeNull();
-      await expect.soft(pane).toHaveCount(1);
+      await expect.soft(bringForwardLocator(pane)).toHaveCount(1);
       expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\n');
     }
   } finally {
@@ -76,7 +77,7 @@ for (const outage of ['quit', 'crash'] as const) {
         await terminal.page.keyboard.press('Enter');
         await expect(terminal.page.locator('.xterm-rows')).toContainText(`ORIGINAL_${index}`);
       }
-      await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(2);
+      await expect(cardLocator(controller.page, directory)).toHaveCount(2);
       for (let round = 0; round < 2; round++) {
         if (outage === 'quit') await controller.app.close();
         else await h.crash(controller.app);
@@ -87,8 +88,8 @@ for (const outage of ['quit', 'crash'] as const) {
           await expect.soft(terminal.page.locator('.xterm-rows')).toContainText(`OUTAGE_${round}_${index}`);
         }
         controller = await h.launch(controllerTarget, h.fixture.nonGit);
-        await expect.soft(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(2, { timeout: RECOVERY_BUDGET_MS });
-        await expect.soft(controller.page.getByRole('button', { name: h.fixture.nonGit, exact: false })).toHaveCount(0);
+        await expect.soft(cardLocator(controller.page, directory)).toHaveCount(2, { timeout: RECOVERY_BUDGET_MS });
+        await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(0);
         expect.soft(readFileSync(join(h.fixture.root, 'shell-starts'), 'utf8')).toBe('started\nstarted\n');
       }
     } finally { await h.dispose(); }
@@ -128,13 +129,14 @@ for (const mode of ['direct', 'replay', 'reconnect'] as const) {
       h.fixture.env.APP_HOME_DIR = h.fixture.home;
       await relay?.replayRegistrations();
     }
-    const panes = controller.page.getByRole('button', { name: h.fixture.repositories[0], exact: false });
+    const panes = cardLocator(controller.page, h.fixture.repositories[0]);
     await expect(panes).toHaveCount(2, { timeout: RECOVERY_BUDGET_MS });
     const delivered: number[] = [];
     for (let pane = 0; pane < 2; pane++) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await panes.nth(pane).click();
+      await expect(bringForwardLocator(panes.nth(pane))).toBeVisible();
+      await bringForwardLocator(panes.nth(pane)).click();
       await expect.soft.poll(async () => Promise.all(terminals.map(terminal => terminal.app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
         return window.isFocused() && !window.isMinimized();

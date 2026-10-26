@@ -345,7 +345,7 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
     expect(load.ok).toBe(false); // the local error wins; the global is NOT used
   });
 
-  // The symmetric case (§B.3, AC 4): the repo has NO flow.yaml but the GLOBAL one is present-but-invalid.
+  // The symmetric case (AC 4): the repo has NO flow.yaml but the GLOBAL one is present-but-invalid.
   // Its own error must surface — a present global's result stands — rather than being masked behind the
   // absent local's "no flow.yaml found", or a bad global value would be reported as a missing flow. Guards
   // the exact regression the local-first fix closed: `global.ok ? global : localAbsentError` fell back to the

@@ -62,7 +62,7 @@ export function composeLoopBindingResolve(autoGate: AutoGate, observedResolveDef
   };
 }
 
-/** The engine's approve: the human approve's §B.3 refusal and its per-worktree deps. */
+/** The engine's approve: the human approve's marked-binding refusal and its per-worktree deps. */
 export function composeEngineApprove(
   approveDepsFor: (repoKey: string) => AppGateDecisionDeps,
   bindingOf: (repoKey: string, step: string) => LoopBinding | null,

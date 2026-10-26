@@ -195,9 +195,9 @@ export interface InstallDestination {
   rootFix: string;
   plan: (bundleDir: string) => Plan;
   /** Set only on a destination that installs where its tool is: when this directory does not exist, the
-   *  destination is skipped rather than created (§18.1 v2.199). Unset, the destination always installs. */
+   *  destination is skipped rather than created (§18.1). Unset, the destination always installs. */
   toolHome?: string;
-  /** §18.1 v2.212. Unset on a destination no retired flow ever wrote to. */
+  /** §18.1. Unset on a destination no retired flow ever wrote to. */
   retired?: RetiredLister;
 }
 
@@ -363,7 +363,7 @@ type Resolution =
   | { ok: true; destinations: ResolvedDestination[]; notInstalled: InstallDestinationNotInstalled[] }
   | { ok: false; error: string };
 
-/** §18.1 v2.199. */
+/** §18.1. */
 function toolPresent(root: string): boolean {
   let isDir: boolean;
   try {

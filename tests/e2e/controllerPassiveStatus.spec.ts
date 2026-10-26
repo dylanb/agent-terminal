@@ -9,6 +9,7 @@ import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockR
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream } from '../../src/shared/audit';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { cardLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -69,7 +70,7 @@ test('status publication leaves a pending terminal notice and the failed run int
     const statusEvents = () => parseAuditStream(readFileSync(auditFile, 'utf8')).events.filter(event => /^(flow|loop|notify)\./.test(event.type));
     const auditBefore = statusEvents();
     await controller.page.evaluate(duration => new Promise<void>(done => setTimeout(done, duration)), ABSENCE_WINDOW_MS);
-    const pane = controller.page.getByRole('button', { name: repo, exact: false });
+    const pane = cardLocator(controller.page, repo);
     await expect.soft(pane).toContainText(source.loop!.errorReason!, { timeout: STATUS_BUDGET_MS });
     await expect.soft(pane).toContainText(/needs? (?:a )?human|human.*needed/i, { timeout: STATUS_BUDGET_MS });
     expect.soft(readFileSync(runFile, 'utf8')).toBe(before);
@@ -95,7 +96,7 @@ test('indeterminate durable progression cannot be displayed as an unassigned ter
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     const terminal = await h.launch(terminalTarget, repo);
     await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo).catch(() => null)).toMatchObject({ runStarted: 'indeterminate' });
-    const pane = controller.page.getByRole('button', { name: repo, exact: false });
+    const pane = cardLocator(controller.page, repo);
     await expect.soft(pane).toContainText(/unavailable|unknown/i, { timeout: STATUS_BUDGET_MS });
     await expect.soft(pane).not.toContainText(/unassigned/i);
   } finally { await h.dispose(); }

@@ -22,7 +22,7 @@ describe('currentGitBranch (§28.5.1)', () => {
     expect(currentGitBranch(repo)).toEqual({ ok: true, branch: fx.git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']) });
   });
 
-  it('reads the branch under the repo\'s own git config: no hooks-path or fsmonitor override (v2.184 (10))', () => {
+  it('reads the branch under the repo\'s own git config: no hooks-path or fsmonitor override', () => {
     const repo = fx.makeGitRepo('gitbranch-config');
     fx.writeRepoFile(repo, 'seed.txt', 'x\n');
     fx.commitAll(repo, 'baseline');

@@ -8,7 +8,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 
 const SELF = 'tests/unit/n8SweepGuards.test.ts';
 
-/** Tracked files under the given repo-relative roots — the "tracked path" set §D.4 grades over, never the
+/** Tracked files under the given repo-relative roots — the "tracked path" set these guards grade over, never the
  *  working tree (which would sweep in build output). */
 function trackedFiles(...roots: string[]): string[] {
   return execFileSync('git', ['ls-files', '-z', ...roots], { encoding: 'utf8' })
@@ -24,7 +24,7 @@ const readText = (f: string): string => {
   }
 };
 
-// ─── §D.4 row: the orphan walk from the entry points (AC 1) ─────────────────────────────────────────────
+// ─── The orphan walk from the entry points (AC 1) ─────────────────────────────────────────────
 // Reachability over the module graph from the three runtime entry points plus the two build-time modules,
 // following ONLY relative import/export specifiers (a non-relative specifier is a package, not a module in
 // the graph). `*.d.ts` is excluded as a closed rule; test files are non-consumers (a src module reachable
@@ -101,8 +101,8 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
   });
 });
 
-// ─── §D.4 row: no removed retired-engine identifier survives in tracked code (AC 1/2/7) ──────────────────
-// Seeded from the same constants the sweep removed (§B.7): the retired FlowApi members, the retired Flow*Msg
+// ─── No removed retired-engine identifier survives in tracked code (AC 1/2/7) ──────────────────
+// Seeded from the same constants the sweep removed: the retired FlowApi members, the retired Flow*Msg
 // IPC message types, the retired CH channel-key names, and the retired `flow:gate` channel. Matched WHOLE-WORD
 // and CASE-SENSITIVE — the surviving §27 tokens (`appGateDecision`, `gateDecisionAuditCmd`,
 // `flowAppGateDecision`, `appRouteOut`) differ in case or carry a boundary-less camelCase prefix, so none is a
@@ -128,10 +128,10 @@ describe('AC1/2/7 — no removed retired-engine identifier survives in tracked c
   });
 });
 
-// ─── §D.4 row (§E.3 / §A.4): the packaging manifest ships no deleted tree ──────────────────────────────────
+// ─── The packaging manifest ships no deleted tree ──────────────────────────────────
 // A shipped-files entry for a deleted tree breaks `pnpm run package` (electron-builder copies each `from:` at
 // package time; a source that no longer exists aborts the build) with no unit/e2e/build step exercising it.
-describe('§E.3/§A.4 — the packaging manifest ships no deleted path', () => {
+describe('the packaging manifest ships no deleted path', () => {
   const yml = readText('electron-builder.yml');
 
   it('every concrete extraResources `from:` path exists on disk', () => {

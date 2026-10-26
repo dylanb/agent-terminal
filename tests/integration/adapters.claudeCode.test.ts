@@ -18,7 +18,7 @@ import {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const goQuiet = () => sleep(220);
 
-describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only', () => {
+describe('Claude Code adapter (§15.3) — asserts on emitted events only', () => {
   let shadow: ReturnType<typeof createShadowModel>;
   afterEach(() => shadow.dispose());
 
@@ -44,7 +44,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     return emitted;
   }
 
-  it('captures corner-box content — a box is content, not chrome (Claude boxes real summaries, v2.17)', async () => {
+  it('captures corner-box content — a box is content, not chrome (Claude boxes real summaries)', async () => {
     const events = await run(PERMISSION_BOX);
     expect(events.some((e) => e.type === 'report')).toBe(true);
   });
@@ -238,7 +238,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   });
 
   it('merges a report that streams across a quiet pause into one capture, retracting the partial (§15.3 seal-on-witness)', async () => {
-    // Seal-on-witness (§15.3 / v2.22): a bottom-most unit with no witness below it (no following
+    // Seal-on-witness (§15.3): a bottom-most unit with no witness below it (no following
     // content, no turn-complete composer) stays PROVISIONAL; when the tail grows the same position,
     // the partial is retracted and the fuller capture replaces it — one capture, not two.
     const emitted: Array<ScannerEmission & { id: string }> = [];
