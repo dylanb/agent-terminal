@@ -90,9 +90,21 @@ required services (injected `deps`) are all named. Nothing reaches outside it.
    work with no per-placement override. A new colour value is defined only as a token in
    `src/renderer/src/tokens.css`, never in a component rule, and a controller pane-status colour uses the
    `--status-*` tokens. Colours already hard-coded in component rules stay as they are; this
-   governs new work.
+   governs new work. `tests/browser/colourLiterals.test.ts` enforces it: it fails on a colour written in
+   any renderer stylesheet other than `tokens.css`, apart from an exact list of the existing ones, and
+   fails on a listed one that has gone, so the list only shrinks.
 6. **Clean teardown.** `dispose()` removes every listener, timer, and node it created, so an
    organism can be unmounted from frame A and mounted in frame B without leaks.
+7. **A component that rebuilds the child components it composes keeps their state through their
+   interface.** When a rebuild replaces a child (a card rebuilt on each live update), whatever must
+   survive it (which control held focus, what the user expanded or showed in full) passes from the old
+   child to its replacement as a state value only the child can read: the old child hands it over and
+   the replacement is built from it. The parent never reads a child's markup to find that state, and
+   never keeps its own copy of state the child owns. Rule 4 keeps organisms out of each other's DOM;
+   this keeps a parent out of its children's. Otherwise renaming a child's element or attribute breaks
+   the parent, and the parent's copy drifts from the child's, as `controllerPanes` did before
+   `controllerCard`'s `state()` and `from` (the shape to copy). The parent still owns what is its own,
+   such as a layout default it passes in.
 
 ### 2.3 Frames are dumb
 A layout/frame's job is to hand each organism a container and wire the declared contract. A
@@ -160,7 +172,10 @@ the e2e alike.
    Library query priority): `getByRole('button', { name })`, a heading by its role, a status by its
    text. Never by tag (`button`, `h1…h6`), class, `id`, a single naming attribute (`aria-label` alone),
    or how the text is split into elements. Each component's tests go through **one** helper, and every
-   query in it shares one matcher, so a `role="button"` element is found everywhere or nowhere.
+   query in it shares one matcher, so a `role="button"` element is found everywhere or nowhere. For the
+   controller's cards that helper is `tests/helpers/controllerCards.ts`, and a `no-restricted-syntax`
+   lint rule in `eslint.config.mjs` fails a controller test that spells the card element, the card
+   role or a card part's test id itself.
 2. **Check inside the element that owns the fact.** Read a card's status from that card's status row,
    not the whole host or page, whenever the same word can appear elsewhere (a header count, a label,
    an activity line). A pattern that a neighbouring element can satisfy proves nothing.
@@ -294,6 +309,7 @@ pins for scroll and footer reachability.
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
+- [ ] If it rebuilds child components: their state passes to the replacements through the children's own interface, never by reading their markup or keeping a copy (UI §2.2 rule 7).
 - [ ] Styled via `src/renderer/src/tokens.css`; light + dark both correct.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).

@@ -7,6 +7,7 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
+import { bringForwardLocator, cardLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -58,7 +59,8 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       expect.soft({ ['halt reason within the same deadline']: shown[1] }).toEqual({ ['halt reason within the same deadline']: true });
       expect.soft({ ['gate status within shared deadline']: attentionTexts.some(text => text.includes(source.loop!.status)) }).toEqual({ ['gate status within shared deadline']: true });
       if (source.loop?.verdictReason) expect.soft({ ['full reason within shared deadline']: attentionTexts.some(text => text.includes(source.loop!.verdictReason!)) }).toEqual({ ['full reason within shared deadline']: true });
-      const pane = controller.page.getByRole('button', { name: repo, exact: false });
+      const pane = cardLocator(controller.page, repo);
+      const bringForward = bringForwardLocator(pane);
       if (action === 'resolve') {
         const cleared = await statusDeadline(controller.page, repo, [/verify/]);
         await approve.click();
@@ -68,8 +70,9 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
         expect.soft(resolution.texts.some(text => /verify/.test(text) && !/needs? (?:a )?human|human.*needed|stop for a human/i.test(text) && (!source.loop?.verdictReason || !text.includes(source.loop.verdictReason)))).toBe(true);
         await expect.soft(pane).not.toContainText(/needs? (?:a )?human|stop for a human/i);
       } else {
-        if (action === 'click') await pane.click();
-        else { await pane.focus(); await controller.page.keyboard.press('Enter'); }
+        await expect(bringForward).toBeVisible();
+        if (action === 'click') await bringForward.click();
+        else { await bringForward.focus(); await controller.page.keyboard.press('Enter'); }
         await expect.soft.poll(() => terminal.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
         expect.soft((await terminal.page.evaluate(directory => window.flow.state(directory), repo)).loop?.humanNeeded).toBe(true);
         await expect.soft(pane).toContainText(/needs? (?:a )?human|human.*needed/i, { timeout: DISPLAY_BOUND_MS });

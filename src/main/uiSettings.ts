@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { atomicWriteFileSync } from './atomicFile';
-import { DEFAULT_UI_SETTINGS, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
+import { DEFAULT_UI_SETTINGS, isTheme, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
 import { KEY_ACTION_IDS, type Chord, type KeyActionId } from '../shared/keymap';
 import { isRecord } from './yamlRecord';
 
@@ -43,7 +43,7 @@ function coerceTab(raw: unknown, fallback: TabId): TabId {
 }
 
 function coerceTheme(raw: unknown, fallback: Theme): Theme {
-  return raw === 'light' || raw === 'dark' ? raw : fallback;
+  return isTheme(raw) ? raw : fallback;
 }
 
 function coerceKeymapProfile(raw: unknown, fallback: KeymapProfileSetting): KeymapProfileSetting {

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createControllerHarness } from './controllerHarness';
+import { createControllerHarness, setContentWidth } from './controllerHarness';
 
 test('controller harness owns crash, restart and real shell startup evidence', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -45,4 +45,25 @@ test('controller harness owns two independent real terminals and cleans up', { t
     await h.dispose();
   }
   expect(existsSync(h.fixture.root)).toBe(false);
+});
+
+test('controller harness relaunches on an earlier launch\'s profile and sets the window width in CSS pixels', { tag: '@ownapp' }, async () => {
+  const h = createControllerHarness();
+  try {
+    const target = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
+    const first = await h.launch(target, h.fixture.nonGit);
+    const userData = await first.app.evaluate(({ app }) => app.getPath('userData'));
+    for (const width of [639, 640, 320]) {
+      await setContentWidth(first, width);
+      expect(await first.page.evaluate(() => window.innerWidth)).toBe(width);
+    }
+    await h.crash(first.app);
+    const again = await h.launch(target, h.fixture.nonGit, { profile: first.profile });
+    expect(await again.app.evaluate(({ app }) => app.getPath('userData'))).toBe(userData);
+    await h.crash(again.app);
+    const fresh = await h.launch(target, h.fixture.nonGit);
+    expect(await fresh.app.evaluate(({ app }) => app.getPath('userData'))).not.toBe(userData);
+  } finally {
+    await h.dispose();
+  }
 });

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { resolveWindowIconPath } from '../../src/main/appIcon';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
+import { bringForwardLocator, cardLocator } from '../helpers/controllerCards';
 
 const PACKAGE_BUILD_MS = 180_000;
 
@@ -46,7 +47,7 @@ test('packaged controller identifies and activates independent packaged terminal
       expect(await application.app.evaluate(({ app }) => app.getAppPath())).toContain(h.fixture.root);
     }
     for (const [index, directory] of h.fixture.repositories.entries()) {
-      await expect(controller.page.getByRole('button', { name: directory, exact: false })).toHaveCount(1);
+      await expect(cardLocator(controller.page, directory)).toHaveCount(1);
       await terminals[index].page.locator('.xterm-screen').click();
       await terminals[index].app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       typeAtDesktop(`printf 'PACKAGED_READY_%s\\n' ${shellQuote(String(index))}`, h.fixture.env);
@@ -57,7 +58,8 @@ test('packaged controller identifies and activates independent packaged terminal
     for (const [index, directory] of h.fixture.repositories.entries()) {
       await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
       await expect.poll(() => controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused())).toBe(true);
-      await controller.page.getByRole('button', { name: directory, exact: false }).click();
+      await expect(bringForwardLocator(cardLocator(controller.page, directory))).toBeVisible();
+      await bringForwardLocator(cardLocator(controller.page, directory)).click();
       await expect.soft.poll(() => terminals[index].app.evaluate(({ BrowserWindow }) => ({
         minimized: BrowserWindow.getAllWindows()[0].isMinimized(), focused: BrowserWindow.getAllWindows()[0].isFocused(),
       }))).toEqual({ minimized: false, focused: true });

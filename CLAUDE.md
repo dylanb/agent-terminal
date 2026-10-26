@@ -33,7 +33,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never han
 - `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer. The flow **audit recorder** (§25, `auditRecorder.ts` + `auditPaths.ts`) is observe-only and best-effort: it writes each run's append-only YAML under `~/.agent-terminal/audit/` and never throws into the flow path.
 - `src/preload/` — contextBridge exposing the `term` and `monitor` namespaces (§6). No raw `ipcRenderer` in the renderer.
 - `src/renderer/` — terminal pane (xterm + app-owned selection, §7) and monitor pane (§9).
-- `src/shared/ipc.ts` — the typed IPC contract: the single source of truth for channel names and payload shapes; main, preload, and renderer all import from it.
+- `src/shared/ipc.ts` — the typed IPC contract, assembled from the per-domain modules in `src/shared/ipc/`. It is the single source of truth for channel names, what each channel does (its one-sentence `does`), and payload shapes; main, preload, and renderer all import from `ipc.ts`. A new channel goes in its domain module with its `does` sentence, never as a §6 table row.
 - **Semantics two sides must agree on get one definition in `src/shared/`, imported by both — never re-implemented per side.** "Two sides" is any writer/reader pair of one vocabulary — two processes, or a writer and a reader of the same on-disk file — and the predicate deciding what is legal lives in one module. Two copies that "obviously agree today" are the bug. → [CODE-STANDARDS.md § Shared semantics](CODE-STANDARDS.md)
   - Code that writes an asset another component reads computes the destination through that component's own resolver, pinned by `expect(dest).toBe(resolve…(…))`. Against a precedence-aware resolver, the writer targets a named branch of the order (tested **with an override present**); a first-run writer's RED test **deletes the target's root first**. A fixture that pre-creates what the code must handle proves nothing. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 
@@ -59,7 +59,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never han
 
 The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STANDARDS.md)** carries each linked rule's rationale — cite its section in review rather than re-arguing a settled decision.
 
-- TypeScript, `strict: true`. No `any` in `src/shared/ipc.ts` — the IPC contract is the part TS exists to protect.
+- TypeScript, `strict: true`. No `any` in `src/shared/ipc.ts` or `src/shared/ipc/` — the IPC contract is the part TS exists to protect.
 - `@xterm/xterm` and `@xterm/headless` are pinned to the same exact version (§8.2) — two parsers at different versions silently corrupt captures. Bump only together.
 - Security defaults are non-negotiable: `contextIsolation: true`, `nodeIntegration: false`, paste-breakout `ESC[201~` strip on both injection paths (§7.5, §9.3).
 - **Security review defends the trust boundaries the spec names, and escalates any new attack class to the operator.** A finding must cross a spec-drawn boundary (e.g. §27.9.1's human-decided gate) or be ordinary robustness (malformed/missing/unreadable input fails closed). A threat the spec places inside the operator boundary — §27.9.1 treats working agents as trusted operators — is not a finding. An attack class the spec does not settle is escalated as a `needs a human` decision, never silently hardened against or dismissed: adding a boundary is a spec decision.
