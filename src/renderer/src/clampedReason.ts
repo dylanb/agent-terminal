@@ -5,6 +5,7 @@ export interface ClampedReasonDeps {
 }
 
 export interface ClampedReason {
+  control(): HTMLElement | undefined;
   dispose(): void;
 }
 
@@ -15,14 +16,12 @@ export function createClampedReason(host: HTMLElement, deps: ClampedReasonDeps):
   let full = deps.full;
   const root = doc.createElement('div');
   root.className = 'controller-reason';
-  root.dataset.reason = deps.text;
   root.style.setProperty('--reason-lines', String(REASON_LINE_LIMIT));
   const text = doc.createElement('p');
   text.className = 'controller-reason-text';
   text.textContent = deps.text;
   const toggle = doc.createElement('button');
   toggle.type = 'button';
-  toggle.dataset.control = 'reason';
   toggle.textContent = 'Show full reason';
   toggle.addEventListener('click', () => {
     full = !full;
@@ -48,6 +47,7 @@ export function createClampedReason(host: HTMLElement, deps: ClampedReasonDeps):
   const observer = View ? new View(render) : undefined;
   observer?.observe(text);
   return {
+    control: () => (toggle.isConnected ? toggle : undefined),
     dispose() {
       observer?.disconnect();
       root.remove();

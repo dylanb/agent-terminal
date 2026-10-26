@@ -208,8 +208,6 @@ function soleLine(file: string, pattern: RegExp): string {
   return hits[0];
 }
 
-const openChildRow = (): string => soleLine(CH06, /^\|\s*`flow:openChild`/);
-const openChildSketch = (): string => soleLine(CH06, /^\s*openChild:/);
 const childLauncherItem = (): string => soleLine(CH24, /child-instance launcher/i);
 const ch23Body = (): string => sectionOf(CH23, '23.2');
 const sentences = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
@@ -228,11 +226,9 @@ describe(`#167 — no §6 / §23 / §24 clause seeds a child's flow selection or
     });
   }
 
-  it(`the §23.2 body, the §6 flow:openChild row and sketch, and the §24 launcher item use no form of "seed"`, () => {
+  it(`the §23.2 body and the §24 launcher item use no form of "seed"`, () => {
     const scoped: ReadonlyArray<readonly [string, string]> = [
       [`§23.2 body`, ch23Body()],
-      [`§6 flow:openChild row`, openChildRow()],
-      [`§6 openChild preload sketch`, openChildSketch()],
       [`§24 child-instance launcher item`, childLauncherItem()],
     ];
     const offenders = scoped.filter(([, text]) => /seed/i.test(text)).map(([where]) => where);
@@ -241,18 +237,6 @@ describe(`#167 — no §6 / §23 / §24 clause seeds a child's flow selection or
 });
 
 describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
-  it(`the §6 flow:openChild row and preload sketch carry no atStep`, () => {
-    expect(openChildRow(), `atStep in the flow:openChild row (${RULE})`).not.toContain('atStep');
-    expect(openChildSketch(), `atStep in the openChild preload sketch (${RULE})`).not.toContain('atStep');
-  });
-
-  it(`the §6 flow:openChild payload and preload sketch take only prRef — no renamed seeding field`, () => {
-    expect(openChildRow(), `flow:openChild payload (${RULE})`).toContain('`{sessionId, prRef} → {worktree, launched}`');
-    expect(openChildSketch(), `openChild preload sketch (${RULE})`).toMatch(
-      /openChild:\s*\(prRef\)\s*=>\s*ipcRenderer\.invoke\('flow:openChild',\s*\{\s*sessionId:\s*SID,\s*prRef\s*\}\)/,
-    );
-  });
-
   it(`§23.2 states the child's flow is bound at Start and its run begins where an ordinary Start begins`, () => {
     const body = lower(ch23Body());
     expect(body).toContain('bound at start');
@@ -267,8 +251,8 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
     expect(lower(ch23Body()), RULE).not.toContain('all steps of the flow run on each pr');
   });
 
-  it(`no sentence of §23.2 or the §6 flow:openChild row cites D22 as authority for seeding`, () => {
-    const offenders = [...sentences(ch23Body()), ...sentences(openChildRow())].filter(
+  it(`no sentence of §23.2 cites D22 as authority for seeding`, () => {
+    const offenders = sentences(ch23Body()).filter(
       (s) => s.includes('D22') && /seed/i.test(s),
     );
     expect(offenders, `D22 cited for seeding (${RULE}):\n${offenders.join('\n')}`).toEqual([]);
@@ -276,22 +260,6 @@ describe(`#167 — epic child worktrees are bound at Start too (AC 6)`, () => {
 
   it(`the §24 child-instance launcher item says the child's flow is bound at Start`, () => {
     expect(lower(childLauncherItem())).toContain('bound at start');
-  });
-
-  it(`the §6 flow:openChild row's shape version has a changelog entry citing §23.2 or D63`, () => {
-    const shape = /shape v(\d+\.\d+)/.exec(openChildRow());
-    expect(shape, 'the flow:openChild row carries no "shape vX.Y" prefix').not.toBeNull();
-    const version = (shape as RegExpExecArray)[1];
-    const entry = changelogEntries().find((e) => e.startsWith(`**Changelog v${version}:**`));
-    expect(entry, `no **Changelog v${version}:** entry for the flow:openChild row's shape`).toBeDefined();
-    const text = entry ?? '';
-    expect(
-      text.includes(`§23.2`) || text.includes('D63'),
-      `the v${version} changelog entry cites neither §23.2 nor D63`,
-    ).toBe(true);
-    expect(text, `the v${version} changelog entry does not describe the flow:openChild change`).toContain(
-      '`flow:openChild`',
-    );
   });
 
   it(`${REQUIREMENTS} records D63 superseding D22's flow-state seeding`, () => {

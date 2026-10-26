@@ -1,34 +1,30 @@
-import { cardStatus } from '../../shared/controllerCardStatus';
+import { cardStatus, workConditions, type WorkCondition } from './controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
 import { createClampedReason, type ClampedReason } from './clampedReason';
 
 export interface ControllerCardDeps {
   terminal: ControllerTerminal;
-  expanded: boolean;
-  onToggle(expanded: boolean): void;
-  fullReasons: ReadonlySet<string>;
-  onReasonToggle(reason: string, full: boolean): void;
+  expandedByDefault: boolean;
   onBringForward(): void;
   onDismiss(): void;
+  from?: CardState;
+}
+
+type Action = 'bring-forward' | 'dismiss';
+type Focus = 'header' | Action | { reason: string };
+const HANDOVER = Symbol('controller card handover');
+
+export interface CardState {
+  readonly [HANDOVER]: { chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
 }
 
 export interface ControllerCard {
-  setExpanded(expanded: boolean): void;
+  setExpandedByDefault(expanded: boolean): void;
+  state(): CardState;
+  focusTarget(): HTMLElement | undefined;
+  header(): HTMLElement;
   dispose(): void;
-}
-
-export interface WorkCondition {
-  statusClass: 'needs-human' | 'error';
-  title: string;
-  reasons: readonly string[];
-}
-
-export function workConditions(work: ControllerWorkStatus | undefined): WorkCondition[] {
-  return [
-    ...(work?.attention ? [{ statusClass: 'needs-human' as const, title: `Human needed: ${work.attention.status}`, reasons: work.attention.reasons }] : []),
-    ...(work?.error ? [{ statusClass: 'error' as const, title: 'Error', reasons: [work.error.reason] }] : []),
-  ];
 }
 
 const TICKET_TEXT = { none: 'No ticket', loading: 'Ticket loading', unavailable: 'Ticket unavailable' } as const;
@@ -48,7 +44,9 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const { terminal } = deps;
   const doc = host.ownerDocument;
   const status = cardStatus(terminal);
-  const reasons: ClampedReason[] = [];
+  const carried = deps.from?.[HANDOVER];
+  const reasons: { text: string; reason: ClampedReason }[] = [];
+  const fullReasons = new Set<string>();
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
     const created = doc.createElement(tag);
     created.className = className;
@@ -57,7 +55,6 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   };
 
   const card = element('article', 'controller-card');
-  card.dataset.terminalId = terminal.id;
   card.dataset.status = status.statusClass;
   if (terminal.status === 'disconnected') card.classList.add('is-disconnected');
   const cardId = `controller-card-${nextCardId += 1}`;
@@ -77,7 +74,6 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const statusLabel = element('span', 'controller-card-label', status.text);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
-  toggle.dataset.control = 'header';
   toggle.setAttribute('aria-controls', `${cardId}-body`);
   toggle.append(element('span', 'controller-card-name', finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)), ' ', directory);
   heading.append(toggle);
@@ -91,22 +87,24 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   card.append(header, ' ', body);
   host.append(card);
 
-  const action = (control: string, label: string, name: string, use: () => void) => {
+  const actionKind: Action = terminal.status === 'disconnected' ? 'dismiss' : 'bring-forward';
+  const action = (label: string, name: string, use: () => void) => {
     const button = element('button', 'controller-card-action', label);
     button.type = 'button';
-    button.dataset.control = control;
     button.setAttribute('aria-label', `${name} ${terminal.launchDirectory}`);
     button.addEventListener('click', use);
     return button;
   };
 
-  if (terminal.status === 'disconnected') {
-    body.append(' ', action('dismiss', 'Dismiss', 'Dismiss disconnected terminal', deps.onDismiss));
+  let actionButton: HTMLButtonElement;
+  if (actionKind === 'dismiss') {
+    actionButton = action('Dismiss', 'Dismiss disconnected terminal', deps.onDismiss);
   } else {
     if (terminal.work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
     else if (terminal.work) appendWork(terminal.work);
-    body.append(' ', action('bring-forward', 'Bring forward', 'Bring forward', deps.onBringForward));
+    actionButton = action('Bring forward', 'Bring forward', deps.onBringForward);
   }
+  body.append(' ', actionButton);
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {
     const line = element('p', 'controller-card-line controller-card-ticket');
@@ -133,15 +131,20 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     box.append(element('p', 'controller-condition-title', title), ' ');
     body.append(' ', box);
     for (const text of texts) {
-      reasons.push(createClampedReason(box, {
+      if (carried?.fullReasons.has(text)) fullReasons.add(text);
+      reasons.push({ text, reason: createClampedReason(box, {
         text,
-        full: deps.fullReasons.has(text),
-        onToggle: full => deps.onReasonToggle(text, full),
-      }));
+        full: fullReasons.has(text),
+        onToggle(full) {
+          if (full) fullReasons.add(text);
+          else fullReasons.delete(text);
+        },
+      }) });
     }
   }
 
-  let expanded = deps.expanded;
+  let chosenExpanded = carried?.chosenExpanded;
+  let expanded = chosenExpanded ?? deps.expandedByDefault;
   function setExpanded(next: boolean): void {
     const held = body.contains(doc.activeElement);
     expanded = next;
@@ -153,14 +156,34 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   }
   setExpanded(expanded);
   toggle.addEventListener('click', () => {
-    setExpanded(!expanded);
-    deps.onToggle(expanded);
+    chosenExpanded = !expanded;
+    setExpanded(chosenExpanded);
   });
 
+  function focused(): Focus | undefined {
+    const active = doc.activeElement;
+    if (active === toggle) return 'header';
+    if (active === actionButton) return actionKind;
+    const reason = reasons.find(({ reason }) => reason.control() === active);
+    return reason && { reason: reason.text };
+  }
+
+  function shown(want: Focus): HTMLElement | undefined {
+    if (want === 'header') return toggle;
+    if (body.hidden) return undefined;
+    if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
+    return want === actionKind ? actionButton : undefined;
+  }
+
   return {
-    setExpanded,
+    setExpandedByDefault(next) {
+      if (chosenExpanded === undefined) setExpanded(next);
+    },
+    state: () => ({ [HANDOVER]: { chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
+    focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
+    header: () => toggle,
     dispose() {
-      reasons.forEach(reason => reason.dispose());
+      reasons.forEach(({ reason }) => reason.dispose());
       card.remove();
     },
   };

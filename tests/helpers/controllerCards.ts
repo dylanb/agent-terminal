@@ -6,6 +6,8 @@ import { SUMMARY_LABELS } from './controllerStatusFixture';
 // `…In` functions are the jsdom counterparts, which match the `aria-label` or else the text, because jsdom here
 // has no accessible-name engine.
 
+export const CARD_SELECTOR = 'article';
+
 export const CARD_ACCENT_TEST_ID = 'card-accent';
 export const CARD_STATUS_TEST_ID = 'card-status';
 
@@ -44,7 +46,7 @@ export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector:
 export const accentLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_ACCENT_TEST_ID);
 export const statusRowLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_STATUS_TEST_ID);
 
-export const cardsIn = (root: ParentNode): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('article')];
+export const cardsIn = (root: ParentNode): HTMLElement[] => [...root.querySelectorAll<HTMLElement>(CARD_SELECTOR)];
 
 // Any node in the subtree, not only the root: `textContent` joins sibling elements with no separator, so a name
 // beside the directory reads as one word and fails the whole-path match, while a directory split across spans
@@ -72,7 +74,7 @@ export function showsName(card: ParentNode | undefined, directory: string, name:
 }
 
 export const windowHeaderIn = (root: ParentNode): HTMLElement | undefined =>
-  [...root.querySelectorAll<HTMLElement>('header')].find(header => !header.closest('article'));
+  [...root.querySelectorAll<HTMLElement>('header')].find(header => !header.closest(CARD_SELECTOR));
 export const controlName = (control: Element | null | undefined): string => control?.getAttribute('aria-label') ?? control?.textContent ?? '';
 const controlsIn = (scope: ParentNode, text: string): HTMLElement[] =>
   [...scope.querySelectorAll<HTMLElement>('button, [role="button"], [role="switch"]')].filter(control => controlName(control).includes(text));
@@ -83,7 +85,7 @@ export const showFullReasonIn = (card: ParentNode) => controlIn(card, 'Show full
 export const showFullReasonsIn = (card: ParentNode): HTMLElement[] => controlsIn(card, 'Show full reason');
 export const windowTitleIn = (root: ParentNode): HTMLElement | undefined =>
   [...root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6, [role="heading"]')]
-    .find(heading => !heading.closest('article') && heading.textContent?.trim() === 'Controller');
+    .find(heading => !heading.closest(CARD_SELECTOR) && heading.textContent?.trim() === 'Controller');
 export const darkThemeIn = (root: ParentNode) => controlIn(root, 'Dark theme');
 export function darkThemeOn(root: ParentNode): boolean {
   const control = darkThemeIn(root);

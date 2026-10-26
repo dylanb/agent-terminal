@@ -1,6 +1,6 @@
 import type { Theme } from '../../shared/ipc';
 
-export const ONE_COLUMN_BELOW_PX = 640;
+const ONE_COLUMN_BELOW_PX = 640;
 
 export interface ControllerLayout {
   oneColumn(): boolean;

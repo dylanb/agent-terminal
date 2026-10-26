@@ -42,7 +42,7 @@ it('announces another pane entering, changing and clearing attention without foc
     observer.disconnect();
     service.publish([statusTerminal({ attention: { status: 'error', reasons: ['Check failed'] }, error: { reason: 'Broken build' } }), other]);
     expect(live!.textContent).toContain('Check failed');
-    expect(live!.textContent).toContain('Broken build');
+    expect(live!.textContent).toContain('/fixed/worktree: Human needed: error. Check failed. Error. Broken build');
     service.publish([statusTerminal(), other]);
     expect(live!.textContent).toContain('/fixed/worktree');
     expect(live!.textContent).toContain('cleared');

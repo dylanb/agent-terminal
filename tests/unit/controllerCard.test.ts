@@ -11,13 +11,10 @@ afterEach(() => document.body.replaceChildren());
 function mount(terminal: ControllerTerminal, expanded = true) {
   const host = document.createElement('div');
   document.body.append(host);
-  const calls = { bringForward: 0, dismiss: 0, toggle: 0 };
+  const calls = { bringForward: 0, dismiss: 0 };
   const deps = {
     terminal,
-    expanded,
-    fullReasons: new Set<string>(),
-    onToggle() { calls.toggle += 1; },
-    onReasonToggle() {},
+    expandedByDefault: expanded,
     onBringForward() { calls.bringForward += 1; },
     onDismiss() { calls.dismiss += 1; },
   };
@@ -61,13 +58,12 @@ describe('controller card header control', () => {
       .toEqual({ state: String(expanded), label: true });
   });
 
-  it('reports each header click as a toggle and never as Bring forward', () => {
+  it('collapses and expands the card on each header click, and never brings it forward', () => {
     const { terminal } = STATUS_CASES.working;
     const { element, calls } = mount(terminal);
     const header = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
-    header?.click();
-    header?.click();
-    expect({ header: Boolean(header), calls }).toEqual({ header: true, calls: { bringForward: 0, dismiss: 0, toggle: 2 } });
+    const states = [1, 2].map(() => { header?.click(); return header?.getAttribute('aria-expanded'); });
+    expect({ states, calls }).toEqual({ states: ['false', 'true'], calls: { bringForward: 0, dismiss: 0 } });
   });
 });
 
@@ -131,7 +127,7 @@ describe('controller card body', () => {
     expect({
       named: controlName(control).includes(terminal.launchDirectory),
       calls,
-    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0, toggle: 0 } });
+    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0 } });
   });
 
   it('shows a disconnected card as Disconnected with no work details and Dismiss last, which reports its use once', () => {

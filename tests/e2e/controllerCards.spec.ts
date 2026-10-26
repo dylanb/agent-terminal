@@ -7,7 +7,7 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { accentLocator, bringForwardLocator, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { accentLocator, bringForwardLocator, CARD_SELECTOR, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 import { expectedColor, type StatusToken, type Theme } from '../helpers/designTokens';
 import { mismatchedTokens, paintColors } from '../helpers/tokenProbe';
 
@@ -108,12 +108,12 @@ async function twoTerminals(h: Awaited<ReturnType<typeof createControllerDesktop
 }
 
 /** How many rows A's and B's cards sit on as painted: 1 side by side, 2 in one column, 0 while either is missing. */
-const cardRows = ({ controller, gated, working }: TwoTerminals): Promise<number> => controller.page.evaluate(directories => {
-  const tops = [...document.querySelectorAll('article')]
+const cardRows = ({ controller, gated, working }: TwoTerminals): Promise<number> => controller.page.evaluate(({ directories, cardSelector }) => {
+  const tops = [...document.querySelectorAll(cardSelector)]
     .filter(element => directories.some(directory => element.textContent?.includes(directory)))
     .map(element => Math.round(element.getBoundingClientRect().top));
   return tops.length === 2 ? new Set(tops).size : 0;
-}, [gated, working]);
+}, { directories: [gated, working], cardSelector: CARD_SELECTOR });
 
 const removeAll = (paths: readonly string[]) => { for (const path of paths) rmSync(path, { recursive: true, force: true }); };
 

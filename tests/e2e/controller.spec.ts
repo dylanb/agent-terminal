@@ -7,7 +7,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
-import { bringForwardLocator, cardHeaderLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, CARD_SELECTOR, cardHeaderLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
 
 test('controller explains how to connect the first terminal', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -97,8 +97,8 @@ test('controller reflows real registered terminal controls when its window narro
     }
     await expect.soft(cardsLocator(controller.page)).toHaveCount(2);
     // Live snapshots can replace panes between locator resolution and evaluation; query and measure atomically.
-    const measure = () => controller.page.evaluate(directories => {
-      const elements = [...document.querySelectorAll('article')].filter(element => directories.some(directory => element.textContent?.includes(directory)));
+    const measure = () => controller.page.evaluate(({ directories, cardSelector }) => {
+      const elements = [...document.querySelectorAll(cardSelector)].filter(element => directories.some(directory => element.textContent?.includes(directory)));
       const boxes = elements.map(element => element.getBoundingClientRect());
       return {
         rows: new Set(boxes.map(box => Math.round(box.top))).size,
@@ -116,7 +116,7 @@ test('controller reflows real registered terminal controls when its window narro
               && box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom);
           }),
       };
-    }, h.fixture.repositories);
+    }, { directories: h.fixture.repositories, cardSelector: CARD_SELECTOR });
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1000, 700));
     await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(1000);
     const wide = await measure();
