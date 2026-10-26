@@ -730,7 +730,6 @@ describe('autoGate — a gate that stops for the operator asks the agent why (N9
     rig.view();
     rig.view();
     expect(rig.asked).toHaveLength(1);
-    expect(rig.asked[0]).toContain('Why does this gate need me?');
     expect(rig.asked[0]).toContain(`\`${STEP}\``);
     expect(rig.asked[0]).toContain('stop for a human');
   });

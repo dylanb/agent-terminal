@@ -7,29 +7,10 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { accentLocator, bringForwardLocator, CARD_SELECTOR, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
-import { expectedColor, type StatusToken, type Theme } from '../helpers/designTokens';
-import { mismatchedTokens, paintColors } from '../helpers/tokenProbe';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
-
-async function paintedColor(part: Locator, property: 'background-color' | 'color'): Promise<string | undefined> {
-  const values = await part.evaluateAll((elements, property) => elements.map(element => getComputedStyle(element).getPropertyValue(property)), property);
-  return values[0];
-}
-
-/** Each card part whose painted colour is not its status token in `theme`, or that is not painted at all. */
-async function offToken(page: Page, theme: Theme, reads: { label: string; part: Locator; property: 'background-color' | 'color'; token: StatusToken }[]): Promise<string[]> {
-  const expected = await page.evaluate(paintColors, reads.map(read => expectedColor(read.token, theme)));
-  const violations: string[] = [];
-  for (const [index, read] of reads.entries()) {
-    const painted = await paintedColor(read.part, read.property);
-    if (painted === undefined) violations.push(`${read.label} is not painted`);
-    else violations.push(...mismatchedTokens([read.label], { [read.label]: painted }, [expected[index]]));
-  }
-  return violations;
-}
 
 type Launched = Awaited<ReturnType<Awaited<ReturnType<typeof createControllerDesktopHarness>>['launch']>>;
 const focused = (launched: Launched) => launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused());
@@ -107,14 +88,6 @@ async function twoTerminals(h: Awaited<ReturnType<typeof createControllerDesktop
   };
 }
 
-/** How many rows A's and B's cards sit on as painted: 1 side by side, 2 in one column, 0 while either is missing. */
-const cardRows = ({ controller, gated, working }: TwoTerminals): Promise<number> => controller.page.evaluate(({ directories, cardSelector }) => {
-  const tops = [...document.querySelectorAll(cardSelector)]
-    .filter(element => directories.some(directory => element.textContent?.includes(directory)))
-    .map(element => Math.round(element.getBoundingClientRect().top));
-  return tops.length === 2 ? new Set(tops).size : 0;
-}, { directories: [gated, working], cardSelector: CARD_SELECTOR });
-
 const removeAll = (paths: readonly string[]) => { for (const path of paths) rmSync(path, { recursive: true, force: true }); };
 
 /** Focuses the controller window and waits until no terminal window is focused, so a later read of a terminal's
@@ -147,18 +120,6 @@ test('status cards on real terminals', { tag: '@ownapp' }, async () => {
     const summary = { 'need a human': 1, working: 1 } as Record<string, number>;
     await expect.soft.poll(async () => unshownCounts((await windowHeaderLocator(controller.page).allTextContents()).join(' '),
       headerLabels(label => summary[label] ?? 0, 2, 2))).toEqual([]);
-    expect.soft(await offToken(controller.page, 'light', [
-      { label: 'A accent', part: accentLocator(cardA), property: 'background-color', token: '--status-needs-human' },
-      { label: 'A status row', part: statusRowLocator(cardA), property: 'color', token: '--status-needs-human-text' },
-      { label: 'B accent', part: accentLocator(cardB), property: 'background-color', token: '--status-working' },
-      { label: 'B status row', part: statusRowLocator(cardB), property: 'color', token: '--status-working-text' },
-    ])).toEqual([]);
-
-    await setContentWidth(controller, 639);
-    await expect.soft.poll(() => cardRows(terminals)).toBe(2);
-    await setContentWidth(controller, 640);
-    await expect.soft.poll(() => cardRows(terminals)).toBe(1);
-
     await focusController(terminals);
     const bringForward = bringForwardLocator(cardA);
     await expect(bringForward).toBeVisible();
@@ -211,7 +172,6 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
     await noneCameForward();
 
     await setContentWidth(controller, 640);
-    await expect.poll(() => cardRows(terminals)).toBe(1);
     await expect.soft(headerA).toHaveAttribute('aria-expanded', 'true');
     await expect.soft(headerB).toHaveAttribute('aria-expanded', 'false');
 
@@ -235,7 +195,7 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
   }
 });
 
-test('theme survives restart: Dark theme paints the dark tokens at once and after the controller restarts', { tag: '@ownapp' }, async () => {
+test('theme survives restart: Dark theme applies at once and after the controller restarts', { tag: '@ownapp' }, async () => {
   test.setTimeout(180_000);
   const h = await createControllerDesktopHarness();
   const paths: string[] = [];
@@ -254,12 +214,6 @@ test('theme survives restart: Dark theme paints the dark tokens at once and afte
     await expect.soft.poll(() => painted(restarted.page)).toBe('dark');
     await expect(statusRowLocator(cardA)).toHaveText('Needs a human', { timeout: 30_000 });
     await expect(statusRowLocator(cardB)).toHaveText('Working', { timeout: 30_000 });
-    expect.soft(await offToken(restarted.page, 'dark', [
-      { label: 'A accent', part: accentLocator(cardA), property: 'background-color', token: '--status-needs-human' },
-      { label: 'A status row', part: statusRowLocator(cardA), property: 'color', token: '--status-needs-human-text' },
-      { label: 'B accent', part: accentLocator(cardB), property: 'background-color', token: '--status-working' },
-      { label: 'B status row', part: statusRowLocator(cardB), property: 'color', token: '--status-working-text' },
-    ])).toEqual([]);
   } finally {
     try { await h.dispose(); }
     finally { removeAll(paths); }

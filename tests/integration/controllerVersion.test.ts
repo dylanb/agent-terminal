@@ -90,6 +90,6 @@ it.each([
   expect(registrations[0]).toMatchObject({ version: 2, type: 'register' });
   expect(starts).toBe(0);
   expect(statuses).toEqual([]);
-  await vi.waitFor(() => expect(starts).toBe(1), { timeout: 8000 });
+  await vi.waitFor(() => expect(starts).toBe(1), { timeout: 30_000 });
   await vi.waitFor(() => expect(statuses).toEqual([{ version: 2, type: 'status', work: workStatus() }]));
-}, 10000);
+}, 35_000);

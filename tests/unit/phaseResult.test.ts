@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
-import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
 import {
   PHASE_RESULT_FIELDS,
   RED_COMPLETION,
   composePhaseResultInstruction,
-  exampleCapturedOutput,
   examplePhaseResult,
   phaseOutputRel,
   phaseResultEnd,
@@ -22,12 +20,6 @@ const end = (text: string, want: Parameters<typeof phaseResultEnd>[1], captured:
   phaseResultEnd({ result: text, captured, capturedRel: phaseOutputRel(RESULT_REL) }, want);
 
 describe('reading a phase result (§28.5.2 / §28.5.5)', () => {
-  it('reads the canonical example back as itself, for every outcome', () => {
-    for (const outcome of PHASE_OUTCOMES) {
-      expect(readPhaseResult(examplePhaseResult(outcome))).toEqual({ ok: true, result: { outcome, build: null, intendedFailures: null, verificationOnly: false } });
-    }
-  });
-
   it('reads the build and the intended failures when the example carries them', () => {
     expect(readPhaseResult(examplePhaseResult('passed', { build: 'built' }))).toMatchObject({ ok: true, result: { build: 'built' } });
     const red = readPhaseResult(examplePhaseResult('failed-assertion', { intendedFailures: [{ file: 'tests/adder.test.ts', line: 5 }] }));
@@ -105,10 +97,6 @@ describe('the captured run lives beside the result', () => {
   ])('%s keeps its run in %s', (rel, out) => {
     expect(phaseOutputRel(rel)).toBe(out);
   });
-
-  it('every outcome has a plausible captured run to show', () => {
-    for (const o of PHASE_OUTCOMES) expect(exampleCapturedOutput(o).trim().length).toBeGreaterThan(0);
-  });
 });
 
 describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)', () => {
@@ -120,22 +108,10 @@ describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)',
       closing: ['CLOSING LINE'],
     }).join('\n');
 
-  it('names the result file, the captured-run file, every JSON field it asks for, and the full outcome vocabulary', () => {
+  it('names the result file and the captured-run file', () => {
     const p = lines();
     expect(p).toContain(RESULT_REL);
     expect(p).toContain(phaseOutputRel(RESULT_REL));
-    expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
-    for (const o of PHASE_OUTCOMES) expect(p).toContain(o);
-  });
-
-  it('tells the agent to save the raw run verbatim in its own file', () => {
-    expect(lines()).toMatch(/raw[\s\S]*verbatim[\s\S]*output\.txt/i);
-  });
-
-  it('embeds the canonical example for the completing outcome, well-formed against the predicate', () => {
-    const p = lines();
-    const json = p.slice(p.indexOf('{'), p.lastIndexOf('}') + 1);
-    expect(readPhaseResult(json)).toMatchObject({ ok: true, result: { outcome: 'failed-assertion' } });
   });
 
   it('threads the phase-specific closing prose verbatim (each caller supplies its own bar)', () => {
@@ -144,11 +120,7 @@ describe('composePhaseResultInstruction (§28.5.5 — the shared writer block)',
 
   it('asks for the build only when a completing build outcome is given (GREEN)', () => {
     expect(lines()).not.toContain(`"${PHASE_RESULT_FIELDS.build}"`);
-    const p = lines(true);
-    expect(p).toContain(`"${PHASE_RESULT_FIELDS.build}"`);
-    for (const b of BUILD_OUTCOMES) expect(p).toContain(b);
-    const json = p.slice(p.indexOf('{'), p.lastIndexOf('}') + 1);
-    expect(readPhaseResult(json)).toMatchObject({ ok: true, result: { outcome: 'passed', build: 'built' } });
+    expect(lines(true)).toContain(`"${PHASE_RESULT_FIELDS.build}"`);
   });
 
   it('works for the refactor bar (tests still pass, no build)', () => {

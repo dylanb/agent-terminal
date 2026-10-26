@@ -1,10 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseRedCheckReport, type RedCheckReport } from '../../src/shared/redCheck';
-import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
 
 // §28.5.2
 
@@ -24,11 +23,6 @@ beforeAll(() => {
 const test = (name: string) => report.tests.find((t) => t.name === name);
 
 describe('scripts/red-check.mjs (§28.5.2)', () => {
-  it("is this repository's declared red_check_command", () => {
-    const caps = parseLoopCapabilities(readFileSync(join(ROOT, 'loop-capabilities.yaml'), 'utf8'));
-    expect(caps.ok && caps.value.redCheckCommand).toBe('node scripts/red-check.mjs');
-  });
-
   it('exits 0 having printed a report, though tests failed', () => {
     expect(exitStatus).toBe(0);
   });

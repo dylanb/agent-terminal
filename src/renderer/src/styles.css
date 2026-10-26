@@ -254,7 +254,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
 .flowstrip .loopstat:hover { background:var(--hair2); }
 /* Open-state cue is a signal border, NOT a background wash: a wash would stack under the spill pill's
-   own wash and drop its text below 4.5:1 on the doubled layer (WCAG 1.4.3, see styleContrast). */
+   own wash and drop its text below 4.5:1 on the doubled layer (WCAG 1.4.3). */
 .flowstrip .loopstat[aria-expanded="true"] { border-color:var(--signal); }
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 /* Values wrap as whole items onto a second row, never inside themselves: a shrinkable flex item breaks
@@ -495,7 +495,7 @@ button:hover { border-color:var(--dim); }
    has left, and overprints the footer at zoom (WCAG 1.4.4, 1.4.10). The shell names a slot, never an
    organism's classes (UI §2.3). */
 .flow-modal .card [data-modal-grow] { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
-/* Two things this box must never do, both invisible to a pin that only checks the footer:
+/* Two things this box must never do:
    `min-height` — a `flex:1 1 auto; min-height:0` body is free to shrink to ZERO when the card's other rows
    fill its max-height, leaving the controls focusable but entirely unpaintable: keyboard focus then lands on
    a control the user cannot see (WCAG 2.2 SC 2.4.11 Focus Not Obscured). The floor keeps at least one option

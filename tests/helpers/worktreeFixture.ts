@@ -2,8 +2,7 @@
 // slice tests drive the started-ness matrix (§18.7.4) and the three-leg definition resolver (§18.7.3) against
 // REAL on-disk states, so this single-sources the worktree shapes those tests seed rather than each slice
 // re-spelling them. No wall-clock, randomness, or network: every file's bytes are fixed literals (mkdtemp's
-// unique suffix aside, the standard hermetic-temp pattern gitRepo.ts uses); the built states are validated
-// against the production readers (createFlowStateStore, loadFlowDefinition) in worktreeFixture.test.ts.
+// unique suffix aside, the standard hermetic-temp pattern gitRepo.ts uses).
 //
 // Paths are derived from the production resolvers so a fixture path and the code under test resolve the
 // identical location (CLAUDE.md writer↔reader-location rule): the flow home from flow.ts's flowHomeDir +
@@ -45,8 +44,6 @@ export interface WorktreeFixture {
   /** A worktree path whose ROOT does not resolve — the anchor-unresolvable leg (resolveJail → null). The parent
    *  is tracked for cleanup; the worktree dir itself is never created, so `realpathSync` on it throws. */
   nonexistentWorktree(prefix: string): string;
-  /** Remove an existing worktree's `.agent-terminal/` (the AC10 "rmSync the root first" variant). */
-  removeAgentTerminalDir(dir: string): void;
   /** Seed `<dir>/.agent-terminal/flow.yaml` (leg-2 local, or leg-3 global fallback on a global root). */
   writeFlowHome(dir: string, def: FlowDefInput): string;
   /** Seed a valid progression at the flow-state path. */
@@ -60,7 +57,7 @@ export interface WorktreeFixture {
   /** Plant `.agent-terminal` ITSELF as a symlink to `target` (a dir holding a real flow-state.yaml) — the
    *  intermediate-directory CWE-59 shape a leaf-only lstat misses (it resolves the parent symlink), so only
    *  whole-path resolution catches it; mirrors loopArtifacts.ts's plantAppStateParentSymlink. Requires no
-   *  pre-existing `.agent-terminal` (use makeFirstRunWorktree / removeAgentTerminalDir). */
+   *  pre-existing `.agent-terminal` (use makeFirstRunWorktree). */
   plantAgentTerminalDirEscape(dir: string, target: string): string;
   /** A begun run's disposition + source binding. */
   writeRunRecord(dir: string, binding: DispositionRead): string;
@@ -123,9 +120,6 @@ export function createWorktreeFixture(): WorktreeFixture {
       const base = mkdtempSync(join(tmpdir(), `${prefix}-`));
       tracked.push(base);
       return join(base, 'absent-worktree');
-    },
-    removeAgentTerminalDir(dir) {
-      rmSync(flowHomeDir(dir), { recursive: true, force: true });
     },
     writeFlowHome(dir, def) {
       const doc = { name: def.name, steps: def.stepIds.map((id) => ({ id, kind: 'manual' })) };

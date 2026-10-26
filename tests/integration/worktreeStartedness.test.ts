@@ -35,8 +35,8 @@ describe('worktreeStartedness — the durable run started-ness accessor (§18.7.
 
   // §18.7.4 AC7 "permitted only while never started" — the accessor has THREE never-started legs (absent, above;
   // a present-but-not-begun record; a title-only doc), and only 'started'/'indeterminate' lock a selection. The
-  // flow-state store returns null for a title-only valid-YAML doc AND for an unparseable one alike
-  // (worktreeFixture.test.ts), so these two pins plus the unparseable→'indeterminate' RED below jointly forbid a
+  // flow-state store returns null for a title-only valid-YAML doc AND for an unparseable one alike, so these two
+  // pins plus the unparseable→'indeterminate' RED below jointly forbid a
   // classifier that keys on read()===null alone: fail-closed on the unverifiable case must NOT extend to locking
   // a legitimately never-started worktree.
   it("reports 'never-started' for a present but never-begun (not_started) progression record", () => {

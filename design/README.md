@@ -6,7 +6,7 @@
 
 Accents (`--signal`, `--attn`, `--pass`) paint dots, borders and washes; each has a `-text` pair because the accent itself does not clear 4.5:1 as small text on `--card`.
 
-The controller's needs-human status tokens are defined on their own, never by reference to the cross-highlight `--reveal` tokens, so changing one never changes the other. In both themes each status text clears 4.5:1 on `--card` and on its tint (WCAG 2.2 SC 1.4.3), and each accent clears 3:1 on `--card` (SC 1.4.11); `tests/browser/tokenSheet.test.ts` checks this in Chromium.
+The controller's needs-human status tokens are defined on their own, never by reference to the cross-highlight `--reveal` tokens, so changing one never changes the other. In both themes each status text clears 4.5:1 on `--card` and on its tint (WCAG 2.2 SC 1.4.3), and each accent clears 3:1 on `--card` (SC 1.4.11).
 
 ### Colour rule
 

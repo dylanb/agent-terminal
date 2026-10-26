@@ -37,13 +37,6 @@ export function lockAlwaysPresentAtCreate(): { writeNewFile: (file: string, cont
   };
 }
 
-/** Take the worktree's lock as a second app instance would, holding it until the returned release is called. */
-export function holdLockAsPeer(lockRoot: string, worktree: string): () => void {
-  const got = createWorktreeLock({ lockRoot, holderLiveness: () => 'live-matching' }).acquire(worktree);
-  if (!got.ok) throw new Error(`peer could not take the worktree lock: ${got.reason}`);
-  return got.release;
-}
-
 /** Wraps a write so that, at the moment it runs, a live-matching peer tries the same worktree's lock (releasing
  *  it again if it got it) and records what it saw — the observation that the write happened inside the lock. */
 export function tryPeerLockDuring(

@@ -117,6 +117,19 @@ describe('scripts/red-check.mjs selecting the tests a RED changed in a spec (§2
     }
   });
 
+  it('selects a test declared by a loop, not the test above it', () => {
+    const repo = seedRepo();
+    try {
+      const looped = (check: string) => `for (const n of [1, 2]) test(\`looped \${n}\`, () => {\n  ${check}\n});`;
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(1);'), looped('expect(n).toBe(n);')]));
+      git(repo, 'commit', '-q', '-am', 'loop');
+      writeFileSync(join(repo, 'tests/e2e/a.spec.ts'), spec([t('one', 'expect(1).toBe(1);'), looped('expect(n).toBe(0);')]));
+      expect(selection(repo, ['tests/e2e/a.spec.ts']).selected).toEqual(['tests/e2e/a.spec.ts:7']);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it('selects the test a RED only deleted a line from', () => {
     const repo = seedRepo();
     try {

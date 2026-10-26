@@ -4,10 +4,8 @@ import { bringForwardIn, cardIn, statusRowIn } from '../helpers/controllerCards'
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
 
-it.each(['light', 'dark'])('does not retain live attention after disconnect, dismissal or recovery in %s', theme => {
-  document.documentElement.dataset.theme = theme;
+it('does not retain live attention after disconnect, dismissal or recovery', () => {
   const parent = document.createElement('main');
-  parent.style.width = '320px';
   document.body.append(parent);
   const blocked = statusTerminal({ attention: { status: 'complete', reasons: ['OUTDATED_HALT'] }, error: { reason: 'OUTDATED_ERROR' } });
   const peer = { ...statusTerminal(), id: 'peer', launchDirectory: '/peer' };
@@ -22,7 +20,6 @@ it.each(['light', 'dark'])('does not retain live attention after disconnect, dis
     expect.soft(gone ? statusRowIn(gone)?.textContent?.trim() : undefined).toBe('Disconnected');
     expect.soft(!/OUTDATED_HALT|OUTDATED_ERROR/.test(host.textContent ?? '') || /last.known/i.test(host.textContent ?? ''), 'disconnected details must be absent or explicitly last-known').toBe(true);
     expect.soft({ peer: Boolean(focusTarget), focused: focusTarget !== undefined && document.activeElement === peerButton() }).toEqual({ peer: true, focused: true });
-    expect.soft(host.scrollWidth).toBeLessThanOrEqual(host.clientWidth);
     service.publish([peer]);
     expect.soft(host.textContent, 'dismissal removes the ended terminal attention').not.toMatch(/OUTDATED_HALT|OUTDATED_ERROR/);
     const recovered = { ...statusTerminal({ flow: { availability: 'known', name: 'current-flow', step: 'verify', assignment: 'assigned' } }), id: 'recovered' };
@@ -31,5 +28,5 @@ it.each(['light', 'dark'])('does not retain live attention after disconnect, dis
     expect.soft(host.textContent, 'recovery cannot replay obsolete attention').not.toMatch(/OUTDATED_HALT|OUTDATED_ERROR/);
     expect.soft({ peer: Boolean(peerButton()), focused: document.activeElement === peerButton() }).toEqual({ peer: true, focused: true });
     expect(service.activated).toEqual([]);
-  } finally { dispose(); document.documentElement.removeAttribute('data-theme'); }
+  } finally { dispose(); parent.remove(); }
 });

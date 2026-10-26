@@ -145,22 +145,20 @@ to `iteration - baseline >= cap` flips the safe direction, so a planted baseline
 untrusted YAML. Each layer gets its own RED test: the reader over the hostile numeric family (`-1`, `NaN`,
 `±Inf`, non-integer), the decision over the relational violation.
 
-## An agent-produced artifact contract — one vocabulary, a self-validating example, a minimal predicate
+## An agent-produced artifact contract — one vocabulary, a minimal predicate, a self-check
 
 A **composed prompt that instructs an LLM to produce a serialized artifact a predicate then gates on** is a
 *writer* in the shared-semantics contract (`composeReviewAndFixPrompt` writes the round report,
 `roundReportProblems` validates it), and it desyncs the same way two copies of a wire format do:
 
 1. **One descriptor feeds both sides.** The disposition set, reviewer statuses and JSON keys live once in
-   `src/shared/roundReport.ts`; composer and predicate both read it.
-2. **The prompt's few-shot is asserted well-formed against the gating predicate** (`exampleRoundReport(...)`
-   through `roundReportProblems` in `reviewTurn.test.ts`). Without it the example and predicate are two
-   hand-maintained copies.
-3. **The predicate validates the minimal contract, not a rigid layout** — declared sections, full roster,
+   `src/shared/roundReport.ts`; composer and predicate both read it, and the prompt's few-shot is that
+   module's canonical example (`exampleRoundReport(...)`).
+2. **The predicate validates the minimal contract, not a rigid layout** — declared sections, full roster,
    each issue's required fields with a disposition from the closed set; never key order, extra fields or
    formatting. Over-constrained, the fake agent passes while a real model's legitimate variation is
    rejected: mocking the VT parser, one layer out.
-4. **The artifact is JSON the agent checks itself.** The prompt hands the agent a command running the same
+3. **The artifact is JSON the agent checks itself.** The prompt hands the agent a command running the same
    predicate and has it fix the file until the check passes before signalling done. Free text the predicate
    does not judge lives in a file nothing parses. A hand-written grammar over Markdown yields a new valid
    edge case every round (fences, indented code, emphasis), never a repeat, so the spinning check cannot

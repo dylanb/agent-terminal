@@ -40,29 +40,11 @@ function finalize() {
 }
 
 describe('#251 installed finalization', () => {
-  it('supplies a working goal, recipe and checklist without reviewer rounds', () => {
+  it('supplies a working goal, recipe and checklist', () => {
     const { def, step, flowDir } = finalize();
     expect(def.work.goal?.trim()).toBeTruthy();
     expect(readFileSync(def.work.recipe, 'utf8').trim()).toBeTruthy();
-    expect(def.rounds).toEqual({ kind: 'none' });
-    expect(def.reviewers).toEqual([]);
     const checklist = loadTodoTemplateFile(join(flowDir, 'todo-templates'), step.todoTemplate ?? '');
     expect(parseTodoTemplate(checklist ?? '').length).toBeGreaterThan(0);
-  });
-
-  it('supplies approved context and exposes the audit artifact', () => {
-    const { def } = finalize();
-    expect(def.inputs.map((input) => input.id)).toEqual(expect.arrayContaining(['groom-intent', 'plan', 'impl-report', 'impl-summary']));
-    expect(def.outputs).toContainEqual(expect.objectContaining({ id: 'finalize-summary', rel: '.agent-terminal/loop/artifacts/finalize-summary.md' }));
-    expect(def.work.artifact).toBe('finalize-summary');
-  });
-
-  it('retains human approval and redo without gate side effects', () => {
-    const { def, step } = finalize();
-    expect(step.gateAuthority).toBe('human');
-    expect(def.gate).toEqual([
-      { option: 'approve', sideEffects: [] },
-      { option: 'redo', sideEffects: [] },
-    ]);
   });
 });

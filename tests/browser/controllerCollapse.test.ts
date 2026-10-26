@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { bringForwardLocator, cardHeaderIn, cardIn, cardLocator, statusRowIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';

@@ -1,5 +1,17 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
+## #256 — tests guard app behaviour only
+
+§28.6 P6b and P6e, §28.10 and §28.11 no longer require a test of charter or recipe wording: the
+content-parity test, the `ui` charter's demand that contrast be checked in a real browser, and the
+recipe↔predicate canonical-example check are gone. Bundled charters and recipes keep only their
+load-validity tests, and P6e's design-system sentence matches TRACER-BULLET.md: token and stylesheet
+content needs no RED test, and any behaviour a slice adds is still proven RED-first with an `_electron`
+e2e. §27.15, §28.5.5 and §28.6 P6c no longer require a prompt's canonical example to be asserted
+well-formed against its predicate, and drop the predicate happy-path test from what the example anchors:
+the example still anchors the prompt few-shot and the fake-agent e2e, and the agent's self-check command
+runs the same predicate. The rule is CLAUDE.md § Test-driven development.
+
 > **Changelog v2.223:** **Spec, standards and design docs describe the current system and its reasons, not its history.** The code says what the system does; these documents say why. Each section is cut to the decision, constraint or accepted risk behind the code, and restated mechanism, finished build plans, superseded designs and version narration are removed. Every heading the code cites keeps its number. CLAUDE.md makes `src/shared/ipc.ts` authoritative over §6 prose for wire shapes. §10 and §11 are deleted (nothing cited them); §27.14 and §25.8 are deleted; §27.15 keeps only its test-seam sentence. The N8 deletion list, the granular-flow plan, the new-loop brief and the unreferenced design mockups are deleted. Claims the code contradicted are corrected, including the feature sections that still specified channels no code implements (`flow:openChild` §23.2, `flow:composeFeedback` §19.4, `viewer:ghRefresh` §20.3, `flow:list` §18), the never-built `layout.json` (§22.4) and cross-instance guard (§23.3), and the live done-todo cap (§16.4). Changelog entries older than v2.200 are dropped from this file. No IPC contract shape change.
 
 > **Changelog v2.222:** **§6 — the channel tables and the `preload.js` sketch are retired; `src/shared/ipc.ts` is the one place a channel is documented ([#243](https://github.com/dylanb/agent-terminal/issues/243), operator decision 2026-10-26).** The tables repeated what `ipc.ts` already defines and had drifted from it: they listed four channels no code implements (`flow:list`, `flow:composeFeedback`, `flow:openChild`, `viewer:ghRefresh`, each still specified in its feature section, §18, §19.4, §23.2 and §20.3) and missed about twenty that ship, including the controller's `controller:getTheme` and `controller:setTheme`. Each channel's definition now carries its wire name and a one-sentence `does` statement as data, and `ipc.ts` assembles the terminal channels from per-domain modules under `src/shared/ipc/`, refusing a key or wire name defined twice. §6 keeps its principles, the controller surface and protocol prose, and initial terminal readiness, and points at `ipc.ts` for every channel and payload. No wire name, payload or behaviour changes.

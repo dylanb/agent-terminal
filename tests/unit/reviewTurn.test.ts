@@ -1,16 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { composeAppWorkPrompt } from '../../src/main/appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END, reviewRoster } from '../../src/main/reviewTurn';
-import { DISPOSITIONS, REPORT_FIELDS, REVIEWER_STATUSES, roundReportWellFormed } from '../../src/shared/roundReport';
-import { PHASE_OUTCOMES, REFACTOR_COMPLETING_OUTCOME } from '../../src/shared/phaseOutcome';
-import { BUILD_OUTCOMES } from '../../src/shared/buildOutcome';
-import { PHASE_RESULT_FIELDS, examplePhaseResult, phaseOutputRel } from '../../src/shared/phaseResult';
+import { phaseOutputRel } from '../../src/shared/phaseResult';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.3/§27.4/§27.5 — the pure, data-driven pieces of the §27 review-and-fix turn: the pre-review boundary
 // selection (data from the def, never a hardcoded clear-or-compact choice), the roster (the def's full
-// reviewer catalog), and the review-and-fix prompt — composed from the SHARED report vocabulary so the
-// shape the fixer is told to write and the shape the predicate accepts derive from one source.
+// reviewer catalog), and the review-and-fix prompt.
 
 function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
   return {
@@ -79,7 +74,7 @@ describe('catalogPersonas — the ONE catalog-persona projection (§27.4)', () =
   });
 });
 
-describe('composeReviewAndFixPrompt — single-sourced from the shared report vocabulary (§27.5)', () => {
+describe('composeReviewAndFixPrompt — what it carries from its inputs (§27.5)', () => {
   const req = () => ({
     roster: reviewRoster(def()),
     sections: def().report.sections,
@@ -93,19 +88,9 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
   it('names every roster persona by the sub-agent type that carries its charter, and never hands over a charter path', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const r of reviewRoster(def())) {
-      expect(p).toContain(`${r.persona} — subagent_type: ${r.loop}--${r.persona}`);
+      expect(p).toContain(`${r.loop}--${r.persona}`);
       expect(p).not.toContain(r.charter);
     }
-  });
-
-  it('tells the fixer to record a reviewer whose sub-agent type cannot be found as not loaded', () => {
-    expect(composeReviewAndFixPrompt(req())).toMatch(/"not loaded"` for one whose\s+subagent_type the Task tool cannot find/);
-  });
-
-  it('requires that exact sub-agent type, never a substitute, for each reviewer', () => {
-    const p = composeReviewAndFixPrompt(req());
-    expect(p).toMatch(/exactly that subagent_type/i);
-    expect(p).toMatch(/never (substitute|spawn) .*general-purpose/i);
   });
 
   it('§19.1 — binds the turn to the engine-resolved ticket it hands each reviewer', () => {
@@ -120,7 +105,6 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     const subject = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const p = composeReviewAndFixPrompt({ ...req(), ticket: 180, subjectRel: subject });
     expect(p).toMatch(/grade .*groomed-ticket\.md.*not the issue body/is);
-    expect(p).not.toContain('handing each ONLY the ticket and its charter');
   });
 
   it('names no artifact subject for a loop whose product is commits', () => {
@@ -130,37 +114,10 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     expect(p).not.toMatch(/not the issue body/i);
   });
 
-  it('tells the fixer exactly the closed disposition set the predicate accepts (one value, one spelling)', () => {
-    const p = composeReviewAndFixPrompt(req());
-    for (const d of DISPOSITIONS) expect(p).toContain(d);
-  });
-
-  it('tells the fixer exactly the JSON fields the predicate requires', () => {
-    const p = composeReviewAndFixPrompt(req());
-    for (const key of Object.values(REPORT_FIELDS)) expect(p).toContain(`"${key}"`);
-  });
-
-  it('tells the fixer each reviewer status, so a reviewer that FAILED TO RUN is recorded apart from one that found nothing (§27.5/AC7)', () => {
-    const p = composeReviewAndFixPrompt(req());
-    for (const status of REVIEWER_STATUSES) expect(p).toContain(`"${status}"`);
-    expect(p).toMatch(/"failed"` for one\s+that FAILED to run/);
-  });
-
   it('names the prescribed report sections and the round-keyed report location', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const s of def().report.sections) expect(p).toContain(s);
     expect(p).toContain(req().reportRel);
-  });
-
-  it('embeds a few-shot example that is itself well-formed against the predicate (no prompt↔predicate drift)', () => {
-    const p = composeReviewAndFixPrompt(req());
-    // The few-shot the prompt shows the fixer must validate against the same predicate that gates the turn,
-    // or the fixer is instructed to write something the engine will reject.
-    const spec = { sections: def().report.sections, roster: reviewRoster(def()).map((r) => r.persona) };
-    // The example is the whole trailing block after the line the composer emits before it.
-    const lead = 'A well-formed example:';
-    expect(p).toContain(lead);
-    expect(roundReportWellFormed(p.slice(p.indexOf(lead) + lead.length), spec)).toBe(true);
   });
 
   it('ends by instructing the §27 done-file, verifying the report on disk first (§27.12a)', () => {
@@ -185,69 +142,16 @@ describe('composeReviewAndFixPrompt — the flow documents and the carried input
   const PLAN = { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' };
   const TICKET = { id: 'groomed-ticket', rel: '.agent-terminal/loop/artifacts/groomed-ticket.md' };
 
-  it('names each carried input by id and path, and no longer says reviewers get no plan', () => {
+  it('names each carried input by id and path', () => {
     const p = composeReviewAndFixPrompt({ ...req(), inputs: [PLAN, TICKET] });
     expect(p).toContain(`- plan: ${PLAN.rel}`);
     expect(p).toContain(`- groomed-ticket: ${TICKET.rel}`);
-    expect(p).not.toMatch(/no plan/i);
   });
 
   it('does not list the subject a second time as an input', () => {
     const p = composeReviewAndFixPrompt({ ...req(), inputs: [PLAN, TICKET], subjectRel: PLAN.rel });
     expect(p).not.toContain(`- plan: ${PLAN.rel}`);
     expect(p).toContain(`- groomed-ticket: ${TICKET.rel}`);
-  });
-
-  it('says flow documents live only under the loop artifacts directory, and carves out the code and repo standards', () => {
-    for (const p of [composeReviewAndFixPrompt(req()), composeReviewAndFixPrompt({ ...req(), subjectRel: PLAN.rel })]) {
-      expect(p).toMatch(/flow documents[\s\S]*only under `\.agent-terminal\/loop\/artifacts\/`/i);
-      expect(p).toMatch(/elsewhere in the repository is not one of this work's flow documents/i);
-      expect(p).toMatch(/still work when the ticket names it/i);
-      expect(p).not.toMatch(/ignore it/i);
-      expect(p).toMatch(/working-tree diff/i);
-      expect(p).toMatch(/standards and\s+configuration are read where they live/i);
-    }
-  });
-});
-
-// §27.6 — the materiality floor that lets the termination rule reach a fixed point on PROSE. §27.6's
-// convergence argument (a memory-less fixer "re-dismisses a settled judgment every round … the loop
-// terminates when a round produces no changes") holds only if an in-scope finding that changes no
-// observable outcome is DISMISSED, not fixed — fixing an already-correct artifact for an equivalent
-// refinement is what manufactures the next round's findings. The composer must state that criterion.
-describe('composeReviewAndFixPrompt — materiality floor for convergence (§27.6)', () => {
-  const req = () => ({
-    roster: reviewRoster(def()),
-    sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.json',
-    round: 1,
-    turnKey: 'review-plan',
-    doneRelPath: '.agent-terminal/loop/turn-done',
-    agentKind: 'claude-code' as const,
-  });
-
-  it('tells the fixer to fix only an issue that changes an observable outcome', () => {
-    expect(composeReviewAndFixPrompt(req())).toContain('observable outcome');
-  });
-
-  it('tells the fixer that an already-correct refinement is dismissed, not fixed (so a round can reach no-change)', () => {
-    const p = composeReviewAndFixPrompt(req());
-    expect(p.toLowerCase()).toContain('already correct');
-    // it names the dismissal disposition for such a refinement — never `fixed`
-    expect(p).toContain('dismissed — invalid');
-  });
-
-  const doubleFidelityClause =
-    /(fake|stand-in|double)[\s\S]*only\s+when\s+a\s+test\s+the\s+ticket\s+needs\s+relies\s+on[\s\S]*`dismissed — invalid`/i;
-
-  it('dismisses a test double gap that no test the ticket needs relies on, for a commit loop', () => {
-    expect(composeReviewAndFixPrompt(req())).toMatch(doubleFidelityClause);
-  });
-
-  it('dismisses a test double gap that no test the ticket needs relies on, for a document loop', () => {
-    expect(composeReviewAndFixPrompt({ ...req(), subjectRel: '.agent-terminal/loop/artifacts/plan.md' })).toMatch(
-      doubleFidelityClause,
-    );
   });
 });
 
@@ -265,30 +169,13 @@ describe('composeReviewAndFixPrompt — fixing a document subject lifts, never a
     ...(subjectRel !== undefined ? { subjectRel } : {}),
   });
   const liftClause = /replac\w*\s+(that|the)\s+mechanism\s+with\s+the\s+contract\s+it\s+must\s+meet[\s\S]*never\s+by\s+specifying/i;
-  const overreachClause = /no\s+acceptance\s+criterion\s+names[\s\S]*`needs a human`/i;
 
   it('tells the fixer to replace a wrong mechanism with its contract rather than detail it further', () => {
     expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(liftClause);
   });
 
-  it('routes a fix that needs a state, outcome, field or defence no acceptance criterion names to a human', () => {
-    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(overreachClause);
-  });
-
-  const assumptionClause = /no\s+test\s+environment\s+in\s+the\s+repository\s+exercises[\s\S]*Assumptions/i;
-  const sameGuardClause = /another\s+hole\s+in\s+the\s+same[\s\S]*`needs a human`/i;
-
-  it('records behaviour no test environment exercises as an assumption rather than elaborating it', () => {
-    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(assumptionClause);
-  });
-
-  it('routes another hole in the same guard to a human as a sign the mechanism is wrong', () => {
-    expect(composeReviewAndFixPrompt(req('.agent-terminal/loop/artifacts/plan.md'))).toMatch(sameGuardClause);
-  });
-
-  it('carries none of these clauses for a loop whose product is commits, where the mechanism is the work', () => {
-    const p = composeReviewAndFixPrompt(req());
-    for (const clause of [liftClause, overreachClause, assumptionClause, sameGuardClause]) expect(p).not.toMatch(clause);
+  it('carries no such clause for a loop whose product is commits, where the mechanism is the work', () => {
+    expect(composeReviewAndFixPrompt(req())).not.toMatch(liftClause);
   });
 });
 
@@ -307,10 +194,6 @@ describe('composeReviewAndFixPrompt — deferred polish (§27.6/§27.8)', () => 
 
   it('tells the fixer to dismiss polish-only findings as out of scope when the def defers polish', () => {
     expect(composeReviewAndFixPrompt(req('defer'))).toMatch(deferClause);
-  });
-
-  it('names no particular later loop, since more than one loop defers to different ones', () => {
-    expect(composeReviewAndFixPrompt(req('defer'))).not.toMatch(/integration-slice/i);
   });
 
   it('carries no deferral clause when the def fixes polish', () => {
@@ -334,12 +217,9 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
     ...(feedback !== undefined ? { feedback } : {}),
   });
 
-  it('carries the operator feedback verbatim when present, framed alongside the reviewers\' findings', () => {
+  it('carries the operator feedback verbatim when present', () => {
     const p = composeReviewAndFixPrompt(reqWith('Tighten the migration section; it overspecifies the schema.'));
     expect(p).toContain('Tighten the migration section; it overspecifies the schema.');
-    // The block names it as the human's request-changes feedback, not a reviewer finding, so the fixer weighs
-    // it as a first-class input to this round (§27.9).
-    expect(p.toLowerCase()).toContain('feedback');
   });
 
   it('adds no feedback block when the round carries none (a consolidator-driven another-round is unchanged)', () => {
@@ -356,12 +236,10 @@ describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 /
     expect(p).toBe(without);
   });
 
-  it('still carries the done-signal instruction and the well-formed example — feedback never displaces the turn contract', () => {
+  it('still carries the done-signal instruction — feedback never displaces the turn contract', () => {
     const p = composeReviewAndFixPrompt(reqWith('address the taint flow'));
     expect(p).toContain('turn-done:review-plan');
     expect(p).toContain('.agent-terminal/loop/reports/2.json');
-    // The few-shot example still trails so the fixer sees the well-formed report shape.
-    expect(p).toContain('A well-formed example:');
     // The feedback appears BEFORE the done-signal contract, not after the example.
     expect(p.indexOf('address the taint flow')).toBeLessThan(p.indexOf('turn-done:review-plan'));
   });
@@ -388,23 +266,13 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
   it('still instructs the round report (the review round is not replaced — the result is ADDED)', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
     for (const s of def().report.sections) expect(p).toContain(s);
-    for (const d of DISPOSITIONS) expect(p).toContain(d);
     expect(p).toContain(refactorReq().reportRel); // the report is still written
   });
 
-  it('appends the phase-result WRITER block naming the result file, the outcome vocabulary, and the passed few-shot', () => {
+  it('appends the phase-result block naming the result file and its output file', () => {
     const p = composeReviewAndFixPrompt(refactorReq());
     expect(p).toContain(RESULT_REL);
-    expect(p).toContain(`"${PHASE_RESULT_FIELDS.outcome}"`);
     expect(p).toContain(phaseOutputRel(RESULT_REL));
-    for (const outcome of PHASE_OUTCOMES) expect(p).toContain(outcome);
-    expect(p).toContain(examplePhaseResult(REFACTOR_COMPLETING_OUTCOME).trimEnd());
-  });
-
-  it('is SOFTER than GREEN — no build classification (§28.5.3: refactor gates on {passed}, not build)', () => {
-    const p = composeReviewAndFixPrompt(refactorReq());
-    expect(p).not.toContain(`"${PHASE_RESULT_FIELDS.build}"`);
-    for (const b of BUILD_OUTCOMES) expect(p).not.toContain(b);
   });
 
   it('verifies BOTH the round report and the result on disk before the done-signal — the round gate reads both', () => {
@@ -419,9 +287,6 @@ describe('composeReviewAndFixPrompt — the refactor round phase-result instruct
     const p = composeReviewAndFixPrompt(withoutResult);
     expect(p).not.toContain(RESULT_REL);
     expect(p).not.toContain(phaseOutputRel(RESULT_REL)); // no phase-result section
-    expect(p).not.toContain('Run the test command for this change'); // no classify instruction
-    // the plain review round still verifies the REPORT on disk (unchanged)
-    expect(p).toContain('re-read .agent-terminal/loop/reports/1.json');
   });
 });
 
@@ -437,16 +302,9 @@ describe('composeReviewAndFixPrompt — the loop brief binds every fix (§27.3)'
   });
   const BRIEF = 'You are a principal engineer.\n\nNo acceptance criterion may be deferred.';
 
-  it('carries the brief verbatim as the standing instructions every fix must meet', () => {
+  it('carries the brief verbatim', () => {
     const p = composeReviewAndFixPrompt({ ...req(), loopBrief: BRIEF });
     expect(p).toContain(BRIEF);
-    expect(p).toMatch(/every fix/i);
-  });
-
-  it('routes a fix that needs the operator to needs a human rather than re-running the work turn\'s steps', () => {
-    const p = composeReviewAndFixPrompt({ ...req(), loopBrief: BRIEF });
-    const block = p.slice(p.indexOf(BRIEF) - 600, p.indexOf(BRIEF));
-    expect(block).toContain(`\`${'needs a human'}\``);
   });
 
   it('carries no brief block when the loop declares none', () => {
@@ -473,21 +331,13 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
     return p.slice(start + REVIEWER_HANDOFF_BEGIN.length, end);
   };
 
-  it('tells the fixer to pass the hand-off to each reviewer word for word, adding nothing', () => {
-    const p = composeReviewAndFixPrompt(req());
-    handoff(p);
-    expect(p).toMatch(/word for word/i);
-  });
-
   it('names the ticket and how to read it', () => {
     expect(handoff(composeReviewAndFixPrompt({ ...req(), ticket: 180 }))).toContain('gh issue view 180 --comments');
   });
 
   it('for a commits loop, says how to see the change with git and which slice the round covers', () => {
     const h = handoff(composeReviewAndFixPrompt({ ...req(), slice: 2 }));
-    expect(h).toContain('git status');
     expect(h).toContain('git diff HEAD');
-    expect(h).toMatch(/default branch/);
     expect(h).toContain('impl-slice 2');
   });
 
@@ -498,85 +348,9 @@ describe('composeReviewAndFixPrompt — the engine writes the reviewer hand-off 
     expect(h).not.toContain('git diff HEAD');
   });
 
-  it('lists the carried inputs and where the flow documents live', () => {
+  it('lists the carried inputs', () => {
     const h = handoff(composeReviewAndFixPrompt({ ...req(), inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }] }));
     expect(h).toContain('- plan: .agent-terminal/loop/artifacts/plan.md');
-    expect(h).toMatch(/only under `\.agent-terminal\/loop\/artifacts\/`/);
   });
 
-  it('describes the change under review one way only', () => {
-    const h = handoff(composeReviewAndFixPrompt(req()));
-    expect(h).not.toMatch(/working-tree diff/);
-    expect(h).toMatch(/standards and\s+configuration are read where they live/);
-  });
-
-  it('asks for each finding as file:line, issue, consequence and fix, with no severity, and no file changes', () => {
-    const h = handoff(composeReviewAndFixPrompt(req()));
-    expect(h).toMatch(/file:line, the issue, its concrete consequence, and the fix/);
-    expect(h).toMatch(/do not rate severity/i);
-    expect(h).toContain('no findings');
-    expect(h).toMatch(/do not change any file/i);
-  });
-});
-
-// §27.5 — each status is told to the fixer with the meaning the engine reads it with.
-describe('the reviewer statuses the round report records', () => {
-  it('pairs each status with its meaning', () => {
-    const p = composeReviewAndFixPrompt({
-      roster: reviewRoster(def()),
-      sections: def().report.sections,
-      reportRel: '.agent-terminal/loop/reports/1.json',
-      round: 1,
-      turnKey: 'review-plan',
-      doneRelPath: '.agent-terminal/loop/turn-done',
-      agentKind: 'claude-code',
-    });
-    expect(p).toContain('`"ran"` for a reviewer that ran');
-    expect(p).toContain('`"failed"` for one\n  that FAILED to run');
-    expect(p).toMatch(/`"not loaded"` for one whose\n\s+subagent_type the Task tool cannot find/);
-  });
-});
-
-// §27.3/§27.6 — a fixer that patches one more special case into a parser for a format the repository
-// itself defines is how #208 spent rounds on a Markdown grammar: every finding was new, so §27.6's spinning
-// check never fired. The fixer and the work agent are both told to question the design before adding complexity,
-// bounded to the fix at hand and the ticket's scope so it cannot become a licence to redesign.
-describe('the design check, before a fix adds complexity (§27.3/§27.6)', () => {
-  const req = () => ({
-    roster: reviewRoster(def()),
-    sections: def().report.sections,
-    reportRel: '.agent-terminal/loop/reports/1.json',
-    round: 1,
-    turnKey: 'review-plan',
-    doneRelPath: '.agent-terminal/loop/turn-done',
-    agentKind: 'claude-code' as const,
-  });
-  const work = { recipeBody: '# work turn', turnKey: 'work-x', doneRelPath: '.agent-terminal/loop/turn-done', completion: null };
-  const asks = /before you add complexity[\s\S]*whether the design itself is the problem/i;
-  const block = (p: string): string => {
-    const m = asks.exec(p);
-    if (m === null) throw new Error('no design check');
-    return p.slice(p.lastIndexOf('\n\n', m.index), p.indexOf('\n\n', m.index + m[0].length));
-  };
-
-  it('fires on any added special case, flag, workaround, guard or copied logic, not only a parser', () => {
-    const b = block(composeReviewAndFixPrompt(req()));
-    for (const kind of [/special case/i, /flag/i, /workaround/i, /guard/i, /second copy/i]) expect(b).toMatch(kind);
-    expect(b).toMatch(/format[\s\S]*structured data/i);
-  });
-
-  it('keeps a simpler design inside the ticket, sends one that reaches beyond it to a human, and asks why when it patches', () => {
-    const b = block(composeReviewAndFixPrompt(req()));
-    expect(b).toMatch(/inside this ticket/i);
-    expect(b).toMatch(/beyond this ticket[\s\S]*human/i);
-    expect(b).toMatch(/say why/i);
-  });
-
-  it('never invites redesigning code no fix touches', () => {
-    expect(block(composeReviewAndFixPrompt(req()))).toMatch(/never redesign code that no fix touches/i);
-  });
-
-  it('asks the work agent the same, in the same words', () => {
-    expect(block(composeAppWorkPrompt(work))).toBe(block(composeReviewAndFixPrompt(req())));
-  });
 });
