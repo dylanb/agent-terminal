@@ -26,9 +26,10 @@ long as each slice is complete and testable end to end.
 
 A design-system first slice is graded by the tracer-bullet rule's design-system note (for example
 `TRACER-BULLET.md`). A slice whose main content is design-system work is a vertical slice when it applies that
-work to a surface that already exists, so the change is visible in the running app, and proves it RED-first
-through a real browser and the `_electron` e2e. A slice that adds tokens or shared components that nothing
-visible uses is still a horizontal layer. Accept the first as the plan's earliest slice; reject the second.
+work to a surface that already exists, so the change is visible in the running app. Its token and stylesheet
+content needs no RED test, but any behaviour the slice adds is still proven RED-first with an `_electron` e2e.
+A slice that adds tokens or shared components that nothing visible uses is still a horizontal layer. Accept the
+first as the plan's earliest slice; reject the second.
 
 Reject a slice whose RED cannot reach one of its tests' own checks until production code that another of its
 tests drives exists — a check behind a flag the launcher does not yet accept, or behind a service the slice has

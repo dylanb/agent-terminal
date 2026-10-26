@@ -107,7 +107,10 @@ Per `CLAUDE.md`: **RED-first, no exceptions**, and tests assert **observable beh
 implementation**. The litmus stays the same — a teammate must be able to rewrite a component's
 internals and keep your tests green. For UI that means asserting rendered DOM the user can see,
 attributes/ARIA, emitted events, and bytes/IPC on the contract — never private method calls,
-internal structure, or class-name spelling that a refactor would change.
+internal structure, or class-name spelling that a refactor would change. What a stylesheet or static
+markup alone determines — colour, contrast, a focus ring's paint, geometry, token values, static copy —
+gets no dedicated test (CLAUDE.md § Test-driven development); colours, styles and text that renderer code
+sets are behaviour and are tested like any other.
 
 ### 3.1 Atoms & Molecules — DOM-level unit tests
 - vitest + `// @vitest-environment jsdom`, driving the **real** DOM (no shadow/PTY mocks; that
@@ -117,29 +120,7 @@ internal structure, or class-name spelling that a refactor would change.
   exactly the shape of the existing `statusStrip` / `captureTab` tests.
 
 ### 3.2 Organisms — DOM unit **plus** e2e
-- Everything in §3.1, **and** a Playwright `_electron` test that mounts the organism for real
-  (real rendering, both themes), since pixel/layout truth isn't observable in jsdom.
-
-### 3.2b Anything about a painted pixel — the `browser` project, never a CSS parser
-Colour, contrast, the focus ring, scrolling, clipping, reflow at a zoom or a small viewport: jsdom
-computes none of it, and a regex over `styles.css` re-implements the cascade (specificity, document
-order, `var()`, `color-mix()`, group `opacity`) — the same class of error as mocking the VT parser,
-and CLAUDE.md bans it outright. These assertions go in the **`browser` vitest project**
-(`tests/browser/`, real Chromium), which mounts the **real component** and reads `getComputedStyle`
-/ real box metrics; the test does the WCAG arithmetic (`tests/helpers/wcag.ts`) and nothing else.
-The Playwright e2e is the other valid home. A pin that cannot fail for its own regression is worse
-than none — mutation-probe it: reintroduce the defect and watch it go red.
-
-**A design token is read through `tests/helpers/tokenProbe.ts`, never a hand-rolled probe.** A test that
-asks what a token paints, whether a token is defined, or whether tokens are at their expected values uses
-`readColors` (a colour, or `null` when nothing defines the token), `readLengths` (the same for a length) and
-`offTable(names, theme)`, against the expected values in `tests/helpers/designTokens.ts`
-(`EXISTING_TOKEN_NAMES`, `STATUS_TOKEN_NAMES`, `LENGTH_TOKEN_NAMES`, `expectedColor`, `aliasOf`,
-`expectedLength`). An e2e reads through Playwright with `paintTokens`/`paintColors` and compares with
-`mismatchedTokens`. A token added to `src/renderer/src/tokens.css` is added to `designTokens.ts` by hand —
-never generated from the stylesheet, which would make the check compare the sheet with itself. Writing a
-second `var()` probe, or a second way to tell an undefined token from a defined one, is the drift these
-helpers exist to stop.
+- Everything in §3.1, **and** a Playwright `_electron` test that mounts the organism for real.
 
 ### 3.3 The relocation test (mandatory for organisms)
 An organism's relocatability is only true when a test proves it. Mount the **same** organism,
@@ -235,8 +216,7 @@ across every dialog, so it is defined **once** and composed, never re-derived:
 7. **A long body scrolls in the card, and never pushes the footer off-screen.** The card is a flex
    column with a `max-height`. A card whose body can outgrow it returns `grow` (the chain that
    absorbs the leftover column height) and `scroll` (the one box that scrolls) **on its `ModalCard`**;
-   the shell applies them. Two things that box must never do, and neither is visible to a pin that
-   only checks the footer: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
+   the shell applies them. Two things that box must never do: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
    leaving controls focusable but unpainted — focus lands where nothing is drawn, WCAG 2.2 SC 2.4.11),
    and **clip the focus ring of a control it scrolled into view** (scroll-into-view aligns the border
    box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell's stylesheet styles its OWN structural classes (`.card`, `.mfoot`, the slot attributes)
@@ -253,9 +233,8 @@ across every dialog, so it is defined **once** and composed, never re-derived:
 The canonical implementation is `createModalShell`. **Every** blocking dialog composes it — do not
 maintain a list here; the composer a list omits is the one that drifts (that is how `errorDialog`'s
 `role="alertdialog"` fell out of the shell's Escape predicate). A dialog is tested like any organism
-(§3.2–3.3) **plus** assertions for items 2–8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
-focus-restored-to-opener, accept-is-not-dismiss, and (if its body can overflow) the §3.2b painted
-pins for scroll and footer reachability.
+(§3.2–3.3) **plus** assertions for items 2–6 and 8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
+focus-restored-to-opener, and accept-is-not-dismiss.
 
 ## 6. Conventions
 
@@ -267,6 +246,12 @@ pins for scroll and footer reachability.
   invariant earns its place; a play-by-play does not.
 - **No new magic numbers.** Timings/dimensions that the spec names stay named and configurable
   (§7.1/§8.2/§9.3).
+- **A box that can outgrow its scroll container is centred so both its edges stay in scroll reach**
+  (WCAG 2.2 SC 1.4.10). When it overflows — a card at a narrow window or a high zoom — its leading and
+  trailing edges must both remain reachable by scrolling. Plain flex or grid centring
+  (`align-items`/`justify-content: center`) fails this, because it pushes an overflowing box's leading
+  edge out of reach; auto margins on the box inside a flex container (`margin:auto`) do not. This binds
+  all renderer UI, static `index.html` markup included, not only organisms.
 
 ## 7. Definition of done (per component)
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
@@ -276,7 +261,7 @@ pins for scroll and footer reachability.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
-- [ ] Any claim about a painted pixel (colour, contrast, focus ring, scroll, clip, reflow) pinned in the `browser` project or the e2e — never by parsing CSS (UI §3.2b).
+- [ ] A box that can outgrow its scroll container keeps both edges in scroll reach when it overflows — never plain flex or grid centring (UI §6, WCAG 2.2 SC 1.4.10).
 - [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4.5–4.6).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).

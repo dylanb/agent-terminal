@@ -399,9 +399,7 @@ the loopholes this rule has actually leaked through:
 real Electron (real PTY, real bash, real renderer) and waits for its first paint. A test that needs a
 bespoke environment — a temp `HOME`, a stubbed `PATH`, `CLAUDE_CONFIG_DIR` — cannot use that instance and
 launches its own, so booting one for it buys a full startup, and the wait on it, purely to throw away. Tag
-such a test **`@ownapp`**: the harness boots nothing and the test boots once. The canary at the top of
-`app.spec.ts` pins the contract (`expect(harnessBooted).toBe(false)`), so a `beforeEach` that regresses to
-booting unconditionally fails a test rather than quietly costing every run.
+such a test **`@ownapp`**: the harness boots nothing and the test boots once.
 
 This is a correctness rule, not a speed one. The waste lands entirely on process startup — the most
 contended thing the suite does — and a saturated runner does not fail *loudly*: it fails as a startup that
@@ -418,7 +416,7 @@ flaky, and 0 failed — the green bar had been true and useless for as long as i
 
 The general form, and why it earns a standard rather than a code comment: **when a shared fixture is
 expensive and only *some* tests can use it, "provision it for everyone" is not the safe default — it is a
-load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-out, and pin the opt-out.
+load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-out.
 
 ## One theme per PR
 

@@ -26,8 +26,7 @@ WCAG 2.2 AA:
 - each planned component sits in the right tier, themes only through tokens, and works in both light and dark
   themes;
 - where a slice adds or changes UI, the plan accounts for contrast (SC 1.4.3, SC 1.4.11), keyboard operation
-  (SC 2.1.1), focus order and visibility (SC 2.4.3, SC 2.4.7), and name, role and value (SC 4.1.2), each
-  checked through a real browser — the `browser` test project or the `_electron` e2e — and never by parsing CSS.
+  (SC 2.1.1), focus order and visibility (SC 2.4.3, SC 2.4.7), and name, role and value (SC 4.1.2).
 
 Do not grade the visual design itself: taste and layout choices are not findings. Cite the SC number or the
 `UI-STANDARDS.md` section. For a plan that does not touch renderer UI, return clean.
