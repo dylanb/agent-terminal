@@ -36,6 +36,20 @@ const localPlugin = {
   },
 };
 
+const CARD_HELPER_MESSAGE = 'Find controller cards through tests/helpers/controllerCards.ts.';
+const CARD_DOM = [
+  "CallExpression[callee.property.name=/^(querySelector|querySelectorAll|closest|matches|locator)$/][arguments.0.value=/(^|[\\s,>+~(])article\\b/]",
+  "CallExpression[callee.property.name='getByRole'][arguments.0.value='article']",
+  "CallExpression[callee.property.name='getByTestId'][arguments.0.value=/^card-/]",
+].map((selector) => ({ selector, message: CARD_HELPER_MESSAGE }));
+const CONTROLLER_TESTS = ['tests/**/controller*.ts', 'tests/**/clampedReason.test.ts', 'tests/**/themeToggle.test.ts'];
+const CARD_HELPER = [
+  'tests/helpers/controllerCards.ts',
+  'tests/helpers/controllerCardsDom.ts',
+  'tests/unit/controllerCards.test.ts',
+  'tests/browser/controllerCards.test.ts',
+];
+
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
   {
@@ -43,5 +57,10 @@ export default [
     languageOptions: { parser: tseslint.parser, ecmaVersion: 'latest', sourceType: 'module' },
     plugins: { local: localPlugin },
     rules: { 'local/no-todo-comments': 'error' },
+  },
+  {
+    files: CONTROLLER_TESTS,
+    ignores: CARD_HELPER,
+    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM] },
   },
 ];

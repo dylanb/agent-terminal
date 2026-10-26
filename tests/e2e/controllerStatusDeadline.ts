@@ -1,8 +1,9 @@
 import type { Page } from '@playwright/test';
+import { CARD_SELECTOR } from '../helpers/controllerCards';
 
 /** Observe all fields together; later assertions cannot give a slow field another deadline. */
 export async function statusDeadline(page: Page, identity: string, patterns: RegExp[], start: 'now' | 'registration' = 'now') {
-  const observation = await page.evaluateHandle(({ identity, patterns, start }) => {
+  const observation = await page.evaluateHandle(({ identity, patterns, start, cardSelector }) => {
     const checks = patterns.map(({ source, flags }) => new RegExp(source, flags));
     return { done: new Promise<{ matched: boolean[]; texts: string[] }>(resolve => {
       let began = start === 'now' ? performance.now() : undefined;
@@ -13,7 +14,7 @@ export async function statusDeadline(page: Page, identity: string, patterns: Reg
       let unsubscribe = () => {};
       const finish = () => { observer.disconnect(); unsubscribe(); clearTimeout(deadline); clearTimeout(registrationTimeout); resolve({ matched: seen, texts }); };
       const sample = () => {
-        const pane = [...document.querySelectorAll('button')].find(button => button.textContent?.includes(identity));
+        const pane = [...document.querySelectorAll<HTMLElement>(cardSelector)].find(card => card.textContent?.includes(identity));
         if (began === undefined) return;
         if (deadline === undefined) deadline = setTimeout(finish, Math.max(0, 2_000 - (performance.now() - began)));
         if (pane && performance.now() - began <= 2_000) {
@@ -32,7 +33,7 @@ export async function statusDeadline(page: Page, identity: string, patterns: Reg
       });
       sample();
     }) };
-  }, { identity, patterns: patterns.map(pattern => ({ source: pattern.source, flags: pattern.flags })), start });
+  }, { identity, patterns: patterns.map(pattern => ({ source: pattern.source, flags: pattern.flags })), start, cardSelector: CARD_SELECTOR });
   return async () => {
     try { return await observation.evaluate(value => value.done); }
     finally { await observation.dispose(); }
