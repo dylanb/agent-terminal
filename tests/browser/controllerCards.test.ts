@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
-import { accentLocator, bringForwardLocator, cardHeaderLocator, cardLocator, darkThemeLocator, dismissLocator, showFullReasonLocator, statusRowLocator, windowTitleLocator } from '../helpers/controllerCards';
+import { accentLocator, bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, showFullReasonLocator, statusRowLocator, windowTitleLocator } from '../helpers/controllerCards';
 import { cardContractDom } from '../helpers/controllerCardsDom';
 
 afterEach(() => document.body.replaceChildren());
@@ -27,15 +27,12 @@ describe('the role-and-name card locators', () => {
     expect(windowTitleLocator(page).element().tagName).toBe('H1');
   });
 
-  it('locate the Dark theme control as a toggle button or as a switch', () => {
+  it('locate the theme control by the theme it switches to', () => {
     const dom = cardContractDom();
-    expect(darkThemeLocator(page).element().getAttribute('aria-pressed')).toBe('false');
-    expect([darkThemeLocator(page, { on: false }).query(), darkThemeLocator(page, { on: true }).query()].map(Boolean)).toEqual([true, false]);
-    const control = dom.querySelector('[aria-pressed]')!;
-    control.removeAttribute('aria-pressed');
-    control.setAttribute('role', 'switch');
-    control.setAttribute('aria-checked', 'true');
-    expect(darkThemeLocator(page).element().getAttribute('role')).toBe('switch');
-    expect([darkThemeLocator(page, { on: true }).query(), darkThemeLocator(page, { on: false }).query()].map(Boolean)).toEqual([true, false]);
+    expect(themeControlLocator(page).element().textContent).toBe('Dark theme');
+    expect([themeControlLocator(page, { on: false }).query(), themeControlLocator(page, { on: true }).query()].map(Boolean)).toEqual([true, false]);
+    dom.querySelector('header > button')!.textContent = 'Light theme';
+    expect(themeControlLocator(page).element().textContent).toBe('Light theme');
+    expect([themeControlLocator(page, { on: true }).query(), themeControlLocator(page, { on: false }).query()].map(Boolean)).toEqual([true, false]);
   });
 });

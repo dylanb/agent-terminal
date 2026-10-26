@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.223
+**Document status:** Draft v2.224
 **Scope:** An Electron app that hosts coding agents in a PTY-attached shell, models the screen in the main process, captures what the agent shows, and runs development work as flows: chains of §27 loops (§28) moving a ticket from groom to plan to implementation. On conflict with §17–§25, §27 wins for the in-app loop.
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 

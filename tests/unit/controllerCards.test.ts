@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 import type { Locator, Page } from '@playwright/test';
-import { type RoleScope, accentIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, darkThemeIn, dismissIn, darkThemeOn, isExpanded, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
+import { type RoleScope, accentIn, bringForwardIn, cardHeaderIn, cardIn, cardsIn, themeControlIn, dismissIn, darkThemeOn, isExpanded, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
 import { cardContractDom } from '../helpers/controllerCardsDom';
 
 afterEach(() => document.body.replaceChildren());
@@ -37,28 +37,22 @@ describe('the jsdom card queries', () => {
     expect([isExpanded(live, '/w/a'), isExpanded(ended, '/w/ab')]).toEqual([true, false]);
     expect(statusRowIn(ended)?.textContent).toBe('Disconnected');
     expect(accentIn(live)?.closest('article')).toBe(live);
-    expect(darkThemeIn(host)?.getAttribute('aria-pressed')).toBe('false');
+    expect(themeControlIn(host)?.textContent).toBe('Dark theme');
   });
 
   it('refuse to report the state of a control that is not there', () => {
     const host = cardContractDom();
-    darkThemeIn(host)!.remove();
-    expect(() => darkThemeOn(host)).toThrow(/Dark theme/);
+    themeControlIn(host)!.remove();
+    expect(() => darkThemeOn(host)).toThrow(/Dark theme or Light theme/);
     expect(() => isExpanded(cardIn(host, '/w/a')!, '/w/ab')).toThrow(/\/w\/ab/);
   });
 
-  it('report the Dark theme state as a toggle button or as a switch', () => {
+  it('report dark as on when the theme control offers Light theme', () => {
     const host = cardContractDom();
-    const control = darkThemeIn(host)!;
+    const control = themeControlIn(host)!;
     expect(darkThemeOn(host)).toBe(false);
-    control.setAttribute('aria-pressed', 'true');
-    expect(darkThemeOn(host)).toBe(true);
-    control.removeAttribute('aria-pressed');
-    control.setAttribute('role', 'switch');
-    control.setAttribute('aria-checked', 'false');
-    expect(darkThemeOn(host)).toBe(false);
-    control.setAttribute('aria-checked', 'true');
-    expect(darkThemeOn(host)).toBe(true);
+    control.textContent = 'Light theme';
+    expect({ found: themeControlIn(host), on: darkThemeOn(host) }).toEqual({ found: control, on: true });
   });
 });
 

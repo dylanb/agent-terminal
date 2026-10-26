@@ -3,7 +3,7 @@ import { page } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import { createViewportLayout } from '../../src/renderer/src/controllerFrame';
-import { cardHeaderIn, cardIn, cardsIn, darkThemeIn, windowHeaderIn } from '../helpers/controllerCards';
+import { cardHeaderIn, cardIn, cardsIn, themeControlIn, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { readable } from '../helpers/readableText';
 import { STATUS_CASES, statusTerminal } from '../helpers/controllerStatusFixture';
@@ -116,9 +116,9 @@ describe('no horizontal scroll with the Dark theme control in the window header'
     await page.viewport(320, 700);
     const { host, dispose } = mountControllerPanes({ terminals: [STATUS_CASES['needs-human'].terminal, STATUS_CASES.working.terminal], oneColumn: true });
     try {
-      await vi.waitFor(() => { if (!darkThemeIn(host)) throw new Error('no Dark theme control yet'); }).catch(() => undefined);
+      await vi.waitFor(() => { if (!themeControlIn(host)) throw new Error('no Dark theme control yet'); }).catch(() => undefined);
       const header = windowHeaderIn(host);
-      const control = darkThemeIn(host);
+      const control = themeControlIn(host);
       expect({
         inHeader: Boolean(control && header?.contains(control)),
         readable: Boolean(control) && readable(host, 'Dark theme', control!),

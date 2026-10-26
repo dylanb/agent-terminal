@@ -49,3 +49,22 @@ it('toggles a card once per click, Enter and Space on its header, flipping its e
       .toEqual({ reached: true, initial: open, clicked: shut, entered: open, spaced: shut, activated: [] });
   } finally { dispose(); }
 });
+
+it('draws a collapsed card no taller than its header beside an expanded card in the same row', async () => {
+  await page.viewport(1200, 700);
+  const idle = { ...statusTerminal({ activity: 'quiet' }), id: 'idle', launchDirectory: '/cards/idle' };
+  const { host, dispose } = mountControllerPanes({ terminals: [idle, working] });
+  try {
+    const card = cardIn(host, idle.launchDirectory);
+    await click(card ? cardHeaderIn(card, idle.launchDirectory) : undefined);
+    const header = card?.querySelector('header')?.getBoundingClientRect();
+    const box = card?.getBoundingClientRect();
+    const neighbour = cardIn(host, DIRECTORY)?.getBoundingClientRect();
+    const padding = card ? Number.parseFloat(getComputedStyle(card).paddingTop) + Number.parseFloat(getComputedStyle(card).paddingBottom) + 2 : 0;
+    expect({
+      sameRow: box?.top === neighbour?.top,
+      neighbourTaller: Boolean(box && neighbour && neighbour.height > box.height),
+      hugsHeader: Boolean(box && header && box.height <= header.height + padding + 1),
+    }).toEqual({ sameRow: true, neighbourTaller: true, hugsHeader: true });
+  } finally { dispose(); }
+});

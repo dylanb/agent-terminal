@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Theme } from '../../src/shared/ipc';
-import { darkThemeIn, darkThemeOn } from '../helpers/controllerCards';
+import { themeControlIn, darkThemeOn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
 
-const themeControl = (host: HTMLElement) => (darkThemeIn(host) ? (darkThemeOn(host) ? 'on' : 'off') : 'missing');
+const themeControl = (host: HTMLElement) => (themeControlIn(host) ? (darkThemeOn(host) ? 'on' : 'off') : 'missing');
 
 /** Waits for the Dark theme control to appear; a control that never appears is left for the caller's check. */
 const shown = (host: HTMLElement) => vi.waitFor(() => {
-  if (!darkThemeIn(host)) throw new Error('no Dark theme control yet');
+  if (!themeControlIn(host)) throw new Error('no Dark theme control yet');
 }).catch(() => undefined);
 
 describe('the controller theme', () => {
@@ -41,9 +41,9 @@ describe('the controller theme', () => {
     try {
       await shown(host);
       const savedOnLoad = [...service.savedThemes];
-      darkThemeIn(host)?.click();
+      themeControlIn(host)?.click();
       const first = { applied: applied.at(-1), saved: [...service.savedThemes], control: themeControl(host) };
-      darkThemeIn(host)?.click();
+      themeControlIn(host)?.click();
       expect({ savedOnLoad, first, second: { applied: applied.at(-1), saved: service.savedThemes, control: themeControl(host) } }).toEqual({
         savedOnLoad: [],
         first: { applied: 'dark', saved: ['dark'], control: 'on' },
@@ -64,9 +64,9 @@ describe('the controller theme', () => {
     const { host, service, dispose } = mountControllerPanes();
     try {
       await shown(host);
-      darkThemeIn(host)?.focus();
+      themeControlIn(host)?.focus();
       service.publish([statusTerminal({ activity: 'quiet' })]);
-      const control = darkThemeIn(host);
+      const control = themeControlIn(host);
       expect(control !== undefined && document.activeElement === control).toBe(true);
     } finally { dispose(); }
   });

@@ -588,7 +588,7 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-counts, .controller-summary { margin:0; font-size:12px; overflow-wrap:anywhere; }
 .controller-counts { color:var(--dim); }
 .controller-summary { font-weight:600; }
-.controller-pane-list { display:grid; gap:var(--r); grid-template-columns:repeat(auto-fit, minmax(min(18rem, calc((100% - var(--r)) / 2)), 1fr)); }
+.controller-pane-list { display:grid; gap:var(--r); align-items:start; grid-template-columns:repeat(auto-fit, minmax(min(18rem, calc((100% - var(--r)) / 2)), 1fr)); }
 .controller-panes[data-layout="one-column"] .controller-pane-list { grid-template-columns:minmax(0, 1fr); }
 .controller-pane-list > p { margin:0; }
 .controller-panes [data-status="error"] { --card-accent:var(--status-error); --card-text:var(--status-error-text); }

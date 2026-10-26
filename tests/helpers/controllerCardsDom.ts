@@ -4,7 +4,7 @@ export function cardContractDom(): HTMLElement {
   const host = document.createElement('main');
   host.id = 'controller';
   host.innerHTML = `
-    <header><h1>Controller</h1><span>2 terminals</span><button type="button" aria-pressed="false">Dark theme</button></header>
+    <header><h1>Controller</h1><span>2 terminals</span><button type="button">Dark theme</button></header>
     <article aria-labelledby="h-a">
       <button type="button" aria-expanded="false">Show full reason</button>
       <header><button type="button" id="h-a" aria-expanded="true"><span>project</span><span style="display: block">/w/a</span></button></header>

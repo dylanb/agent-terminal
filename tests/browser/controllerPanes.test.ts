@@ -3,7 +3,7 @@ import { userEvent } from 'vitest/browser';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { accentIn, bringForwardIn, cardHeaderIn, cardIn, darkThemeIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
+import { accentIn, bringForwardIn, cardHeaderIn, cardIn, themeControlIn, dismissIn, showFullReasonIn, statusRowIn, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
 import { readable } from '../helpers/readableText';
@@ -152,7 +152,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
     try {
       await vi.waitFor(() => {
         if (![longHuman, longError].every(t => control(host, t.launchDirectory, showFullReasonIn))) throw new Error('no Show full reason yet');
-        if (!darkThemeIn(host)) throw new Error('no Dark theme control yet');
+        if (!themeControlIn(host)) throw new Error('no Dark theme control yet');
       }).catch(() => undefined);
       const withCards = grade([
         ...new Set(cases.map(c => c.text)), ...SUMMARY_LABELS,
@@ -215,7 +215,7 @@ describe.each(['light', 'dark'])('controller panes in %s theme', theme => {
           return found;
         }).catch(() => undefined),
         'Dark theme': () => vi.waitFor(() => {
-          const found = darkThemeIn(host);
+          const found = themeControlIn(host);
           if (!found) throw new Error('no control yet');
           return found;
         }).catch(() => undefined),

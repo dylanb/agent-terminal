@@ -10,8 +10,7 @@ export function createThemeToggle(host: HTMLElement, deps: ThemeToggleDeps): { d
   const button = host.ownerDocument.createElement('button');
   button.type = 'button';
   button.className = 'controller-theme-toggle';
-  button.textContent = 'Dark theme';
-  const show = () => button.setAttribute('aria-pressed', String(theme === 'dark'));
+  const show = () => { button.textContent = theme === 'dark' ? 'Light theme' : 'Dark theme'; };
   show();
   button.addEventListener('click', () => {
     theme = theme === 'dark' ? 'light' : 'dark';
