@@ -38,6 +38,9 @@ jobs:
       # bypass of the husky pre-commit hook before a deferral marker reaches the default branch.
       - run: pnpm lint
 
+      # vitest strips types without checking them, so this is the only check of the tests' types.
+      - run: pnpm typecheck
+
       # The `browser` project launches Chromium through the playwright provider; without the binary
       # and its shared libraries the whole `pnpm test` run aborts before the node project reports.
       - run: pnpm exec playwright install --with-deps chromium

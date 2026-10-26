@@ -45,6 +45,14 @@ describe('CI runs the test suites that gate a merge', () => {
     }
   });
 
+  // vitest strips types without checking them, so only tsc catches a type error in test code.
+  it('a pull-request workflow type-checks the source and the tests', () => {
+    const gating = workflows().filter(
+      (wf) => commands(wf).some((c) => /(^|\s)pnpm\s+(run\s+)?typecheck(\s|$)/.test(c)) && triggers(wf).includes('pull_request'),
+    );
+    expect(gating.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('a pull-request workflow runs the playwright e2e suite', () => {
     const gating = workflows().filter(
       (wf) => commands(wf).some((c) => /playwright\s+test/.test(c)) && triggers(wf).includes('pull_request'),
