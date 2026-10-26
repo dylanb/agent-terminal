@@ -27,7 +27,6 @@ function mount(terminal: ControllerTerminal, expanded = true) {
 
 const withWork = (work: Partial<WorkStatus>): ControllerTerminal => statusTerminal(work);
 
-/** Each of `texts` in `text`, in order, each after the previous one. */
 function missingInOrder(text: string, texts: readonly string[]): string[] {
   let from = 0;
   return texts.flatMap(expected => {

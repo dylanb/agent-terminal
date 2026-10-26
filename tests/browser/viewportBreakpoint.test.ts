@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-// The one-column breakpoint is one named constant in the controller's frame module, and the stylesheet reads the
-// layout from the DOM. A width query in a stylesheet would be a second definition that drifts from it.
 const RENDERER_CSS = import.meta.glob<string>('../../src/renderer/**/*.css', { eager: true, query: '?inline', import: 'default' });
 
 function widthConditions(css: string): string[] {
