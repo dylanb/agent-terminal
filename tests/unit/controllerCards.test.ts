@@ -66,3 +66,29 @@ it('the role-and-name locators accept a Playwright page and locator', () => {
   expectTypeOf<Page>().toExtend<RoleScope<Locator>>();
   expectTypeOf<Locator>().toExtend<RoleScope<Locator>>();
 });
+
+it('finds conflict actions and labelled ARIA disclosure controls through their accessible names', () => {
+  const host = cardContractDom();
+  const card = cardIn(host, '/w/a')!;
+  const action = bringForwardIn(card)!;
+  action.setAttribute('aria-label', 'Bring both forward project /w/a');
+  expect(bringForwardIn(card)).toBe(action);
+  action.setAttribute('aria-label', 'Bring 3 terminals forward project /w/a');
+  expect(bringForwardIn(card)).toBe(action);
+});
+
+it('finds an ARIA disclosure named by a referenced label', () => {
+  const host = cardContractDom();
+  const card = cardIn(host, '/w/a')!;
+  const header = cardHeaderIn(card, '/w/a')!;
+  const replacement = document.createElement('div');
+  replacement.setAttribute('role', 'button');
+  replacement.setAttribute('aria-expanded', 'true');
+  replacement.setAttribute('aria-labelledby', 'directory-label');
+  const label = document.createElement('span');
+  label.id = 'directory-label';
+  label.textContent = '/w/a';
+  host.append(label);
+  header.replaceWith(replacement);
+  expect(cardHeaderIn(card, '/w/a')).toBe(replacement);
+});

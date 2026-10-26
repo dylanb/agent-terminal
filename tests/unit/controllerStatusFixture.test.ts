@@ -63,3 +63,30 @@ describe('the shared controller fake', () => {
     expect(failing.activated).toEqual(['terminal-a']);
   });
 });
+
+it('lets each activation settle independently across snapshot changes', async () => {
+  let finish!: (value: 'activated') => void;
+  const pending = new Promise<'activated'>(resolve => { finish = resolve; });
+  const service = statusService([], { activation: id => id === 'first' ? pending : Promise.resolve('unavailable') });
+  const first = service.api.activateTerminal('first');
+  const second = service.api.activateTerminal('second');
+  service.publish([statusTerminal()]);
+  expect(await second).toBe('unavailable');
+  finish('activated');
+  expect(await first).toBe('activated');
+  expect(service.activated).toEqual(['first', 'second']);
+});
+
+it('builds distinct reports for overlapping connections and a separate worktree', async () => {
+  const { directoryConflictFixture } = await import('../helpers/controllerStatusFixture');
+  const { members, unrelated } = directoryConflictFixture();
+  expect(members).toHaveLength(3);
+  expect(new Set(members.map(item => item.launchDirectory)).size).toBe(1);
+  expect(unrelated.launchDirectory).not.toBe(members[0].launchDirectory);
+  const terminals = [...members, unrelated];
+  expect(new Set(terminals.map(item => item.id)).size).toBe(4);
+  expect(new Set(terminals.map(item => JSON.stringify(item.work))).size).toBe(4);
+  expect(terminals.every(item => isControllerWorkStatus(item.work))).toBe(true);
+  members[0].work.attention!.reasons.push('mutated');
+  expect(directoryConflictFixture().members[0].work.attention!.reasons).toEqual(['Approve amber']);
+});
