@@ -42,7 +42,7 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       await expect(control).toHaveText('Start');
       await control.click();
       await expect.poll(() => existsSync(`${verdictHold}.pids`), { timeout: 60_000 }).toBe(true);
-      const attentionStatus = await observeStatus(controller.page, repo, [/needs? (?:a )?human|human.*needed/i, /stop.for.a.human|automatic.*halt/i]);
+      const attentionStatus = await observeStatus(controller.page, repo, { attention: /needs? (?:a )?human|human.*needed/i, halt: /stop.for.a.human|automatic.*halt/i });
       rmSync(verdictHold);
       const stateFile = join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
       await expect.poll(() => { try { return readFileSync(stateFile, 'utf8'); } catch { return ''; } }, { timeout: 60_000 }).toContain('verdict: stop for a human');
@@ -52,11 +52,11 @@ for (const action of ['click', 'keyboard', 'resolve'] as const) {
       await expect(approve).toBeVisible();
       const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
       expect(source.loop?.humanNeeded).toBe(true);
-      const { matched: shown, texts: attentionTexts } = await attentionStatus();
-      expect.soft({ ['attention shown after verdict dispatch']: shown[0] }).toEqual({ ['attention shown after verdict dispatch']: true });
-      expect.soft({ ['halt reason shown']: shown[1] }).toEqual({ ['halt reason shown']: true });
-      expect.soft({ ['gate status shown']: attentionTexts.some(text => text.includes(source.loop!.status)) }).toEqual({ ['gate status shown']: true });
-      if (source.loop?.verdictReason) expect.soft({ ['full reason shown']: attentionTexts.some(text => text.includes(source.loop!.verdictReason!)) }).toEqual({ ['full reason shown']: true });
+      const attention = await attentionStatus();
+      expect.soft({ ['attention shown after verdict dispatch']: attention.shown.attention }).toEqual({ ['attention shown after verdict dispatch']: true });
+      expect.soft({ ['halt reason shown']: attention.shown.halt }).toEqual({ ['halt reason shown']: true });
+      expect.soft({ ['gate status shown']: attention.ever(source.loop!.status) }).toEqual({ ['gate status shown']: true });
+      if (source.loop?.verdictReason) expect.soft({ ['full reason shown']: attention.ever(source.loop!.verdictReason!) }).toEqual({ ['full reason shown']: true });
       const pane = controller.page.getByRole('button', { name: repo, exact: false });
       if (action === 'resolve') {
         await approve.click();

@@ -88,11 +88,11 @@ for (const outage of ['socket', 'exit', 'crash'] as const) {
           controller = await h.launch(controllerTarget, h.fixture.nonGit);
           h.fixture.env.APP_HOME_DIR = h.fixture.home;
         }
-        const current = await observeStatus(controller.page, repo, [/verify/, /recovery-flow/], 'registration', ABSENCE_WINDOW_MS);
+        const current = await observeStatus(controller.page, repo, { step: /verify/, flow: /recovery-flow/ }, { start: 'registration', holdMs: ABSENCE_WINDOW_MS });
         online = true;
         const observed = await current();
-        expect.soft(observed.matched).toEqual([true, true]);
-        expect.soft(observed.texts.every(text => !/Human needed|stop for a human/.test(text))).toBe(true);
+        expect.soft(observed.shown).toEqual({ step: true, flow: true });
+        expect.soft(observed.ever(/Human needed|stop for a human/)).toBe(false);
         await expect.soft(controller.page.getByRole('status')).not.toContainText(/Human needed|stop for a human/);
         const pane = controller.page.getByRole('button', { name: repo, exact: false });
         await expect.soft(pane).toHaveCount(1);

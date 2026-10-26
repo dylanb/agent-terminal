@@ -90,8 +90,8 @@ export function slicePlanWellFormed(planText: string): boolean {
   );
 }
 
-/** The one canonical example the predicate test, the fake-agent output, and the recipe few-shot all reference,
- *  so they cannot drift (§93). Asserted `slicePlanWellFormed` by its test. */
+/** The one canonical example the fake-agent output and the recipe few-shot both reference, so they cannot
+ *  drift (§93). */
 export function exampleSlicePlan(n = 2): string {
   const lines = [SLICE_GRAMMAR.implSlicesHeading, ''];
   for (let i = 1; i <= n; i++) {

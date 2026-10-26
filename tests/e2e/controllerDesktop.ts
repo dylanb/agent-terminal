@@ -34,12 +34,20 @@ export async function createControllerDesktopHarness() {
     if (!/^\d+$/.test(number)) throw new Error(`Invalid X display number: ${number}`);
     const display = `:${number}`;
     const env = { ...process.env, DISPLAY: display };
-    wm = spawn('openbox', ['--sm-disable'], { env, stdio: 'ignore' });
+    let wmOutput = '';
+    const startWm = () => {
+      const started = spawn('openbox', ['--sm-disable'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+      started.stderr!.on('data', (chunk: Buffer) => { wmOutput += chunk.toString(); });
+      return started;
+    };
+    wm = startWm();
     const deadline = Date.now() + WINDOW_TIMEOUT_MS;
     for (;;) {
       const { stdout } = await exec('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { env });
       if (/window id # 0x[1-9a-f]/i.test(stdout)) break;
-      if (Date.now() >= deadline || wm.exitCode !== null) throw new Error('Controller test window manager did not become ready');
+      if (Date.now() >= deadline) throw new Error(`Controller test window manager did not become ready: ${wmOutput.trim() || 'no output'}`);
+      // openbox has been seen to exit at once on a display Xvfb had only just assigned.
+      if (wm.exitCode !== null || wm.signalCode !== null) wm = startWm();
       await delay(DESKTOP_POLL_MS);
     }
     const harness = createControllerHarness();

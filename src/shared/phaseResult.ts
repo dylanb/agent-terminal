@@ -144,8 +144,8 @@ export function exampleCapturedOutput(outcome: PhaseOutcome): string {
   return `${SAMPLE_CAPTURED[outcome]}\n`;
 }
 
-/** The ONE canonical example the predicate test, the fake-agent e2e output and the prompt few-shot reference
- *  (§28.5.5), one per outcome so any can be scripted; `opts` adds GREEN's build or RED's intended failures. */
+/** The ONE canonical example the fake-agent e2e output and the prompt few-shot reference (§28.5.5), one per
+ *  outcome so any can be scripted; `opts` adds GREEN's build or RED's intended failures. */
 export function examplePhaseResult(
   outcome: PhaseOutcome,
   opts?: { build?: BuildOutcome; intendedFailures?: IntendedFailure[]; verificationOnly?: true },

@@ -40,23 +40,24 @@ fi
       rmSync(h.fixture.env.TITLE_ALLOW, { force: true });
       rmSync(h.fixture.env.TITLE_STARTED, { force: true });
       await controller.page.getByRole('button', { name: `Dismiss disconnected terminal ${repo}`, exact: true }).click();
-      const initialStatus = await observeStatus(controller.page, repo, [/#219/, /ticket-flow/, /implement/, ...(title === 'slow' ? [] : [title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i])], 'registration');
+      const initialPatterns: Record<string, RegExp> = { issue: /#219/, flow: /ticket-flow/, step: /implement/, ...(title === 'slow' ? {} : { title: title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i }) };
+      const initialStatus = await observeStatus(controller.page, repo, initialPatterns, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Advance');
       await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ runStarted: 'started', refs: { ticket: 219, pr: 236 } });
       const pane = controller.page.getByRole('button', { name: repo, exact: false });
-      const { matched: shown } = await initialStatus();
-      expect.soft({ ['issue in the initial status']: shown[0] }).toEqual({ ['issue in the initial status']: true });
-      expect.soft({ ['flow in the initial status']: shown[1] }).toEqual({ ['flow in the initial status']: true });
-      expect.soft({ ['step in the initial status']: shown[2] }).toEqual({ ['step in the initial status']: true });
+      const { shown } = await initialStatus();
+      expect.soft({ ['issue in the initial status']: shown.issue }).toEqual({ ['issue in the initial status']: true });
+      expect.soft({ ['flow in the initial status']: shown.flow }).toEqual({ ['flow in the initial status']: true });
+      expect.soft({ ['step in the initial status']: shown.step }).toEqual({ ['step in the initial status']: true });
       if (title === 'slow') {
         await expect.poll(() => existsSync(h.fixture.env.TITLE_STARTED), { timeout: STATUS_BUDGET_MS }).toBe(true);
         expect(existsSync(h.fixture.env.TITLE_ALLOW)).toBe(false);
       }
-      if (title !== 'slow') expect.soft({ ['initial title availability']: shown[3] }).toEqual({ ['initial title availability']: true });
-      const titleStatus = await observeStatus(controller.page, repo, [title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i]);
+      if (title !== 'slow') expect.soft({ ['initial title availability']: shown.title }).toEqual({ ['initial title availability']: true });
+      const titleStatus = await observeStatus(controller.page, repo, { title: title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i });
       writeFileSync(h.fixture.env.TITLE_ALLOW, 'release title');
-      expect.soft({ ['title after releasing the external result']: (await titleStatus()).matched[0] }).toEqual({ ['title after releasing the external result']: true });
+      expect.soft({ ['title after releasing the external result']: (await titleStatus()).shown.title }).toEqual({ ['title after releasing the external result']: true });
       await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY|Different pull request title/);
     } finally {
       if (h.fixture.env.TITLE_ALLOW) writeFileSync(h.fixture.env.TITLE_ALLOW, 'release during cleanup');
@@ -73,16 +74,16 @@ test('real malformed flow remains an error rather than an unassigned terminal', 
     mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
     seedTrustedFlow(h.fixture.home, repo, 'broken-flow', 'name: broken-flow\nsteps: [\n');
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-    const errorStatus = await observeStatus(controller.page, repo, [/error/i, /broken-flow|parse|yaml|invalid/i], 'registration');
+    const errorStatus = await observeStatus(controller.page, repo, { error: /error/i, reason: /broken-flow|parse|yaml|invalid/i }, { start: 'registration' });
     const terminal = await h.launch(terminalTarget, repo);
     await expect(terminal.page.locator('#flow-strip .flow-error')).toBeVisible();
     await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ status: 'error' });
     const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
     const pane = controller.page.getByRole('button', { name: repo, exact: false });
     const errorShown = await errorStatus();
-    expect.soft({ ['error in the initial status']: errorShown.matched[0] }).toEqual({ ['error in the initial status']: true });
+    expect.soft({ ['error in the initial status']: errorShown.shown.error }).toEqual({ ['error in the initial status']: true });
     expect(source.error).toBeTruthy();
-    expect.soft({ ['full error shown']: errorShown.texts.some(text => text.includes(source.error!)) }).toEqual({ ['full error shown']: true });
+    expect.soft({ ['full error shown']: errorShown.ever(source.error!) }).toEqual({ ['full error shown']: true });
     await expect.soft(pane).not.toContainText(/unassigned/i);
   } finally { await h.dispose(); }
 });
@@ -100,13 +101,13 @@ test('real PTY activity remains visible without a started flow and never implies
     await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Start');
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('while :; do printf "SCREEN_ACTIVITY_%s\\n" "$RANDOM"; sleep 0.1; done');
-    const activityStatus = await observeStatus(controller.page, repo, [/active/i, /unassigned/i]);
+    const activityStatus = await observeStatus(controller.page, repo, { active: /active/i, unassigned: /unassigned/i });
     await terminal.page.keyboard.press('Enter');
     await expect(terminal.page.locator('.xterm-rows')).toContainText('SCREEN_ACTIVITY_');
     const pane = controller.page.getByRole('button', { name: repo, exact: false });
-    const { matched: activityShown } = await activityStatus();
-    expect.soft({ ['active shown']: activityShown[0] }).toEqual({ ['active shown']: true });
-    expect.soft({ ['unassigned shown']: activityShown[1] }).toEqual({ ['unassigned shown']: true });
+    const { shown: activityShown } = await activityStatus();
+    expect.soft({ ['active shown']: activityShown.active }).toEqual({ ['active shown']: true });
+    expect.soft({ ['unassigned shown']: activityShown.unassigned }).toEqual({ ['unassigned shown']: true });
     await terminal.page.keyboard.press('Control+c');
     await expect.soft(pane).toContainText(/idle|quiet/i);
     await expect.soft(pane).not.toContainText(/needs? (?:a )?human/i);

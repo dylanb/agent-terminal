@@ -18,27 +18,25 @@ for (const stage of ['unassigned', 'assigned', 'completed'] as const) {
       seedTrustedFlow(h.fixture.home, repo, 'status-delivery', autoGateFlowYaml([{ id: 'implement', kind: 'manual' }], 'status-delivery'));
       writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\n');
       const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      let status = await observeStatus(controller.page, repo, [/unassigned/i, /active|idle|quiet/i, /no ticket/i], 'registration');
+      let status = await observeStatus(controller.page, repo, { stage: /unassigned/i, activity: /active|idle|quiet/i, ticket: /no ticket/i }, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       const control = terminal.page.locator('#flow-strip .flow-control');
       await expect(control).toHaveText('Start');
       if (stage !== 'unassigned') {
-        await status();
-        status = await observeStatus(controller.page, repo, [/\bassigned\b/i, /active|idle|quiet/i, /no ticket/i]);
+        status = await observeStatus(controller.page, repo, { stage: /\bassigned\b/i, activity: /active|idle|quiet/i, ticket: /no ticket/i });
         await control.click();
         await expect(control).toHaveText('Advance');
       }
       if (stage === 'completed') {
-        await status();
-        status = await observeStatus(controller.page, repo, [/completed/i, /active|idle|quiet/i, /no ticket/i]);
+        status = await observeStatus(controller.page, repo, { stage: /completed/i, activity: /active|idle|quiet/i, ticket: /no ticket/i });
         await control.click();
         await expect(control).toHaveText('Restart');
       }
       const pane = controller.page.getByRole('button', { name: repo, exact: false });
-      const { matched: shown } = await status();
-      expect.soft({ [`${stage} shown`]: shown[0] }).toEqual({ [`${stage} shown`]: true });
-      expect.soft({ ['activity shown']: shown[1] }).toEqual({ ['activity shown']: true });
-      expect.soft({ ['ticket availability shown']: shown[2] }).toEqual({ ['ticket availability shown']: true });
+      const { shown } = await status();
+      expect.soft({ [`${stage} shown`]: shown.stage }).toEqual({ [`${stage} shown`]: true });
+      expect.soft({ ['activity shown']: shown.activity }).toEqual({ ['activity shown']: true });
+      expect.soft({ ['ticket availability shown']: shown.ticket }).toEqual({ ['ticket availability shown']: true });
       if (stage !== 'unassigned') await expect.soft(pane).not.toContainText(/unassigned/i);
       await expect.soft(pane).not.toContainText(/needs? (?:a )?human/i);
     } finally { await h.dispose(); }

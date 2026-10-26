@@ -3,11 +3,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { seedTrustedFlow } from './autoGateHarness';
+import { STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { shellQuote } from '../../src/shared/shellQuote';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
-const STATUS_BUDGET_MS = 30_000;
 const LATE_RENDER_WINDOW_MS = 10_000;
 
 for (const returnToFirstRepo of [false, true]) {

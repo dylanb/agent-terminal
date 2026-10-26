@@ -23,23 +23,17 @@ function asReviewRounds(dir: string, loop: string): void {
 // The plan-loop gate the fixture runs: the gate options and approve side effect the e2e assert are this fixture's
 // input, not the shipped def's configuration.
 const PLAN_LOOP_GATE = [
-  'gate:',
-  '  - option: approve',
-  '    side_effects:',
-  '      - kind: gh',
-  '        action: mark-ready',
-  '  - option: request-changes',
-  '  - option: redo',
-  '  - option: polish',
-  '',
-].join('\n');
+  { option: 'approve', side_effects: [{ kind: 'gh', action: 'mark-ready' }] },
+  { option: 'request-changes' },
+  { option: 'redo' },
+  { option: 'polish' },
+];
 
 function ownPlanLoopGate(dir: string): void {
   const defPath = join(dir, 'plan-loop.yaml');
-  const def = readFileSync(defPath, 'utf8');
-  const owned = def.replace(/^gate:\n(?:[ ]+.*\n)*/m, PLAN_LOOP_GATE);
-  if (owned === def && !def.includes(PLAN_LOOP_GATE)) throw new Error('ownPlanLoopGate: plan-loop gate block not found');
-  writeFileSync(defPath, owned);
+  const def = load(readFileSync(defPath, 'utf8')) as Record<string, unknown>;
+  def.gate = PLAN_LOOP_GATE;
+  writeFileSync(defPath, dump(def));
 }
 
 /** An operator config whose shared loops-v2/<loop>/ folder holds the bundled defs, so a fixture flow of any

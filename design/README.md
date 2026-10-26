@@ -41,7 +41,7 @@ Each pane status has an accent `--status-<status>` (dots, card accents, rings), 
 | completed | `var(--pass)` | `var(--pass-text)` | own value | — |
 | idle (idle and unassigned) | `var(--dim)` | `var(--dim)` | `var(--hair2)` | — |
 
-The needs-human tokens are defined on their own, never by reference to `--reveal` / `--reveal-wash`, so changing the cross-highlight never changes them and the reverse. In both themes each status text clears 4.5:1 on `--card` and on its painted tint (WCAG 2.2 SC 1.4.3), and each accent clears 3:1 on `--card` (SC 1.4.11); `tests/browser/tokenSheet.test.ts` checks this in Chromium.
+The needs-human tokens are defined on their own, never by reference to `--reveal` / `--reveal-wash`, so changing the cross-highlight never changes them and the reverse. In both themes each status text clears 4.5:1 on `--card` and on its painted tint (WCAG 2.2 SC 1.4.3), and each accent clears 3:1 on `--card` (SC 1.4.11).
 
 ### Colour rule
 

@@ -38,7 +38,7 @@ test('status publication leaves a pending terminal notice and the failed run int
     await expect(control).toHaveText('Start');
     await control.click();
     await expect.poll(() => existsSync(`${failureHold}.pids`), { timeout: 60_000 }).toBe(true);
-    const errorStatus = await observeStatus(controller.page, repo, [/error/i, /needs? (?:a )?human|human.*needed/i]);
+    const errorStatus = await observeStatus(controller.page, repo, { error: /error/i, attention: /needs? (?:a )?human|human.*needed/i });
     rmSync(failureHold);
     const runFile = join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
     await expect.poll(() => { try { return readFileSync(runFile, 'utf8'); } catch { return ''; } }, { timeout: 60_000 }).toContain('status: error');
@@ -46,9 +46,8 @@ test('status publication leaves a pending terminal notice and the failed run int
     expect(source.loop?.appTurn).toBeTruthy();
     expect(source.loop?.errorReason).toBeTruthy();
     const errorShown = await errorStatus();
-    expect.soft(errorShown.matched[0]).toBe(true);
-    expect.soft(errorShown.matched[1]).toBe(true);
-    expect.soft(errorShown.texts.some(text => text.includes(source.loop!.errorReason!))).toBe(true);
+    expect.soft(errorShown.shown).toEqual({ error: true, attention: true });
+    expect.soft(errorShown.ever(source.loop!.errorReason!)).toBe(true);
     await terminal.app.evaluate(({ BrowserWindow }) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents;
       const send = contents.send.bind(contents);

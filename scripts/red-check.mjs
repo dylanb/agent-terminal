@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const vitestBin = path.join(path.dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
 
 const SPEC_ARG = /^(.*\.spec\.ts)((?::\d+)+)?$/;
-const TEST_DECLARATION = /^\s*test(?:\.(?:only|fail|fixme|skip|slow))?\s*\(/;
+const TEST_DECLARATION = /(?:^|\)|=>)\s*test(?:\.(?:only|fail|fixme|skip|slow))?\s*\(/;
 
 const args = process.argv.slice(2);
 const specArgs = args.filter((a) => SPEC_ARG.test(a)).map(repoRelativeSpec);
