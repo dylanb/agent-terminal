@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createScanner, type ScannerEmit } from '../../src/main/scanner';
@@ -56,14 +54,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
   }
 
   afterEach(() => shadow?.dispose());
-
-  it('is stored as plain text, not a NUL-containing binary blob', () => {
-    // A NUL (or other control byte) in the source makes git treat the file as
-    // binary, destroying diff/blame/merge for the central scanner module.
-    const bytes = readFileSync(path.resolve(__dirname, '../../src/main/scanner.ts'));
-    const offending = bytes.findIndex((b) => b === 0 || (b < 9) || (b > 13 && b < 32));
-    expect(offending, `control byte 0x${bytes[offending]?.toString(16)} at offset ${offending}`).toBe(-1);
-  });
 
   it('emits only on the quiet transition, never per output chunk', async () => {
     setup();

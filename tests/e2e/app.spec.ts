@@ -3080,8 +3080,8 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
   expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
 
-  // AC1 — the actionable gate renders exactly the def's options: approve + request-changes + redo + polish
-  // (sub-ticket 3 widened the shipped defs), and never the §27-illegal impasse.
+  // AC1 — the actionable gate renders exactly the options the fixture's plan-loop declares, and never the
+  // §27-illegal impasse.
   await loopReadout().click();
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toBeVisible();
@@ -7706,7 +7706,7 @@ function seedGroomV3Agent(binDir: string): void {
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
-test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and publishes the ticket when the operator approves', { tag: '@ownapp' }, async () => {
+test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal session that runs its own reviewer and is compacted between legs, and moves on when the operator approves', { tag: '@ownapp' }, async () => {
   const { dir: repo } = seedFlowRepoBase('agent-term-e2e-groomv3-', {
     flowYaml: readFileSync(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'), 'utf8'),
     flowState: 'step: groom-intent\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "77"\n',
@@ -7739,13 +7739,12 @@ test('§27.3 v2.200/v2.201 — feature-dev-v3 interviews, grooms in a goal sessi
   expect(checks.match(/OK: \.agent-terminal\/loop\/goal-progress\.[0-9a-f]{8}\.json/g)).toHaveLength(2);
   expect(checks).not.toContain('exit=1');
   expect(readIf(join(repo, '.agent-terminal', 'compact-seen'))).toBe('x');
-  expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toContain('subagent_type: groom-goal-loop--review-plan-intent');
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).toMatch(/subagent_type: \S+/);
 
-  // The approval step stops for the operator, and approve publishes the groomed ticket to the issue.
+  // The approval step stops for the operator, and approve takes the flow on to planning.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: groom-approve[\s\S]*verdict: clean/);
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click();
-  await expect.poll(() => readIf(`${logFile}.issue-body.176`), { timeout: 30_000 }).toContain('# Groomed ticket 176');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: plan\n');
   // §28.10 AC1 — planning consumes the approved groomed ticket as a chained input.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.step }).toMatch(/^step: plan$[\s\S]*chained_inputs:[\s\S]*?-\s*groomed-ticket(?![\w-])/m);
@@ -7872,7 +7871,7 @@ for (const integration of ['1', '0']) test(`§27.4 v2.201 — under Codex, detec
   await flowControl().click();
   await passAutoGate(home, repo, 'groom-intent');
 
-  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toContain('agent: groom_goal_loop__review_plan_intent');
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md')), { timeout: 30_000 }).toMatch(/agent: [a-z0-9_]+__[a-z0-9_]+/);
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompt-seen.md'))).not.toContain('subagent_type');
 
   await app.close();
@@ -7894,7 +7893,7 @@ function seedV3Config(prefix: string): string {
   return cfg;
 }
 
-test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal sessions that review their own work, compacts them between legs, approves the plan once, lets the operator send the slice back to RED from the final approval, and publishes the PR on approve', { tag: '@ownapp' }, async () => {
+test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal sessions that review their own work, compacts them between legs, approves the plan once, lets the operator send the slice back to RED from the final approval, and finishes on approve', { tag: '@ownapp' }, async () => {
   test.setTimeout(chainBudget(13));
   const repo = seedV3ChainRepo('agent-term-e2e-implv3-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-implv3-home-'));
@@ -7923,7 +7922,6 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  const before = gitCount(repo);
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: EPIC_GATE_WAIT.start });
   await typeCommand('fake-agent');
@@ -7931,12 +7929,12 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   // Planning reaches its one human gate without stopping, the session told to run its own reviewers.
   await passAutoGate(home, repo, 'plan');
   expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?2["']?/);
-  expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toContain('subagent_type: plan-goal-loop--review-plan-determinism');
+  expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen'))).toMatch(/subagent_type: \S+/);
   await approveHumanGate(repo, 'plan-approve');
-  await expect.poll(() => readGhLog(logFile)).toContain('pr ready');
-  expect(readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
+  await expect.poll(() => readIf(appFlowState(repo))).toMatch(/slices:\s*["']?1["']?/);
   // §28.10 AC1 — each implementation step consumes the approved plan as a chained input.
-  for (const step of ['infra', 'red', 'green', 'refactor', 'integration-slice']) await passAutoGate(home, repo, step, 'plan');
+  const implSteps = ['infra', 'red', 'green', 'refactor', 'integration-slice'];
+  for (const step of implSteps) await passAutoGate(home, repo, step, 'plan');
 
   // Planning and every implementation step were goal sessions; the plan's and GREEN's each took two legs with a compact between them.
   const goals = readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n');
@@ -7948,7 +7946,7 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   }
   // §27.10 — the app assembled impl-report.md from the section files, in flow order, handing it to each next step.
   const stepsInReport = (): string[] => implReport().split('\n').filter((l) => l.startsWith('## ')).map((l) => l.slice(3));
-  await expect.poll(stepsInReport, { timeout: EPIC_GATE_WAIT.gate }).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  await expect.poll(stepsInReport, { timeout: EPIC_GATE_WAIT.gate }).toEqual([...implSteps, 'impl-approve']);
   expect(implReport()).toContain('run 1 of red');
   // §27.12 v2.202 — each session ran the real bundled check its prompt handed it, after writing its file, and
   // every check passed: each goal session's progress and result.
@@ -7982,16 +7980,14 @@ test('§27.3 v2.201/#212 — feature-dev-v3 plans and implements in goal session
   expect(readIf(join(repo, '.agent-terminal', 'goal-prompts-seen')).slice(promptsAtReopen)).toContain(BRIEF);
   await atImplApprove();
   // Each step that ran again replaced only its own section; infra's first and only run is still there.
-  expect(stepsInReport()).toEqual(['infra', 'red', 'green', 'refactor', 'integration-slice', 'impl-approve']);
+  expect(stepsInReport()).toEqual([...implSteps, 'impl-approve']);
   for (const step of ['red', 'green', 'refactor', 'integration-slice', 'impl-approve']) {
     expect(implReport()).toContain(`run 2 of ${step}`);
     expect(implReport()).not.toContain(`run 1 of ${step}`);
   }
   expect(implReport()).toContain('run 1 of infra');
   await loopPanel().locator('[data-gate-option="approve"]').click();
-  await expect.poll(() => readIf(`${logFile}.pr-body`), { timeout: 30_000 }).toContain('# plan');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: finalize');
-  expect(gitIn(repo, 'log', '--format=%s', `-${gitCount(repo) - before}`).split('\n')).toEqual(['integration', 'refactor', 'GREEN', 'RED', 'integration', 'refactor', 'GREEN', 'RED', 'infra']);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

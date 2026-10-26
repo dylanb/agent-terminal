@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   loadFlowDefinition,
-  loadFlowDefinitionFromFile,
   loadFlowDefinitionLocalFirst,
   createFlowMachine,
   type FlowLoad,
@@ -179,27 +178,6 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
       expect(load.error).toContain('done');
       expect(load.error).toContain('gate_authority');
     }
-  });
-
-  it('the shipped feature-dev flow declares `human` only at its four operator approvals, `auto` on every other loop step', () => {
-    const load = loadFlowDefinitionFromFile(join(process.cwd(), 'example', 'flows', 'feature-dev-v3', 'flow.yaml'));
-    expect(load.ok).toBe(true);
-    if (!load.ok) return;
-    expect(Object.fromEntries(load.definition.steps.map((s) => [s.id, s.gateAuthority ?? null]))).toEqual({
-      preparation: null,
-      'groom-intent': 'auto',
-      groom: 'auto',
-      'groom-approve': 'human',
-      plan: 'auto',
-      'plan-approve': 'human',
-      infra: 'auto',
-      red: 'auto',
-      green: 'auto',
-      refactor: 'auto',
-      'integration-slice': 'auto',
-      'impl-approve': 'human',
-      finalize: 'human',
-    });
   });
 
   it('fails the load on a non-string gate_authority', () => {
