@@ -1,5 +1,5 @@
 import { ipcMain, type WebContents } from 'electron';
-import { CONTROLLER_CH, isTheme, SESSION_ID, type ControllerActivation, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
+import { CONTROLLER_CH, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
 
@@ -25,7 +25,7 @@ export function installControllerIpc(
     controller.dismiss(payload.id);
   });
   ipcMain.handle(CONTROLLER_CH.getTheme, (event, payload: ControllerThemeRequest): Theme => {
-    if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return 'light';
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_THEME;
     return settings.theme();
   });
   ipcMain.handle(CONTROLLER_CH.setTheme, (event, payload: ControllerThemeChoice) => {

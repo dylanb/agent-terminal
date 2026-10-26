@@ -358,6 +358,16 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     }
   });
 
+  it('shows session, agent and full-screen status but not paste mode', () => {
+    wireMonitorPane();
+    handlers.update!({ sessionId: 's1', altScreen: true, bracketedPaste: true, agentState: 'active', quietSince: null });
+    const shown = announcedText(status());
+    expect(shown).toContain('session: alive');
+    expect(shown).toContain('agent: working');
+    expect(shown).toContain('full-screen: yes');
+    expect(shown).not.toMatch(/paste/i);
+  });
+
   it('renders HTML metacharacters inert (textContent only, never innerHTML)', async () => {
     wireMonitorPane();
     await flush();

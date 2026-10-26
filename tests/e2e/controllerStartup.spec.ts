@@ -9,6 +9,7 @@ import { load } from 'js-yaml';
 import { seedTrustedFlow, autoGateFlowYaml } from './autoGateHarness';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { cardLocator } from '../helpers/controllerCards';
+import { STARTUP_CARD } from '../helpers/startupCard';
 
 const RETRY_OBSERVATION_MS = 8_100;
 const UNCONFIRMED_OBSERVATION_MS = 500;
@@ -24,7 +25,7 @@ for (const theme of ['light', 'dark']) {
     try {
       const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
       await terminal.page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-      await expect.soft(terminal.page.getByText(/start.*controller/i)).toBeVisible();
+      await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
       expect.soft(starts(h.fixture.root)).toBe('');
       await expect.poll(() => terminal.page.evaluate(() => document.readyState)).toBe('complete');
       const startsAtClose = starts(h.fixture.root);
@@ -43,10 +44,17 @@ test('startup automatically registers after controller launch and starts exactly
   const h = createControllerHarness();
   try {
     const terminal = await h.launch(terminalTarget, h.fixture.nonGit);
+    await expect(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeVisible();
+    const statuses = terminal.page.getByRole('status');
+    await expect.soft(statuses).toHaveCount(2);
+    await expect.soft(statuses.filter({ hasText: STARTUP_CARD.statusLine })).toHaveText(STARTUP_CARD.statusLine);
+    await expect.soft(statuses.filter({ hasNotText: STARTUP_CARD.statusLine })).toHaveText('');
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
     await expect.soft(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1, { timeout: RECOVERY_BOUND_MS });
     await expect.soft.poll(() => starts(h.fixture.root)).toBe('started\n');
     await expect(terminal.page.locator('.xterm-screen')).toBeVisible();
+    await expect.soft(terminal.page.getByRole('heading', { name: STARTUP_CARD.heading, exact: true })).toBeHidden();
+    await expect.soft(terminal.page.getByText(STARTUP_CARD.statusLine)).toBeHidden();
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('printf "STARTUP_%s\\n" "READY"');
     await terminal.page.keyboard.press('Enter');
@@ -112,7 +120,7 @@ for (const mode of ['delayed', 'silent', 'malformed', 'interrupted', 'late-after
         expect.soft(starts(h.fixture.root)).toBe(startsAtClose);
         expect(registrations).toHaveLength(1);
       } else {
-        await expect.soft(terminal.page.getByText(/start.*controller|controller.*start/i)).toBeVisible();
+        await expect.soft(terminal.page.getByText(STARTUP_CARD.explanation)).toBeVisible();
         await expect.soft(terminal.page.getByText(/build/i)).toBeVisible();
         await delay(RETRY_OBSERVATION_MS);
         expect.soft(starts(h.fixture.root)).toBe('');

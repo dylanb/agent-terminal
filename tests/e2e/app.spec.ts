@@ -68,6 +68,7 @@ let harnessBooted: boolean;
 const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${userDataDir}`];
 
 const termRows = () => page.locator('.xterm-rows');
+const outputLine = (text: string) => page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${text}\\s*$`) });
 
 // xterm routes keystrokes through a hidden textarea; under parallel-CI load, characters typed before
 // that textarea takes focus are dropped, mistyping the command (e.g. "exit" → "ex"). Click, then wait
@@ -296,9 +297,10 @@ test('Send from a todo pastes an editable command line at the prompt without sub
 });
 
 test('injection honors bracketed-paste mode read live from the shadow (§9.3)', async () => {
+  await typeCommand("PS1='PASTE-MODE-PROMPT> '");
   // Mode OFF (?2004l): an unfenced paste arrives with no bracket markers (§9.3). cat -v renders bytes.
-  await typeCommand('printf "\\x1b[?2004l"; cat -v');
-  await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('off');
+  await typeCommand('printf "\\x1b[?2004l"; echo PASTE-OFF-SET; cat -v');
+  await expect(outputLine('PASTE-OFF-SET')).toHaveCount(1);
   await inject('plain-text-in', true);
   await expect(termRows()).toContainText('plain-text-in');
   // Wait for cat's output as well as tty echo: the delayed submit CR must not split the next shell command.
@@ -308,15 +310,16 @@ test('injection honors bracketed-paste mode read live from the shadow (§9.3)', 
   // Mode ON (?2004h): the paste must be fenced by ESC[200~ … ESC[201~.
   await typeCommand('');
   await page.keyboard.press('Control+D');
-  await typeCommand('printf "\\x1b[?2004h"; cat -v');
-  await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('on');
+  await expect.poll(async () => (await page.locator('.xterm-rows > div').allTextContents()).map((line) => line.trim()).filter(Boolean).at(-1)).toBe('PASTE-MODE-PROMPT>');
+  await typeCommand('printf "\\x1b[?2004h"; echo PASTE-ON-SET; cat -v');
+  await expect(outputLine('PASTE-ON-SET')).toHaveCount(1);
   await inject('fenced-in', true);
   await expect(termRows()).toContainText(/\[200~fenced-in.*\[201~/);
 });
 
 test('embedded ESC[201~ in injected content cannot break out of paste mode', async () => {
-  await typeCommand('printf "\\x1b[?2004h"; cat -v');
-  await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('on');
+  await typeCommand('printf "\\x1b[?2004h"; echo BREAKOUT-ON-SET; cat -v');
+  await expect(outputLine('BREAKOUT-ON-SET')).toHaveCount(1);
   await inject('bad\x1b[201~rm', true);
   // The embedded ESC[201~ is stripped (§7.5/§9.3 breakout guard): payload arrives contiguous.
   await expect(termRows()).toContainText(/\[200~badrm.*\[201~/);

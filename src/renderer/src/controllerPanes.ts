@@ -1,7 +1,7 @@
 import { cardStatus, SUMMARY_CLASS, SUMMARY_LABELS, type CardStatusClass } from '../../shared/controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import { captureSubtreeFocus } from './dom';
-import type { ControllerApi, ControllerTerminal, Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerTerminal, type Theme } from '../../shared/ipc';
 import { createControllerCard, workConditions, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
 import { createThemeToggle } from './themeToggle';
@@ -69,7 +69,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const toggled = new Map<string, boolean>();
   host.append(header.element, list, alert, status);
   let themeToggle: { dispose(): void } | undefined;
-  void deps.controller.getTheme().catch((): Theme => 'light').then(theme => {
+  void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
     if (disposed) return;
     deps.applyTheme(theme);
     header.element.append(' ');

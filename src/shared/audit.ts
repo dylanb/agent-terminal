@@ -91,9 +91,49 @@ export function serializeDoc(doc: AuditHeader | AuditEvent): string {
   return `---\n${yaml.dump(doc)}`;
 }
 
+type FieldCheck = (value: unknown) => boolean;
+const textField: FieldCheck = (value) => typeof value === 'string';
+const numberField: FieldCheck = (value) => typeof value === 'number' && Number.isFinite(value);
+const nullableNumber: FieldCheck = (value) => value === null || numberField(value);
+const todoStatus: FieldCheck = (value) => value === 'active' || value === 'in_progress' || value === 'done';
+const flowStatus: FieldCheck = (value) => value === 'not_started' || value === 'in_progress' || value === 'done';
+
+// Each event's required fields are checked here before replay, including syntactically valid partial appends.
+const eventFields: {
+  [K in AuditEvent['type']]: Record<Exclude<keyof Extract<AuditEvent, { type: K }>, 'ts' | 'type'>, FieldCheck>
+} = {
+  'flow.started': { step: textField },
+  'flow.status': { from: flowStatus, to: flowStatus },
+  'step.entered': { step: textField },
+  'flow.completed': { step: textField },
+  'flow.terminated': {},
+  'todo.created': { id: textField, text: textField },
+  'todo.status': { id: textField, from: todoStatus, to: todoStatus },
+  'todo.text': { id: textField, text: textField },
+  'todo.deleted': { id: textField },
+  'input.resolved': { name: textField, value: textField },
+  'ticket.assoc': { ticket: numberField },
+  'pr.assoc': { pr: numberField },
+  'loop.status': { from: textField, to: textField },
+  'loop.iteration': { n: numberField },
+  'command': { source: textField, cmd: textField, exit: nullableNumber },
+  'outputs.snapshot': { pr: nullableNumber, files: (value) => Array.isArray(value) && value.every((file: unknown) =>
+    file !== null && typeof file === 'object' && 'path' in file && textField(file.path) && 'bytes' in file && numberField(file.bytes)) },
+  'loop.cost': { iteration: numberField, usd: numberField, unpriced: (value) => Array.isArray(value) && value.every(textField) },
+  'loop.ci': { iteration: numberField, total: numberField, passed: numberField, failed: numberField, pending: numberField },
+  'notify.failed': { reason: textField },
+};
+
+function isAuditEvent(value: unknown): value is AuditEvent {
+  if (!value || typeof value !== 'object') return false;
+  const doc = value as Record<string, unknown>;
+  if (!textField(doc.ts) || typeof doc.type !== 'string' || !Object.hasOwn(eventFields, doc.type)) return false;
+  return Object.entries(eventFields[doc.type as AuditEvent['type']]).every(([field, check]) => check(doc[field]));
+}
+
 /** Read a run's append-only stream into its header + ordered events, discarding a trailing partial
  *  document (a crash mid-append) by stopping at the first document that fails to parse (§25.3). */
-export function parseAuditStream(text: string): { header: AuditHeader | null; events: AuditEvent[] } {
+export function parseAuditStream(text: string): { header: AuditHeader | null; events: AuditEvent[]; incomplete: boolean } {
   const docs: string[] = [];
   let cur: string[] | null = null;
   for (const line of text.split('\n')) {
@@ -106,6 +146,7 @@ export function parseAuditStream(text: string): { header: AuditHeader | null; ev
   }
   if (cur) docs.push(cur.join('\n'));
 
+  let incomplete = false;
   let header: AuditHeader | null = null;
   const events: AuditEvent[] = [];
   for (let i = 0; i < docs.length; i++) {
@@ -113,16 +154,17 @@ export function parseAuditStream(text: string): { header: AuditHeader | null; ev
     try {
       parsed = yaml.load(docs[i]);
     } catch {
+      incomplete = true;
       break; // trailing partial / tail corruption — append-only means it can only be at the end
     }
     if (i === 0) {
       if (parsed && typeof parsed === 'object' && 'flow' in parsed) header = parsed as AuditHeader;
       continue;
     }
-    if (!parsed || typeof parsed !== 'object' || typeof (parsed as { type?: unknown }).type !== 'string') break;
-    events.push(parsed as AuditEvent);
+    if (!isAuditEvent(parsed)) { incomplete = true; break; }
+    events.push(parsed);
   }
-  return { header, events };
+  return { header, events, incomplete };
 }
 
 /** The events a flow transition produces, from the before/after view diff (§25.4/§25.5). `start`
@@ -225,7 +267,18 @@ export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final
  *  state they reconstruct — proof that a complete timeline is recoverable from the record alone. */
+export interface AuditVisit {
+  step: string;
+  entered: string;
+  exited: string | null;
+  elapsedMs: number | null;
+  completedTodoCount: number;
+  unfinishedTodos: (TodoLike & { deleted: boolean })[];
+}
+
 export interface RunTimeline {
+  coverage: 'complete' | 'incomplete' | 'unavailable';
+  visits: AuditVisit[];
   header: AuditHeader | null;
   events: AuditEvent[];
   flow: { status: FlowStatus; step: string };
@@ -244,9 +297,17 @@ export interface RunTimeline {
 
 /** Replay a run's stream into its ordered timeline and folded final state (§25.6), tolerating a
  *  trailing partial document (parseAuditStream stops at the first unparseable doc). */
-export function reconstructTimeline(text: string): RunTimeline {
-  const { header, events } = parseAuditStream(text);
+export function reconstructTimeline(text: string, run?: Pick<AuditHeader, 'repoPath' | 'flow' | 'started'>): RunTimeline {
+  const parsed = parseAuditStream(text);
+  let { header, events } = parsed;
+  const { incomplete } = parsed;
+  if (!header || (run && (header.repoPath !== run.repoPath || header.flow !== run.flow || header.started !== run.started))) {
+    header = null;
+    events = [];
+  }
   const tl: RunTimeline = {
+    coverage: header === null ? 'unavailable' : incomplete ? 'incomplete' : 'complete',
+    visits: [],
     header,
     events,
     flow: { status: 'not_started', step: '' },
@@ -260,8 +321,49 @@ export function reconstructTimeline(text: string): RunTimeline {
     costs: [],
     ci: [],
   };
-  const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
-  for (const e of events) {
+  const entered = enteredSteps(events);
+  let visit: AuditVisit | undefined;
+  const knownTodos = new Map<string, TodoLike & { deleted: boolean }>();
+  let visitTodos = new Map<string, TodoLike & { deleted: boolean }>();
+  const finishVisit = (exit?: string): void => {
+    if (!visit) return;
+    if (exit) {
+      visit.exited = exit;
+      const elapsed = Date.parse(exit) - Date.parse(visit.entered);
+      visit.elapsedMs = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null;
+    }
+    visit.completedTodoCount = [...visitTodos.values()].filter((t) => t.status === 'done').length;
+    visit.unfinishedTodos = [...visitTodos.values()].filter((t) => t.status !== 'done');
+  };
+  events.forEach((e, index) => {
+    const step = entered[index];
+    if (step !== null) {
+      finishVisit(e.ts);
+      visitTodos = new Map();
+      visit = { step, entered: e.ts, exited: null, elapsedMs: null, completedTodoCount: 0, unfinishedTodos: [] };
+      tl.visits.push(visit);
+    }
+    if (e.type === 'todo.created') {
+      const todo = { id: e.id, text: e.text, status: 'active' as const, deleted: false };
+      knownTodos.delete(e.id);
+      knownTodos.set(e.id, todo);
+      visitTodos.set(e.id, todo);
+    }
+    if (e.type === 'todo.status' || e.type === 'todo.text' || e.type === 'todo.deleted') {
+      const previous = knownTodos.get(e.id);
+      if (previous) {
+        const todo = { ...previous };
+        if (e.type === 'todo.status') todo.status = e.to;
+        if (e.type === 'todo.text') todo.text = e.text;
+        if (e.type === 'todo.deleted') todo.deleted = true;
+        knownTodos.set(e.id, todo);
+        visitTodos.set(e.id, todo);
+      }
+    }
+    if (e.type === 'flow.completed' || e.type === 'flow.terminated' || (e.type === 'flow.status' && e.to !== 'in_progress')) {
+      finishVisit(e.ts);
+      visit = undefined;
+    }
     switch (e.type) {
       case 'flow.started':
         tl.flow = { status: 'in_progress', step: e.step };
@@ -275,22 +377,6 @@ export function reconstructTimeline(text: string): RunTimeline {
         break;
       case 'flow.terminated':
         tl.flow = { status: 'not_started', step: '' };
-        break;
-      case 'todo.created':
-        tl.todos.push({ id: e.id, text: e.text, status: 'active' });
-        break;
-      case 'todo.status': {
-        const t = todoOf(e.id);
-        if (t) t.status = e.to;
-        break;
-      }
-      case 'todo.text': {
-        const t = todoOf(e.id);
-        if (t) t.text = e.text;
-        break;
-      }
-      case 'todo.deleted':
-        tl.todos = tl.todos.filter((t) => t.id !== e.id);
         break;
       case 'input.resolved':
         tl.inputs[e.name] = e.value;
@@ -320,7 +406,11 @@ export function reconstructTimeline(text: string): RunTimeline {
         tl.ci.push({ iteration: e.iteration, total: e.total, passed: e.passed, failed: e.failed, pending: e.pending });
         break;
     }
-  }
+  });
+  finishVisit();
+  tl.todos = [...knownTodos.values()]
+    .filter((todo) => !todo.deleted)
+    .map(({ id, text, status }) => ({ id, text, status }));
   return tl;
 }
 

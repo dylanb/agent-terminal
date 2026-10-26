@@ -8,7 +8,7 @@
 - **Quiescence detection** (§8.3): track whether the agent's output stream is **active** or **quiet** and publish transitions to the monitor pane — the "agent is probably waiting for you" signal, and the trigger the future semantic pipeline will scan on.
 - Full color (256-color / truecolor) and correct resize/reflow behavior (renderer and shadow stay in lockstep).
 - Mouse text selection in the terminal (app-owned, focus-independent model); driven entirely by the keyboard — Copy via the keymap (§7.7), Clear via Escape while a selection is active (§7.5.1).
-- A minimal **monitor pane**: lists captured blocks and live session status (working/quiet activity, alt-screen and bracketed-paste indicators); each block offers **Insert into agent** and **Insert & submit** actions.
+- A minimal **monitor pane**: lists captured blocks and live session status (working/quiet activity and alt-screen indicators); each block offers **Insert into agent** and **Insert & submit** actions.
 - A main-process **injection API** (`agent:inject`) used by the monitor pane: wraps text per the *live* bracketed-paste mode read from the shadow model, optionally appends a submit (`\r`).
 - Graceful handling of shell exit and window close.
 

@@ -1,6 +1,5 @@
 /// <reference lib="dom" />
 
-/** A controller window holding the § Card DOM contract's parts, for testing the card helpers. */
 export function cardContractDom(): HTMLElement {
   const host = document.createElement('main');
   host.id = 'controller';

@@ -2,7 +2,7 @@ import { electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
@@ -10,7 +10,10 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { gateDecisionDecider, gateDecisionKind, parseAutoHaltReasons, parseAuditStream } from '../../src/shared/audit';
 import { auditRepoDir, auditRootDir } from '../../src/main/auditPaths';
-import { readChangedTests, recordBaselineCommit, recordChangedTests } from '../../src/main/appLoopState';
+import { readChangedTests, recordBaselineCommit, recordChangedTests, writeAppLoopState } from '../../src/main/appLoopState';
+import { createFlowStateStore } from '../../src/main/flowState';
+import { recordDisposition } from '../../src/main/runDisposition';
+import { createTrustedPickups } from '../../src/main/trustedPickups';
 import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
 import { completionMarker } from '../../src/main/appWorkTurn';
@@ -19,6 +22,7 @@ import {
   b64,
   exampleConfigDir,
   goalBlockedCmd,
+  goalProgressCmd,
   seedFakeAgentSteps,
   seedFakeAgentV2,
   seedFakeGhGit,
@@ -35,6 +39,11 @@ import {
 } from './fakeTools';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
+import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
+import { resolveArtifactCheckScript } from '../../src/main/artifactCheck';
+import { seedAuditPublicationGh } from '../helpers/auditPublicationGh';
+import { createRequire } from 'node:module';
+import { seedFinalizeGit, seedScriptedGh } from '../helpers/finalizeFixtures';
 import {
   auditGateEntries,
   autoGateFlowYaml,
@@ -59,11 +68,13 @@ const loopTestBudget = (uiWaits: number, approves: number): number =>
 let app: ElectronApplication | undefined;
 let page: Page;
 const cleanup: string[] = [];
+const gitFixtures: GitRepoFixture[] = [];
 
 test.afterEach(async () => {
   await app?.close();
   app = undefined;
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const fixture of gitFixtures.splice(0)) fixture.cleanup();
 });
 
 const RED_RESULT_REL = '.agent-terminal/loop/artifacts/red-result.json';
@@ -993,6 +1004,320 @@ function seedFeatureDevAgent(binDir: string, opts: { blocked?: Record<string, nu
       'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
     },
   );
+}
+
+test('#251 implementation approval automatically injects final preparation into the working session', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(5, 1));
+  const home = tmp('agent-term-e2e-finalize-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-finalize-', 'impl-approve', { ticket: '251' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  await launchInto('agent-term-e2e-finalize-', repo, home, (binDir) => {
+    seedV3GoalAgent(binDir, 'fake-agent', { finalize: goalBlockedCmd('Readiness unverified: latest-head CI is pending.') }, {
+      'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
+    });
+  });
+  await flowControl().click();
+  await approveHumanStep(home, repo, 'impl-approve', LOOP_ROUND_MS);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'goal-commands-seen')), { timeout: APPROVE_ADVANCE_MS }).toMatch(/turn-done:work-finalize/);
+});
+
+const AUDIT_TRANSPORT_REPORT = [
+  '# Flow audit',
+  '## Scope and status',
+  'feature-dev-v3; ticket 251; PR 41. Development complete for reporting; human completion and merge remain.',
+  '## Execution and decisions',
+  '| Step | Decision | Rationale |',
+  '| plan | Keep the approved scope | Operator decision |',
+  '## Stage timeline and elapsed time',
+  'Recorded elapsed time is not active work. Finalize interval remains open.',
+  '## Exceptions, blocks and checklist outcomes',
+  'red visit 1: one completed item. Deleted unfinished question retained as history.',
+  '## Evidence gaps and follow-up',
+  'An outside-todo question has unavailable text and step attribution.',
+  '## Finalize work and PR readiness',
+  'Latest-head checks passed. Publication is being attempted; human handoff follows readback.',
+  '## Review findings and resolutions',
+  'green: existing implementation finding fixed; Copilot finding dismissed with recorded rationale.',
+  '## Sources',
+  'Controlled agent response for transport testing; narrative accuracy is not established by this fixture.',
+  completionMarker('finalize'),
+];
+
+test('#251 audit transport: the artifact opens, publication is captured, redo updates it and human completion remains explicit', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(12, 1));
+  const home = tmp('agent-term-e2e-audit-home-');
+  const repo = seedAutoGateRepo('agent-term-e2e-audit-', 'finalize', { ticket: '251' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  const ghBin = tmp('agent-term-e2e-audit-gh-');
+  const original = '# Implementation\n\nOperator context.\n\nCloses #251\n';
+  const report = (revision: number) => `${AUDIT_TRANSPORT_REPORT.slice(0, -1).join('\n')}\nRevision ${revision}\n${completionMarker('finalize')}\n`;
+  const body = (revision: number) => `${original}\n<!-- agent-terminal:flow-audit:start -->\n${report(revision)}<!-- agent-terminal:flow-audit:end -->\n`;
+  const artifactFor = (revision: number) => `.agent-terminal/audit-${revision}.md`;
+  for (const revision of [1, 2]) writeFileSync(join(repo, artifactFor(revision)), report(revision));
+  const gh = seedAuditPublicationGh(ghBin, original);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(ghBin, 'git'), `#!/bin/sh\nexec ${shellQuote(realGit)} "$@"\n`, { mode: 0o755 });
+  gh.set({ reject: true });
+  const runtime = createRequire(__filename)('electron') as string;
+  const publish = `PATH=${shellQuote(ghBin)}:$PATH ELECTRON_RUN_AS_NODE=1 ${shellQuote(runtime)} ${shellQuote(resolveArtifactCheckScript(join(process.cwd(), 'out/main')))} publish-flow-audit ${shellQuote(repo)} 41 "$ART"`;
+  const { logFile } = await launchInto('agent-term-e2e-audit-', repo, home, (binDir) => {
+    const run = [
+      `ART=$(sed -n 's/^As the final line of your \\(.*\\) artifact,.*/\\1/p' "$p" | head -1)`,
+      'n=1; [ ! -f .agent-terminal/audit-runs ] || n=2',
+      'mkdir -p "$(dirname "$ART")"',
+      'cp ".agent-terminal/audit-$n.md" "$ART"',
+      'printf "%s" "$ART" > .agent-terminal/audit-artifact-path',
+      `if ${publish} > .agent-terminal/publication-result.json 2> .agent-terminal/publication-error; then`,
+      'printf "%s" "$ART" > .agent-terminal/audit-artifact-path',
+      'printf "%s" "$n" > .agent-terminal/audit-runs',
+      goalProgressCmd('done'),
+      `else ${goalBlockedCmd('Readiness unverified: audit publication rejected. Retry publication after recovery.')}; fi`,
+    ].join('; ').replace('then;', 'then');
+    seedV3GoalAgent(binDir, 'fake-agent', { finalize: run }, {}, [
+      `    *"not a turn."*) printf x >> .agent-terminal/gate-question-seen ;;\n`,
+      `    *'Continue audit publication now.'*) ${run}; printf '%s' work-finalize > .agent-terminal/loop/turn-done ;;\n`,
+    ]);
+  });
+  gitIn(repo, 'remote', 'add', 'origin', 'https://github.com/fixture/project.git');
+  await flowControl().click();
+  await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: stop for a human');
+  await openLoopPanel();
+  await expect(loopPanel()).toContainText('audit publication rejected');
+  expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+  expect(readIf(join(repo, readIf(join(repo, '.agent-terminal/audit-artifact-path'))))).toBe(report(1));
+  expect(readIf(join(repo, '.agent-terminal/publication-error'))).toMatch(/gh.*failed/i);
+  expect(gh.read().body).toBe(original);
+  await expect.poll(() => readIf(join(repo, '.agent-terminal/gate-question-seen')), { timeout: UI_MS }).toBe('x');
+  await loopPanel().locator('[data-loop-close]').click();
+  gh.set({ reject: false });
+  await typeCommand('Continue audit publication now.');
+  for (const revision of [1, 2]) {
+    await expect.poll(() => readIf(join(repo, '.agent-terminal/audit-runs')), { timeout: LOOP_ROUND_MS }).toBe(String(revision));
+    await awaitHumanGate(home, repo, 'finalize', LOOP_ROUND_MS);
+    const artifact = readIf(join(repo, '.agent-terminal/audit-artifact-path'));
+    expect(artifact).toMatch(/^\.agent-terminal\/loop\/artifacts\/.*\.md$/);
+    expect(readIf(join(repo, artifact))).toBe(report(revision));
+    expect.soft(gh.read().body).toBe(body(revision));
+    expect.soft(gh.read().writes.at(-1)).toBe(body(revision));
+    expect(JSON.parse(readIf(join(repo, '.agent-terminal/publication-result.json')))).toEqual({ outcome: 'done' });
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    await loopPanel().locator('[data-loop-close]').click();
+    await page.keyboard.press('Control+2');
+    await page.locator('#artifacts .tree .f').filter({ hasText: artifact.split('/').at(-1) }).click();
+    await expect(page.locator('#artifacts .vbody')).toContainText(`Revision ${revision}`);
+    await expect(page.locator('#artifacts .vbody')).toContainText('Review findings and resolutions');
+    await page.keyboard.press('Control+1');
+    await openLoopPanel();
+    if (revision === 1) {
+      await loopPanel().locator('[data-gate-option="redo"]').click();
+      const composer = page.locator('#redo-composer-host .flow-modal');
+      await composer.locator('textarea').fill('Update the audit for the new revision.');
+      await composer.locator('.confirm').click();
+      await expect(composer).toBeHidden();
+    }
+  }
+  await expectSteady(() => flowState(repo), flowState(repo));
+  const auditDir = auditRepoDir(auditRootDir(home), repo);
+  const events = readdirSync(auditDir).flatMap((file) => parseAuditStream(readFileSync(join(auditDir, file), 'utf8')).events);
+  expect(events.some((event) => event.type === 'flow.completed')).toBe(false);
+  expect(readIf(logFile)).not.toMatch(/gh pr (?:merge|review)|copilot/i);
+  expect(gh.read().calls.every((args) => args[0] === 'repo' || (args[0] === 'pr' && ['view', 'edit'].includes(args[1])))).toBe(true);
+  await approveOption().click();
+  await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^status: done$/m);
+});
+
+test('#251 relaunch reconstructs finalization evidence and preserves the human stop', { tag: '@ownapp' }, async () => {
+  test.setTimeout(loopTestBudget(4, 0));
+  const home = tmp('at251-resume-');
+  const repo = seedAutoGateRepo('agent-term-e2e-finalize-resume-', 'finalize', { ticket: '176' });
+  cleanup.push(repo);
+  seedTrustedFlow(home, repo, FEATURE_DEV_ID, FEATURE_DEV_YAML);
+  const run = { flow: FEATURE_DEV_ID, startedAt: Date.parse('2026-10-24T10:00:00Z') };
+  recordDisposition(repo, { source: 'catalog', tier: 'global', id: FEATURE_DEV_ID });
+  createFlowStateStore(repo).write({ step: 'finalize', status: 'in_progress', ...run, inputs: { ticket: '176' } });
+  createTrustedPickups({ currentRun: () => run, persistFailed: (_repo, reason) => { throw new Error(reason); }, forgetFailed: (_repo, reason) => { throw new Error(reason); } })
+    .set(repo, { pr: 4242, issue: 176, branch: 'plan-loop/issue-176', initialStatus: 'planning' });
+  writeAppLoopState(repo, {
+    loop: 'finalize-loop', step: 'finalize', turnKey: 'work-finalize', status: 'complete',
+    verdict: 'stop for a human', verdictReason: 'Theme choice and billing need answers.',
+    goalSession: 'cafebabe', chainedInputs: ['impl-report'],
+  });
+  const loopDir = join(repo, '.agent-terminal', 'loop');
+  mkdirSync(join(loopDir, 'artifacts', 'impl-report'), { recursive: true });
+  writeFileSync(join(loopDir, 'artifacts', 'impl-report', 'green.md'), '## green\n\nThe fixture implementation is complete.\n');
+  writeFileSync(join(loopDir, 'goal-progress.cafebabe.json'), JSON.stringify({ leg: 1, status: 'blocked', blocked: 'Theme choice and billing need answers.' }));
+  writeFileSync(join(loopDir, 'turn-done'), 'work-finalize');
+
+  await launchInto('agent-term-e2e-finalize-resume-', repo, home, (binDir) => seedV3GoalAgent(binDir, 'fake-agent', {}), {}, null);
+  await openLoopPanel();
+
+  await expect(loopPanel()).toContainText('Theme choice and billing need answers.', { timeout: LOOP_ROUND_MS });
+  expect(runState(repo)).toContain('verdict: stop for a human');
+  expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+  expect(readIf(join(loopDir, 'artifacts', 'impl-report.md'))).toContain('The fixture implementation is complete.');
+  await expect(page.getByText('Maximum call stack size exceeded', { exact: false })).toHaveCount(0);
+});
+
+const PREPARATION_CASES = [
+  { name: 'conflict', reason: 'release conflicts need an intent decision', status: 0, response: '' },
+  { name: 'commit', reason: 'commit rejected; local changes remain uncommitted', status: 0, response: '' },
+  { name: 'push', reason: 'push rejected; the local commit is not on the PR', status: 0, response: '' },
+  { name: 'pending', reason: 'latest-head CI is pending', status: 8, response: 'pending' },
+  { name: 'failed', reason: 'latest-head CI failed; the scoped fix is not yet verified', status: 1, response: 'failed' },
+  { name: 'unavailable', reason: 'CI evidence is unavailable', status: 1, response: '' },
+  { name: 'empty', reason: 'no CI checks were returned', status: 0, response: '[]' },
+  { name: 'stale', reason: 'successful CI belongs to an earlier revision', status: 0, response: 'stale' },
+  { name: 'changed-head', reason: 'the remote head changed after verification', status: 0, response: 'changed-head' },
+] as const;
+
+for (const scenario of PREPARATION_CASES) {
+  test(`#251 goal protocol: ${scenario.name} remains unverified until current-revision preparation succeeds`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(loopTestBudget(14, 1));
+    const home = tmp('agent-term-e2e-finalize-protocol-home-');
+    const fx = createGitRepoFixture();
+    gitFixtures.push(fx);
+    const { repo, remote, base, head } = seedFinalizeGit(fx);
+    const scaffold = seedAutoGateRepo('agent-term-e2e-finalize-protocol-', 'finalize', { ticket: '251' });
+    cleanup.push(scaffold);
+    cpSync(join(scaffold, '.agent-terminal'), join(repo, '.agent-terminal'), { recursive: true });
+    fx.writeRepoFile(repo, '.gitignore', '.agent-terminal/\n');
+    fx.commitAll(repo, 'Ignore flow artifacts');
+    const oldHead = fx.git(repo, ['rev-parse', 'HEAD']);
+    if (scenario.name !== 'conflict') {
+      expect(() => fx.git(repo, ['merge', '--no-edit', `origin/${base}`])).toThrow();
+      expect(fx.git(repo, ['diff', '--name-only', '--diff-filter=U'])).toBe('policy.txt');
+      fx.writeRepoFile(repo, 'policy.txt', 'approved resolution\n');
+      fx.commitAll(repo, 'Previously reconciled implementation');
+    }
+    fx.git(repo, ['push', 'origin', head]);
+    fx.writeRepoFile(repo, '.agent-terminal/loop/bootstrap.yaml', `schema_version: 1\nstatus: complete\npr: 77\nbranch: ${head}\nissue: 251\ninitial_status: planning\nupdated_at: 2026-07-23T00:00:00.000Z\n`);
+    const before = fx.git(remote, ['rev-parse', head]);
+    const rejectingHook = scenario.name === 'commit' ? join(repo, '.git', 'hooks', 'pre-commit') : join(remote, '.git', 'hooks', 'pre-receive');
+    if (scenario.name === 'commit' || scenario.name === 'push') {
+      writeFileSync(rejectingHook, '#!/bin/sh\necho "rejected by fixture" >&2\nexit 1\n', { mode: 0o755 });
+      fx.writeRepoFile(repo, 'verification.txt', 'scoped CI fix\n');
+    }
+    const gh = seedScriptedGh(tmp('agent-term-e2e-finalize-gh-'));
+    const checks = ['pr', 'checks', '77', '--repo', 'fixture/repo'];
+    const firstResponse = scenario.name === 'stale'
+      ? JSON.stringify({ headRefOid: oldHead, conclusion: 'SUCCESS' })
+      : scenario.name === 'changed-head'
+        ? JSON.stringify({ headRefOid: before, conclusion: 'SUCCESS' })
+        : scenario.response;
+    const hasInitialCheck = !['conflict', 'commit', 'push'].includes(scenario.name);
+    const operatorBlock = !hasInitialCheck;
+    gh.script(hasInitialCheck ? [{ args: checks, stdout: firstResponse, stderr: scenario.name === 'unavailable' ? 'API unavailable' : '', exitCode: scenario.status }] : []);
+    const realGit = shellQuote(execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim());
+    const checkCommand = `${shellQuote(gh.command)} ${checks.map(shellQuote).join(' ')}`;
+    const config = tmp('agent-term-e2e-finalize-protocol-config-');
+    cpSync(exampleConfigDir, config, { recursive: true });
+    const def = join(config, 'loops-v2', 'finalize-protocol');
+    mkdirSync(def, { recursive: true });
+    writeFileSync(join(def, 'finalize-protocol.yaml'), [
+      'version: v2', 'name: finalize-protocol', 'work:', '  recipe: work.md', '  artifact: preparation',
+      '  goal: preparation has finished and is ready for the human', 'reviewers: []', 'boundaries: []', 'report:', '  sections: [summary]',
+      'gate:', '  - option: approve', '  - option: redo', 'outputs:', '  - id: preparation', '    path: preparation.md', '',
+    ].join('\n'));
+    writeFileSync(join(def, 'work.md'), 'Exercise the existing goal-session completion protocol.\n');
+    seedTrustedFlow(home, repo, 'finalize-protocol', [
+      'name: finalize-protocol', 'steps:', '  - id: finalize', '    kind: loop', '    loop: finalize-protocol',
+      '    loop_namespace: app', '    gate_authority: human', '',
+    ].join('\n'));
+    const reason = `Readiness unverified: ${scenario.reason}.`;
+    const { logFile } = await launchInto('agent-term-e2e-finalize-protocol-', repo, home, (binDir) => {
+      const signal = 'printf %s work-finalize > .agent-terminal/loop/turn-done';
+      const push = `${realGit} push origin ${shellQuote(head)}`;
+      const commit = `${realGit} add policy.txt verification.txt 2>/dev/null; ${realGit} add -u; ${realGit} commit -m 'Resolve approved intent'`;
+      const resolve = `printf '%s\\n' 'approved resolution' > policy.txt; ${realGit} add policy.txt && ${realGit} commit -m 'Resolve approved intent' && ${push}`;
+      const fix = `printf '%s\\n' 'verified scoped fix' > verification.txt; ${realGit} add verification.txt && ${realGit} commit -m 'Fix scoped CI failure' && ${push}`;
+      const actions: Record<string, { start: string; resume: string }> = {
+        conflict: { start: `${realGit} fetch origin ${shellQuote(base)}; ${realGit} merge --no-edit ${shellQuote(`origin/${base}`)}`, resume: resolve },
+        commit: { start: commit, resume: `${commit} && ${push}` },
+        push: { start: `${commit} && ${push}`, resume: push },
+        failed: { start: checkCommand, resume: fix },
+        'changed-head': { start: `${checkCommand}; ${fix}`, resume: ':' },
+      };
+      const action = actions[scenario.name] ?? { start: checkCommand, resume: ':' };
+      const waitFor = (file: string): string => `deadline=$((SECONDS + 20)); while [ ! -f ${shellQuote(file)} ]; do [ "$SECONDS" -lt "$deadline" ] || exit 98; sleep 0.05; done`;
+      const waitForChecks = `printf ready > .agent-terminal/checks-requested; ${waitFor('.agent-terminal/checks-ready')}`;
+      const finish = `${realGit} ls-remote origin ${shellQuote(`refs/heads/${head}`)} > .agent-terminal/verified-head; printf '%s\\n' ${shellQuote(completionMarker('finalize'))} > .agent-terminal/loop/artifacts/preparation.md; ${goalProgressCmd('done')}`;
+      const resume = `if ${action.resume}; then ${waitForChecks}; if ${checkCommand} > .agent-terminal/verified-ci; then ${finish}; fi; fi`;
+      const wait = operatorBlock ? goalBlockedCmd(reason) : `printf '%s\\n' ${shellQuote(reason)}; printf ready > .agent-terminal/awaiting-ci; ${waitFor('.agent-terminal/continue-preparation')}; ${resume}`;
+      seedV3GoalAgent(binDir, 'fake-agent', { finalize: `{ ${action.start}; } > .agent-terminal/initial-result 2>&1; printf '%s' "$?" > .agent-terminal/initial-exit; ${wait}` }, {}, [
+        `    *"not a turn."*) printf x >> .agent-terminal/gate-question-seen ;;\n`,
+        `    *"Continue preparation now"*) ${resume}; ${signal} ;;\n`,
+      ]);
+    }, { CLAUDE_CONFIG_DIR: config });
+    await flowControl().click();
+    if (operatorBlock) {
+      await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toContain('verdict: stop for a human');
+      await openLoopPanel();
+      await expect(loopPanel()).toContainText(reason);
+    } else {
+      await expect.poll(() => readIf(join(repo, '.agent-terminal', 'awaiting-ci')), { timeout: LOOP_ROUND_MS }).toBe('ready');
+      await expect(page.locator('.xterm-rows')).toContainText(reason);
+      expect(runState(repo)).toMatch(/^status: working$/m);
+    }
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    expect(existsSync(join(repo, '.agent-terminal', 'loop', 'artifacts', 'preparation.md'))).toBe(false);
+    const atBlock = fx.git(remote, ['rev-parse', head]);
+    if (scenario.name === 'changed-head') expect(atBlock).not.toBe(before);
+    else expect(atBlock).toBe(before);
+    if (scenario.name === 'conflict') expect(fx.git(repo, ['diff', '--name-only', '--diff-filter=U'])).toBe('policy.txt');
+    if (scenario.name === 'commit') {
+      expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(before);
+      expect(fx.git(repo, ['status', '--porcelain'])).not.toBe('');
+    }
+    if (scenario.name === 'push') expect(fx.git(repo, ['rev-parse', 'HEAD'])).not.toBe(before);
+    if (scenario.name === 'commit' || scenario.name === 'push') {
+      expect(readIf(join(repo, '.agent-terminal', 'initial-exit'))).not.toBe('0');
+      expect(readIf(join(repo, '.agent-terminal', 'initial-result'))).toContain('rejected by fixture');
+      rmSync(rejectingHook);
+    }
+    if (hasInitialCheck) {
+      expect(gh.calls().map((call) => call.args)).toEqual([checks]);
+      expect(readIf(join(repo, '.agent-terminal', 'initial-result'))).toContain(scenario.name === 'unavailable' ? 'API unavailable' : firstResponse);
+    }
+    if (['pending', 'empty', 'unavailable', 'stale'].includes(scenario.name)) {
+      expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(before);
+      expect(fx.git(repo, ['status', '--porcelain'])).toBe('');
+    }
+    const sessionCommands = readIf(join(repo, '.agent-terminal', 'goal-commands-seen'));
+    if (operatorBlock) {
+      await expect.poll(() => readIf(join(repo, '.agent-terminal', 'gate-question-seen')), { timeout: UI_MS }).toBe('x');
+      await loopPanel().locator('[data-loop-close]').click();
+      await typeCommand('Continue preparation now.');
+    } else {
+      writeFileSync(join(repo, '.agent-terminal', 'continue-preparation'), 'ready');
+    }
+    await expect.poll(() => readIf(join(repo, '.agent-terminal', 'checks-requested')), { timeout: UI_MS }).toBe('ready');
+    const pushed = fx.git(remote, ['rev-parse', head]);
+    gh.script([{ args: checks, stdout: JSON.stringify({ headRefOid: pushed, conclusion: 'SUCCESS' }) }]);
+    writeFileSync(join(repo, '.agent-terminal', 'checks-ready'), 'ready');
+    await awaitHumanGate(home, repo, 'finalize', LOOP_ROUND_MS);
+    expect(fx.git(repo, ['rev-parse', 'HEAD'])).toBe(pushed);
+    expect(fx.git(repo, ['show', 'HEAD:policy.txt'])).toBe('approved resolution');
+    expect(fx.git(repo, ['merge-base', 'HEAD', `origin/${base}`])).toBe(fx.git(repo, ['rev-parse', `origin/${base}`]));
+    if (['pending', 'empty', 'unavailable', 'stale'].includes(scenario.name)) expect(pushed).toBe(before);
+    if (scenario.name === 'changed-head') expect(pushed).toBe(atBlock);
+    if (['conflict', 'commit', 'push', 'failed'].includes(scenario.name)) expect(pushed).not.toBe(before);
+    expect(JSON.parse(readIf(join(repo, '.agent-terminal', 'verified-ci')))).toEqual({ headRefOid: pushed, conclusion: 'SUCCESS' });
+    expect(readIf(join(repo, '.agent-terminal', 'verified-head')).split(/\s/)[0]).toBe(pushed);
+    expect(gh.calls().map((call) => call.args)).toEqual(hasInitialCheck ? [checks, checks] : [checks]);
+    expect(readIf(join(repo, '.agent-terminal', 'goal-commands-seen'))).toBe(sessionCommands);
+    await expectSteady(() => flowState(repo), flowState(repo));
+    expect(flowState(repo)).toMatch(/^status: in_progress$/m);
+    expect(auditGateEntries(home, repo).filter((e) => gateDecisionKind(e.cmd)?.kind === 'decision')).toEqual([]);
+    const auditDir = auditRepoDir(auditRootDir(home), repo);
+    const events = readdirSync(auditDir).flatMap((file) => parseAuditStream(readFileSync(join(auditDir, file), 'utf8')).events);
+    expect(events.some((e) => e.type === 'flow.started')).toBe(true);
+    expect(events.some((e) => e.type === 'flow.completed')).toBe(false);
+    expect(readIf(logFile)).not.toMatch(/gh pr (?:merge|review)|copilot/i);
+    await approveOption().click();
+    await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^status: done$/m);
+  });
 }
 
 /** Wait, bounded, for `step`'s clean gate to wait on the operator; a halt or a stall fails naming what the gate shows. */

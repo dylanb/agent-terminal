@@ -211,7 +211,7 @@ test('controller retains disconnected identities while another terminal remains 
   } finally { await h.dispose(); }
 });
 
-test('clicking each pane focuses its original terminal after shell navigation', { tag: '@ownapp' }, async () => {
+test('Bring forward focuses each original terminal after shell navigation', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
@@ -232,7 +232,7 @@ test('clicking each pane focuses its original terminal after shell navigation', 
   } finally { await h.dispose(); }
 });
 
-test('clicking a pane restores its minimized terminal window', { tag: '@ownapp' }, async () => {
+test('Bring forward restores its minimized terminal window', { tag: '@ownapp' }, async () => {
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);

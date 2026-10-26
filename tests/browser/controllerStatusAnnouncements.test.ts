@@ -1,5 +1,6 @@
 import { page } from 'vitest/browser';
 import { expect, it } from 'vitest';
+import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 import '../helpers/rendererTokens';
 import { bringForwardIn, cardIn, statusRowIn } from '../helpers/controllerCards';

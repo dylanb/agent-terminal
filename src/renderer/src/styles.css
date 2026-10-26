@@ -625,6 +625,17 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-reason button, .controller-card-action { font:inherit; font-size:12px; }
 .controller-card-action { justify-self:start; margin-top:4px; }
 
-.startup-waiting { padding:calc(3 * var(--r)); height:100%; overflow:auto; overflow-wrap:anywhere; }
+.startup-waiting { display:flex; padding:calc(3 * var(--r)); height:100%; overflow:auto; overflow-wrap:anywhere; }
+/* auto margins, not align/justify-content:center: a centred card taller than the window would put its top out of scroll reach. */
+.startup-card { margin:auto; width:100%; max-width:36rem; padding:clamp(16px, 4vw, 32px); background:var(--card); color:var(--text); border:1px solid var(--hair); border-radius:var(--r); }
+.startup-card > * { margin:0 0 12px; }
+.startup-card > :last-child { margin-bottom:0; }
+.startup-label { color:var(--dim); font-size:13px; font-weight:600; letter-spacing:.04em; }
+.startup-heading { font-family:"Fraunces",Georgia,serif; font-size:28px; font-weight:600; line-height:1.2; }
+.startup-steps { padding-left:1.25em; }
+.startup-steps li + li { margin-top:6px; }
+.startup-steps code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.9em; }
+.startup-status { display:flex; align-items:baseline; gap:8px; padding-top:12px; border-top:1px solid var(--hair); color:var(--dim); }
+.startup-dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--status-needs-human); }
 
 .controller-status-announcement { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }

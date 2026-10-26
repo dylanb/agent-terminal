@@ -1,5 +1,7 @@
 ## 27. In-terminal loop engine — the live design
 
+**#251, v3 finalization:** `finalize-loop` uses the existing reviewerless goal protocol and blocked-answer continuation. Its explicit associated PR/repository, actual target, approved intent, commit/push results, required local verification and latest-remote-head CI establish preparation readiness. Pending or unavailable checks remain visibly unverified, even without a new push; changed-head evidence must be reassessed immediately before handoff. Publication failure cannot complete work. The human approve/redo gate adds no side effects and never merges the PR; only human approval advances the flow to completion. No new scheduler, lifecycle state or review round is added.
+
 > **Status:** requirements, drafted **v2.135** from an operator interview. **This is the live loop design; §26 is deleted.** The v2.99 engine (decisions **D41–D62**) shipped as tracer bullets L1–L8; it worked, and it was **replaced rather than extended** because its cost and latency were symptoms of machinery the loop does not need. Its decisions are **retired** — where a D-number survives, it is restated here as an **N-decision**; where it does not appear here, it is **gone** (the retirement map is §27.14). The new decisions are **N1–N14**.
 >
 > **Why a new section number rather than a rewrite of §26.** The two engines **coexist in the tree** while this one is built (§27.15), so the spec must be able to describe both at once without ambiguity. Rewriting §26 in place would also have reused nine of its thirteen subsection numbers for different concepts, silently redirecting roughly 800 `§26.x` citations in `src/` and `tests/` — and every historical changelog entry from v2.99 to v2.132 — to clauses whose meaning had changed underneath them. A new number costs nothing and keeps every existing citation true. §26 is deleted, with the code it specifies, at the N8 sweep.
@@ -397,3 +399,18 @@ Per the CLAUDE.md tracer-bullet rule, each slice spans main → `src/shared/ipc.
 - **N9 — Epic promotion: the plan fans out into a chain.** Approving a plan classified an epic raises the **confirm-first** preview and, on confirmation, creates one sub-ticket per slice (§27.10) — AC slice, plan verbatim with the slice delimited, epic link, preceding slice's issue number — turns the epic into a tracking issue, then **closes the epic planning PR and terminates the flow** (slice 1 is a uniform sibling picked up by hand — P7b, §28.8; not the earlier re-point design). Resumable and idempotent. **Fire:** approve an epic plan. **Land:** the preview names every sub-ticket before anything is created; on confirm the chain exists on GitHub and the epic carries its checklist; re-approving creates nothing further. **e2e:** the fake-agent writes an epic plan, with `gh` recorded.
 - **N10 — Picking up a sub-ticket: reconstruct and skip to impl.** A ticket carrying the sub-ticket marker enters at groom; the app rebuilds the groomed-ticket and plan artifacts from the **body as it stands**, and the flow advances to **impl** without running groom or plan (§27.10). **Fire:** pick up a sub-ticket in a fresh worktree. **Land:** the flow lands at impl with both artifacts present and the operator's body edits honoured; a body malformed where the reconstruction reads it creates nothing and surfaces why.
 - **N11 — Stacked bases.** Slice k's pickup bases its branch and draft PR on slice k−1's branch, derived from k−1's issue number through the `pickup` branch template, falling back to the epic's base **and saying so** when that branch is absent (§27.10). **Fire:** pick up slice 2 while slice 1 is in review. **Land:** the PR targets slice 1's branch; picking up slice 3 with no slice-2 branch bases on the epic's base and names the slice it expected to stack on.
+
+
+### #251 — work-time audit publication access
+
+The bundled agent runtime also accepts `publish-flow-audit <repo> <PR> <artifact>`. The recipe uses the
+explicitly verified target identity; the runtime confines the artifact to the repository's flow artifacts,
+resolves the GitHub repository through the existing repository source, reads the PR description and
+maintains the report beneath it in one marked section. It uses structured command arguments and sends the composed body as stdin data,
+preserving unrelated content and closing references. Audit publication depends only on reading and
+replacing PR-body text; artifact loading stays at the installed command boundary. Publication errors remain failures with
+local evidence retained. Reruns replace the existing section, moving it below any trailing operator context.
+Missing, reversed, nested or duplicate delimiters reject publication before a write; report artifacts
+containing reserved delimiters are likewise rejected. Publication succeeds only after the entire remote
+body matches the composed description and report. Failed writes or readback leave readiness unverified
+and permit retry with the retained artifact. No human-gate publication side effect is added.

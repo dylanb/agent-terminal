@@ -1,5 +1,7 @@
 ## 25. Flow audit record (per-run, append-only)
 
+**#251, finalization lifecycle:** Entering v3 finalize and preparing its summary leave the flow in progress. Development-complete is a reporting convention only; it neither emits `flow.completed` nor substitutes for human flow completion. Preparation records its own decisions, revision-linked verification and failures using existing evidence. The complete maintained audit report and verified publication precede the human handoff; neither introduces telemetry or a completion event.
+
 ### 25.1 Goal & boundary (D-audit-1)
 
 Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the loop status/iteration, and the commands the flow issued on the user's behalf.
@@ -122,3 +124,18 @@ Per the CLAUDE.md tracer-bullet rule, each slice is fired by an **existing UI co
 
 ---
 
+
+
+### #251 — installed audit evidence access
+
+The installed agent runtime exposes `audit-evidence <repo>` using the persisted flow identity and the
+recorder's shared audit path derivation. It checks the header's absolute repository path, flow and start
+time, so a basename collision cannot supply another run's evidence. Missing/unreadable/mismatched
+history is unavailable; a truncated stream retains usable events with incomplete coverage. Shared
+reconstruction retains ordered visits, open intervals, elapsed durations and visit-attributed completed
+checklist counts and edited/deleted unfinished items. Elapsed time is not active-work time.
+
+The v3 report uses all eight sections specified in #251 and supplements historical audit evidence with
+step reports, Git/GitHub results and finalization's own work. Missing facts remain unavailable and costs
+are omitted. Development-complete language on entering finalize is a reporting convention: it neither
+changes engine state nor invents a completion event. The absence of that event alone is not a defect.

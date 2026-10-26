@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isTheme, type Theme } from '../shared/ipc';
+import { CONTROLLER_DEFAULT_THEME, isTheme, type Theme } from '../shared/ipc';
 import { atomicWriteFileSync } from './atomicFile';
 import { errMsg } from './errno';
 import { isRecord } from './yamlRecord';
@@ -16,9 +16,9 @@ export function createControllerSettingsStore(userDataDir: string): ControllerSe
     theme() {
       try {
         const saved: unknown = JSON.parse(readFileSync(file, 'utf8'));
-        return isRecord(saved) && isTheme(saved.theme) ? saved.theme : 'light';
+        return isRecord(saved) && isTheme(saved.theme) ? saved.theme : CONTROLLER_DEFAULT_THEME;
       } catch {
-        return 'light';
+        return CONTROLLER_DEFAULT_THEME;
       }
     },
     saveTheme(theme) {

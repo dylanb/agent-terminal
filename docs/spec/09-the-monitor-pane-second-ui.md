@@ -10,7 +10,7 @@ The monitor pane **talks only to main-process APIs** (`window.monitor.*` — §6
 
 ### 9.2 Skeleton UI
 
-- **Status strip:** session alive/exited (the "exited" state is transient — the app terminates on shell exit, §5); **activity indicator** — `working` (output flowing) / `quiet` (no output ≥ 1 s), with a "quiet for _N_ s" counter derived from `quietSince`; `altScreen` indicator ("agent is full-screen"); `bracketedPaste` indicator. Driven by `monitor:update`.
+- **Status strip:** session alive/exited (the "exited" state is transient — the app terminates on shell exit, §5); **activity indicator** — `working` (output flowing) / `quiet` (no output ≥ 1 s), with a "quiet for _N_ s" counter derived from `quietSince`; `altScreen` indicator ("agent is full-screen"). `bracketedPaste` is not displayed. Driven by `monitor:update`.
 - **Captured blocks list:** each `monitor:event` of type `capture` appends a block showing its text (monospace, scrollable if long) and timestamp.
 - **Per-block actions:**
   - **Insert into agent** → `monitor.inject({ text, submit: false })` — places the text in the agent's input box as one editable block; nothing runs.

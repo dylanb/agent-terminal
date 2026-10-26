@@ -20,7 +20,6 @@ export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTermi
 export const SUMMARY_LABELS = ['errors', 'need a human', 'idle', 'working'] as const;
 export type SummaryLabel = (typeof SUMMARY_LABELS)[number];
 
-/** One terminal and the status the ticket's § Status of a card table gives it (first matching row wins). */
 export interface StatusCase {
   terminal: ControllerTerminal;
   text: string;
@@ -61,8 +60,7 @@ const CASES = {
 export type StatusCaseKey = keyof typeof CASES;
 
 /**
- * Every row of the ticket's status table, plus the overlaps its order settles. Written from the ticket, never
- * from the production classifier, so it stays an independent oracle.
+ * Written independently of the production classifier, never derived from it, so it stays an independent oracle.
  */
 export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.fromEntries(
   Object.entries(CASES).map(([key, [terminal, text, statusClass, summary]]) => [key, { terminal, text, statusClass, summary }]),

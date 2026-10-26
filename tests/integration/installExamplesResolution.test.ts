@@ -94,7 +94,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
 });
 
 describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)', () => {
-  it('installs the full-TDD chain groom-intent → groom → groom-approve → plan → plan-approve → infra → red → green → refactor → integration-slice → impl-approve on the app namespace', () => {
+  it('installs the full-TDD chain groom-intent → groom → groom-approve → plan → plan-approve → infra → red → green → refactor → integration-slice → impl-approve → finalize on the app namespace', () => {
     applyInstallExamples(dirs, []);
 
     const loaded = loadFlowDefinitionLocalFirst(repo, home);
@@ -120,7 +120,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
       { ...implStep('refactor', 'refactor-loop'), repeat: { backTo: 'red', countInput: 'slices' } },
       implStep('integration-slice', 'integration-slice-loop'),
       appStep('impl-approve', 'impl-approve-loop', 'human'),
-      { id: 'finalize', kind: 'manual', todoTemplate: 'polish' },
+      { ...appStep('finalize', 'finalize-loop', 'human'), todoTemplate: 'finalize' },
     ]);
   });
 

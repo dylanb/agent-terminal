@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 import { SUMMARY_LABELS } from './controllerStatusFixture';
 
-// The § Card DOM contract, spelt once. Playwright pages and locators and vitest-browser `page` and locators all
+// Playwright pages and locators and vitest-browser `page` and locators all
 // satisfy `RoleScope`, so the browser tests and the e2e locate cards with the same role-and-name queries; the
 // `…In` functions are the jsdom counterparts, which match the `aria-label` or else the text, because jsdom here
 // has no accessible-name engine.
