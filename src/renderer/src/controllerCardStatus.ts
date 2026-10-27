@@ -20,7 +20,8 @@ export interface CardStatus {
   summary: SummaryLabel;
 }
 
-function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
+function textAndClass(terminal: ControllerTerminal & { instanceCount?: number }): [string, CardStatusClass] {
+  if ((terminal.instanceCount ?? 1) > 1) return ['Duplicate directory', 'error'];
   const work = terminal.work;
   if (terminal.status === 'disconnected') return ['Disconnected', 'error'];
   if (work?.error) return ['Flow error', 'error'];
@@ -34,7 +35,7 @@ function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
   return ['Working', 'working'];
 }
 
-export function cardStatus(terminal: ControllerTerminal): CardStatus {
+export function cardStatus(terminal: ControllerTerminal & { instanceCount?: number }): CardStatus {
   const [text, statusClass] = textAndClass(terminal);
   return { text, statusClass, summary: SUMMARY_OF[statusClass] };
 }

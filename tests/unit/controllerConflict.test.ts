@@ -213,3 +213,14 @@ describe('activation of captured directory connections', () => {
   });
 
 });
+
+it('announces that the directory conflict cleared when its last connections depart', () => {
+  const { host, service, dispose } = mountControllerPanes({ terminals: members.slice(0, 2) });
+  try {
+    service.publish([{ ...members[1], status: 'disconnected' }]);
+    const announcement = host.querySelector('[role="status"]')?.textContent;
+    expect(announcement).toContain(directory);
+    expect(announcement).toMatch(/(?:duplicate|conflict).*clear/i);
+    expect(announcement).not.toMatch(/Approve|Error blue/);
+  } finally { dispose(); }
+});

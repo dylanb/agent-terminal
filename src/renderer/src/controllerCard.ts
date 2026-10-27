@@ -4,7 +4,7 @@ import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc'
 import { createClampedReason, type ClampedReason } from './clampedReason';
 
 export interface ControllerCardDeps {
-  terminal: ControllerTerminal;
+  terminal: ControllerTerminal & { instanceCount?: number };
   expandedByDefault: boolean;
   onBringForward(): void;
   onDismiss(): void;
@@ -16,7 +16,7 @@ type Focus = 'header' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
 export interface CardState {
-  readonly [HANDOVER]: { chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
+  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
 }
 
 export interface ControllerCard {
@@ -44,6 +44,9 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const { terminal } = deps;
   const doc = host.ownerDocument;
   const status = cardStatus(terminal);
+  const count = terminal.instanceCount ?? 1;
+  const duplicate = count > 1;
+  const statusText = duplicate ? `${status.text} · ${count} instances` : status.text;
   const carried = deps.from?.[HANDOVER];
   const reasons: { text: string; reason: ClampedReason }[] = [];
   const fullReasons = new Set<string>();
@@ -71,7 +74,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const directoryText = element('bdi', '', terminal.launchDirectory);
   directoryText.dir = 'ltr';
   directory.append(directoryText);
-  const statusLabel = element('span', 'controller-card-label', status.text);
+  const statusLabel = element('span', 'controller-card-label', statusText);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
   toggle.setAttribute('aria-controls', `${cardId}-body`);
@@ -81,7 +84,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   const body = element('div', 'controller-card-body');
   body.id = `${cardId}-body`;
-  const statusRow = element('p', 'controller-card-status', status.text);
+  const statusRow = element('p', 'controller-card-status', statusText);
   statusRow.dataset.testid = 'card-status';
   body.append(statusRow);
   card.append(header, ' ', body);
@@ -100,9 +103,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   if (actionKind === 'dismiss') {
     actionButton = action('Dismiss', 'Dismiss disconnected terminal', deps.onDismiss);
   } else {
-    if (terminal.work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
+    if (duplicate) body.append(' ', element('p', 'controller-card-line', 'Bring the terminals forward and close extra instances so only one remains.'));
+    else if (terminal.work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
     else if (terminal.work) appendWork(terminal.work);
-    actionButton = action('Bring forward', 'Bring forward', deps.onBringForward);
+    const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
+    actionButton = action(label, `${label} ${finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)}`, deps.onBringForward);
   }
   body.append(' ', actionButton);
 
@@ -143,7 +148,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     }
   }
 
-  let chosenExpanded = carried?.chosenExpanded;
+  let chosenExpanded = carried?.disconnected && terminal.status !== 'disconnected' ? undefined : carried?.chosenExpanded;
   let expanded = chosenExpanded ?? deps.expandedByDefault;
   function setExpanded(next: boolean): void {
     const held = body.contains(doc.activeElement);
@@ -179,7 +184,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
+    state: () => ({ [HANDOVER]: { disconnected: terminal.status === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {
