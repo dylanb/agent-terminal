@@ -1,4 +1,5 @@
 import { cardStatus, workConditions, type WorkCondition } from './controllerCardStatus';
+import { ACTIVITY_WORDS } from '../../shared/controllerCardClassification';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
 import { createClampedReason, type ClampedReason } from './clampedReason';
@@ -30,9 +31,6 @@ export interface ControllerCard {
 const TICKET_TEXT = { none: 'No ticket', loading: 'Ticket loading', unavailable: 'Ticket unavailable' } as const;
 const TITLE_TEXT = { loading: 'Title loading', unavailable: 'Title unavailable' } as const;
 const FLOW_TEXT = { loading: 'Flow loading', unavailable: 'Flow unavailable' } as const;
-const ACTIVITY_TEXT: Readonly<Record<ControllerWorkStatus['activity'], string>> = {
-  active: 'Active', quiet: 'Idle', unavailable: 'Activity unavailable',
-};
 
 let nextCardId = 0;
 
@@ -122,7 +120,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   function appendWork(work: ControllerWorkStatus): void {
     const flow = work.flow.availability === 'known' ? `Flow: ${work.flow.name} — Step: ${work.flow.step}` : FLOW_TEXT[work.flow.availability];
-    body.append(' ', ticketLine(work), ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', ACTIVITY_TEXT[work.activity]));
+    body.append(' ', ticketLine(work), ' ', element('p', 'controller-card-line', flow), ' ', element('p', 'controller-card-line', ACTIVITY_WORDS[work.activity]));
     for (const condition of workConditions(work)) appendCondition(condition);
   }
 
