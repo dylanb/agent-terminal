@@ -20,17 +20,17 @@ for (const stage of ['unassigned', 'assigned', 'completed'] as const) {
       seedTrustedFlow(h.fixture.home, repo, 'status-delivery', autoGateFlowYaml([{ id: 'implement', kind: 'manual' }], 'status-delivery'));
       writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: implement\nstatus: not_started\n');
       const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-      let status = await observeStatus(controller.page, repo, { stage: /unassigned/i, activity: /active|idle|quiet/i, ticket: /no flow run started/i }, { start: 'registration' });
+      let status = await observeStatus(controller.page, repo, { stage: /unassigned/i, activity: /\b(?:working|idle)\b|activity unavailable/i, ticket: /no flow run started/i }, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       const control = terminal.page.locator('#flow-strip .flow-control');
       await expect(control).toHaveText('Start');
       if (stage !== 'unassigned') {
-        status = await observeStatus(controller.page, repo, { stage: /\b(?:working|idle)\b/i, activity: /active|idle|quiet/i, ticket: /no ticket/i });
+        status = await observeStatus(controller.page, repo, { stage: /\b(?:working|idle)\b/i, activity: /\b(?:working|idle)\b|activity unavailable/i, ticket: /no ticket/i });
         await control.click();
         await expect(control).toHaveText('Advance');
       }
       if (stage === 'completed') {
-        status = await observeStatus(controller.page, repo, { stage: /completed/i, activity: /active|idle|quiet/i, ticket: /no ticket/i });
+        status = await observeStatus(controller.page, repo, { stage: /completed/i, activity: /\b(?:working|idle)\b|activity unavailable/i, ticket: /no ticket/i });
         await control.click();
         await expect(control).toHaveText('Restart');
       }

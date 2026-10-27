@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { bringForwardIn, cardHeaderIn, cardIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, headerLabels, statusRowIn, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusTerminal, type StatusCase } from '../helpers/controllerStatusFixture';
 
@@ -24,7 +24,7 @@ function expanded(host: HTMLElement, directory: string): boolean | string {
 }
 
 const working = { ...statusTerminal(), id: 'working', launchDirectory: '/cards/working' };
-const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] } }), id: 'working', launchDirectory: '/cards/working' };
+const blocked = { ...statusTerminal({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }), id: 'working', launchDirectory: '/cards/working' };
 const peer = { ...statusTerminal({ activity: 'quiet' }), id: 'peer', launchDirectory: '/cards/peer' };
 
 describe('the default collapse rule', () => {
@@ -102,6 +102,33 @@ describe('an untoggled card follows the rule', () => {
       const kept = cardIn(host, '/cards/blocked');
       expect({ collapsed: expanded(host, peer.launchDirectory) === false, focused: Boolean(kept) && document.activeElement === (kept && bringForwardIn(kept)) })
         .toEqual({ collapsed: true, focused: true });
+    } finally { dispose(); }
+  });
+});
+
+describe('an activity change alone', () => {
+  it('changes an untoggled one-column card\'s written status, open state and the summary counts in the same update, keeping its place', () => {
+    const gated = (row: StatusCase) => ({ ...row.terminal, id: 'gated', launchDirectory: '/cards/gated', repositoryRoot: '/cards' });
+    const [busy, quiet] = [STATUS_CASES['needs-human-working'], STATUS_CASES['needs-human']];
+    const { host, service, dispose } = mountControllerPanes({ terminals: [peer, gated(busy)], oneColumn: true });
+    try {
+      const read = (row: StatusCase) => {
+        const card = cardIn(host, '/cards/gated');
+        return {
+          status: card ? statusRowIn(card)?.textContent?.trim() : 'no card',
+          expanded: expanded(host, '/cards/gated'),
+          order: [peer.launchDirectory, '/cards/gated'].map(directory => cardsIn(host).findIndex(c => c === cardIn(host, directory))),
+          countsNotShown: unshownCounts(windowHeaderIn(host)?.textContent ?? '', headerLabels(label => [STATUS_CASES.idle.summary, row.summary].filter(summary => summary === label).length, 2, 2)),
+        };
+      };
+      const whileWorking = read(busy);
+      service.publish([peer, gated(quiet)]);
+      const onceIdle = read(quiet);
+      service.publish([peer, gated(busy)]);
+      const workingAgain = read(busy);
+      const shown = (c: StatusCase, open: boolean) => ({ status: c.text, expanded: open, order: [0, 1], countsNotShown: [] });
+      expect({ whileWorking, onceIdle, workingAgain })
+        .toEqual({ whileWorking: shown(busy, false), onceIdle: shown(quiet, true), workingAgain: shown(busy, false) });
     } finally { dispose(); }
   });
 });

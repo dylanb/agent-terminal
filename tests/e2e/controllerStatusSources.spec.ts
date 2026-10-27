@@ -103,7 +103,7 @@ test('real PTY activity remains visible without a started flow and never implies
     await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Start');
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('while :; do printf "SCREEN_ACTIVITY_%s\\n" "$RANDOM"; sleep 0.1; done');
-    const activityStatus = await observeStatus(controller.page, repo, { active: /active/i, unassigned: /unassigned/i });
+    const activityStatus = await observeStatus(controller.page, repo, { active: /working/i, unassigned: /unassigned/i });
     await terminal.page.keyboard.press('Enter');
     await expect(terminal.page.locator('.xterm-rows')).toContainText('SCREEN_ACTIVITY_');
     const pane = cardLocator(controller.page, repo);

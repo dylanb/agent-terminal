@@ -22,15 +22,19 @@ interface Alternatives<L> {
   or(other: L): L;
 }
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /** Matches `directory` as a whole path, so `/w/a` does not match a name holding `/w/ab` or `/w/a/b`. */
 export function directoryPattern(directory: string): RegExp {
-  const escaped = directory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![\\w./-])${escaped}(?![\\w./-])`);
+  return new RegExp(`(?<![\\w./-])${escapeRegExp(directory)}(?![\\w./-])`);
 }
 
 export const cardsLocator = <L>(scope: RoleScope<L>): L => scope.getByRole('article');
 export const cardLocator = <L>(scope: RoleScope<L>, directory: string): L =>
   scope.getByRole('article', { name: directoryPattern(directory) });
+/** The card for `directory` only while its accessible name also holds `text`. */
+export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text: string): L =>
+  scope.getByRole('article', { name: new RegExp(`^(?=[\\s\\S]*${directoryPattern(directory).source})(?=[\\s\\S]*${escapeRegExp(text)})`) });
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Bring forward' });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
 export const showFullReasonLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Show full reason' });

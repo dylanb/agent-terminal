@@ -69,13 +69,13 @@ describe('controller card header control', () => {
 
 describe('controller card body', () => {
   it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward last', () => {
-    const { terminal } = STATUS_CASES['flow-error-and-human'];
+    const { terminal, text } = STATUS_CASES['flow-error-and-human'];
     const { element } = mount(terminal);
     const status = element ? statusRowIn(element)?.textContent?.trim() : undefined;
     expect([
-      ...(status === 'Flow error' ? [] : [`status row reads ${status}`]),
+      ...(status === text ? [] : [`status row reads ${status}`]),
       ...missingInOrder(element?.textContent ?? '', [
-        'Flow error', '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Active',
+        text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Idle',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
       ...(element && isLastElement(element, bringForwardIn(element)) ? [] : ['Bring forward is not the last element']),
@@ -91,10 +91,19 @@ describe('controller card body', () => {
     ['an unavailable ticket', withWork({ ticket: { availability: 'unavailable' } }), ['Ticket unavailable']],
     ['a loading flow', STATUS_CASES['flow-loading'].terminal, ['Flow loading']],
     ['an unavailable flow', STATUS_CASES['flow-unavailable'].terminal, ['Flow unavailable']],
-    ['unavailable activity', STATUS_CASES['working-activity-unavailable'].terminal, ['Activity unavailable']],
   ] as const)('shows the alternative text for %s', (_, terminal, texts) => {
     const { element } = mount(terminal);
     expect(missingInOrder(element?.textContent ?? '', texts)).toEqual([]);
+  });
+
+  it.each([
+    ['active', 'Working'], ['quiet', 'Idle'], ['unavailable', 'Activity unavailable'],
+  ] as const)('reads the %s activity line, after the flow line, as %s', (activity, word) => {
+    const { element } = mount(withWork({ activity, attention: { status: 'needs a human', reasons: ['Approve the plan'] } }));
+    const text = element?.textContent ?? '';
+    const flowLine = 'Flow: feature-dev — Step: implement';
+    const afterFlow = text.slice(text.indexOf(flowLine) + flowLine.length);
+    expect({ flowLine: text.includes(flowLine), activityLine: afterFlow.trimStart().slice(0, word.length) }).toEqual({ flowLine: true, activityLine: word });
   });
 
   it('shows the activity apart from the status text', () => {
@@ -115,7 +124,7 @@ describe('controller card body', () => {
       ...(element && statusRowIn(element)?.textContent?.trim() === status ? [] : ['wrong status row']),
       ...missingInOrder(element?.textContent ?? '', extra),
       ...(element && bringForwardIn(element) ? [] : ['no Bring forward']),
-      ...['#', 'Ticket', 'No ticket', 'No flow run started', 'Flow', 'Active', 'Idle', 'Activity'].filter(line => text.includes(line)).map(line => `shows "${line}"`),
+      ...['#', 'Ticket', 'No ticket', 'No flow run started', 'Flow', 'Working', 'Idle', 'Activity'].filter(line => text.includes(line)).map(line => `shows "${line}"`),
     ]).toEqual([]);
   });
 
@@ -139,7 +148,7 @@ describe('controller card body', () => {
     expect([
       ...(element ? [] : ['no card']),
       ...(element && statusRowIn(element)?.textContent?.trim() === 'Disconnected' ? [] : ['wrong status row']),
-      ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Active'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
+      ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Working'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
       ...(element && bringForwardIn(element) ? ['offers Bring forward'] : []),
       ...(element && isLastElement(element, dismiss) ? [] : ['Dismiss is not the last element']),
       ...(controlName(dismiss).includes(terminal.launchDirectory) ? [] : ['Dismiss is not named with the directory']),

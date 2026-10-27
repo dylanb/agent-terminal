@@ -68,7 +68,7 @@ describe.each(['aside', 'main'])('the controller organism placed in %s', tag => 
       expect({
         total: /(?<![\w-])2\s*(?:total|terminals?)\b|\b(?:total|terminals?)\W*2(?!\d)/i.test(header),
         statuses: cases.map(c => { const card = cardIn(host, c.terminal.launchDirectory); return card ? statusRowIn(card)?.textContent?.trim() : undefined; }),
-      }).toEqual({ total: true, statuses: ['Needs a human', 'Working'] });
+      }).toEqual({ total: true, statuses: cases.map(c => c.text) });
     } finally { dispose(); }
   });
 });

@@ -32,3 +32,19 @@ it('announces another pane entering, changing and clearing attention without foc
     expect(service.activated).toEqual([]);
   } finally { dispose(); }
 });
+
+it('makes no announcement when only the activity of a terminal with a condition changes', () => {
+  const blocked = (activity: 'active' | 'quiet' | 'unavailable') =>
+    statusTerminal({ attention: { status: 'complete', reasons: ['Review required'] }, error: { reason: 'Broken build' }, activity });
+  const { host, service, dispose } = mountControllerPanes({ terminals: [blocked('active')] });
+  try {
+    const live = page.elementLocator(host).getByRole('status').element();
+    const announced = live.textContent;
+    const observer = new MutationObserver(() => {});
+    observer.observe(live, { childList: true, subtree: true, characterData: true });
+    for (const activity of ['quiet', 'unavailable', 'active'] as const) service.publish([blocked(activity)]);
+    const mutations = observer.takeRecords().length;
+    observer.disconnect();
+    expect({ announced: announced?.includes('Review required'), mutations, text: live.textContent }).toEqual({ announced: true, mutations: 0, text: announced });
+  } finally { dispose(); }
+});
