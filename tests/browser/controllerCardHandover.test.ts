@@ -1,3 +1,4 @@
+import { directoryCards } from '../../src/shared/controllerCards';
 import { afterEach, describe, expect, it } from 'vitest';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
@@ -20,7 +21,7 @@ function setup() {
   document.body.append(host);
   let current: ControllerCard | undefined;
   const build = (terminal: ControllerTerminal, from?: ReturnType<ControllerCard['state']>, expandedByDefault = true) => {
-    current = createControllerCard(host, { terminal, expandedByDefault, onBringForward() {}, onDismiss() {}, from });
+    current = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault, onAction() {}, from });
     return current;
   };
   const replace = (terminal: ControllerTerminal, expandedByDefault = true) => {

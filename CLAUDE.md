@@ -22,7 +22,7 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 
 **Always run the e2e locally via the Podman harness (`docs/e2e-podman.md`) before claiming a change done — do not defer e2e to CI.**
 
-**Test runs own their windows through cleanup.** For native GUI verification, do not launch an ad hoc `.command` file or Terminal window that merely exits when the test ends: Terminal may retain the finished window. Before launching, arrange cleanup on success, failure and interruption for the exact test-owned window IDs and child processes, including any Terminal wrapper. Close only those owned resources, never all Terminal/Electron windows or the operator's sessions. After the run, verify that no owned windows or processes remain before reporting completion. If a launch mechanism cannot provide this ownership and cleanup, use one that can; do not leave cleanup to the operator.
+**Test runs own their GUI windows and processes through verified cleanup on success, failure and interruption, including Terminal wrappers; never close the operator's sessions.** → [CODE-STANDARDS.md — Test runs own their GUI windows through cleanup](CODE-STANDARDS.md#test-runs-own-their-gui-windows-through-cleanup).
 
 `node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `pnpm run rebuild`.
 

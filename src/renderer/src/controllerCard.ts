@@ -1,13 +1,13 @@
 import { cardStatus, workConditions, type WorkCondition } from './controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
-import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerDirectoryCard } from '../../shared/controllerCards';
 import { createClampedReason, type ClampedReason } from './clampedReason';
 
 export interface ControllerCardDeps {
-  terminal: ControllerTerminal & { instanceCount?: number };
+  card: ControllerDirectoryCard;
   expandedByDefault: boolean;
-  onBringForward(): void;
-  onDismiss(): void;
+  onAction(): void;
   from?: CardState;
 }
 
@@ -41,11 +41,12 @@ function finalSegment(path: string): string {
 }
 
 export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps): ControllerCard {
-  const { terminal } = deps;
+  const { card: model } = deps;
   const doc = host.ownerDocument;
-  const status = cardStatus(terminal);
-  const count = terminal.instanceCount ?? 1;
-  const duplicate = count > 1;
+  const status = cardStatus(model);
+  const count = model.kind === 'disconnected' ? 0 : model.activationTargets.length;
+  const work = model.kind === 'single' ? model.work : undefined;
+  const duplicate = model.kind === 'conflict';
   const statusText = duplicate ? `${status.text} · ${count} instances` : status.text;
   const carried = deps.from?.[HANDOVER];
   const reasons: { text: string; reason: ClampedReason }[] = [];
@@ -59,7 +60,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
 
   const card = element('article', 'controller-card');
   card.dataset.status = status.statusClass;
-  if (terminal.status === 'disconnected') card.classList.add('is-disconnected');
+  if (model.kind === 'disconnected') card.classList.add('is-disconnected');
   const cardId = `controller-card-${nextCardId += 1}`;
   const headingId = `${cardId}-heading`;
   card.setAttribute('aria-labelledby', headingId);
@@ -70,15 +71,15 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const heading = element('h2', 'controller-card-heading');
   heading.id = headingId;
   const directory = element('span', 'controller-card-directory mono');
-  directory.title = terminal.launchDirectory;
-  const directoryText = element('bdi', '', terminal.launchDirectory);
+  directory.title = model.launchDirectory;
+  const directoryText = element('bdi', '', model.launchDirectory);
   directoryText.dir = 'ltr';
   directory.append(directoryText);
   const statusLabel = element('span', 'controller-card-label', statusText);
   const toggle = element('button', 'controller-card-toggle');
   toggle.type = 'button';
   toggle.setAttribute('aria-controls', `${cardId}-body`);
-  toggle.append(element('span', 'controller-card-name', finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)), ' ', directory);
+  toggle.append(element('span', 'controller-card-name', finalSegment(model.repositoryRoot ?? model.launchDirectory)), ' ', directory);
   heading.append(toggle);
   header.append(accent, heading);
 
@@ -90,24 +91,24 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   card.append(header, ' ', body);
   host.append(card);
 
-  const actionKind: Action = terminal.status === 'disconnected' ? 'dismiss' : 'bring-forward';
+  const actionKind: Action = model.kind === 'disconnected' ? 'dismiss' : 'bring-forward';
   const action = (label: string, name: string, use: () => void) => {
     const button = element('button', 'controller-card-action', label);
     button.type = 'button';
-    button.setAttribute('aria-label', `${name} ${terminal.launchDirectory}`);
+    button.setAttribute('aria-label', `${name} ${model.launchDirectory}`);
     button.addEventListener('click', use);
     return button;
   };
 
   let actionButton: HTMLButtonElement;
   if (actionKind === 'dismiss') {
-    actionButton = action('Dismiss', 'Dismiss disconnected terminal', deps.onDismiss);
+    actionButton = action('Dismiss', 'Dismiss disconnected terminal', deps.onAction);
   } else {
     if (duplicate) body.append(' ', element('p', 'controller-card-line', 'Bring the terminals forward and close extra instances so only one remains.'));
-    else if (terminal.work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
-    else if (terminal.work) appendWork(terminal.work);
+    else if (work?.unavailableReason) body.append(' ', element('p', 'controller-card-line', CONTROLLER_OVERSIZED_STATUS_TEXT));
+    else if (work) appendWork(work);
     const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
-    actionButton = action(label, `${label} ${finalSegment(terminal.repositoryRoot ?? terminal.launchDirectory)}`, deps.onBringForward);
+    actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
   }
   body.append(' ', actionButton);
 
@@ -148,7 +149,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     }
   }
 
-  let chosenExpanded = carried?.disconnected && terminal.status !== 'disconnected' ? undefined : carried?.chosenExpanded;
+  let chosenExpanded = carried?.disconnected && model.kind !== 'disconnected' ? undefined : carried?.chosenExpanded;
   let expanded = chosenExpanded ?? deps.expandedByDefault;
   function setExpanded(next: boolean): void {
     const held = body.contains(doc.activeElement);
@@ -184,7 +185,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { disconnected: terminal.status === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
+    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {
