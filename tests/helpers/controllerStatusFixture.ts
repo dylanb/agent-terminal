@@ -1,5 +1,4 @@
 import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
-import type { CardStatusClass as Status } from '../../src/renderer/src/controllerCardStatus';
 
 export type WorkStatus = ControllerWorkStatus;
 
@@ -16,6 +15,9 @@ export function workStatus(overrides: Partial<WorkStatus> = {}): WorkStatus {
 export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTerminal {
   return { id: 'terminal-a', launchDirectory: '/fixed/worktree', repositoryRoot: '/fixed/repository', work: workStatus(overrides) };
 }
+
+export const STATUS_CLASSES = ['error', 'needs-human', 'working', 'completed', 'idle'] as const;
+export type Status = (typeof STATUS_CLASSES)[number];
 
 export const SUMMARY_LABELS = ['errors', 'need a human', 'idle', 'working'] as const;
 export type SummaryLabel = (typeof SUMMARY_LABELS)[number];

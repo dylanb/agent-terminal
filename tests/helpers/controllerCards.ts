@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import { SUMMARY_LABELS } from './controllerStatusFixture';
+import { STATUS_CLASSES, SUMMARY_LABELS } from './controllerStatusFixture';
 
 // Playwright pages and locators and vitest-browser `page` and locators all
 // satisfy `RoleScope`, so the browser tests and the e2e locate cards with the same role-and-name queries; the
@@ -124,3 +124,37 @@ export function showsFullReason(control: Element | undefined): boolean {
   if (state === undefined) throw new Error('Show full reason exposes no state');
   return state === 'true';
 }
+
+/** The status class whose §24.1 tokens paint a card's accent and its shown written status, or why none does. */
+export interface PaintedStatus { accent: string; text: string }
+interface PaintProbe { classes: readonly string[]; accentTestId: string; statusTestId: string }
+const PAINT_PROBE: PaintProbe = { classes: STATUS_CLASSES, accentTestId: CARD_ACCENT_TEST_ID, statusTestId: CARD_STATUS_TEST_ID };
+
+// Playwright serialises this into the page, so it may reference nothing outside its own body.
+function paintedStatus(card: Element, { classes, accentTestId, statusTestId }: PaintProbe): PaintedStatus {
+  const probe = card.ownerDocument.createElement('span');
+  card.append(probe);
+  try {
+    const tokenColour = (token: string): string => {
+      probe.style.color = `var(${token})`;
+      return getComputedStyle(probe).color;
+    };
+    const classOf = (element: Element | null | undefined, property: 'backgroundColor' | 'color', suffix: string): string => {
+      if (!element) return 'not shown';
+      const painted = getComputedStyle(element)[property];
+      const matches = classes.filter(statusClass => tokenColour(`--status-${statusClass}${suffix}`) === painted);
+      return matches.length === 1 ? matches[0] : `${matches.join(' or ') || 'no status class'} painted ${painted}`;
+    };
+    const row = card.querySelector(`[data-testid="${statusTestId}"]`);
+    const label = row?.checkVisibility()
+      ? row
+      : [...card.querySelectorAll('header *')].filter(element => element.textContent === row?.textContent).at(-1);
+    return { accent: classOf(card.querySelector(`[data-testid="${accentTestId}"]`), 'backgroundColor', ''), text: classOf(label, 'color', '-text') };
+  } finally {
+    probe.remove();
+  }
+}
+
+export const paintedStatusIn = (card: Element): PaintedStatus => paintedStatus(card, PAINT_PROBE);
+export const paintedStatusOf = (card: { evaluate(fn: typeof paintedStatus, probe: PaintProbe): Promise<PaintedStatus> }): Promise<PaintedStatus> =>
+  card.evaluate(paintedStatus, PAINT_PROBE);

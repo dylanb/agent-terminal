@@ -63,4 +63,13 @@ export default [
     ignores: CARD_HELPER,
     rules: { 'no-restricted-syntax': ['error', ...CARD_DOM] },
   },
+  {
+    files: ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{
+        regex: '(^|/)src/(?!shared/ipc(/|$))',
+        message: 'The controller status oracle is written independently of the production classifier; import only the IPC contract from src/.',
+      }] }],
+    },
+  },
 ];
