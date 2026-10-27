@@ -1,5 +1,18 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
+## #267 — controller cards show agent activity alongside flow errors and human requests, coloured by the combination
+
+§23.6: a card with a flow error or a human request showed only that condition, in the error or needs-a-human
+colour, so the operator could not tell an agent blocked on them from one still working. Its written status now
+names each condition, flow error first, then the activity (**Working**, **Idle** or **Activity unavailable**),
+joined by ` · `. A working agent's card is in the working class; an idle or unavailable one is in the error class
+with a flow error, otherwise needs-human. The colour, window-summary counts and one-column default open/closed
+rule follow that class (operator decision 2026-10-26). A card with no condition whose activity is unavailable
+read **Working**; it now reads **Activity unavailable** in the idle class. The expanded card's activity line reads
+**Working** instead of **Active**. The classification moves from the renderer module §23.6 named
+(`src/renderer/src/controllerCardStatus.ts`) to `src/shared/controllerCardClassification.ts`, so the main process
+can use the same rule, and §23.6 now names the shared module. Announcements are unchanged: an activity change alone is never announced. No IPC contract change.
+
 ## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
 
 §23.6: the window header's theme button read **Dark theme** in both themes and showed its state only

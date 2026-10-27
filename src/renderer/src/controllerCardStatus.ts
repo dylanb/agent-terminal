@@ -1,8 +1,6 @@
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
 
-export { cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardClassification';
-
 export interface WorkCondition {
   statusClass: 'needs-human' | 'error';
   title: string;
