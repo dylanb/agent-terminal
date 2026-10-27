@@ -17,7 +17,7 @@
   /* changed-line markers in the code viewer (§20.2); tied to the "changed" provenance hue. */
   --changed:var(--signal); --changed-wash:var(--signal-wash);
   /* code-viewer syntax palette (§20.2). Every tone clears 4.5:1 on --bg AND on a changed line's
-     --changed-wash over it, in both themes (WCAG 1.4.3) — pinned by tests/browser/styleContrast. */
+     --changed-wash over it, in both themes (WCAG 1.4.3). */
   --syn-keyword:#B3202B; --syn-string:#0A3069; --syn-comment:#59636E; --syn-number:#0550AE;
   --syn-func:#6639BA; --syn-type:#116329; --syn-var:#953800; --syn-punct:#24292F;
   --r:7px;

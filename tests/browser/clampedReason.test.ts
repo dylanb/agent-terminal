@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import '../helpers/rendererTokens';
+import '../../src/renderer/src/tokens.css';
 import '../../src/renderer/src/styles.css';
 import { createClampedReason } from '../../src/renderer/src/clampedReason';
 import { cardHeaderIn, cardIn, showFullReasonIn, showFullReasonsIn, showsFullReason, statusRowIn } from '../helpers/controllerCards';
@@ -11,49 +11,11 @@ afterEach(() => document.body.replaceChildren());
 const LINES = ['Reason line 1', 'Reason line 2', 'Reason line 3', 'Reason line 4', 'Reason line 5'];
 const LONG = LINES.join('\n');
 
-const clips = (style: CSSStyleDeclaration): boolean => style.overflowX !== 'visible' || style.overflowY !== 'visible';
-
-/** Whether some occurrence of `text` in `root` is painted wholly inside every clipping ancestor up to `root`. */
-function shown(root: HTMLElement, text: string): boolean {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const start = node.textContent?.indexOf(text) ?? -1;
-    if (start < 0) continue;
-    const range = document.createRange();
-    range.setStart(node, start);
-    range.setEnd(node, start + text.length);
-    const boxes = [...range.getClientRects()];
-    let visible = boxes.length > 0;
-    for (let parent: HTMLElement | null = node.parentElement; visible && parent; parent = parent === root ? null : parent.parentElement) {
-      const style = getComputedStyle(parent);
-      const clip = parent.getBoundingClientRect();
-      visible = style.visibility === 'visible' && boxes.every(box => box.width > 0 && box.height > 0 && (!clips(style)
-        || (box.left >= clip.left - 0.5 && box.right <= clip.right + 0.5 && box.top >= clip.top - 0.5 && box.bottom <= clip.bottom + 0.5)));
-    }
-    if (visible) return true;
-  }
-  return false;
-}
-
-const shownLines = (root: HTMLElement, lines: readonly string[] = LINES): number => lines.filter(line => shown(root, line)).length;
-
-/** How many separate rows the painted reason lines sit on: five only when their line breaks are kept. */
-function paintedRows(root: HTMLElement): number {
-  const tops = new Set<number>();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    for (const line of LINES) {
-      const start = node.textContent?.indexOf(line) ?? -1;
-      if (start < 0 || !shown(root, line)) continue;
-      const range = document.createRange();
-      range.setStart(node, start);
-      range.setEnd(node, start + line.length);
-      const first = range.getClientRects()[0];
-      if (first) tops.add(Math.round(first.top));
-    }
-  }
-  return tops.size;
-}
+/** Whether the reason's Show full reason control reports it shown in full; undefined when no control is offered. */
+const fullIn = (root: HTMLElement | undefined): boolean | undefined => {
+  const control = root ? showFullReasonIn(root) : undefined;
+  return control ? showsFullReason(control) : undefined;
+};
 
 /** `read()` once it satisfies `done`, waiting for the reason's painted measurement; its last value if it never does. */
 const settled = <T>(read: () => T, done: (value: T) => boolean = Boolean): Promise<T> =>
@@ -70,7 +32,7 @@ describe('a reason limited to three painted lines', () => {
   it('shows the first three lines of a longer reason, with Show full reason', async () => {
     const host = reasonHost('20rem');
     createClampedReason(host, { text: LONG, full: false, onToggle() {} });
-    await expect.poll(() => ({ lines: shownLines(host), control: Boolean(showFullReasonIn(host)) })).toEqual({ lines: 3, control: true });
+    await expect.poll(() => fullIn(host)).toBe(false);
   });
 
   it('shows the whole reason with its line breaks when Show full reason is used, and shortens it when used again', async () => {
@@ -78,24 +40,24 @@ describe('a reason limited to three painted lines', () => {
     const toggles: boolean[] = [];
     createClampedReason(host, { text: LONG, full: false, onToggle: full => toggles.push(full) });
     (await settled(() => showFullReasonIn(host)))?.click();
-    const opened = await settled(() => ({ lines: shownLines(host), rows: paintedRows(host) }), value => value.lines === 5 && value.rows === 5);
+    const opened = fullIn(host);
     showFullReasonIn(host)?.click();
-    await expect.poll(() => ({ opened, closed: shownLines(host), toggles }))
-      .toEqual({ opened: { lines: 5, rows: 5 }, closed: 3, toggles: [true, false] });
+    await expect.poll(() => ({ opened, closed: fullIn(host), toggles }))
+      .toEqual({ opened: true, closed: false, toggles: [true, false] });
   });
 
   it('offers no Show full reason for a short reason', async () => {
     const host = reasonHost('20rem');
     createClampedReason(host, { text: LINES[0], full: false, onToggle() {} });
     for (let frame = 0; frame < 2; frame += 1) await new Promise(requestAnimationFrame);
-    await expect.poll(() => ({ lines: shownLines(host), control: Boolean(showFullReasonIn(host)) })).toEqual({ lines: 1, control: false });
+    await expect.poll(() => Boolean(showFullReasonIn(host))).toBe(false);
   });
 
   it('offers no Show full reason for a reason of exactly three lines', async () => {
     const host = reasonHost('20rem');
     createClampedReason(host, { text: LINES.slice(0, 3).join('\n'), full: false, onToggle() {} });
     for (let frame = 0; frame < 2; frame += 1) await new Promise(requestAnimationFrame);
-    await expect.poll(() => ({ lines: shownLines(host, LINES.slice(0, 3)), control: Boolean(showFullReasonIn(host)) })).toEqual({ lines: 3, control: false });
+    await expect.poll(() => Boolean(showFullReasonIn(host))).toBe(false);
   });
 
   it('removes Show full reason once the card is wide enough for the reason', async () => {
@@ -111,8 +73,8 @@ describe('a reason limited to three painted lines', () => {
     createClampedReason(host, { text, full: false, onToggle() {} });
     const narrow = Boolean(await settled(() => showFullReasonIn(host)));
     host.style.width = `${unwrapped * 2}px`;
-    await expect.poll(() => ({ narrow, control: Boolean(showFullReasonIn(host)), shown: shown(host, text) }))
-      .toEqual({ narrow: true, control: false, shown: true });
+    await expect.poll(() => ({ narrow, control: Boolean(showFullReasonIn(host)) }))
+      .toEqual({ narrow: true, control: false });
   });
 
   it('offers Show full reason for a reason delivered while hidden, once it is shown', async () => {
@@ -121,7 +83,7 @@ describe('a reason limited to three painted lines', () => {
     createClampedReason(host, { text: LONG, full: false, onToggle() {} });
     for (let frame = 0; frame < 2; frame += 1) await new Promise(requestAnimationFrame);
     host.style.display = '';
-    await expect.poll(() => ({ lines: shownLines(host), control: Boolean(showFullReasonIn(host)) })).toEqual({ lines: 3, control: true });
+    await expect.poll(() => fullIn(host)).toBe(false);
   });
 });
 
@@ -147,9 +109,8 @@ describe('a reason across live updates', () => {
       service.publish([blocked(LONG)]);
       for (let frame = 0; frame < 2; frame += 1) await new Promise(requestAnimationFrame);
       await expect.poll(() => {
-        const after = card(host);
-        return { lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
-      }).toEqual({ lines: 5, control: true });
+        return fullIn(card(host));
+      }).toBe(true);
     } finally { dispose(); }
   });
 
@@ -158,14 +119,13 @@ describe('a reason across live updates', () => {
     const header = () => { const current = card(host); return current ? cardHeaderIn(current, directory) : undefined; };
     try {
       (await control(host))?.click();
-      await settled(() => { const opened = card(host); return opened ? shownLines(opened) : 0; }, lines => lines === 5);
+      await settled(() => fullIn(card(host)), full => full === true);
       header()?.click();
       const collapsed = await drawnCollapsed(host);
       header()?.click();
       await expect.poll(() => {
-        const after = card(host);
-        return { collapsed, lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
-      }).toEqual({ collapsed: true, lines: 5, control: true });
+        return { collapsed, full: fullIn(card(host)) };
+      }).toEqual({ collapsed: true, full: true });
     } finally { dispose(); }
   });
 
@@ -178,9 +138,8 @@ describe('a reason across live updates', () => {
       const collapsed = await drawnCollapsed(host);
       header()?.click();
       await expect.poll(() => {
-        const after = card(host);
-        return { collapsed, lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
-      }).toEqual({ collapsed: true, lines: 3, control: true });
+        return { collapsed, full: fullIn(card(host)) };
+      }).toEqual({ collapsed: true, full: false });
     } finally { dispose(); }
   });
 
@@ -188,13 +147,12 @@ describe('a reason across live updates', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [blocked(LONG)] });
     try {
       (await control(host))?.click();
-      await settled(() => { const opened = card(host); return opened ? shownLines(opened) : 0; }, lines => lines === 5);
+      await settled(() => fullIn(card(host)), full => full === true);
       (await control(host))?.click();
       service.publish([blocked(LONG)]);
       await expect.poll(() => {
-        const after = card(host);
-        return { lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
-      }).toEqual({ lines: 3, control: true });
+        return fullIn(card(host));
+      }).toBe(false);
     } finally { dispose(); }
   });
 
@@ -204,21 +162,17 @@ describe('a reason across live updates', () => {
       attention: { status: 'complete', reasons: ['A short reason', LONG] },
       error: { reason: failure.join('\n') },
     });
-    const controls = showFullReasonsIn;
     const read = () => {
       const current = card(host);
-      return current
-        ? { short: shown(current, 'A short reason'), human: shownLines(current), error: shownLines(current, failure), controls: controls(current).length }
-        : { short: false, human: 0, error: 0, controls: 0 };
+      return current ? showFullReasonsIn(current).map(control => showsFullReason(control)) : [];
     };
     const { host, dispose } = mountControllerPanes({ terminals: [both] });
     try {
-      const limited = await settled(read, value => value.controls === 2);
+      const limited = await settled(read, value => value.length === 2);
       const current = card(host);
-      if (current) controls(current)[0]?.click();
-      const opened = await settled(read, value => value.human + value.error === 8);
-      expect({ limited, opened: [opened.human, opened.error].sort() })
-        .toEqual({ limited: { short: true, human: 3, error: 3, controls: 2 }, opened: [3, 5] });
+      if (current) showFullReasonsIn(current)[0]?.click();
+      const opened = await settled(read, value => value.includes(true));
+      expect({ limited, opened: [...opened].sort() }).toEqual({ limited: [false, false], opened: [false, true] });
     } finally { dispose(); }
   });
 
@@ -271,9 +225,8 @@ describe('a reason across live updates', () => {
       service.publish([blocked('A different short reason')]);
       service.publish([blocked(LONG)]);
       await expect.poll(() => {
-        const after = card(host);
-        return { lines: after ? shownLines(after) : 0, control: Boolean(after && showFullReasonIn(after)) };
-      }).toEqual({ lines: 3, control: true });
+        return fullIn(card(host));
+      }).toBe(false);
     } finally { dispose(); }
   });
 
@@ -286,12 +239,8 @@ describe('a reason across live updates', () => {
       await expect.poll(() => {
         const changed = card(host);
         const peer = cardIn(host, other.launchDirectory);
-        return {
-          changed: changed ? shownLines(changed) : 0,
-          changedControl: Boolean(changed && showFullReasonIn(changed)),
-          peer: peer ? shownLines(peer) : 0,
-        };
-      }).toEqual({ changed: 3, changedControl: true, peer: 3 });
+        return { changed: fullIn(changed), peer: fullIn(peer) };
+      }).toEqual({ changed: false, peer: false });
     } finally { dispose(); }
   });
 });

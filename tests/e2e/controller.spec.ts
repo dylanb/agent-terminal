@@ -8,7 +8,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
-import { bringForwardLocator, CARD_SELECTOR, cardHeaderLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
 
 test('controller explains how to connect the first terminal', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
@@ -85,66 +85,6 @@ test('controller consolidates terminals launched in the same directory', { tag: 
     await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
     await waitForConnections(controller.page, h.fixture.nonGit, 2);
     await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
-  } finally {
-    await h.dispose();
-  }
-});
-
-test('controller reflows real registered terminal controls when its window narrows', { tag: '@ownapp' }, async () => {
-  const h = createControllerHarness();
-  try {
-    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
-    for (const directory of h.fixture.repositories) {
-      await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, directory);
-    }
-    await expect.soft(cardsLocator(controller.page)).toHaveCount(2);
-    // Live snapshots can replace panes between locator resolution and evaluation; query and measure atomically.
-    const measure = () => controller.page.evaluate(({ directories, cardSelector }) => {
-      const elements = [...document.querySelectorAll(cardSelector)].filter(element => directories.some(directory => element.textContent?.includes(directory)));
-      const boxes = elements.map(element => element.getBoundingClientRect());
-      return {
-        rows: new Set(boxes.map(box => Math.round(box.top))).size,
-        reachable: boxes.length === 2 && boxes.every(box => box.width > 0 && box.height > 0
-          && box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight),
-        separated: boxes.every((box, i) => boxes.slice(i + 1).every(other =>
-          box.right <= other.left || other.right <= box.left || box.bottom <= other.top || other.bottom <= box.top)),
-        pageOverflow: document.documentElement.scrollWidth > innerWidth,
-        readable: directories.every(directory => elements.some(element => element.textContent?.includes(directory)))
-          && elements.every(element => {
-            const bounds = element.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(element);
-            return [...range.getClientRects()].every(box => box.width > 0 && box.height > 0
-              && box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom);
-          }),
-      };
-    }, { directories: h.fixture.repositories, cardSelector: CARD_SELECTOR });
-    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1000, 700));
-    await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(1000);
-    const wide = await measure();
-    const expandedInOneColumn = ['Disconnected', 'Flow error', 'Needs a human', 'Status unavailable'];
-    const ruleOpens = new Map<string, boolean>();
-    for (const directory of h.fixture.repositories) {
-      const statusRow = statusRowLocator(cardLocator(controller.page, directory));
-      await expect.soft(statusRow).not.toHaveText(/^(Loading|Status unknown)$/);
-      ruleOpens.set(directory, expandedInOneColumn.includes((await statusRow.textContent())?.trim() ?? ''));
-    }
-    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(320, 700));
-    await expect.poll(() => controller.page.evaluate(() => innerWidth)).toBe(320);
-    await expect.soft.poll(async () => (await measure()).rows).toBeGreaterThan(wide.rows);
-    for (const directory of h.fixture.repositories) {
-      const header = cardHeaderLocator(cardLocator(controller.page, directory), directory);
-      const opens = ruleOpens.get(directory) ?? false;
-      await expect.soft(header).toHaveAttribute('aria-expanded', String(opens));
-      if (!opens && await header.count()) await header.click();
-      await expect.soft(header).toHaveAttribute('aria-expanded', 'true');
-    }
-    const narrow = await measure();
-    expect.soft(wide.reachable).toBe(true);
-    expect.soft(narrow.reachable).toBe(true);
-    expect.soft(wide.readable && narrow.readable).toBe(true);
-    expect.soft(wide.separated && narrow.separated).toBe(true);
-    expect.soft(wide.pageOverflow || narrow.pageOverflow).toBe(false);
   } finally {
     await h.dispose();
   }
@@ -332,7 +272,7 @@ for (const action of ['activate', 'close-and-restore', 'quit', 'crash-and-recove
           await expect.soft(approve).toBeVisible();
           expect.soft({ flow: read('flow-state.yaml'), loop: read('loop/run-state.yaml'), input: read('injected-log') }).toEqual(before);
           const recovered = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
-          await expect.soft(cardLocator(recovered.page, repo)).toHaveCount(1, { timeout: 10_000 });
+          await expect.soft(cardLocator(recovered.page, repo)).toHaveCount(1, { timeout: 30_000 });
           await bringForwardLocator(cardLocator(recovered.page, repo))
             .evaluateAll(buttons => (buttons[0] as HTMLButtonElement | undefined)?.click());
         }

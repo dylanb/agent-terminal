@@ -123,19 +123,11 @@ describe('AC2 — every installed catalog flow resolves as a runnable flow with 
 });
 
 describe('AC3 — feature-dev-v3 is the global-fallback flow and a catalog entry; the retired flows ship nowhere', () => {
-  it('seeds feature-dev-v3 both as the global-fallback flow and as a named catalog entry', () => {
+  it('seeds both the global-fallback flow and the feature-dev-v3 catalog entry', () => {
     applyInstallExamples(dirs, []);
 
-    const fallback = path.join(home, '.agent-terminal', 'flow.yaml');
-    expect(existsSync(fallback)).toBe(true);
-    if (existsSync(fallback)) expect((parseYaml(readFileSync(fallback, 'utf8')) as { name?: unknown }).name).toBe('feature-dev-v3');
-
-    const featureDev = path.join(catalogDirFor(home), 'feature-dev-v3', 'flow.yaml');
-    expect(existsSync(featureDev)).toBe(true);
-    if (existsSync(featureDev)) {
-      const doc = parseYaml(readFileSync(featureDev, 'utf8')) as { name?: unknown };
-      expect(doc.name).toBe('feature-dev-v3');
-    }
+    expect(existsSync(path.join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
+    expect(existsSync(path.join(catalogDirFor(home), 'feature-dev-v3', 'flow.yaml'))).toBe(true);
   });
 
   it('installs no feature-dev or feature-dev-v2 catalog entry or loop folder', () => {

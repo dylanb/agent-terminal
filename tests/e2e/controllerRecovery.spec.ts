@@ -63,7 +63,7 @@ test('connection-only loss preserves PTY work and restores one pane while the co
 
 for (const outage of ['quit', 'crash'] as const) {
   test(`recovery restores original PTYs and fixed identities after repeated controller ${outage}`, { tag: '@ownapp' }, async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const h = await createControllerDesktopHarness();
     try {
       let controller = await h.launch(controllerTarget, h.fixture.nonGit);

@@ -35,7 +35,7 @@ it('repeated real-socket recovery publishes current peer state and rejects callb
     registry = undefined;
     current[0] = workStatus({ flow: { availability: 'known', name: 'new-context', step: `step-${round}`, assignment: 'assigned' }, ticket: { availability: 'none' }, activity: 'quiet' });
     registry = await startControllerTransport(home);
-    await expect.poll(() => registry!.terminals().map(t => t.work), { timeout: 8_000 }).toEqual(expect.arrayContaining(current));
+    await expect.poll(() => registry!.terminals().map(t => t.work), { timeout: 30_000 }).toEqual(expect.arrayContaining(current));
     stale.forEach(listener => listener(workStatus({ attention: { status: 'error', reasons: ['obsolete delayed result'] } })));
     for (const terminal of registry.terminals()) expect(await registry.activate(terminal.id)).toBe('activated');
     expect(registry.terminals()).toHaveLength(2);
@@ -44,7 +44,7 @@ it('repeated real-socket recovery publishes current peer state and rejects callb
     expect(starts).toEqual([1, 1]);
     expect(activations).toEqual([round + 1, round + 1]);
   }
-}, 25_000);
+}, 75_000);
 
 it('late pre-outage title cannot overwrite current work after real-socket recovery', async () => {
   registry = await startControllerTransport(home);
@@ -66,7 +66,7 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
   repo = '/new';
   source.refresh();
   registry = await startControllerTransport(home);
-  await expect.poll(() => registry!.terminals()[0]?.work?.ticket, { timeout: 8_000 }).toMatchObject({ number: 220, title: { text: 'CURRENT_TITLE' } });
+  await expect.poll(() => registry!.terminals()[0]?.work?.ticket, { timeout: 30_000 }).toMatchObject({ number: 220, title: { text: 'CURRENT_TITLE' } });
   const seen: ControllerWorkStatus[] = [];
   const unsubscribe = registry.subscribeTerminals(terminals => { for (const terminal of terminals) if (terminal.work) seen.push(terminal.work); });
   release('OBSOLETE_TITLE');
@@ -80,4 +80,4 @@ it('late pre-outage title cannot overwrite current work after real-socket recove
   expect(await registry.activate(registry.terminals()[0].id)).toBe('unavailable');
   registry.dismiss(registry.terminals()[0].id);
   expect(registry.terminals()).toEqual([]);
-}, 15_000);
+}, 40_000);

@@ -1,5 +1,5 @@
 import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
-import type { Status } from './designTokens';
+import type { CardStatusClass as Status } from '../../src/renderer/src/controllerCardStatus';
 
 export type WorkStatus = ControllerWorkStatus;
 

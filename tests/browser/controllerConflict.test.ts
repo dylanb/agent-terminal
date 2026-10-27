@@ -46,12 +46,14 @@ it.each(['light', 'dark'])('paints conflict warning and accent as errors with lo
       const accent = first && accentIn(first);
       const action = first && bringForwardIn(first);
       const expected = readColors(['--status-error', '--status-error-text']);
+      const errorColor = expected['--status-error'];
+      const errorTextColor = expected['--status-error-text'];
       const readable = (element: HTMLElement | null | undefined) => Boolean(element && element.checkVisibility({ visibilityProperty: true })
         && contrastRatio(ringOver(getComputedStyle(element).color, opacity(element), background(element)), background(element)) >= 4.5);
       return {
         warning: warning?.textContent?.includes('Duplicate directory') ?? false,
-        warningColor: Boolean(warning && sameColor(parseColor(getComputedStyle(warning).color), expected['--status-error-text'])),
-        accentColor: Boolean(accent && sameColor(parseColor(getComputedStyle(accent).backgroundColor), expected['--status-error'])),
+        warningColor: Boolean(warning && errorTextColor && sameColor(parseColor(getComputedStyle(warning).color), errorTextColor)),
+        accentColor: Boolean(accent && errorColor && sameColor(parseColor(getComputedStyle(accent).backgroundColor), errorColor)),
         warningReadable: readable(warning), actionReadable: readable(action),
         named: controlName(first).includes(longPath),
         pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,

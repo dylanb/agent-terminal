@@ -1,6 +1,6 @@
 import { directoryCards } from '../../src/shared/controllerCards';
 import { afterEach, describe, expect, it } from 'vitest';
-import '../helpers/rendererTokens';
+import '../../src/renderer/src/tokens.css';
 import '../../src/renderer/src/styles.css';
 import { createControllerCard, type ControllerCard } from '../../src/renderer/src/controllerCard';
 import type { ControllerTerminal } from '../../src/shared/ipc';

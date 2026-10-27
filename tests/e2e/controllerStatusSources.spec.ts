@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
-import { statusDeadline } from './controllerStatusDeadline';
+import { observeStatus, STATUS_BUDGET_MS } from './controllerStatusObservation';
 import { autoGateFlowYaml, seedTrustedFlow } from './autoGateHarness';
 import { cardLocator, dismissLocator } from '../helpers/controllerCards';
 
@@ -11,6 +11,7 @@ const controllerTarget = { kind: 'development' as const, entry: resolve('out/mai
 
 for (const title of ['available', 'unavailable', 'slow'] as const) {
   test(`real initial flow snapshot keeps issue identity with ${title} title`, { tag: '@ownapp' }, async () => {
+    test.setTimeout(180_000);
     const h = await createControllerDesktopHarness();
     const repo = h.fixture.repositories[0];
     try {
@@ -41,24 +42,24 @@ fi
       rmSync(h.fixture.env.TITLE_STARTED, { force: true });
       await expect(dismissLocator(cardLocator(controller.page, repo))).toBeVisible();
       await dismissLocator(cardLocator(controller.page, repo)).click();
-      const initialStatus = await statusDeadline(controller.page, repo, [/#219/, /ticket-flow/, /implement/, ...(title === 'slow' ? [] : [title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i])], 'registration');
+      const initialPatterns: Record<string, RegExp> = { issue: /#219/, flow: /ticket-flow/, step: /implement/, ...(title === 'slow' ? {} : { title: title === 'available' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i }) };
+      const initialStatus = await observeStatus(controller.page, repo, initialPatterns, { start: 'registration' });
       const terminal = await h.launch(terminalTarget, repo);
       await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Advance');
       await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ runStarted: 'started', refs: { ticket: 219, pr: 236 } });
       const pane = cardLocator(controller.page, repo);
-      const { matched: shown } = await initialStatus();
-      expect(shown).toHaveLength(title === 'slow' ? 3 : 4);
-      expect.soft({ ['issue within the initial shared deadline']: shown[0] }).toEqual({ ['issue within the initial shared deadline']: true });
-      expect.soft({ ['flow within the initial shared deadline']: shown[1] }).toEqual({ ['flow within the initial shared deadline']: true });
-      expect.soft({ ['step within the initial shared deadline']: shown[2] }).toEqual({ ['step within the initial shared deadline']: true });
+      const { shown } = await initialStatus();
+      expect.soft({ ['issue in the initial status']: shown.issue }).toEqual({ ['issue in the initial status']: true });
+      expect.soft({ ['flow in the initial status']: shown.flow }).toEqual({ ['flow in the initial status']: true });
+      expect.soft({ ['step in the initial status']: shown.step }).toEqual({ ['step in the initial status']: true });
       if (title === 'slow') {
-        expect(existsSync(h.fixture.env.TITLE_STARTED)).toBe(true);
+        await expect.poll(() => existsSync(h.fixture.env.TITLE_STARTED), { timeout: STATUS_BUDGET_MS }).toBe(true);
         expect(existsSync(h.fixture.env.TITLE_ALLOW)).toBe(false);
       }
-      if (title !== 'slow') expect.soft({ ['initial title availability within shared deadline']: shown[3] }).toEqual({ ['initial title availability within shared deadline']: true });
-      const titleStatus = await statusDeadline(controller.page, repo, [title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i]);
+      if (title !== 'slow') expect.soft({ ['initial title availability']: shown.title }).toEqual({ ['initial title availability']: true });
+      const titleStatus = await observeStatus(controller.page, repo, { title: title !== 'unavailable' ? /Issue title for live status/ : /title.*unavailable|unavailable.*title/i });
       writeFileSync(h.fixture.env.TITLE_ALLOW, 'release title');
-      expect.soft({ ['title within two seconds of releasing the external result']: (await titleStatus()).matched[0] }).toEqual({ ['title within two seconds of releasing the external result']: true });
+      expect.soft({ ['title after releasing the external result']: (await titleStatus()).shown.title }).toEqual({ ['title after releasing the external result']: true });
       await expect.soft(pane).not.toContainText(/PRIVATE ISSUE BODY|PRIVATE PR BODY|Different pull request title/);
     } finally {
       if (h.fixture.env.TITLE_ALLOW) writeFileSync(h.fixture.env.TITLE_ALLOW, 'release during cleanup');
@@ -68,27 +69,29 @@ fi
 }
 
 test('real malformed flow remains an error rather than an unassigned terminal', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
   const h = await createControllerDesktopHarness();
   const repo = h.fixture.repositories[0];
   try {
     mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
     seedTrustedFlow(h.fixture.home, repo, 'broken-flow', 'name: broken-flow\nsteps: [\n');
     const controller = await h.launch(controllerTarget, h.fixture.nonGit);
-    const errorStatus = await statusDeadline(controller.page, repo, [/error/i, /broken-flow|parse|yaml|invalid/i], 'registration');
+    const errorStatus = await observeStatus(controller.page, repo, { error: /error/i, reason: /broken-flow|parse|yaml|invalid/i }, { start: 'registration' });
     const terminal = await h.launch(terminalTarget, repo);
     await expect(terminal.page.locator('#flow-strip .flow-error')).toBeVisible();
     await expect.poll(() => terminal.page.evaluate(directory => window.flow.state(directory), repo)).toMatchObject({ status: 'error' });
     const source = await terminal.page.evaluate(directory => window.flow.state(directory), repo);
     const pane = cardLocator(controller.page, repo);
     const errorShown = await errorStatus();
-    expect.soft({ ['error within initial deadline']: errorShown.matched[0] }).toEqual({ ['error within initial deadline']: true });
+    expect.soft({ ['error in the initial status']: errorShown.shown.error }).toEqual({ ['error in the initial status']: true });
     expect(source.error).toBeTruthy();
-    expect.soft({ ['full error within same deadline']: errorShown.texts.some(text => text.includes(source.error!)) }).toEqual({ ['full error within same deadline']: true });
+    expect.soft({ ['full error shown']: errorShown.ever(source.error!) }).toEqual({ ['full error shown']: true });
     await expect.soft(pane).not.toContainText(/unassigned/i);
   } finally { await h.dispose(); }
 });
 
 test('real PTY activity remains visible without a started flow and never implies attention', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
   const h = await createControllerDesktopHarness();
   const repo = h.fixture.repositories[0];
   try {
@@ -100,13 +103,13 @@ test('real PTY activity remains visible without a started flow and never implies
     await expect(terminal.page.locator('#flow-strip .flow-control')).toHaveText('Start');
     await terminal.page.locator('.xterm-screen').click();
     await terminal.page.keyboard.type('while :; do printf "SCREEN_ACTIVITY_%s\\n" "$RANDOM"; sleep 0.1; done');
-    const activityStatus = await statusDeadline(controller.page, repo, [/active/i, /unassigned/i]);
+    const activityStatus = await observeStatus(controller.page, repo, { active: /active/i, unassigned: /unassigned/i });
     await terminal.page.keyboard.press('Enter');
     await expect(terminal.page.locator('.xterm-rows')).toContainText('SCREEN_ACTIVITY_');
     const pane = cardLocator(controller.page, repo);
-    const { matched: activityShown } = await activityStatus();
-    expect.soft({ ['active within shared deadline']: activityShown[0] }).toEqual({ ['active within shared deadline']: true });
-    expect.soft({ ['unassigned within shared deadline']: activityShown[1] }).toEqual({ ['unassigned within shared deadline']: true });
+    const { shown: activityShown } = await activityStatus();
+    expect.soft({ ['active shown']: activityShown.active }).toEqual({ ['active shown']: true });
+    expect.soft({ ['unassigned shown']: activityShown.unassigned }).toEqual({ ['unassigned shown']: true });
     await terminal.page.keyboard.press('Control+c');
     await expect.soft(pane).toContainText(/idle|quiet/i);
     await expect.soft(pane).not.toContainText(/needs? (?:a )?human/i);

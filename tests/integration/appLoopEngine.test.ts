@@ -380,7 +380,6 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     engine.enter(h.repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable(); // boundary drained + idle-confirm → the work prompt injects
     expect(h.injected[1]).toContain('#133');
-    expect(h.injected[1].toLowerCase()).toContain('do not infer');
   });
 
   it('emits no ticket line in the work prompt when the flow resolved no ticket', () => {
@@ -1397,7 +1396,6 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(retry).not.toBe(firstPrompt);
     expect(retry).toContain(`no record for ${ROSTER[1]}`);
     expect(retry).toContain(roundReportRel(1));
-    expect(retry.toLowerCase()).toContain('do not re-run the reviewers');
     expect(retry).not.toContain('Spawn each reviewer');
     expect(retry).toContain(`check-artifact report ${roundReportRel(1)}`);
     expect(retry).toContain(REVIEW_KEY);

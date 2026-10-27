@@ -18,7 +18,7 @@ export function deferred<T>(): Deferred<T> {
 }
 
 export interface ScriptedAsync<A extends unknown[], R> {
-  /** The fake to inject. A call no answer was scripted for rejects and is recorded in `unscripted()`. */
+  /** The fake to inject. A call no answer was scripted for rejects. */
   call(...args: A): Promise<R>;
   /** Queue an answer for the next unanswered call. */
   respond(value: R): void;
@@ -28,14 +28,11 @@ export interface ScriptedAsync<A extends unknown[], R> {
   otherwise(value: R): void;
   /** Every call's arguments, in call order. */
   calls(): A[];
-  /** The arguments of every call that found no scripted answer, in call order. */
-  unscripted(): A[];
 }
 
 export function createScriptedAsync<A extends unknown[], R>(): ScriptedAsync<A, R> {
   const queue: Deferred<R>[] = [];
   const seen: A[] = [];
-  const unanswered: A[] = [];
   let fallback: { value: R } | null = null;
   return {
     call(...args) {
@@ -43,7 +40,6 @@ export function createScriptedAsync<A extends unknown[], R>(): ScriptedAsync<A, 
       const next = queue.shift();
       if (next) return next.promise;
       if (fallback) return Promise.resolve(fallback.value);
-      unanswered.push(args);
       return Promise.reject(new Error(`unscripted call with ${JSON.stringify(args)}`));
     },
     respond(value) {
@@ -60,7 +56,6 @@ export function createScriptedAsync<A extends unknown[], R>(): ScriptedAsync<A, 
       fallback = { value };
     },
     calls: () => [...seen],
-    unscripted: () => [...unanswered],
   };
 }
 

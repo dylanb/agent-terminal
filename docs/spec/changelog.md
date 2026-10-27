@@ -2,6 +2,27 @@
 
 > **Changelog v2.224:** **§23.6 — directory conflict cards ([#220](https://github.com/dylanb/agent-terminal/issues/220), operator decision 2026-10-26).** Overlapping live connections now share one conflict-only card with directory identity, instance count and all-original-window activation. This explicitly supersedes older overlap ticket/work/human-request display requirements: the operator must reduce the terminals to one before the survivor's current ordinary information returns. Header counts count cards; collapsed conflicts retain warning/count. Activation reports aggregate failures against the captured target set. Last departure retains one disconnected occurrence, reconnect replaces it, and focus/collapse continuity follows the directory. Wire protocol, human gates and T4 notifications are unchanged.
 
+## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
+
+§23.6: the window header's theme button read **Dark theme** in both themes and showed its state only
+through `aria-pressed`. It now names the theme it switches to — **Dark theme** in light mode, **Light
+theme** in dark mode — with no pressed state, since a toggle's name may not change with its state. In
+the multi-column layout a collapsed card stretched to the tallest card in its row, so its outline looked
+expanded; cards now align to the top of the row and a collapsed card's outline wraps its header. No IPC
+contract change.
+
+## #256 — tests guard app behaviour only
+
+§28.6 P6b and P6e, §28.10 and §28.11 no longer require a test of charter or recipe wording: the
+content-parity test, the `ui` charter's demand that contrast be checked in a real browser, and the
+recipe↔predicate canonical-example check are gone. Bundled charters and recipes keep only their
+load-validity tests, and P6e's design-system sentence matches TRACER-BULLET.md: token and stylesheet
+content needs no RED test, and any behaviour a slice adds is still proven RED-first with an `_electron`
+e2e. §27.15, §28.5.5 and §28.6 P6c no longer require a prompt's canonical example to be asserted
+well-formed against its predicate, and drop the predicate happy-path test from what the example anchors:
+the example still anchors the prompt few-shot and the fake-agent e2e, and the agent's self-check command
+runs the same predicate. The rule is CLAUDE.md § Test-driven development.
+
 > **Changelog v2.223:** **Spec, standards and design docs describe the current system and its reasons, not its history.** The code says what the system does; these documents say why. Each section is cut to the decision, constraint or accepted risk behind the code, and restated mechanism, finished build plans, superseded designs and version narration are removed. Every heading the code cites keeps its number. CLAUDE.md makes `src/shared/ipc.ts` authoritative over §6 prose for wire shapes. §10 and §11 are deleted (nothing cited them); §27.14 and §25.8 are deleted; §27.15 keeps only its test-seam sentence. The N8 deletion list, the granular-flow plan, the new-loop brief and the unreferenced design mockups are deleted. Claims the code contradicted are corrected, including the feature sections that still specified channels no code implements (`flow:openChild` §23.2, `flow:composeFeedback` §19.4, `viewer:ghRefresh` §20.3, `flow:list` §18), the never-built `layout.json` (§22.4) and cross-instance guard (§23.3), and the live done-todo cap (§16.4). Changelog entries older than v2.200 are dropped from this file. No IPC contract shape change.
 
 > **Changelog v2.222:** **§6 — the channel tables and the `preload.js` sketch are retired; `src/shared/ipc.ts` is the one place a channel is documented ([#243](https://github.com/dylanb/agent-terminal/issues/243), operator decision 2026-10-26).** The tables repeated what `ipc.ts` already defines and had drifted from it: they listed four channels no code implements (`flow:list`, `flow:composeFeedback`, `flow:openChild`, `viewer:ghRefresh`, each still specified in its feature section, §18, §19.4, §23.2 and §20.3) and missed about twenty that ship, including the controller's `controller:getTheme` and `controller:setTheme`. Each channel's definition now carries its wire name and a one-sentence `does` statement as data, and `ipc.ts` assembles the terminal channels from per-domain modules under `src/shared/ipc/`, refusing a key or wire name defined twice. §6 keeps its principles, the controller surface and protocol prose, and initial terminal readiness, and points at `ipc.ts` for every channel and payload. No wire name, payload or behaviour changes.

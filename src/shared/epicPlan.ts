@@ -98,8 +98,8 @@ export function epicPlanWellFormed(planText: string): boolean {
   );
 }
 
-/** The one canonical example the predicate test, the fake-agent output, and the recipe few-shot all reference,
- *  so they cannot drift (§93). Asserted `epicPlanWellFormed` by its test. */
+/** The one canonical example the fake-agent output and the recipe few-shot both reference, so they cannot
+ *  drift (§93). */
 export function exampleEpicPlan(n = 2): string {
   const lines = [`${EPIC_GRAMMAR.classification} ${EPIC_CLASSIFICATION}`, '', EPIC_GRAMMAR.subTicketsHeading, ''];
   for (let i = 1; i <= n; i++) {
