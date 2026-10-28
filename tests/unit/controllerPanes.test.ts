@@ -45,7 +45,7 @@ describe('controller window header', () => {
 
 describe('controller window header with empty classes', () => {
   it('shows 0 for each summary class with no cards', () => {
-    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['working-activity-unavailable']];
+    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['needs-human-working']];
     const { host, dispose } = mountControllerPanes({ terminals: cases.map(c => c.terminal) });
     try {
       const text = windowHeaderIn(host)?.textContent ?? '';
@@ -88,12 +88,12 @@ describe('controller panes', () => {
     } finally { dispose(); }
   });
 
-  it('brings forward the chosen opaque terminal identity even for equal directories', async () => {
+  it('brings forward every live connection represented by a directory card', async () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [terminal, { ...terminal, id: 'terminal-b' }] });
     try {
-      const second = cardsIn(host)[1];
-      (second && bringForwardIn(second))?.click();
-      await vi.waitFor(() => expect({ cards: cardsIn(host).length, activated: service.activated }).toEqual({ cards: 2, activated: ['terminal-b'] }));
+      const card = cardsIn(host)[0];
+      (card && bringForwardIn(card))?.click();
+      await vi.waitFor(() => expect({ cards: cardsIn(host).length, activated: [...service.activated].sort() }).toEqual({ cards: 1, activated: ['terminal-a', 'terminal-b'] }));
     } finally { dispose(); }
   });
 

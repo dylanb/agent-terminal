@@ -23,6 +23,8 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 
 **Always run the e2e locally via the Podman harness (`docs/e2e-podman.md`) before claiming a change done — do not defer e2e to CI.**
 
+**Test runs own their GUI windows and processes through verified cleanup on success, failure and interruption, including Terminal wrappers; never close the operator's sessions.** → [CODE-STANDARDS.md — Test runs own their GUI windows through cleanup](CODE-STANDARDS.md#test-runs-own-their-gui-windows-through-cleanup).
+
 `node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `pnpm run rebuild`.
 
 ## Requesting / awaiting a Copilot PR review
@@ -55,6 +57,8 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` — **never han
   - **Locators:** finding an element by its text or accessible name to drive it, or to isolate it for a behavioural assertion, is fine; an assertion whose only purpose is that static copy exists is not.
 - **An injection seam exposes a domain concept, NOT the shape of the thing behind it** (`canEnter(dir): boolean`, `now(): number` — not `accessSync`/`statSync`, `Date.now`). Inject the narrowest domain predicate; model a descriptor with mutually-exclusive modes as a discriminated union (`BundleLocation`), never a flat record with dead fields. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - **Comments state ONLY what the code cannot.** Litmus: could a reader delete the comment, read the code, and recover the fact? If yes, delete it. The default is no comment; only (1) a bare citation of an authority outside this repo (WCAG, CWE, RFC, a wire/third-party format) or (2) a fact near impossible to recover from the code, stating what breaks if violated. Nothing in this repo is cited from code — a bare `§n` only when finding the clause would otherwise mean reading the whole spec. Doc-comments meet the same bar; an asserted invariant is a missing check (enforce it, delete the comment); a parameter's domain goes in a named type; a mechanism comment the change alters is updated or deleted in that change. Code `TODO`/`FIXME` is forbidden (enforced by the `local/no-todo-comments` ESLint rule). → [CODE-STANDARDS.md § Comments](CODE-STANDARDS.md)
+- **Expected results are written independently of the code they check.** An oracle fixture never imports the code it grades — only the contract's types — and is listed in `EXPECTED_RESULTS_FIXTURES` (`eslint.config.mjs`), which enforces it. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- **A test stand-in for a controller peer builds messages with `src/shared/controllerProtocol.ts`'s encoder and version constants, never a typed-in version** — `connectScriptedTerminal` for a plain terminal. Only wire-format tests (`WIRE_FORMAT_TESTS`) type versions in. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - **No mocks for the terminal emulator or the PTY.** Integration tests drive the real `@xterm/headless` shadow module with scripted byte streams (it is pure JS and runs under vitest/node). Full-loop behavior (real node-pty, real bash, real renderer) is covered by Playwright `_electron` e2e — never by mocking node-pty. Fake timers/clocks are fine (the quiescence detector takes injectable timers for exactly this); mocking the VT parser is not.
 - **An e2e test never boots an Electron it will not use** — a test that launches its own is tagged `@ownapp` and the harness boots nothing for it; the canary at the top of `app.spec.ts` pins this. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 

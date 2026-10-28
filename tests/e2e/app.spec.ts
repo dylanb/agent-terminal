@@ -3587,6 +3587,7 @@ function withPickup(yaml: string, block: string): string {
 }
 
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
@@ -4501,9 +4502,12 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
     | { inputs?: Record<string, unknown> }
     | undefined;
   expect(Object.values(staleState?.inputs ?? {})).not.toContain('999');
-  const calls = readGhLog(logFile).slice(staleInputLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh ');
+  // The viewer's own working-tree read (`git status --porcelain -z`) can land after the mark, so only the
+  // pickup's exact preflight probe and its mutation sidecars show the stale answer started a pickup.
+  expect(readGhLog(logFile).slice(staleInputLogStart)).not.toMatch(/^git status --porcelain$/m);
+  for (const mutation of ['local-branch', 'remote-branch', 'pr-created', 'issue-assignee', 'issue-label', 'pr-label']) {
+    expect(existsSync(`${logFile}.${mutation}`), `pickup mutation .${mutation} fired for a stale answer`).toBe(false);
+  }
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });

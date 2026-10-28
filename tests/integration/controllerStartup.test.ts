@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { startControllerTransport } from '../../src/main/controllerTransport';
-import { encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 
 const identity = { launchDirectory: '/work/startup', repositoryRoot: null };
 
@@ -53,7 +53,7 @@ describe('initial controller registration', () => {
     const frames: Array<{ message: unknown; published: boolean }> = [];
     peer.on('message', chunk => frames.push({ message: JSON.parse(chunk.toString()), published }));
     await once(peer, 'open');
-    peer.send(encodeControllerMessage({ version: 2, type: 'register', ...identity }));
+    peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'register', ...identity }));
     await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 2, type: 'registered' }, published: true }]));
   });
 

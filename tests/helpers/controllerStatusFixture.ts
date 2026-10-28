@@ -1,5 +1,4 @@
 import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
-import type { CardStatusClass as Status } from '../../src/renderer/src/controllerCardStatus';
 
 export type WorkStatus = ControllerWorkStatus;
 
@@ -16,6 +15,9 @@ export function workStatus(overrides: Partial<WorkStatus> = {}): WorkStatus {
 export function statusTerminal(overrides: Partial<WorkStatus> = {}): StatusTerminal {
   return { id: 'terminal-a', launchDirectory: '/fixed/worktree', repositoryRoot: '/fixed/repository', work: workStatus(overrides) };
 }
+
+export const STATUS_CLASSES = ['error', 'needs-human', 'working', 'completed', 'idle'] as const;
+export type Status = (typeof STATUS_CLASSES)[number];
 
 export const SUMMARY_LABELS = ['errors', 'need a human', 'idle', 'working'] as const;
 export type SummaryLabel = (typeof SUMMARY_LABELS)[number];
@@ -37,10 +39,17 @@ const failure = { reason: 'Step exited 1' };
 
 const CASES = {
   disconnected: [caseTerminal('disconnected', undefined, 'disconnected'), 'Disconnected', 'error', 'errors'],
-  'disconnected-with-error': [caseTerminal('disconnected-with-error', workStatus({ error: failure, attention: human }), 'disconnected'), 'Disconnected', 'error', 'errors'],
-  'flow-error': [caseTerminal('flow-error', workStatus({ error: failure })), 'Flow error', 'error', 'errors'],
-  'flow-error-and-human': [caseTerminal('flow-error-and-human', workStatus({ error: failure, attention: human })), 'Flow error', 'error', 'errors'],
-  'needs-human': [caseTerminal('needs-human', workStatus({ attention: human, activity: 'active' })), 'Needs a human', 'needs-human', 'need a human'],
+  'disconnected-with-error': [caseTerminal('disconnected-with-error', workStatus({ error: failure, attention: human, activity: 'active' }), 'disconnected'), 'Disconnected', 'error', 'errors'],
+  'flow-error': [caseTerminal('flow-error', workStatus({ error: failure, activity: 'quiet' })), 'Flow error · Idle', 'error', 'errors'],
+  'flow-error-working': [caseTerminal('flow-error-working', workStatus({ error: failure, activity: 'active' })), 'Flow error · Working', 'working', 'working'],
+  'flow-error-activity-unavailable': [caseTerminal('flow-error-activity-unavailable', workStatus({ error: failure, activity: 'unavailable' })), 'Flow error · Activity unavailable', 'error', 'errors'],
+  'malformed-flow-error-working': [caseTerminal('malformed-flow-error-working', workStatus({ flow: { availability: 'unavailable' }, error: failure, activity: 'active' })), 'Flow error · Working', 'working', 'working'],
+  'flow-error-and-human': [caseTerminal('flow-error-and-human', workStatus({ error: failure, attention: human, activity: 'quiet' })), 'Flow error · Needs a human · Idle', 'error', 'errors'],
+  'flow-error-and-human-working': [caseTerminal('flow-error-and-human-working', workStatus({ error: failure, attention: human, activity: 'active' })), 'Flow error · Needs a human · Working', 'working', 'working'],
+  'flow-error-and-human-activity-unavailable': [caseTerminal('flow-error-and-human-activity-unavailable', workStatus({ error: failure, attention: human, activity: 'unavailable' })), 'Flow error · Needs a human · Activity unavailable', 'error', 'errors'],
+  'needs-human': [caseTerminal('needs-human', workStatus({ attention: human, activity: 'quiet' })), 'Needs a human · Idle', 'needs-human', 'need a human'],
+  'needs-human-working': [caseTerminal('needs-human-working', workStatus({ attention: human, activity: 'active' })), 'Needs a human · Working', 'working', 'working'],
+  'needs-human-activity-unavailable': [caseTerminal('needs-human-activity-unavailable', workStatus({ attention: human, activity: 'unavailable' })), 'Needs a human · Activity unavailable', 'needs-human', 'need a human'],
   oversized: [caseTerminal('oversized', {
     flow: { availability: 'unavailable' }, ticket: { availability: 'unavailable' },
     activity: 'unavailable', attention: null, error: null, unavailableReason: 'message-too-large',
@@ -54,7 +63,7 @@ const CASES = {
   completed: [caseTerminal('completed', workStatus({ flow: { ...running, assignment: 'completed' }, activity: 'active' })), 'Completed', 'completed', 'idle'],
   idle: [caseTerminal('idle', workStatus({ activity: 'quiet' })), 'Idle', 'idle', 'idle'],
   working: [caseTerminal('working', workStatus({ activity: 'active' })), 'Working', 'working', 'working'],
-  'working-activity-unavailable': [caseTerminal('working-activity-unavailable', workStatus({ activity: 'unavailable' })), 'Working', 'working', 'working'],
+  'activity-unavailable': [caseTerminal('activity-unavailable', workStatus({ activity: 'unavailable' })), 'Activity unavailable', 'idle', 'idle'],
 } as const satisfies Record<string, readonly [ControllerTerminal, string, Status, SummaryLabel]>;
 
 export type StatusCaseKey = keyof typeof CASES;
@@ -68,7 +77,7 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
-  options: { activation?: 'activated' | 'unavailable' | 'rejected'; theme?: Theme | 'unreadable' } = {},
+  options: { activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal']; theme?: Theme | 'unreadable' } = {},
 ) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
@@ -85,6 +94,7 @@ export function statusService(
     subscribeTerminals(listener) { listeners.add(listener); listener(current); return () => { listeners.delete(listener); }; },
     async activateTerminal(id) {
       activated.push(id);
+      if (typeof options.activation === 'function') return options.activation(id);
       if (options.activation === 'rejected') throw new Error('activation failed');
       return options.activation ?? 'activated';
     },
@@ -102,4 +112,19 @@ export function statusService(
     },
   };
   return { api, activated, dismissed, publish, savedThemes };
+}
+
+export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {
+  const terminals = ['amber', 'blue', 'coral', 'denim'].map((key, index): StatusTerminal => ({
+    id: `connection-${key}`,
+    launchDirectory: index < 3 ? '/conflicts/shared' : '/conflicts/other-worktree',
+    repositoryRoot: '/conflicts/repository',
+    work: workStatus({
+      flow: { availability: 'known', name: `flow-${key}`, step: `step-${key}`, assignment: 'assigned' },
+      ticket: { availability: 'known', number: 271 + index, title: { availability: 'known', text: `Ticket ${key}` } },
+      attention: { status: 'needs a human', reasons: [`Approve ${key}`] },
+      error: { reason: `Error ${key}` },
+    }),
+  }));
+  return { members: terminals.slice(0, 3), unrelated: terminals[3] };
 }

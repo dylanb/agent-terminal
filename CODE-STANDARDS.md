@@ -48,6 +48,29 @@ snapshots of internal structures and assertions that re-spell the source are the
 sequences are legitimate only where the bytes ARE the contract (`ESC[200~…ESC[201~` paste framing, `\r`
 submit).
 
+## Expected results are written independently of the code they check
+
+A table of expected results that tests grade production code against (an oracle fixture) is written from
+the requirement, by hand, and never imports the code it checks. An expectation computed by that code
+passes whatever the code does, so the test can no longer catch the mistake it exists for. The fixture may
+import the contract's types (`src/shared/ipc`), never a classifier, formatter or constant that decides the
+answer. Each such fixture is listed in `EXPECTED_RESULTS_FIXTURES` in `eslint.config.mjs`, whose
+`no-restricted-imports` block enforces this; `tests/helpers/controllerStatusFixture.ts` (`STATUS_CASES`) is
+the shape to copy. A new oracle is added to that list in the change that creates it.
+
+## Test stand-ins speak the protocol through its own module
+
+A test that stands in for one side of the controller protocol (a scripted terminal, a fake controller)
+builds every message with `encodeControllerMessage` and the version constants
+(`CONTROLLER_PROTOCOL_MAJOR`, `CONTROLLER_PROTOCOL_MINOR`) from `src/shared/controllerProtocol.ts`, never a
+typed-in `version: 2`. A typed-in version goes stale silently on the next protocol bump: every copy has to
+be found by hand, and a test can keep passing against a message the app no longer sends. A test that only
+needs a registered terminal uses `connectScriptedTerminal` (`tests/helpers/scriptedControllerTerminal.ts`).
+The exception is a test whose subject *is* the wire format — version negotiation, malformed or fragmented
+frames, the parser's accept/reject rules — where the typed-in bytes are the contract; those files are
+listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. A `no-restricted-syntax` rule there flags a literal
+`version` or `minor` on a message a controller test builds.
+
 ## An injection seam names a domain concept, not the shape of what backs it
 
 A dependency injected for testability is part of the unit's public surface, so it names *what* the unit
@@ -372,6 +395,18 @@ ceiling, and a **worker that cannot tear down**. A worker-teardown timeout belon
 cannot absorb it: Playwright reports `1 error was not a part of any test` and exits non-zero with every test
 green. Generally: when a shared fixture is expensive and only *some* tests can use it, make it opt-out and
 pin the opt-out.
+
+## Test runs own their GUI windows through cleanup
+
+Before a GUI test or native verification run launches anything, establish how it will identify and
+clean up its own windows and child processes on success, failure and interruption. Ownership includes
+any Terminal wrapper used to start the run. A shell command exiting is not proof of cleanup: Terminal
+can retain the finished window, leaving the operator to identify and close test leftovers.
+
+Close only the exact resources owned by the run, never all Terminal/Electron windows, unrelated
+processes or the operator's sessions. Verify that no owned windows or processes remain before reporting
+completion. If a launch mechanism cannot provide ownership and cleanup, use one that can; do not rely
+on the operator to clean up or change their global Terminal preferences to hide the problem.
 
 ## One theme per PR
 

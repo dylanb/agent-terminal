@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startControllerTransport, CONTROLLER_ACTIVATION_TIMEOUT_MS } from '../../src/main/controllerTransport';
-import { parseControllerMessage, encodeControllerMessage, type ControllerMessage } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, parseControllerMessage, encodeControllerMessage, type ControllerMessage } from '../../src/shared/controllerProtocol';
 
 describe('controller real local transport', () => {
   let root: string;
@@ -35,7 +35,7 @@ describe('controller real local transport', () => {
     const socket = connectWebSocket(resolveControllerEndpoint(appHome));
     peers.push(socket);
     await once(socket, 'open');
-    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: null }));
+    socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'register', launchDirectory: directory, repositoryRoot: null }));
     return socket;
   }
 
@@ -235,7 +235,7 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(original.received).toHaveLength(1));
     const request = original.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    original.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    original.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await activation).toBe('activated');
   });
 
@@ -253,7 +253,7 @@ describe('controller real local transport', () => {
       if (release === 'confirmation') {
         const request = terminal.received[0];
         if (request.type !== 'activate') throw new Error('Expected activation request');
-        terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+        terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
         expect(await pending[0]).toBe('activated');
       } else if (release === 'disconnect') {
         terminal.socket.terminate();
@@ -265,7 +265,7 @@ describe('controller real local transport', () => {
       await vi.waitFor(() => expect(healthy.received).toHaveLength(1));
       const request = healthy.received[0];
       if (request.type !== 'activate') throw new Error('Expected activation request');
-      healthy.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+      healthy.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
       expect(await resumed).toBe('activated');
       await rejected;
     }, 10_000,
@@ -314,7 +314,7 @@ describe('controller real local transport', () => {
         const message = parseControllerMessage(chunk.toString());
         if (message.type === 'activate') messages.push(message);
         if (message.type === 'activate') socket.send(encodeControllerMessage({
-          version: 2, type: 'result', requestId: message.requestId, outcome: 'activated',
+          version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: message.requestId, outcome: 'activated',
         }));
       });
       await vi.waitFor(() => expect(server!.terminals()).toHaveLength(received.indexOf(messages) + 1));
@@ -336,8 +336,8 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(terminal.received).toHaveLength(2));
     const requests = terminal.received.filter(message => message.type === 'activate');
     expect(new Set(requests.map(request => request.requestId)).size).toBe(2);
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: requests[1].requestId, outcome: 'activated' }));
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: requests[0].requestId, outcome: 'unavailable' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: requests[1].requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: requests[0].requestId, outcome: 'unavailable' }));
     expect(await Promise.all([first, second])).toEqual(['unavailable', 'activated']);
   });
 
@@ -350,7 +350,7 @@ describe('controller real local transport', () => {
     expect.soft(settled).toBe(false);
     const request = terminal.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await result).toBe('activated');
   });
 
@@ -361,7 +361,7 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(terminal.received).toHaveLength(1));
     const request = terminal.received[0];
     if (request.type !== 'activate') throw new Error('Expected activation request');
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect.soft(await result).toBe('activated');
     const disconnected = new Promise<void>(resolve => {
       let initial = true;
@@ -403,7 +403,7 @@ describe('controller real local transport', () => {
     await vi.waitFor(() => expect(replacement.received.length).toBeGreaterThan(0));
     const barrierRequest = replacement.received.at(-1)!;
     if (barrierRequest.type !== 'activate') throw new Error('Expected activation request');
-    replacement.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
+    replacement.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
     expect(await barrier).toBe('unavailable');
     expect(replacement.received).toEqual([{ version: 2, type: 'activate', requestId: expect.any(String) }]);
   });
@@ -429,8 +429,8 @@ describe('controller real local transport', () => {
     const nextRequest = terminal.received[1];
     if (nextRequest.type !== 'activate') throw new Error('Expected activation request');
     expect.soft(nextSettled).toBe(false);
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'unavailable' }));
-    terminal.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: nextRequest.requestId, outcome: 'activated' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'unavailable' }));
+    terminal.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: nextRequest.requestId, outcome: 'activated' }));
     expect.soft(await next).toBe('activated');
     expect(await result).toBe('unavailable');
   });
@@ -446,11 +446,11 @@ describe('controller real local transport', () => {
     const request = owner.received[0];
     const barrierRequest = other.received[0];
     if (request.type !== 'activate' || barrierRequest.type !== 'activate') throw new Error('Expected activation requests');
-    other.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
-    other.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
+    other.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    other.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: barrierRequest.requestId, outcome: 'unavailable' }));
     expect(await barrier).toBe('unavailable');
     expect.soft(settled).toBe(false);
-    owner.socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: request.requestId, outcome: 'activated' }));
+    owner.socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: request.requestId, outcome: 'activated' }));
     expect(await result).toBe('activated');
   });
 });

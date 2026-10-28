@@ -1,57 +1,39 @@
-import { once } from 'node:events';
-import WebSocket from 'ws';
-import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startControllerTransport } from '../../src/main/controllerTransport';
-import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import type { ControllerTerminal } from '../../src/shared/ipc';
+import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 
 type Transport = Awaited<ReturnType<typeof startControllerTransport>>;
 
 describe('controller stale representations', () => {
   let home: string;
   let server: Transport;
-  const sockets: WebSocket[] = [];
+  const clients: ScriptedControllerTerminal[] = [];
   beforeEach(async () => {
     home = realpathSync(mkdtempSync(join(tmpdir(), 'at-dismiss-')));
     server = await startControllerTransport(home);
   });
   afterEach(async () => {
-    for (const socket of sockets.splice(0)) socket.terminate();
+    await Promise.all(clients.splice(0).map(client => client.close()));
     await server.dispose();
     rmSync(home, { recursive: true, force: true });
   });
 
   async function peer(directory: string) {
     const before = new Set(server.terminals().map(item => item.id));
-    const socket = connectWebSocket(resolveControllerEndpoint(home));
-    sockets.push(socket);
-    socket.on('error', () => socket.terminate());
-    let confirmed = false;
-    let activations = 0;
-    socket.on('message', (chunk: Buffer) => {
-      const message = parseControllerMessage(chunk.toString());
-      if (message.type === 'registered') confirmed = true;
-      if (message.type === 'activate') {
-        activations++;
-        socket.send(encodeControllerMessage({ version: 2, type: 'result', requestId: message.requestId, outcome: 'activated' }));
-      }
-    });
-    await once(socket, 'open');
-    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
-    await vi.waitFor(() => expect(confirmed).toBe(true));
+    const client = await connectScriptedTerminal(home, { launchDirectory: directory, repositoryRoot: '/work' });
+    clients.push(client);
     const terminal = server.terminals().find(item => !before.has(item.id) && item.status !== 'disconnected')!;
-    return { socket, terminal, activations: () => activations };
+    return { terminal, activations: client.activations, close: client.close };
   }
 
   async function disconnect(client: Awaited<ReturnType<typeof peer>>) {
-    client.socket.terminate();
-    await vi.waitFor(() => expect(server.terminals().find(item => item.id === client.terminal.id)?.status).toBe('disconnected'));
+    await client.close();
+    await vi.waitFor(() => expect(server.terminals().some(item => item.id === client.terminal.id && item.status !== 'disconnected')).toBe(false));
   }
 
   it.each(['read', 'subscribe'] as const)('%s snapshots cannot change live or disconnected identities', async source => {
@@ -154,7 +136,7 @@ describe('controller stale representations', () => {
     expect(await server.activate(newer.terminal.id)).toBe('activated');
   });
 
-  it('dismisses one occurrence while preserving same-directory and other-directory stale entries and a live peer', async () => {
+  it('discards departed peers while preserving another directory and rejects their delayed dismissal', async () => {
     const selected = await peer('/work/a');
     const sameDirectory = await peer('/work/a');
     const otherDirectory = await peer('/work/b');
@@ -167,7 +149,6 @@ describe('controller stale representations', () => {
     try {
       await server.dismiss(selected.terminal.id);
       const expected = [
-        { ...sameDirectory.terminal, status: 'disconnected' },
         { ...otherDirectory.terminal, status: 'disconnected' },
         live.terminal,
       ];
@@ -177,6 +158,27 @@ describe('controller stale representations', () => {
       expect.soft(published).toEqual(expect.arrayContaining(expected));
       expect(await server.activate(live.terminal.id)).toBe('activated');
     } finally { unsubscribe(); }
+  });
+
+  it('retains only the last departure and rebuilds live membership through repeated reconnects', async () => {
+    const other = await peer('/work/other');
+    await disconnect(other);
+    for (let round = 0; round < 2; round++) {
+      const first = await peer('/work/shared');
+      const second = await peer('/work/shared');
+      const third = await peer('/work/shared');
+      await disconnect(first);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared').map(item => item.id).sort())
+        .toEqual([second.terminal.id, third.terminal.id].sort());
+      await disconnect(second);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared')).toEqual([third.terminal]);
+      await disconnect(third);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared'))
+        .toEqual([{ ...third.terminal, status: 'disconnected' }]);
+      expect.soft(server.terminals()).toContainEqual({ ...other.terminal, status: 'disconnected' });
+      await server.dismiss(first.terminal.id);
+      expect.soft(server.terminals()).toContainEqual({ ...third.terminal, status: 'disconnected' });
+    }
   });
 
 });

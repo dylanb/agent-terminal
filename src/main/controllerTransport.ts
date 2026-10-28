@@ -49,8 +49,10 @@ export async function startControllerTransport(appHome: string): Promise<Control
     socket.on('error', () => socket.terminate());
     socket.on('close', () => {
       const terminal = registrations.get(socket);
-      if (terminal) retained.set(terminal.id, { ...terminal, status: 'disconnected' });
       registrations.delete(socket);
+      if (terminal && ![...registrations.values()].some(peer => peer.launchDirectory === terminal.launchDirectory)) {
+        retained.set(terminal.id, { ...terminal, status: 'disconnected' });
+      }
       for (const request of pending.values()) if (request.socket === socket) request.finish('unavailable');
       notify();
     });
