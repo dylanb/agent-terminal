@@ -156,3 +156,49 @@ describe('controller card body', () => {
     ]).toEqual([]);
   });
 });
+
+describe('controller card action while its work is being answered', () => {
+  const settle = (): Promise<void> => new Promise(done => setTimeout(done, 0));
+  function mountPending(terminal: ControllerTerminal, host = document.body.appendChild(document.createElement('div'))) {
+    const answers: Array<() => void> = [];
+    const answer = () => new Promise<void>(done => { answers.push(done); });
+    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, onAction: answer });
+    return { host, card, answers };
+  }
+
+  it.each([
+    ['Bring forward', 'working', bringForwardIn],
+    ['Dismiss', 'disconnected-with-error', dismissIn],
+  ] as const)('%s ignores further presses and reports busy until its work is answered', async (_, statusCase, find) => {
+    const { terminal } = STATUS_CASES[statusCase];
+    const { host, answers } = mountPending(terminal);
+    const card = cardIn(host, terminal.launchDirectory);
+    const control = card ? find(card) : undefined;
+    control?.click();
+    control?.click();
+    const pending = { dispatched: answers.length, busy: control?.getAttribute('aria-busy') ?? null };
+    answers[0]?.();
+    await settle();
+    control?.click();
+    expect({ pending, afterAnswer: answers.length }).toEqual({ pending: { dispatched: 1, busy: 'true' }, afterAnswer: 2 });
+  });
+
+  it('keeps Bring forward unavailable on a card rebuilt while the old card\'s press is still answered', async () => {
+    const { terminal } = STATUS_CASES.working;
+    const { host, card: old, answers } = mountPending(terminal);
+    const first = cardIn(host, terminal.launchDirectory);
+    (first && bringForwardIn(first))?.click();
+    const state = old.state();
+    old.dispose();
+    const later: string[] = [];
+    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, from: state, onAction() { later.push('pressed'); } });
+    const rebuilt = cardIn(host, terminal.launchDirectory);
+    const control = rebuilt ? bringForwardIn(rebuilt) : undefined;
+    control?.click();
+    const pending = [...later];
+    answers[0]?.();
+    await settle();
+    control?.click();
+    expect({ pending, afterAnswer: later }).toEqual({ pending: [], afterAnswer: ['pressed'] });
+  });
+});

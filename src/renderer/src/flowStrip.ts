@@ -11,6 +11,7 @@ import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../sha
 import { isSelectionLocked } from '../../shared/flowStarted';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
+import { createPressGroup } from './pressable';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -103,7 +104,7 @@ export type FlowStripDeps = Omit<
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
-  onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void) => void;
+  onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void | Promise<unknown>) => void;
   /** Open the destructive Terminate confirmation (#26 AC3/AC4). The composition root surfaces the
    *  repo's current todo count and gates the IPC call; it invokes `confirm` only when the user
    *  confirms. The strip's `confirm` closure then drives `terminate(repoKey)` and repaints. Omitted →
@@ -267,33 +268,26 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           ? deps.restart(key)
           : deps.undo(key);
 
-  /** A lifecycle control button: fires its transition, disabling itself while in flight so a
-   *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
-   *  this keeps the UI honest), then re-renders from the returned state. */
+  const controls = createPressGroup();
+
+  const afterTransition = (key: string) => (view: FlowStateView): void => {
+    // The cwd may have moved while the transition was in flight; the awaited view belongs to
+    // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
+    if (repoKey !== key) return;
+    applyTransition(view);
+    // Signal the todo overlay to re-pull: its template picker is gated to the active step,
+    // which this transition may have changed (decoupled contract, §4.1/§9.1).
+    window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
+  };
+
   function controlButton(label: string, act: Act, step: string): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
     button.textContent = label;
-    button.addEventListener('click', () => {
+    controls.bind(button, () => {
       if (repoKey === null) return;
       const key = repoKey;
-      button.disabled = true;
-      runAct(act, key, step)
-        .then((view) => {
-          // The cwd may have moved while the transition was in flight; the awaited view belongs to
-          // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
-          if (repoKey !== key) return;
-          applyTransition(view);
-          // Signal the todo overlay to re-pull: its template picker is gated to the active step,
-          // which this transition may have changed (decoupled contract, §4.1/§9.1).
-          window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
-        })
-        .catch(onActFailed)
-        // Re-enable so retry is possible if both the action and refresh()'s state() reject (no
-        // repaint detached this button). Harmless on success: the repaint already replaced it.
-        .finally(() => {
-          button.disabled = false;
-        });
+      return runAct(act, key, step).then(afterTransition(key)).catch(onActFailed);
     });
     return button;
   }
@@ -311,23 +305,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     const button = doc.createElement('button');
     button.className = 'flow-terminate pill';
     button.textContent = 'Terminate';
-    button.addEventListener('click', () => {
+    controls.bind(button, () => {
       if (repoKey === null) return;
       const key = repoKey;
       deps.onTerminate?.(key, () => {
         if (repoKey !== key) return;
-        button.disabled = true;
-        deps
-          .terminate(key)
-          .then((view) => {
-            if (repoKey !== key) return;
-            applyTransition(view);
-            window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
-          })
-          .catch(onActFailed)
-          .finally(() => {
-            button.disabled = false;
-          });
+        controls.run(button, () => deps.terminate(key).then(afterTransition(key)).catch(onActFailed));
       });
     });
     return button;
@@ -450,7 +433,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
       // A stale submit (cwd moved while the modal was open) must not land on the now-current repo.
       if (boundRepo === null || repoKey !== boundRepo) return;
-      deps
+      return deps
         .provideInput(boundRepo, boundStep, values)
         .then((view) => {
           // The cwd may also move while provideInput is in flight (mirrors controlButton's guard).

@@ -6,6 +6,7 @@
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
 import { captureSubtreeFocus, focusedPopupOwnsEscape } from './dom';
+import { createPressGroup } from './pressable';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
@@ -167,15 +168,20 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     signalLayoutChange(); // hiding/showing chrome changes the main width → refit width-sensitive panes
   }
 
-  const onClick = (e: Event): void => {
-    const target = e.target as Element;
-    const vb = target.closest('[data-viewbtn]');
-    if (vb && root.contains(vb)) return setView(vb.getAttribute('data-viewbtn') as ViewId);
-    if (target.closest('#qs')) return toggleDrawer();
-    if (target.closest('#dclose')) return closeDrawer();
-    if (target.closest('.loopstat')) return toggleLoopPanel();
-    if (target.closest('[data-loop-close]')) return closeLoopPanel();
-    if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
+  const navPress = (target: Element): { control: HTMLElement; action: () => void } | null => {
+    const vb = target.closest<HTMLElement>('[data-viewbtn]');
+    if (vb && root.contains(vb)) return { control: vb, action: () => setView(vb.getAttribute('data-viewbtn') as ViewId) };
+    const press = (selector: string, action: () => void): { control: HTMLElement; action: () => void } | null => {
+      const control = target.closest<HTMLElement>(selector);
+      return control ? { control, action } : null;
+    };
+    return (
+      press('#qs', toggleDrawer) ??
+      press('#dclose', closeDrawer) ??
+      press('.loopstat', toggleLoopPanel) ??
+      press('[data-loop-close]', closeLoopPanel) ??
+      press('#tg', () => setTheme(theme === 'dark' ? 'light' : 'dark'))
+    );
   };
 
   // Capture phase + stopPropagation: xterm would otherwise swallow the app-nav chords (⌘/Ctrl+0/9 and
@@ -240,7 +246,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const win = doc.defaultView;
   win?.addEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
 
-  root.addEventListener('click', onClick);
+  const unbindNav = createPressGroup().within(root, navPress);
   doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
@@ -271,7 +277,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     setViewerFullscreen,
     isViewerFullscreen: () => fullscreen,
     dispose() {
-      root.removeEventListener('click', onClick);
+      unbindNav();
       doc.removeEventListener('keydown', onKeyDown, true);
       win?.removeEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
     },

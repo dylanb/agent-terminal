@@ -1,5 +1,16 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
+## A pressed control waits for its answer
+
+§22.5 (new): a control kept accepting presses while the app was still answering its first one, so a
+second click could start the same action, or a related one, again. Every press that starts work the app
+must answer now holds that control and its related controls until the answer arrives. The pressed control
+shows the activity spinner and reports `aria-busy`, and the held controls report `aria-disabled`. All
+renderer controls go through one helper, and a lint rule fails any other click handler (UI-STANDARDS.md
+§1.4). IPC: `flow:appGateDecision` (approve, polish, back-to-red without a brief) now replies with whether the
+decision landed once main has acted on it, like `flow:appRequestChanges`, so a loop gate's controls hold
+until then. No payload changes.
+
 ## #267 — controller cards show agent activity alongside flow errors and human requests, coloured by the combination
 
 §23.6: a card with a flow error or a human request showed only that condition, in the error or needs-a-human

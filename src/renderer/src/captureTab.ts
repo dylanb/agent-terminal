@@ -21,6 +21,7 @@ import {
   type DoInject,
 } from './paneActions';
 import type { TodoSink } from './todoTab';
+import { createPressGroup, onPress } from './pressable';
 
 /** Muted meta-line label per type; unknown future types fall back to the raw type (§15.6). */
 const TYPE_LABELS: Record<string, string> = {
@@ -94,7 +95,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const b = doc.createElement('button');
     b.className = 'linkbtn';
     b.textContent = label;
-    b.addEventListener('click', onClick);
+    onPress(b, onClick);
     return b;
   }
 
@@ -308,56 +309,51 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   // One undoable todo from all freshly-checked chunks (§16.2). The chunks are dismissed only when
   // the undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks. A new
   // add finalizes any prior still-undoable batch, so the undo applies only to the latest add.
-  let adding = false;
   async function onAddSelected(): Promise<void> {
-    if (adding || !todoSink.currentRepoKey()) return;
+    if (!todoSink.currentRepoKey()) return;
     const selected = checkedChunks();
     if (selected.length === 0) return;
-    adding = true;
+    if (undoPending) commitPending();
+    const ids = selected.map((c) => c.id);
+    undoPending = true;
+    processedIds = ids;
+    setProcessed(ids, true);
+    refreshSelectionUI();
+    // A rejected invoke (main restart) is treated the same as a silent failure below — never an
+    // unhandled rejection, and the processed cue is cleared via endUndo().
+    let added: TodoItem | null = null;
     try {
-      if (undoPending) commitPending();
-      const ids = selected.map((c) => c.id);
-      undoPending = true;
-      processedIds = ids;
-      setProcessed(ids, true);
-      refreshSelectionUI();
-      // A rejected invoke (main restart) is treated the same as a silent failure below — never an
-      // unhandled rejection, and the processed cue is cleared via endUndo().
-      let added: TodoItem | null = null;
-      try {
-        added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
-      } catch {
-        added = null;
-      }
-      // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
-      // source chunks would be dismissed with nothing added to the todo list.
-      if (!added) {
-        endUndo();
-        return;
-      }
-
-      undoSlot.replaceChildren();
-      const note = doc.createElement('span');
-      note.className = 'added-note';
-      note.textContent = 'Added to todo';
-      const undo = doc.createElement('button');
-      undo.className = 'undo-add-to-todo linkbtn';
-      undo.textContent = 'Undo';
-      undoTimer = setTimeout(commitPending, TODO_UNDO_MS);
-      undo.addEventListener('click', async () => {
-        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
-        try {
-          if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
-        } catch {
-          // IPC failure (main restart): nothing dismissed; still end the window below.
-        } finally {
-          endUndo(); // always end the window, or processed chunks stay disabled forever
-        }
-      });
-      undoSlot.append(note, undo);
-    } finally {
-      adding = false;
+      added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
+    } catch {
+      added = null;
     }
+    // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
+    // source chunks would be dismissed with nothing added to the todo list.
+    if (!added) {
+      endUndo();
+      return;
+    }
+    const undone = added;
+
+    undoSlot.replaceChildren();
+    const note = doc.createElement('span');
+    note.className = 'added-note';
+    note.textContent = 'Added to todo';
+    const undo = doc.createElement('button');
+    undo.className = 'undo-add-to-todo linkbtn';
+    undo.textContent = 'Undo';
+    undoTimer = setTimeout(commitPending, TODO_UNDO_MS);
+    toolbarActions.bind(undo, async () => {
+      if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+      try {
+        await todoSink.deleteTodo(undone.repoKey, undone.id); // chunks stay; nothing dismissed
+      } catch {
+        // IPC failure (main restart): nothing dismissed; still end the window below.
+      } finally {
+        endUndo(); // always end the window, or processed chunks stay disabled forever
+      }
+    });
+    undoSlot.append(note, undo);
   }
 
   function endUndo(): void {
@@ -372,13 +368,14 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   // Toolbar (§16.2 / §24.2.1): bulk Add-to-todo (+ undo slot), Dismiss selected, Dismiss all.
   const toolbar = doc.createElement('div');
   toolbar.className = 'cap-toolbar';
+  const toolbarActions = createPressGroup();
 
   const addSelectedBtn = doc.createElement('button');
   addSelectedBtn.id = 'add-selected-todo';
   addSelectedBtn.className = 'pill sm signal';
   addSelectedBtn.textContent = 'Add to todo';
   addSelectedBtn.disabled = true;
-  addSelectedBtn.addEventListener('click', () => void onAddSelected());
+  toolbarActions.bind(addSelectedBtn, onAddSelected);
 
   const undoSlot = doc.createElement('span');
   undoSlot.className = 'add-undo-slot';
@@ -388,7 +385,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   dismissSelectedBtn.className = 'pill sm';
   dismissSelectedBtn.textContent = 'Dismiss selected';
   dismissSelectedBtn.disabled = true;
-  dismissSelectedBtn.addEventListener('click', () => {
+  toolbarActions.bind(dismissSelectedBtn, () => {
     for (const { id } of checkedChunks()) {
       monitor.dismiss(id); // also drop from the store so replay won't resurrect it
       removeChunk(id);
@@ -409,7 +406,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   dismissAllBtn.id = 'dismiss-all';
   dismissAllBtn.className = 'pill sm';
   dismissAllBtn.textContent = 'Dismiss all';
-  dismissAllBtn.addEventListener('click', () => {
+  toolbarActions.bind(dismissAllBtn, () => {
     monitor.dismissAll();
     clearRendered();
   });

@@ -9,7 +9,7 @@ import { createModalShell } from './modalShell';
 export interface FlowInputModal {
   /** Open the modal for `prompt`, entering `stepName`; `submit` receives the name→value map on
    *  Confirm. `null` closes any open modal. */
-  render(prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void): void;
+  render(prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void | Promise<unknown>): void;
   /** Tear down: clear the host subtree and drop captured state on unmount/relocation (UI §2.2.1). */
   dispose(): void;
 }
@@ -37,7 +37,7 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
   return {
     render(prompt, stepName, submit) {
       if (!prompt) return shell.render(null);
-      shell.render(({ doc, titleId, close }) => {
+      shell.render(({ doc, titleId, close, presses: footer }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -72,11 +72,11 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
         const cancel = doc.createElement('button');
         cancel.className = 'pill cancel';
         cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
         const confirm = doc.createElement('button');
         confirm.className = 'pill signal confirm';
         confirm.textContent = 'Confirm & bootstrap';
-        confirm.addEventListener('click', () => {
+        footer.bind(cancel, close);
+        footer.bind(confirm, () => {
           // Null-prototype map: an input named `__proto__` must store as own data, not hit the
           // prototype setter (which would drop the value and is a prototype-pollution vector, §18.4).
           const values: Record<string, string> = Object.create(null);
@@ -85,7 +85,7 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
           });
           // Every prompted input is required (§18.4); refuse a submit with any empty value, re-prompt.
           if (reads.some((r) => values[r.name].length === 0)) return;
-          submit(values);
+          return submit(values);
         });
         foot.append(cancel, confirm);
         card.append(foot);

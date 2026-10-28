@@ -128,14 +128,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       expandedByDefault: expandedFor(directory),
       from: handover.get(directory.launchDirectory),
       onAction() {
-        if (directory.kind === 'disconnected') {
-          void deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
-          return;
-        }
+        if (directory.kind === 'disconnected') return deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
         const request = ++activation;
         const targets = directory.activationTargets;
         alert.replaceChildren();
-        void Promise.all(targets.map(async id => {
+        return Promise.all(targets.map(async id => {
           try { return await deps.controller.activateTerminal(id); }
           catch { return 'unavailable' as const; }
         })).then(outcomes => {

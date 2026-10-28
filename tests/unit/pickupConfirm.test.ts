@@ -214,7 +214,6 @@ describe('the dialog’s accessibility (UI-STANDARDS §4.5–§4.6, §5; WCAG 2.
     const ok = button(dialog()!, 'Confirm');
     ok.focus();
     confirm.mockImplementationOnce(async () => {
-      // Chromium blurs a control that is disabled while focused; jsdom does not, so strand focus on <body> directly.
       const elsewhere = document.body.appendChild(document.createElement('input'));
       elsewhere.focus();
       elsewhere.remove();
@@ -232,7 +231,29 @@ describe('the dialog’s accessibility (UI-STANDARDS §4.5–§4.6, §5; WCAG 2.
     ok.click();
     await flush();
     expect(dialog()!.querySelector('[role="alert"]')?.textContent).toContain('could not reach its main process');
-    expect(ok.disabled).toBe(false);
+    ok.click();
+    await flush();
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores Confirm and Not now while a confirm is still being answered, and shows Confirm busy', async () => {
+    let answer!: (r: ConfirmRunPickupResult) => void;
+    confirm.mockImplementationOnce(() => new Promise((res) => (answer = res)));
+    push('/repo', view(proposed()));
+    const ok = button(dialog()!, 'Confirm');
+    ok.click();
+    ok.click();
+    button(dialog()!, 'Not now').click();
+    document.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    document.querySelector<HTMLElement>('.flow-scrim')?.click();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(dialog()).not.toBeNull();
+    expect(ok.getAttribute('aria-busy')).toBe('true');
+    answer({ ok: false, reason: 'pull request #233 is not open (closed)' });
+    await flush();
+    expect(ok.getAttribute('aria-busy')).toBeNull();
+    ok.click();
+    expect(confirm).toHaveBeenCalledTimes(2);
   });
 
   it('a refresh of the side-panel line keeps focus on its button', () => {

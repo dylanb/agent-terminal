@@ -607,7 +607,7 @@ describe('runAppGateDecision — back-to-red reopens the current slice (§28.4.2
 
   // §28.4.2 (CWE-703/755) — reopening the slice is best-effort: a throw from the reopen port (the flow-state
   // write behind flow.reopenSlice cannot land — a symlinked/EACCES `.agent-terminal`, ENOSPC) is surfaced to
-  // the operator and the decision resolves without stranding, never rejecting into the one-way void caller.
+  // the operator and the decision resolves without stranding, never rejecting.
   // Pairs the happy path above; the sibling polish branch pins the same surfacing for its throwing port.
   it('surfaces a thrown reopen-slice error and resolves without stranding (CWE-703)', async () => {
     const { deps, rec } = mkDeps({
@@ -753,8 +753,7 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
   });
 
   // §27.9 / N5 (AC6, CWE-703) — entering polish is best-effort: a throw (an unresolvable loop area — a planted
-  // symlink) is surfaced to the operator and the decision resolves without stranding, never rejecting into the
-  // one-way caller. Pairs the happy path above so the surfacing behavior is pinned, not just the success.
+  // symlink) is surfaced to the operator and the decision resolves without stranding, never rejecting. Pairs the happy path above so the surfacing behavior is pinned, not just the success.
   it('surfaces a thrown enter-polish error and resolves without stranding (AC6)', async () => {
     const { deps, rec } = mkDeps({
       gate: POLISH_GATE,

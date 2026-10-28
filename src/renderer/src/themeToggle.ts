@@ -1,4 +1,5 @@
 import type { Theme } from '../../shared/ipc';
+import { onPress } from './pressable';
 
 export interface ThemeToggleDeps {
   theme: Theme;
@@ -12,7 +13,7 @@ export function createThemeToggle(host: HTMLElement, deps: ThemeToggleDeps): { d
   button.className = 'controller-theme-toggle';
   const show = () => { button.textContent = theme === 'dark' ? 'Light theme' : 'Dark theme'; };
   show();
-  button.addEventListener('click', () => {
+  onPress(button, () => {
     theme = theme === 'dark' ? 'light' : 'dark';
     show();
     deps.onChange(theme);

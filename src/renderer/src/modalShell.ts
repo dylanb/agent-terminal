@@ -1,3 +1,5 @@
+import { createPressGroup, onPress, type PressGroup } from './pressable';
+
 export interface ModalCard {
   card: HTMLElement;
   initialFocus: HTMLElement | null;
@@ -21,6 +23,8 @@ export type ModalShellBuild = (ctx: {
   /** Accept: the user's own affirmative action (Confirm / Install). Closes WITHOUT firing `onDismiss`, so a
    *  caller that retracts the operation on dismissal does not also retract the one it is about to run. */
   confirm: () => void;
+  /** The dialog's controls bind here; Escape and the scrim do not dismiss while one of its presses is answered. */
+  presses: PressGroup;
 }) => ModalCard;
 
 export interface ModalShell {
@@ -79,9 +83,13 @@ export function createModalShell(
             : restoreFocusTo;
       }
 
+      const presses = createPressGroup();
+      const dismiss = (): void => {
+        if (!presses.busy) close();
+      };
       const scrim = doc.createElement('div');
       scrim.className = 'flow-scrim';
-      scrim.addEventListener('click', close);
+      onPress(scrim, dismiss);
 
       const modal = doc.createElement('div');
       modal.className = 'flow-modal';
@@ -90,7 +98,7 @@ export function createModalShell(
       modal.setAttribute('aria-labelledby', titleId);
       modal.tabIndex = -1;
       modal.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') return close();
+        if (e.key === 'Escape') return dismiss();
         if (e.key === 'Tab') {
           const f = [
             ...modal.querySelectorAll<HTMLElement>('a[href],button,input,textarea,select,[tabindex]'),
@@ -109,7 +117,7 @@ export function createModalShell(
         }
       });
 
-      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear });
+      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear, presses });
       if (role) modal.setAttribute('role', role);
       if (describedById) modal.setAttribute('aria-describedby', describedById);
       grow?.setAttribute('data-modal-grow', '');

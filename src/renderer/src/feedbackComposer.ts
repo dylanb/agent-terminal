@@ -84,7 +84,7 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
     render(ctx, submit) {
       if (!ctx) return shell.render(null);
       const copy = PURPOSE_COPY[ctx.purpose ?? 'request-changes'];
-      shell.render(({ doc, titleId, close, confirm }) => {
+      shell.render(({ doc, titleId, close, confirm, presses: footGroup }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -177,19 +177,18 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
         const cancel = doc.createElement('button');
         cancel.className = 'pill cancel';
         cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
+        footGroup.bind(cancel, close);
         const submitBtn = doc.createElement('button');
         submitBtn.className = 'pill signal confirm';
         submitBtn.textContent = copy.submitLabel;
         submitBtn.setAttribute('aria-describedby', err.id);
         const refreshSubmit = (): void => {
+          if (footGroup.busy) return;
           const empty = copy.required && currentComposed().length === 0;
           submitBtn.setAttribute('aria-disabled', empty ? 'true' : 'false');
           if (!empty) err.textContent = '';
         };
-        let inFlight = false;
-        submitBtn.addEventListener('click', () => {
-          if (inFlight) return; // a second press before the first delivery settles must not double-dispatch
+        footGroup.bind(submitBtn, () => {
           const composed = currentComposed();
           if (copy.required && composed.length === 0) {
             err.textContent = 'Add feedback or select a review todo before submitting.';
@@ -197,20 +196,12 @@ export function createFeedbackComposer(host: HTMLElement, opts?: { onFocusLost?:
             return;
           }
           // §27.9/AC4 — hold the dialog OPEN until the loop confirms it started the round: on a refusal the
-          // operator's typed feedback would otherwise be lost with no route back. Disable submit while the
-          // delivery is in flight; `confirm` (on success) closes WITHOUT the shell's dismissal, so the caller's
-          // dispatch is the one decision.
+          // operator's typed feedback would otherwise be lost with no route back. `confirm` (on success) closes
+          // WITHOUT the shell's dismissal, so the caller's dispatch is the one decision.
           err.textContent = '';
-          inFlight = true;
-          submitBtn.setAttribute('aria-disabled', 'true');
-          void Promise.resolve(submit(composed.length === 0 ? '' : frameFeedback(selectedMode(), composed))).then((delivered) => {
-            inFlight = false;
-            if (delivered) {
-              confirm();
-              return;
-            }
-            err.textContent = copy.dropped;
-            submitBtn.setAttribute('aria-disabled', 'false');
+          return Promise.resolve(submit(composed.length === 0 ? '' : frameFeedback(selectedMode(), composed))).then((delivered) => {
+            if (delivered) confirm();
+            else err.textContent = copy.dropped;
           });
         });
         area.addEventListener('input', refreshSubmit);

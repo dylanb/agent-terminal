@@ -3,7 +3,7 @@
 // through the injected contract.
 
 import type { CliInstallResult } from '../../shared/ipc';
-import { captureFocusReturn } from './dom';
+import { onPress } from './pressable';
 
 export interface CliInstallDeps {
   install(): Promise<CliInstallResult>;
@@ -53,12 +53,7 @@ export function createCliInstallAction(host: HTMLElement, deps: CliInstallDeps):
     alert.textContent = text;
   }
 
-  let busy = false;
   async function run(): Promise<void> {
-    if (busy) return;
-    busy = true;
-    const returnFocus = captureFocusReturn(btn);
-    btn.disabled = true;
     showStatus('cli-status', 'Installing…');
     try {
       const res = await deps.install();
@@ -69,13 +64,9 @@ export function createCliInstallAction(host: HTMLElement, deps: CliInstallDeps):
       }
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
-    } finally {
-      busy = false;
-      btn.disabled = false;
-      returnFocus();
     }
   }
-  btn.addEventListener('click', () => void run());
+  onPress(btn, run);
 
   return { dispose: () => host.replaceChildren() };
 }

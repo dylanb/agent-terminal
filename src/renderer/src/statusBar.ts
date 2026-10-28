@@ -7,6 +7,7 @@ import { stripDisplayControlChars } from '../../shared/controlChars';
 import { sameOccurrence, type Occurrence } from '../../shared/occurrence';
 import { createSpinner } from './spinner';
 import { captureSubtreeFocus } from './dom';
+import { createPressGroup, onPress } from './pressable';
 
 export interface StatusBarDeps {
   /** Resolve a ref's title/url within `repoKey`. Null when it cannot be resolved (no `gh`, offline,
@@ -67,6 +68,8 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
   let editing = false;
   let renderRevision = 0;
   let titleMutation = 0;
+
+  const opening = createPressGroup();
 
   const canEdit = (title: StatusBarTitle): boolean => title.kind === 'user' && repoKey !== null;
 
@@ -140,7 +143,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     if (name instanceof HTMLButtonElement) {
       const forRepo = repoKey!; // canEdit
       if (named) name.setAttribute('aria-label', `Rename work: ${title.text}`);
-      name.addEventListener('click', () => beginEdit(title.text, forRepo));
+      onPress(name, () => beginEdit(title.text, forRepo));
     }
     titleSlot.replaceChildren(name);
   }
@@ -173,10 +176,10 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
         'aria-label',
         `${title.kind === 'pr' ? 'PR' : 'Ticket'} #${title.number}: ${refTitle} (opens in browser)`,
       );
-      link.addEventListener('click', () => {
+      opening.bind(link, () => {
         if (refUrl === null) return;
         const url = refUrl;
-        void (async () => {
+        return (async () => {
           const opened = await deps.openExternal(url);
           if (opened === false) throw new Error('the operating system refused the link');
         })().catch((e: unknown) => deps.onOpenError(e instanceof Error ? e.message : String(e)));
@@ -244,7 +247,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     open.className = 'sb-alert-btn';
     open.dataset.statusAlert = '';
     open.setAttribute('aria-controls', deps.loopPanelId);
-    open.addEventListener('click', () => deps.onAlertActivate(open));
+    onPress(open, () => deps.onAlertActivate(open));
 
     const dot = doc.createElement('span');
     dot.className = 'dot';

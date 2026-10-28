@@ -203,6 +203,33 @@ describe('dismiss disconnected cards', () => {
   });
 });
 
+describe('a card action while the controller is answering it', () => {
+  it.each([
+    ['Bring forward', 'activateTerminal', bringForwardIn, false],
+    ['Dismiss', 'dismissTerminal', dismissIn, true],
+  ] as const)('%s asks the controller once until it answers, then again', async (_, method, find, disconnected) => {
+    const shown = { ...terminal, ...(disconnected ? { status: 'disconnected' as const } : {}) };
+    const answers: Array<() => void> = [];
+    const requested: string[] = [];
+    const fake = statusService([shown]).api;
+    const { host, dispose } = mountControllerPanes({ controller: {
+      ...fake,
+      [method](id: string) { requested.push(id); return new Promise<void>(done => { answers.push(done); }); },
+    } });
+    try {
+      const card = cardIn(host, terminal.launchDirectory);
+      const control = card ? find(card) : undefined;
+      control?.click();
+      control?.click();
+      const pending = [...requested];
+      answers[0]?.();
+      await vi.waitFor(() => expect(control?.hasAttribute('aria-busy')).toBe(false));
+      control?.click();
+      expect({ pending, afterAnswer: requested }).toEqual({ pending: [terminal.id], afterAnswer: [terminal.id, terminal.id] });
+    } finally { dispose(); }
+  });
+});
+
 describe('controller layout after disposal', () => {
   it('stops following layout changes once disposed', () => {
     const { layout, dispose } = mountControllerPanes({ terminals: [terminal] });

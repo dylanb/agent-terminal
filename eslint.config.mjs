@@ -64,6 +64,14 @@ const WIRE_FORMAT_TESTS = [
 ];
 const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'];
 
+const PRESS_HELPER_MESSAGE =
+  'Run a control\'s action through createPressGroup/onPress in src/renderer/src/pressable.ts, so a press cannot start it again while it is still running (UI-STANDARDS §1.4).';
+const RAW_CLICK = [
+  "CallExpression[callee.property.name='addEventListener'][arguments.0.value='click']",
+  "CallExpression[callee.property.name='addEventListener'][arguments.0.type='TemplateLiteral'][arguments.0.quasis.0.value.cooked='click']",
+  "AssignmentExpression[left.property.name='onclick']",
+].map((selector) => ({ selector, message: PRESS_HELPER_MESSAGE }));
+
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
   {
@@ -86,6 +94,11 @@ export default [
     files: WIRE_FORMAT_TESTS,
     ignores: CARD_HELPER,
     rules: { 'no-restricted-syntax': ['error', ...CARD_DOM] },
+  },
+  {
+    files: ['src/renderer/**/*.ts'],
+    ignores: ['src/renderer/src/pressable.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,

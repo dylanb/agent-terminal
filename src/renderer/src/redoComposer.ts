@@ -29,7 +29,7 @@ export function createRedoComposer(host: HTMLElement, opts?: { onFocusLost?: () 
   return {
     render(ctx, submit) {
       if (!ctx) return shell.render(null);
-      shell.render(({ doc, titleId, close, confirm }) => {
+      shell.render(({ doc, titleId, close, confirm, presses: footGroup }) => {
         const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -66,20 +66,19 @@ export function createRedoComposer(host: HTMLElement, opts?: { onFocusLost?: () 
         const cancel = doc.createElement('button');
         cancel.className = 'pill cancel';
         cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
+        footGroup.bind(cancel, close);
         const submitBtn = doc.createElement('button');
         submitBtn.className = 'pill signal confirm';
         submitBtn.textContent = 'Redo the work';
         submitBtn.setAttribute('aria-describedby', err.id);
         const current = (): string => area.value.trim();
         const refreshSubmit = (): void => {
+          if (footGroup.busy) return;
           const empty = current().length === 0;
           submitBtn.setAttribute('aria-disabled', empty ? 'true' : 'false');
           if (!empty) err.textContent = '';
         };
-        let inFlight = false;
-        submitBtn.addEventListener('click', () => {
-          if (inFlight) return; // a second press before the first delivery settles must not double-dispatch
+        footGroup.bind(submitBtn, () => {
           const instruction = current();
           if (instruction.length === 0) {
             err.textContent = 'Type an instruction before submitting.';
@@ -87,20 +86,12 @@ export function createRedoComposer(host: HTMLElement, opts?: { onFocusLost?: () 
             return;
           }
           // §27.9/AC5 — hold the dialog OPEN until the loop confirms the work turn re-entered: on a refusal the
-          // operator's typed instruction would otherwise be lost with no route back. Disable submit while the
-          // delivery is in flight; `confirm` (on success) closes WITHOUT the shell's dismissal, so the caller's
-          // dispatch is the one decision.
+          // operator's typed instruction would otherwise be lost with no route back. `confirm` (on success) closes
+          // WITHOUT the shell's dismissal, so the caller's dispatch is the one decision.
           err.textContent = '';
-          inFlight = true;
-          submitBtn.setAttribute('aria-disabled', 'true');
-          void Promise.resolve(submit(instruction)).then((delivered) => {
-            inFlight = false;
-            if (delivered) {
-              confirm();
-              return;
-            }
-            err.textContent = 'Could not re-enter the work turn — the loop was busy. Try again.';
-            submitBtn.setAttribute('aria-disabled', 'false');
+          return Promise.resolve(submit(instruction)).then((delivered) => {
+            if (delivered) confirm();
+            else err.textContent = 'Could not re-enter the work turn — the loop was busy. Try again.';
           });
         });
         area.addEventListener('input', refreshSubmit);

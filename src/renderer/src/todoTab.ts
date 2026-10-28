@@ -8,6 +8,7 @@
 
 import type { MonitorApi, TodoItem, TodoSource, TodoTemplateRef } from '../../shared/ipc';
 import { TODO_UNDO_MS, type DoInject } from './paneActions';
+import { createPressGroup, onPress, type PressAction } from './pressable';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
 export interface TodoSink {
@@ -75,6 +76,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // Refocus the contextually-correct control after a re-render destroyed the one the user just
   // activated, so a keyboard user is never dropped to <body> (WCAG 2.4.3). Consumed once per render.
   let focusAfterRender: (() => void) | null = null;
+  // Every list change answers with the whole list, so two in flight would race to replace it.
+  const listChanges = createPressGroup();
 
   function updateTodoCount(): void {
     todoCountEl.textContent = String(todos.filter((t) => t.status !== 'done').length);
@@ -131,13 +134,23 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     }
   }
 
-  function actionButton(cls: string, label: string, ariaLabel: string, onClick: () => void): HTMLButtonElement {
+  function labelledButton(cls: string, label: string, ariaLabel: string): HTMLButtonElement {
     const b = doc.createElement('button');
     b.className = cls;
     b.textContent = label;
     b.setAttribute('aria-label', ariaLabel);
-    b.addEventListener('click', onClick);
     return b;
+  }
+
+  function actionButton(cls: string, label: string, ariaLabel: string, onClick: PressAction): HTMLButtonElement {
+    const b = labelledButton(cls, label, ariaLabel);
+    onPress(b, onClick);
+    return b;
+  }
+
+  function listChangeButton(cls: string, label: string, ariaLabel: string, todoId: string, change: PressAction): { button: HTMLButtonElement; press: () => void } {
+    const button = labelledButton(cls, label, ariaLabel);
+    return { button, press: listChanges.bind(button, change, { key: `${cls}:${todoId}` }) };
   }
 
   const activeOf = (ordered: TodoItem[]): TodoItem[] => ordered.filter(isOutstanding);
@@ -145,22 +158,22 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   /** Persist a new ACTIVE ordering while leaving every done row in its display slot — the
    *  active ids are slotted back into the positions actives occupied in the full order, so a
    *  reorder never shoves an inline done row (§16.4). */
-  function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): void {
-    if (!currentRepoKey) return;
+  function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): Promise<void> | undefined {
+    if (!currentRepoKey) return undefined;
     let k = 0;
     const ids = ordered.map((t) => (isOutstanding(t) ? newActive[k++].id : t.id));
     // A rejected invoke (main restart) keeps the current order, never an unhandled rejection.
-    void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
+    return monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
 
   /** Move an active item one slot up/down within the active run (skipping done rows). */
-  function moveActive(ordered: TodoItem[], item: TodoItem, dir: -1 | 1): void {
+  function moveActive(ordered: TodoItem[], item: TodoItem, dir: -1 | 1): Promise<void> | undefined {
     const active = activeOf(ordered);
     const i = active.findIndex((t) => t.id === item.id);
     const j = i + dir;
-    if (i < 0 || j < 0 || j >= active.length) return;
+    if (i < 0 || j < 0 || j >= active.length) return undefined;
     [active[i], active[j]] = [active[j], active[i]];
-    commitActiveOrder(ordered, active);
+    return commitActiveOrder(ordered, active);
   }
 
   /** Re-render and move focus to the row's control matching `sel` (a11y, §WCAG 2.4.3). */
@@ -169,18 +182,19 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     renderTodos();
   }
 
-  function renderActions(t: TodoItem, ordered: TodoItem[]): HTMLElement {
+  function renderActions(t: TodoItem, ordered: TodoItem[]): { actions: HTMLElement; save: (() => void) | null } {
     const actions = doc.createElement('div');
     actions.className = 'todo-actions';
 
     if (t.id === editingId) {
+      const save = listChangeButton('todo-save pill sm signal', 'Save', 'Save todo', t.id, () => commitEdit(t));
       actions.append(
-        actionButton('todo-save pill sm signal', 'Save', 'Save todo', () => void commitEdit(t)),
+        save.button,
         actionButton('todo-cancel linkbtn', 'Cancel', 'Cancel edit', () =>
           rerenderFocusingAfterResolve(t.id, () => resolveEdit()),
         ),
       );
-      return actions;
+      return { actions, save: save.press };
     }
 
     // The cluster is rendered for every row and only DISABLED when done, so completing a todo never
@@ -188,9 +202,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const outstanding = isOutstanding(t);
     const active = activeOf(ordered);
     const ai = active.findIndex((x) => x.id === t.id);
-    const up = actionButton('todo-up iconbtn', '↑', 'Move up', () => moveActive(ordered, t, -1));
+    const up = listChangeButton('todo-up iconbtn', '↑', 'Move up', t.id, () => moveActive(ordered, t, -1)).button;
     up.disabled = !outstanding || ai <= 0;
-    const down = actionButton('todo-down iconbtn', '↓', 'Move down', () => moveActive(ordered, t, 1));
+    const down = listChangeButton('todo-down iconbtn', '↓', 'Move down', t.id, () => moveActive(ordered, t, 1)).button;
     down.disabled = !outstanding || ai === active.length - 1;
     const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
       editingId = t.id;
@@ -199,17 +213,18 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     edit.disabled = !outstanding;
     // Send pastes into the agent's input WITHOUT submitting (§9.3 submit:false / §16.2 Insert) and
     // marks the todo in_progress — the sole entry into that state (§16.3).
-    const send = actionButton('todo-send pill sm signal', 'Send', 'Send todo to agent', () => {
+    const send = listChangeButton('todo-send pill sm signal', 'Send', 'Send todo to agent', t.id, () => {
       doInject(t.text, false);
-      if (t.status !== 'in_progress') void monitor.todoSetStatus(t.repoKey, t.id, 'in_progress').then(setTodos).catch(() => {});
-    });
+      if (t.status !== 'in_progress') return monitor.todoSetStatus(t.repoKey, t.id, 'in_progress').then(setTodos).catch(() => {});
+      return undefined;
+    }).button;
     send.disabled = !outstanding;
     const del = actionButton('todo-delete iconbtn', '×', 'Delete todo', () => {
       confirmingDeleteId = t.id;
       rerenderFocusing(t.id, '.todo-delete-confirm');
     });
     actions.append(up, down, edit, send, del);
-    return actions;
+    return { actions, save: null };
   }
 
   /** Two-step delete confirmation, stacked BELOW the action cluster so showing it never changes the
@@ -303,13 +318,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     // Tri-state checkbox (§16.3).
     chk.setAttribute('aria-checked', done ? 'true' : t.status === 'in_progress' ? 'mixed' : 'false');
     chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
-    chk.addEventListener('click', async () => {
+    listChanges.bind(chk, async () => {
       try {
         setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
       } catch {
         // IPC failure (main restart): leave the UI unchanged, never an unhandled rejection.
       }
-    });
+    }, { key: `status:${t.id}` });
+    const { actions, save } = renderActions(t, ordered);
 
     const body = doc.createElement('div');
     body.className = 'body';
@@ -327,7 +343,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       tx.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          void commitEdit(t, row);
+          save?.();
         } else if (e.key === 'Escape') {
           e.preventDefault();
           // Escape-cancel restores focus to the row's edit button, not <body> (WCAG 2.4.3, §16.4).
@@ -340,7 +356,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     src.textContent = provenanceText(t.source);
     body.append(tx, src);
 
-    row.append(chk, body, renderActions(t, ordered));
+    row.append(chk, body, actions);
     if (t.id === confirmingDeleteId && t.id !== editingId) row.append(renderDeleteBar(t));
     return row;
   }
@@ -364,7 +380,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     car.setAttribute('aria-hidden', 'true');
     car.textContent = '▾';
     toggle.append(doc.createTextNode('From template '), car);
-    toggle.addEventListener('click', () => {
+    onPress(toggle, () => {
       templateOpen = !templateOpen;
       focusAfterRender = () =>
         todoListEl.querySelector<HTMLElement>(templateOpen ? '.tmpl-pick' : '.tmpl-toggle')?.focus();
@@ -403,17 +419,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       const add = doc.createElement('button');
       add.className = 'tmpl-add pill sm signal';
       add.textContent = 'Add todos';
-      add.addEventListener('click', () => {
-        if (!currentRepoKey) return;
-        add.disabled = true;
+      listChanges.bind(add, () => {
+        if (!currentRepoKey) return undefined;
         // Main silently skips already-present items. The picker stays open (operator decision). A
-        // rejected invoke (main restart) re-enables the button and leaves the list unchanged.
-        void monitor
+        // rejected invoke (main restart) leaves the list unchanged.
+        return monitor
           .instantiateTemplate(currentRepoKey, select.value)
           .then(setTodos)
-          .catch(() => {
-            add.disabled = false;
-          });
+          .catch(() => {});
       });
 
       group.append(select, add);
@@ -457,11 +470,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       setTodos(list);
       input.value = '';
     };
-    addBtn.addEventListener('click', () => void submitAdd());
+    const pressAdd = listChanges.bind(addBtn, submitAdd);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        void submitAdd();
+        pressAdd();
       }
     });
     addRow.append(input, addBtn);
