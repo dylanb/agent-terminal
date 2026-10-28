@@ -8,6 +8,13 @@ export interface ControllerAlwaysOnTopDeps {
   initial: boolean;
 }
 
-export function createControllerAlwaysOnTop(_deps: ControllerAlwaysOnTopDeps): ControllerAlwaysOnTop {
-  return { current: () => false, set() {} };
+export function createControllerAlwaysOnTop(deps: ControllerAlwaysOnTopDeps): ControllerAlwaysOnTop {
+  let current = deps.initial;
+  return {
+    current: () => current,
+    set(alwaysOnTop) {
+      deps.window.setAlwaysOnTop(alwaysOnTop);
+      current = alwaysOnTop;
+    },
+  };
 }

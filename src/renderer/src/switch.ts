@@ -4,7 +4,35 @@ export interface SwitchDeps {
   onChange(checked: boolean): void;
 }
 
-export function createSwitch(host: HTMLElement, _deps: SwitchDeps): { set(checked: boolean): void; dispose(): void } {
-  host.append(host.ownerDocument.createElement('span'));
-  return { set() {}, dispose() {} };
+export function createSwitch(host: HTMLElement, deps: SwitchDeps): { set(checked: boolean): void; dispose(): void } {
+  const doc = host.ownerDocument;
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.className = 'switch';
+  button.setAttribute('role', 'switch');
+  const track = doc.createElement('span');
+  track.className = 'switch-track';
+  track.setAttribute('aria-hidden', 'true');
+  const knob = doc.createElement('span');
+  knob.className = 'switch-knob';
+  track.append(knob);
+  const label = doc.createElement('span');
+  label.textContent = deps.label;
+  button.append(track, label);
+  let checked = deps.checked;
+  const show = () => { button.setAttribute('aria-checked', String(checked)); };
+  show();
+  button.addEventListener('click', () => {
+    checked = !checked;
+    show();
+    deps.onChange(checked);
+  });
+  host.append(button);
+  return {
+    set(next) {
+      checked = next;
+      show();
+    },
+    dispose() { button.remove(); },
+  };
 }

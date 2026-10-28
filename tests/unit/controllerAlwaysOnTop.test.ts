@@ -82,3 +82,22 @@ describe('the header Always on top switch', () => {
     } finally { dispose(); }
   });
 });
+
+it('keeps showing the value main last accepted when a later request is rejected', async () => {
+  const service = statusService(undefined, { alwaysOnTop: true });
+  let requests = 0;
+  const setAlwaysOnTop = async (next: boolean) => {
+    requests += 1;
+    if (requests > 1) throw new Error('always-on-top not set');
+    return next;
+  };
+  const { host, dispose } = mountControllerPanes({ controller: { ...service.api, setAlwaysOnTop } });
+  try {
+    await shown(host);
+    alwaysOnTopIn(host)?.click();
+    await settled();
+    alwaysOnTopIn(host)?.click();
+    await settled();
+    expect({ requests, state: switchState(host) }).toEqual({ requests: 2, state: 'off' });
+  } finally { dispose(); }
+});

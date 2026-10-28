@@ -1,9 +1,10 @@
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate, cardStatus, statusSummary, type CardStatusClass } from './controllerCardStatus';
 import { captureSubtreeFocus } from './dom';
-import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
+import { createSwitch } from './switch';
 import { createThemeToggle } from './themeToggle';
 
 export interface ControllerPanesDeps {
@@ -63,12 +64,38 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   let previousAttention = new Map<string, string>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   host.append(header.element, list, alert, status);
+  const controlSlot = () => {
+    const slot = doc.createElement('span');
+    slot.className = 'controller-header-control';
+    return slot;
+  };
+  const alwaysOnTopSlot = controlSlot();
+  const themeSlot = controlSlot();
+  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot);
+  let alwaysOnTopSwitch: { set(checked: boolean): void; dispose(): void } | undefined;
+  void deps.controller.getAlwaysOnTop().catch(() => CONTROLLER_DEFAULT_ALWAYS_ON_TOP).then(initial => {
+    if (disposed) return;
+    let reported = initial;
+    const show = (alwaysOnTop: boolean) => {
+      reported = alwaysOnTop;
+      if (!disposed) alwaysOnTopSwitch?.set(alwaysOnTop);
+    };
+    alwaysOnTopSwitch = createSwitch(alwaysOnTopSlot, {
+      label: 'Always on top',
+      checked: initial,
+      onChange(next) {
+        void deps.controller.setAlwaysOnTop(next).then(show, error => {
+          console.error(`Controller always on top not set: ${error instanceof Error ? error.message : String(error)}`);
+          show(reported);
+        });
+      },
+    });
+  });
   let themeToggle: { dispose(): void } | undefined;
   void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
     if (disposed) return;
     deps.applyTheme(theme);
-    header.element.append(' ');
-    themeToggle = createThemeToggle(header.element, {
+    themeToggle = createThemeToggle(themeSlot, {
       theme,
       onChange(next) {
         deps.applyTheme(next);
@@ -160,6 +187,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
+      alwaysOnTopSwitch?.dispose();
       themeToggle?.dispose();
       cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();

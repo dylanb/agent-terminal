@@ -24,6 +24,7 @@ void app.whenReady().then(async () => {
   applyDockIcon(app.dock, process.platform, iconLoc, 'controller');
   const window = new BrowserWindow({
     icon: resolveWindowIconPath(iconLoc, 'controller'),
+    alwaysOnTop: CONTROLLER_DEFAULT_ALWAYS_ON_TOP,
     webPreferences: { preload: join(__dirname, '../preload/index.js'), additionalArguments: [CONTROLLER_WINDOW_ARGUMENT], contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   installNavigationGuards(window.webContents);
