@@ -1,5 +1,6 @@
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
-import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerDirectoryCard } from '../../shared/controllerCards';
 
 export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' | 'idle';
 type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
@@ -20,9 +21,10 @@ export interface CardStatus {
   summary: SummaryLabel;
 }
 
-function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
-  const work = terminal.work;
-  if (terminal.status === 'disconnected') return ['Disconnected', 'error'];
+function textAndClass(card: ControllerDirectoryCard): [string, CardStatusClass] {
+  if (card.kind === 'conflict') return ['Duplicate directory', 'error'];
+  if (card.kind === 'disconnected') return ['Disconnected', 'error'];
+  const work = card.work;
   if (work?.error) return ['Flow error', 'error'];
   if (work?.attention) return ['Needs a human', 'needs-human'];
   if (work?.unavailableReason) return ['Status unavailable', 'needs-human'];
@@ -34,8 +36,8 @@ function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
   return ['Working', 'working'];
 }
 
-export function cardStatus(terminal: ControllerTerminal): CardStatus {
-  const [text, statusClass] = textAndClass(terminal);
+export function cardStatus(card: ControllerDirectoryCard): CardStatus {
+  const [text, statusClass] = textAndClass(card);
   return { text, statusClass, summary: SUMMARY_OF[statusClass] };
 }
 
@@ -45,8 +47,8 @@ export interface StatusCount {
   count: number;
 }
 
-export function statusSummary(terminals: readonly ControllerTerminal[]): StatusCount[] {
-  const summaries = terminals.map(terminal => cardStatus(terminal).summary);
+export function statusSummary(cards: readonly ControllerDirectoryCard[]): StatusCount[] {
+  const summaries = cards.map(card => cardStatus(card).summary);
   return SUMMARY_LABELS.map(label => ({ label, statusClass: SUMMARY_CLASS[label], count: summaries.filter(summary => summary === label).length }));
 }
 
@@ -63,9 +65,9 @@ export function workConditions(work: ControllerWorkStatus | undefined): WorkCond
   ];
 }
 
-export function attentionText(terminal: ControllerTerminal): string {
-  if (terminal.work?.unavailableReason) return CONTROLLER_OVERSIZED_STATUS_TEXT;
-  return workConditions(terminal.work).flatMap(condition => [condition.title, ...condition.reasons]).join('. ');
+export function attentionText(work: ControllerWorkStatus | undefined): string {
+  if (work?.unavailableReason) return CONTROLLER_OVERSIZED_STATUS_TEXT;
+  return workConditions(work).flatMap(condition => [condition.title, ...condition.reasons]).join('. ');
 }
 
 export function attentionUpdate(previous: string, current: string): string | undefined {
