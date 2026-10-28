@@ -68,7 +68,7 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
-  options: { activation?: 'activated' | 'unavailable' | 'rejected'; theme?: Theme | 'unreadable' } = {},
+  options: { activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal']; theme?: Theme | 'unreadable' } = {},
 ) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
@@ -85,6 +85,7 @@ export function statusService(
     subscribeTerminals(listener) { listeners.add(listener); listener(current); return () => { listeners.delete(listener); }; },
     async activateTerminal(id) {
       activated.push(id);
+      if (typeof options.activation === 'function') return options.activation(id);
       if (options.activation === 'rejected') throw new Error('activation failed');
       return options.activation ?? 'activated';
     },
@@ -102,4 +103,19 @@ export function statusService(
     },
   };
   return { api, activated, dismissed, publish, savedThemes };
+}
+
+export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {
+  const terminals = ['amber', 'blue', 'coral', 'denim'].map((key, index): StatusTerminal => ({
+    id: `connection-${key}`,
+    launchDirectory: index < 3 ? '/conflicts/shared' : '/conflicts/other-worktree',
+    repositoryRoot: '/conflicts/repository',
+    work: workStatus({
+      flow: { availability: 'known', name: `flow-${key}`, step: `step-${key}`, assignment: 'assigned' },
+      ticket: { availability: 'known', number: 271 + index, title: { availability: 'known', text: `Ticket ${key}` } },
+      attention: { status: 'needs a human', reasons: [`Approve ${key}`] },
+      error: { reason: `Error ${key}` },
+    }),
+  }));
+  return { members: terminals.slice(0, 3), unrelated: terminals[3] };
 }

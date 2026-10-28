@@ -1,3 +1,4 @@
+import { waitForConnections } from './controllerSnapshot';
 import { expect, test } from '@playwright/test';
 import { join, resolve } from 'node:path';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -76,13 +77,14 @@ test('controller distinguishes two worktrees and a non-Git launch', { tag: '@own
   }
 });
 
-test('controller presents separate terminals launched in the same directory', { tag: '@ownapp' }, async () => {
+test('controller consolidates terminals launched in the same directory', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
     await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
     await h.launch({ kind: 'development', entry: resolve('out/main/index.js') }, h.fixture.nonGit);
-    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(2);
+    await waitForConnections(controller.page, h.fixture.nonGit, 2);
+    await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
   } finally {
     await h.dispose();
   }
