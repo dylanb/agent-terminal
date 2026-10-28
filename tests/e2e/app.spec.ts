@@ -5635,7 +5635,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .toContain('176');
+    .toMatch(/\b176\b/);
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
@@ -5646,7 +5646,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .not.toContain('176');
+    .not.toMatch(/\b176\b/);
 
   await flowControl().click(); // Advance → plan again: because the input was cleared, the modal re-prompts
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });

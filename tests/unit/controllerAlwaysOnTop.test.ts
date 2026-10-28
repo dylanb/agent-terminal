@@ -130,3 +130,11 @@ describe('always-on-top changed outside the window', () => {
     } finally { dispose(); }
   });
 });
+
+it('stops following always-on-top pushes once disposed', async () => {
+  const { host, service, dispose } = mountControllerPanes({ alwaysOnTop: true });
+  await shown(host);
+  const mounted = service.followingAlwaysOnTop();
+  dispose();
+  expect({ mounted, disposed: service.followingAlwaysOnTop() }).toEqual({ mounted: true, disposed: false });
+});

@@ -1,5 +1,5 @@
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
-import { attentionText, attentionUpdate, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardStatus';
+import { attentionText, attentionUpdate, cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardStatus';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
@@ -35,10 +35,10 @@ function windowHeader(doc: Document): { element: HTMLElement; render(directories
   return {
     element,
     render(directories) {
-      const disconnected = directories.filter(directory => directory.kind === 'disconnected').length;
+      const { total, connected, disconnected } = cardCounts(directories);
       counts.replaceChildren(...items([
-        [`${directories.length} ${directories.length === 1 ? 'card' : 'cards'}`],
-        [`${directories.length - disconnected} connected`],
+        [`${total} ${total === 1 ? 'card' : 'cards'}`],
+        [`${connected} connected`],
         [`${disconnected} disconnected`],
       ]));
       summary.replaceChildren(...items(statusSummary(directories).map(({ label, statusClass, count }) => [`${count} ${label}`, statusClass] as [string, string])));
@@ -73,20 +73,23 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   const themeSlot = controlSlot();
   header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot);
   let alwaysOnTopSwitch: { set(checked: boolean): void; dispose(): void } | undefined;
+  let reportedAlwaysOnTop: boolean | undefined;
+  const showAlwaysOnTop = (alwaysOnTop: boolean) => {
+    reportedAlwaysOnTop = alwaysOnTop;
+    if (!disposed) alwaysOnTopSwitch?.set(alwaysOnTop);
+  };
+  const unsubscribeAlwaysOnTop = deps.controller.onAlwaysOnTopChanged(showAlwaysOnTop);
   void deps.controller.getAlwaysOnTop().catch(() => CONTROLLER_DEFAULT_ALWAYS_ON_TOP).then(initial => {
     if (disposed) return;
-    let reported = initial;
-    const show = (alwaysOnTop: boolean) => {
-      reported = alwaysOnTop;
-      if (!disposed) alwaysOnTopSwitch?.set(alwaysOnTop);
-    };
+    const shown = reportedAlwaysOnTop ?? initial;
+    reportedAlwaysOnTop = shown;
     alwaysOnTopSwitch = createSwitch(alwaysOnTopSlot, {
       label: 'Always on top',
-      checked: initial,
+      checked: shown,
       onChange(next) {
-        void deps.controller.setAlwaysOnTop(next).then(show, error => {
+        void deps.controller.setAlwaysOnTop(next).then(showAlwaysOnTop, error => {
           console.error(`Controller always on top not set: ${error instanceof Error ? error.message : String(error)}`);
-          show(reported);
+          showAlwaysOnTop(reportedAlwaysOnTop ?? shown);
         });
       },
     });
@@ -187,6 +190,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
+      unsubscribeAlwaysOnTop();
       alwaysOnTopSwitch?.dispose();
       themeToggle?.dispose();
       cards.forEach(({ card }) => card.dispose());

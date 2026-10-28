@@ -12,13 +12,18 @@ export interface ControllerAlwaysOnTopDeps {
 
 export function createControllerAlwaysOnTop(deps: ControllerAlwaysOnTopDeps): ControllerAlwaysOnTop {
   let current = deps.initial;
+  const listeners = new Set<(alwaysOnTop: boolean) => void>();
   return {
     current: () => current,
     set(alwaysOnTop) {
       deps.window.setAlwaysOnTop(alwaysOnTop);
       current = alwaysOnTop;
       deps.store.saveAlwaysOnTop(alwaysOnTop);
+      listeners.forEach(listener => listener(alwaysOnTop));
     },
-    subscribe: () => () => {},
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
   };
 }

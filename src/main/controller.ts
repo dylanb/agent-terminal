@@ -12,8 +12,11 @@ import { createControllerWindowStateStore, placeWindow } from './controllerWindo
 import { errMsg } from './errno';
 import { applyDockIcon, resolveWindowIconPath } from './appIcon';
 import type { BundleLocation } from './bundleLocation';
+import { controllerCloseAction } from './controllerWindowPolicy';
+import { CONTROLLER_APP_NAME, controllerTrayMenuMode, watchTrayView, type ControllerTraySources } from './controllerTrayModel';
+import { createControllerTray } from './controllerTray';
 
-app.setName('Agent Terminal Controller');
+app.setName(CONTROLLER_APP_NAME);
 let quitting = false;
 app.on('before-quit', () => { quitting = true; });
 
@@ -39,17 +42,49 @@ void app.whenReady().then(async () => {
   let boundsBeforeMinimize: Rectangle | null = null;
   window.on('minimize', () => { boundsBeforeMinimize = window.getNormalBounds(); });
   window.on('restore', () => { boundsBeforeMinimize = null; });
+  // untestable (macOS hide-on-close and Dock-click reopen are native) — tracked in #153.
+  const closeAction = controllerCloseAction(process.platform);
   window.on('close', event => {
     if (quitting) {
       windowState.saveBounds(boundsBeforeMinimize ?? window.getNormalBounds());
       return;
     }
     event.preventDefault();
-    window.minimize();
+    // A full-screen window ignores minimize, and hiding one on macOS leaves its Space behind as a black screen.
+    if (!window.isFullScreen()) {
+      window[closeAction]();
+      return;
+    }
+    window.once('leave-full-screen', () => window[closeAction]());
+    window.setFullScreen(false);
+  });
+  const open = () => {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  };
+  app.on('activate', open);
+  const alwaysOnTop = createControllerAlwaysOnTop({ window, store: windowState, initial: saved.alwaysOnTop });
+  // untestable (the native tray; the operator's test scope leaves it to the manual checklist) — tracked in #153.
+  const tray = createControllerTray(
+    resolveWindowIconPath(iconLoc, 'controller'),
+    controllerTrayMenuMode(process.platform),
+    { open, setAlwaysOnTop: on => alwaysOnTop.set(on), quit: () => app.quit() },
+  );
+  const noTerminals: ControllerTraySources['subscribeTerminals'] = listener => {
+    listener([]);
+    return () => {};
+  };
+  let stopTray = watchTrayView({ subscribeTerminals: noTerminals, alwaysOnTop }, tray.show);
+  app.once('will-quit', () => {
+    stopTray();
+    tray.destroy();
   });
   try {
     const transport = await startControllerTransport(resolveAppHome(process.env, homedir()));
-    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')), createControllerAlwaysOnTop({ window, store: windowState, initial: saved.alwaysOnTop }));
+    stopTray();
+    stopTray = watchTrayView({ subscribeTerminals: transport.subscribeTerminals, alwaysOnTop }, tray.show);
+    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')), alwaysOnTop);
     window.once('closed', () => {
       disposeIpc();
       void transport.dispose().catch(error => console.error(errMsg(error)));

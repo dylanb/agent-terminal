@@ -6,6 +6,7 @@ import { createControllerHarness } from './controllerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
+import { isFullScreen, isMinimized } from './controllerWindow';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
 import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
@@ -104,6 +105,23 @@ test('on Linux, closing the controller window minimizes it instead of exiting', 
     }));
     const outcome = await Promise.race([windowOutcome.catch(() => exited), exited]);
     expect(outcome).toBe('minimized');
+  } finally {
+    await h.dispose();
+  }
+});
+
+test('closing the controller window in full screen leaves full screen before it goes', { tag: '@ownapp' }, async () => {
+  test.skip(process.platform === 'darwin', 'macOS hides the closed window; its native effect is the AC 26 gap tracked in #153');
+  const h = await createControllerDesktopHarness();
+  try {
+    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
+    await expect.poll(() => isFullScreen(controller.app)).toBe(true);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(() => isMinimized(controller.app)).toBe(true);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
+    await expect.poll(() => isMinimized(controller.app)).toBe(false);
+    expect(await isFullScreen(controller.app)).toBe(false);
   } finally {
     await h.dispose();
   }

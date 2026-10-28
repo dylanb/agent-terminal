@@ -313,3 +313,28 @@ describe('the tray badge', () => {
     });
   });
 });
+
+describe('watching the tray view as it changes', () => {
+  it('keeps the current always-on-top value in views given after the terminals change', () => {
+    const source = traySources([working('a', '/watched/a')], true);
+    const views: ControllerTrayView[] = [];
+    const stop = watchTrayView(source.sources, view => { views.push(view); });
+    source.setAlwaysOnTop(false);
+    source.publish([working('a', '/watched/a'), working('b', '/watched/b')]);
+    stop();
+    expect({ connected: views.at(-1)?.connected, alwaysOnTop: views.at(-1)?.alwaysOnTop }).toEqual({ connected: 2, alwaysOnTop: false });
+  });
+
+  it('gives no new view for an update that changes nothing the tray shows, and one for an update that does', () => {
+    const source = traySources([working('a', '/watched/a')], true);
+    const views: ControllerTrayView[] = [];
+    const stop = watchTrayView(source.sources, view => { views.push(view); });
+    const first = views.length;
+    source.publish([at('a', '/watched/a', { work: workStatus({ activity: 'quiet' }) })]);
+    const afterActivity = views.length;
+    source.publish([needingHuman('a', '/watched/a')]);
+    stop();
+    expect({ afterActivity: afterActivity - first, afterGate: views.length - afterActivity, badge: views.at(-1)?.badge })
+      .toEqual({ afterActivity: 0, afterGate: 1, badge: 'needs-human' });
+  });
+});

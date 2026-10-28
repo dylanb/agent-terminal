@@ -132,7 +132,9 @@ export function statusService(
       return () => { alwaysOnTopListeners.delete(listener); };
     },
   };
-  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop };
+  /** Whether the window still listens for always-on-top pushes. */
+  const followingAlwaysOnTop = (): boolean => alwaysOnTopListeners.size > 0;
+  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {

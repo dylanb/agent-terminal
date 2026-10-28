@@ -14,5 +14,9 @@ export const controllerApi: ControllerApi = {
   setTheme: theme => ipcRenderer.invoke(CONTROLLER_CH.setTheme, { sessionId: SESSION_ID, theme } satisfies ControllerThemeChoice),
   getAlwaysOnTop: () => ipcRenderer.invoke(CONTROLLER_CH.getAlwaysOnTop, { sessionId: SESSION_ID } satisfies ControllerAlwaysOnTopRequest),
   setAlwaysOnTop: alwaysOnTop => ipcRenderer.invoke(CONTROLLER_CH.setAlwaysOnTop, { sessionId: SESSION_ID, alwaysOnTop } satisfies ControllerAlwaysOnTopChoice),
-  onAlwaysOnTopChanged: () => () => {},
+  onAlwaysOnTopChanged(listener) {
+    const receive = (_event: Electron.IpcRendererEvent, payload: ControllerAlwaysOnTopChoice) => listener(payload.alwaysOnTop);
+    ipcRenderer.on(CONTROLLER_CH.alwaysOnTop, receive);
+    return () => { ipcRenderer.removeListener(CONTROLLER_CH.alwaysOnTop, receive); };
+  },
 };

@@ -14,6 +14,9 @@ export function installControllerIpc(
     if (!contents.isDestroyed()) contents.send(CONTROLLER_CH.terminals, { sessionId: SESSION_ID, terminals } satisfies ControllerSnapshot);
   };
   const unsubscribe = controller.subscribeTerminals(send);
+  const unsubscribeAlwaysOnTop = alwaysOnTop.subscribe(value => {
+    if (!contents.isDestroyed()) contents.send(CONTROLLER_CH.alwaysOnTop, { sessionId: SESSION_ID, alwaysOnTop: value } satisfies ControllerAlwaysOnTopChoice);
+  });
   const subscribe = (event: Electron.IpcMainEvent) => {
     if (event.sender === contents) send(controller.terminals());
   };
@@ -44,6 +47,7 @@ export function installControllerIpc(
   });
   return () => {
     unsubscribe();
+    unsubscribeAlwaysOnTop();
     ipcMain.removeListener(CONTROLLER_CH.subscribe, subscribe);
     ipcMain.removeHandler(CONTROLLER_CH.activate);
     ipcMain.removeHandler(CONTROLLER_CH.dismiss);

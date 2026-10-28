@@ -82,6 +82,7 @@ export interface CardCounts {
   disconnected: number;
 }
 
-export function cardCounts(_cards: readonly ControllerDirectoryCard[]): CardCounts {
-  return { total: 0, connected: 0, disconnected: 0 };
+export function cardCounts(cards: readonly ControllerDirectoryCard[]): CardCounts {
+  const disconnected = cards.filter(card => card.kind === 'disconnected').length;
+  return { total: cards.length, connected: cards.length - disconnected, disconnected };
 }
