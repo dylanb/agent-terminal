@@ -36,6 +36,8 @@ export const cardHeaderLocator = <L extends Alternatives<L>>(card: RoleScope<L>,
 /** The theme control is named for the theme it switches to, so `on` (dark active) is the one named Light theme. */
 export const themeControlLocator = <L>(scope: RoleScope<L>, state: { on?: boolean } = {}): L =>
   scope.getByRole('button', { name: state.on === undefined ? /^(Dark|Light) theme$/ : state.on ? 'Light theme' : 'Dark theme', exact: true });
+export const alwaysOnTopLocator = <L>(scope: RoleScope<L>, state: { on?: boolean } = {}): L =>
+  scope.getByRole('switch', { name: 'Always on top', exact: true, ...(state.on === undefined ? {} : { checked: state.on }) });
 export const windowTitleLocator = <L>(scope: RoleScope<L>): L => scope.getByRole('heading', { name: 'Controller', exact: true });
 export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector: string, options?: { has?: L }): L }): L =>
   scope.locator('header', { has: windowTitleLocator(scope) });
@@ -94,6 +96,15 @@ export const showFullReasonsIn = (card: ParentNode): HTMLElement[] => controlsIn
 export const windowTitleIn = (root: ParentNode): HTMLElement | undefined =>
   roleMatches(root, ['heading'], /^Controller$/).find(heading => !heading.closest(CARD_SELECTOR));
 export const themeControlIn = (root: ParentNode) => controlIn(root, 'Dark theme') ?? controlIn(root, 'Light theme');
+export const alwaysOnTopIn = (root: ParentNode): HTMLElement | undefined =>
+  roleMatches(root, ['switch'], /^\s*Always on top\s*$/).find(control => !control.closest(CARD_SELECTOR));
+export function alwaysOnTopOn(root: ParentNode): boolean {
+  const control = alwaysOnTopIn(root);
+  if (!control) throw new Error('No Always on top switch');
+  const checked = control.getAttribute('aria-checked');
+  if (checked !== 'true' && checked !== 'false') throw new Error('Always on top exposes no aria-checked state');
+  return checked === 'true';
+}
 export function darkThemeOn(root: ParentNode): boolean {
   const control = themeControlIn(root);
   if (!control) throw new Error('No Dark theme or Light theme control');

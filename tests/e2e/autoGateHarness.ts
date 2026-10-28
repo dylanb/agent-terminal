@@ -1,14 +1,17 @@
-// Helpers only the #137 auto-gate e2e uses (§27.9.1), built on the shared fake tools.
+// Helpers for the e2e that drive a real gate (§27.9.1), built on the shared fake tools.
 
+import { expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { auditFilePath, auditRootDir } from '../../src/main/auditPaths';
 import { parseAuditStream, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
-import { exampleConfigDir, writeCatalogEntry } from './fakeTools';
+import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
+import { shellQuote } from '../../src/shared/shellQuote';
+import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
 
 export type AutoGateLoop = 'groom-loop' | 'plan-approve-loop' | 'red-loop' | 'green-loop' | 'refactor-loop';
 
@@ -82,6 +85,66 @@ export function seedAutoGateRepo(prefix: string, firstStep: string, opts: { loca
 export function seedTrustedFlow(home: string, repo: string, id: string, yaml: string): void {
   writeCatalogEntry(home, id, yaml);
   writeActiveFlow(repo, id);
+}
+
+export interface HeldHumanGate {
+  repo: string;
+  /** Starts the agent and its flow in `terminal`, resolving once the agent holds its verdict. */
+  start(terminal: Page): Promise<void>;
+  /** Lets the held verdict through, resolving once the run is stopped at its human gate. */
+  release(): Promise<void>;
+  dispose(): void;
+}
+
+/** A real human gate (a red-loop step whose review says "stop for a human") that the agent reaches only when the
+ *  test calls `release`, so a test can put the controller in any state first. Adds the fake tools to `env`. */
+export function heldHumanGate(fixture: { home: string; env: Record<string, string> }, prefix: string): HeldHumanGate {
+  const repo = seedAutoGateRepo(`${prefix}-`, 'red');
+  let binDir: string | undefined;
+  const dispose = (): void => {
+    rmSync(repo, { recursive: true, force: true });
+    if (binDir) rmSync(binDir, { recursive: true, force: true });
+  };
+  try {
+    const tools = seedFakeGhGit(`${prefix}-tools-`, { realCommitOps: true });
+    binDir = tools.binDir;
+    seedTrustedFlow(fixture.home, repo, 'held-gate', autoGateFlowYaml([
+      { id: 'red', kind: 'loop', loop: 'red-loop', authority: 'auto' }, { id: 'verify', kind: 'manual' },
+    ], 'held-gate'));
+    writeFileSync(join(binDir, 'verdict-hold'), 'hold');
+    seedFakeAgentV2(binDir, {
+      holdConsolidate: { sentinel: join(binDir, 'verdict-hold') },
+      stepId: 'red', artifactRel: '.agent-terminal/loop/artifacts/red-result.json', work: 'red',
+      roster: loopRoster('red-loop'), verdicts: [exampleConsolidatorOutput('stop for a human', loopRoster('red-loop'))],
+    });
+    Object.assign(fixture.env, {
+      PATH: `${binDir}:${fixture.env.PATH ?? process.env.PATH}`, FAKE_GHGIT_LOG: tools.logFile,
+      CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100',
+    });
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+  const verdictHold = join(binDir, 'verdict-hold');
+  const stateFile = join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
+  return {
+    repo,
+    async start(terminal) {
+      await terminal.locator('.xterm-screen').click();
+      await terminal.keyboard.type(`cd ${shellQuote(repo)}; fake-agent`);
+      await terminal.keyboard.press('Enter');
+      const control = terminal.locator('#flow-strip .flow-control');
+      await expect(control).toHaveText('Start');
+      await control.click();
+      await expect.poll(() => existsSync(`${verdictHold}.pids`), { timeout: 60_000 }).toBe(true);
+    },
+    async release() {
+      rmSync(verdictHold);
+      await expect.poll(() => { try { return readFileSync(stateFile, 'utf8'); } catch { return ''; } }, { timeout: 60_000 })
+        .toContain('verdict: stop for a human');
+    },
+    dispose,
+  };
 }
 
 export interface AuditRunIdentity {

@@ -119,3 +119,27 @@ export function directoryConflictFixture(): { members: StatusTerminal[]; unrelat
   }));
   return { members: terminals.slice(0, 3), unrelated: terminals[3] };
 }
+
+/** The window header's and tray's counts for `distinctAttentionMix`, written independently of the production code. */
+export interface AttentionMixCounts {
+  total: number;
+  connected: number;
+  disconnected: number;
+  errors: number;
+  needsHuman: number;
+  working: number;
+}
+
+/** One card per terminal (no shared directory) in every attention class, each class a different size, so no two counts
+ *  a test compares can be swapped unnoticed (UI-STANDARDS.md §3.4 rule 4). */
+export function distinctAttentionMix(): { terminals: ControllerTerminal[]; counts: AttentionMixCounts } {
+  const sized = (key: string, size: number, work: WorkStatus | undefined, status?: 'disconnected') =>
+    Array.from({ length: size }, (_, index) => caseTerminal(`${key}-${index + 1}`, work, status));
+  const terminals = [
+    ...sized('mix-disconnected', 1, undefined, 'disconnected'),
+    ...sized('mix-flow-error', 3, workStatus({ error: failure })),
+    ...sized('mix-needs-human', 2, workStatus({ attention: human })),
+    ...sized('mix-working', 5, workStatus({ activity: 'active' })),
+  ];
+  return { terminals, counts: { total: 11, connected: 10, disconnected: 1, errors: 4, needsHuman: 2, working: 5 } };
+}
