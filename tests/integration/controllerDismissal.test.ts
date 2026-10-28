@@ -33,7 +33,7 @@ describe('controller stale representations', () => {
 
   async function disconnect(client: Awaited<ReturnType<typeof peer>>) {
     await client.close();
-    await vi.waitFor(() => expect(server.terminals().find(item => item.id === client.terminal.id)?.status).toBe('disconnected'));
+    await vi.waitFor(() => expect(server.terminals().some(item => item.id === client.terminal.id && item.status !== 'disconnected')).toBe(false));
   }
 
   it.each(['read', 'subscribe'] as const)('%s snapshots cannot change live or disconnected identities', async source => {
@@ -136,7 +136,7 @@ describe('controller stale representations', () => {
     expect(await server.activate(newer.terminal.id)).toBe('activated');
   });
 
-  it('dismisses one occurrence while preserving same-directory and other-directory stale entries and a live peer', async () => {
+  it('discards departed peers while preserving another directory and rejects their delayed dismissal', async () => {
     const selected = await peer('/work/a');
     const sameDirectory = await peer('/work/a');
     const otherDirectory = await peer('/work/b');
@@ -149,7 +149,6 @@ describe('controller stale representations', () => {
     try {
       await server.dismiss(selected.terminal.id);
       const expected = [
-        { ...sameDirectory.terminal, status: 'disconnected' },
         { ...otherDirectory.terminal, status: 'disconnected' },
         live.terminal,
       ];
@@ -159,6 +158,27 @@ describe('controller stale representations', () => {
       expect.soft(published).toEqual(expect.arrayContaining(expected));
       expect(await server.activate(live.terminal.id)).toBe('activated');
     } finally { unsubscribe(); }
+  });
+
+  it('retains only the last departure and rebuilds live membership through repeated reconnects', async () => {
+    const other = await peer('/work/other');
+    await disconnect(other);
+    for (let round = 0; round < 2; round++) {
+      const first = await peer('/work/shared');
+      const second = await peer('/work/shared');
+      const third = await peer('/work/shared');
+      await disconnect(first);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared').map(item => item.id).sort())
+        .toEqual([second.terminal.id, third.terminal.id].sort());
+      await disconnect(second);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared')).toEqual([third.terminal]);
+      await disconnect(third);
+      expect.soft(server.terminals().filter(item => item.launchDirectory === '/work/shared'))
+        .toEqual([{ ...third.terminal, status: 'disconnected' }]);
+      expect.soft(server.terminals()).toContainEqual({ ...other.terminal, status: 'disconnected' });
+      await server.dismiss(first.terminal.id);
+      expect.soft(server.terminals()).toContainEqual({ ...third.terminal, status: 'disconnected' });
+    }
   });
 
 });

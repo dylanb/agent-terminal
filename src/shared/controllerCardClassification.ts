@@ -1,4 +1,5 @@
-import type { ControllerTerminal, ControllerWorkStatus } from './ipc';
+import type { ControllerWorkStatus } from './ipc';
+import type { ControllerDirectoryCard } from './controllerCards';
 
 export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' | 'idle';
 export type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
@@ -29,9 +30,10 @@ function conditionStatus(work: ControllerWorkStatus): [string, CardStatusClass] 
   return [text, work.error ? 'error' : 'needs-human'];
 }
 
-function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
-  const work = terminal.work;
-  if (terminal.status === 'disconnected') return ['Disconnected', 'error'];
+function textAndClass(card: ControllerDirectoryCard): [string, CardStatusClass] {
+  if (card.kind === 'conflict') return ['Duplicate directory', 'error'];
+  if (card.kind === 'disconnected') return ['Disconnected', 'error'];
+  const work = card.work;
   if (work?.error || work?.attention) return conditionStatus(work);
   if (work?.unavailableReason) return ['Status unavailable', 'needs-human'];
   if (!work) return ['Loading', 'idle'];
@@ -41,8 +43,8 @@ function textAndClass(terminal: ControllerTerminal): [string, CardStatusClass] {
   return [ACTIVITY_WORDS[work.activity], work.activity === 'active' ? 'working' : 'idle'];
 }
 
-export function cardStatus(terminal: ControllerTerminal): CardStatus {
-  const [text, statusClass] = textAndClass(terminal);
+export function cardStatus(card: ControllerDirectoryCard): CardStatus {
+  const [text, statusClass] = textAndClass(card);
   return { text, statusClass, summary: SUMMARY_OF[statusClass] };
 }
 
@@ -52,7 +54,7 @@ export interface StatusCount {
   count: number;
 }
 
-export function statusSummary(terminals: readonly ControllerTerminal[]): StatusCount[] {
-  const summaries = terminals.map(terminal => cardStatus(terminal).summary);
+export function statusSummary(cards: readonly ControllerDirectoryCard[]): StatusCount[] {
+  const summaries = cards.map(card => cardStatus(card).summary);
   return SUMMARY_LABELS.map(label => ({ label, statusClass: SUMMARY_CLASS[label], count: summaries.filter(summary => summary === label).length }));
 }

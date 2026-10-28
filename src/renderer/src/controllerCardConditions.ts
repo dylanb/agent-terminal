@@ -1,5 +1,5 @@
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
-import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
+import type { ControllerWorkStatus } from '../../shared/ipc';
 
 export interface WorkCondition {
   statusClass: 'needs-human' | 'error';
@@ -14,9 +14,9 @@ export function workConditions(work: ControllerWorkStatus | undefined): WorkCond
   ];
 }
 
-export function attentionText(terminal: ControllerTerminal): string {
-  if (terminal.work?.unavailableReason) return CONTROLLER_OVERSIZED_STATUS_TEXT;
-  return workConditions(terminal.work).flatMap(condition => [condition.title, ...condition.reasons]).join('. ');
+export function attentionText(work: ControllerWorkStatus | undefined): string {
+  if (work?.unavailableReason) return CONTROLLER_OVERSIZED_STATUS_TEXT;
+  return workConditions(work).flatMap(condition => [condition.title, ...condition.reasons]).join('. ');
 }
 
 export function attentionUpdate(previous: string, current: string): string | undefined {

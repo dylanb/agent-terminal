@@ -14,6 +14,8 @@ read **Working**; it now reads **Activity unavailable** in the idle class. The e
 can use the same rule, and §23.6 now names the shared module. The renderer module keeps only the condition boxes
 and announcement text and is renamed `controllerCardConditions.ts`. Announcements are unchanged: an activity change alone is never announced. No IPC contract change.
 
+> **Changelog v2.224:** **§23.6 — directory conflict cards ([#220](https://github.com/dylanb/agent-terminal/issues/220), operator decision 2026-10-26).** Overlapping live connections now share one conflict-only card with directory identity, instance count and all-original-window activation. This explicitly supersedes older overlap ticket/work/human-request display requirements: the operator must reduce the terminals to one before the survivor's current ordinary information returns. Header counts count cards; collapsed conflicts retain warning/count. Activation reports aggregate failures against the captured target set. Last departure retains one disconnected occurrence, reconnect replaces it, and focus/collapse continuity follows the directory. Wire protocol, human gates and T4 notifications are unchanged.
+
 ## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
 
 §23.6: the window header's theme button read **Dark theme** in both themes and showed its state only

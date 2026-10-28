@@ -396,6 +396,18 @@ cannot absorb it: Playwright reports `1 error was not a part of any test` and ex
 green. Generally: when a shared fixture is expensive and only *some* tests can use it, make it opt-out and
 pin the opt-out.
 
+## Test runs own their GUI windows through cleanup
+
+Before a GUI test or native verification run launches anything, establish how it will identify and
+clean up its own windows and child processes on success, failure and interruption. Ownership includes
+any Terminal wrapper used to start the run. A shell command exiting is not proof of cleanup: Terminal
+can retain the finished window, leaving the operator to identify and close test leftovers.
+
+Close only the exact resources owned by the run, never all Terminal/Electron windows, unrelated
+processes or the operator's sessions. Verify that no owned windows or processes remain before reporting
+completion. If a launch mechanism cannot provide ownership and cleanup, use one that can; do not rely
+on the operator to clean up or change their global Terminal preferences to hide the problem.
+
 ## One theme per PR
 
 A branch that accumulates unrelated themes is not reviewable, by a human or by the §27.4 persona fan-out:

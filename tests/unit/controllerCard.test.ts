@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { directoryCards } from '../../src/shared/controllerCards';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
@@ -13,10 +14,9 @@ function mount(terminal: ControllerTerminal, expanded = true) {
   document.body.append(host);
   const calls = { bringForward: 0, dismiss: 0 };
   const deps = {
-    terminal,
+    card: directoryCards([terminal])[0],
     expandedByDefault: expanded,
-    onBringForward() { calls.bringForward += 1; },
-    onDismiss() { calls.dismiss += 1; },
+    onAction() { calls[terminal.status === 'disconnected' ? 'dismiss' : 'bringForward'] += 1; },
   };
   const card = createControllerCard(host, deps);
   return { host, calls, card, element: cardIn(host, terminal.launchDirectory) };

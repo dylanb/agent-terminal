@@ -164,11 +164,12 @@ describe('a toggled card keeps the operator\'s choice', () => {
     } finally { dispose(); }
   });
 
-  it('treats a terminal that registers again under a new id as untoggled', () => {
+  it('treats registration after zero live connections as untoggled', () => {
     const { host, service, dispose } = mountControllerPanes({ terminals: [working], oneColumn: false });
     try {
       header(host, working.launchDirectory)?.click();
       const toggled = expanded(host, working.launchDirectory);
+      service.publish([{ ...working, status: 'disconnected' }]);
       service.publish([{ ...working, id: 'working-again' }]);
       expect({ toggled, registeredAgain: expanded(host, working.launchDirectory) }).toEqual({ toggled: false, registeredAgain: true });
     } finally { dispose(); }
