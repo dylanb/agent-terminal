@@ -62,6 +62,24 @@ discriminated union, never a flat record with fields dead in some modes — a fl
 dummy the mode ignores. `BundleLocation` (`packaged: true` carries `resourcesPath`; `packaged: false`
 carries `appPath`) is the shape to copy.
 
+## Platform branches take the platform as a parameter
+
+CI and the Podman e2e run only on Linux, so a branch decided by reading `process.platform` inline runs its
+macOS arm only on a developer's Mac, and the macOS behaviour ends up untested or recorded as a gap. Code
+whose behaviour differs by operating system therefore takes the platform as an argument
+(`platform: NodeJS.Platform`) and returns the decision — a value, a template, the name of the action to take
+— so a unit test passes `'darwin'` and `'linux'` on any host and asserts both. `process.platform` is read
+once, at the composition root (`src/main/index.ts`, `src/main/controller.ts`), and handed down.
+`applyDockIcon` (`appIcon.ts`), `buildMenuTemplate` (`appMenu.ts`) and `probeShellCommand` are the shapes to
+copy.
+
+What remains untested is only the native call that carries the decision out (`window.hide()`,
+`tray.setContextMenu(…)`). That code chooses nothing itself: it executes a decision the tested function
+returned, and when no layer can drive it, it carries the `// untestable; tracked in #153` comment (CLAUDE.md
+TDD exemption). If a reviewer finds an `if (platform …)` in untested glue, that decision belongs in a tested
+function instead. Inline `process.platform` reads already in the code stay as they are until a change
+touches their branch.
+
 ## "Clean" is a claim about an observed, complete, green run
 
 Declaring a change clean, done or ready requires having run the full relevant suite — unit, integration,
