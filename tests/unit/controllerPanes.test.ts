@@ -45,7 +45,7 @@ describe('controller window header', () => {
 
 describe('controller window header with empty classes', () => {
   it('shows 0 for each summary class with no cards', () => {
-    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['working-activity-unavailable']];
+    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['needs-human-working']];
     const { host, dispose } = mountControllerPanes({ terminals: cases.map(c => c.terminal) });
     try {
       const text = windowHeaderIn(host)?.textContent ?? '';

@@ -1,5 +1,6 @@
+import { cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardClassification';
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
-import { attentionText, attentionUpdate, cardStatus, statusSummary, type CardStatusClass } from './controllerCardStatus';
+import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';

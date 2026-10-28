@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import { SUMMARY_LABELS } from './controllerStatusFixture';
+import { STATUS_CLASSES, SUMMARY_LABELS } from './controllerStatusFixture';
 
 export const CARD_SELECTOR = 'article';
 
@@ -17,15 +17,19 @@ interface Alternatives<L> {
   or(other: L): L;
 }
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /** Matches `directory` as a whole path, so `/w/a` does not match a name holding `/w/ab` or `/w/a/b`. */
 export function directoryPattern(directory: string): RegExp {
-  const escaped = directory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![\\w./-])${escaped}(?![\\w./-])`);
+  return new RegExp(`(?<![\\w./-])${escapeRegExp(directory)}(?![\\w./-])`);
 }
 
 export const cardsLocator = <L>(scope: RoleScope<L>): L => scope.getByRole('article');
 export const cardLocator = <L>(scope: RoleScope<L>, directory: string): L =>
   scope.getByRole('article', { name: directoryPattern(directory) });
+/** The card for `directory` only while its accessible name also holds `text`. */
+export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text: string): L =>
+  scope.getByRole('article', { name: new RegExp(`^(?=[\\s\\S]*${directoryPattern(directory).source})(?=[\\s\\S]*${escapeRegExp(text)})`) });
 const activationName = /Bring (?:both |[0-9]+ terminals )?forward/;
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: activationName });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
@@ -131,3 +135,37 @@ export function showsFullReason(control: Element | undefined): boolean {
   if (state === undefined) throw new Error('Show full reason exposes no state');
   return state === 'true';
 }
+
+/** Each field names the status class painting that part, or says why no single class does. */
+export interface PaintedStatus { accent: string; text: string }
+interface PaintProbe { classes: readonly string[]; accentTestId: string; statusTestId: string }
+const PAINT_PROBE: PaintProbe = { classes: STATUS_CLASSES, accentTestId: CARD_ACCENT_TEST_ID, statusTestId: CARD_STATUS_TEST_ID };
+
+// Playwright serialises this into the page, so it may reference nothing outside its own body.
+function paintedStatus(card: Element, { classes, accentTestId, statusTestId }: PaintProbe): PaintedStatus {
+  const probe = card.ownerDocument.createElement('span');
+  card.append(probe);
+  try {
+    const tokenColour = (token: string): string => {
+      probe.style.color = `var(${token})`;
+      return getComputedStyle(probe).color;
+    };
+    const classOf = (element: Element | null | undefined, property: 'backgroundColor' | 'color', suffix: string): string => {
+      if (!element) return 'not shown';
+      const painted = getComputedStyle(element)[property];
+      const matches = classes.filter(statusClass => tokenColour(`--status-${statusClass}${suffix}`) === painted);
+      return matches.length === 1 ? matches[0] : `${matches.join(' or ') || 'no status class'} painted ${painted}`;
+    };
+    const row = card.querySelector(`[data-testid="${statusTestId}"]`);
+    const label = row?.checkVisibility()
+      ? row
+      : [...card.querySelectorAll('header *')].filter(element => element.textContent === row?.textContent).at(-1);
+    return { accent: classOf(card.querySelector(`[data-testid="${accentTestId}"]`), 'backgroundColor', ''), text: classOf(label, 'color', '-text') };
+  } finally {
+    probe.remove();
+  }
+}
+
+export const paintedStatusIn = (card: Element): PaintedStatus => paintedStatus(card, PAINT_PROBE);
+export const paintedStatusOf = (card: { evaluate(fn: typeof paintedStatus, probe: PaintProbe): Promise<PaintedStatus> }): Promise<PaintedStatus> =>
+  card.evaluate(paintedStatus, PAINT_PROBE);
