@@ -8,6 +8,7 @@ import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_WINDOW_ARGUMENT } from '..
 import { installControllerIpc } from './controllerIpc';
 import { createControllerSettingsStore } from './controllerSettings';
 import { createControllerAlwaysOnTop } from './controllerAlwaysOnTop';
+import { createControllerWindowStateStore } from './controllerWindowState';
 import { errMsg } from './errno';
 import { applyDockIcon, resolveWindowIconPath } from './appIcon';
 import type { BundleLocation } from './bundleLocation';
@@ -35,7 +36,7 @@ void app.whenReady().then(async () => {
   });
   try {
     const transport = await startControllerTransport(resolveAppHome(process.env, homedir()));
-    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')), createControllerAlwaysOnTop({ window, initial: CONTROLLER_DEFAULT_ALWAYS_ON_TOP }));
+    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')), createControllerAlwaysOnTop({ window, store: createControllerWindowStateStore(app.getPath('userData')), initial: CONTROLLER_DEFAULT_ALWAYS_ON_TOP }));
     window.once('closed', () => {
       disposeIpc();
       void transport.dispose().catch(error => console.error(errMsg(error)));

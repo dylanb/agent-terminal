@@ -5,6 +5,7 @@ export interface ControllerAlwaysOnTop {
 
 export interface ControllerAlwaysOnTopDeps {
   window: { setAlwaysOnTop(alwaysOnTop: boolean): void };
+  store: { saveAlwaysOnTop(alwaysOnTop: boolean): void };
   initial: boolean;
 }
 

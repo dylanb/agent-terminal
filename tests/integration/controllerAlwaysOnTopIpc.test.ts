@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createControllerAlwaysOnTop } from '../../src/main/controllerAlwaysOnTop';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
+import { createControllerWindowStateStore } from '../../src/main/controllerWindowState';
 import { installControllerIpc } from '../../src/main/controllerIpc';
 import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, SESSION_ID } from '../../src/shared/ipc';
 
@@ -31,12 +32,19 @@ afterEach(() => {
   rmSync(userData, { recursive: true, force: true });
 });
 
-/** Installs the controller IPC over a real always-on-top owner; `applied` is each value the window was told to take. */
+/** Installs the controller IPC over a real always-on-top owner and window-state store; `applied` is each value the
+ *  window was told to take. */
 function install(initial: boolean) {
   const applied: boolean[] = [];
-  const owner = createControllerAlwaysOnTop({ window: { setAlwaysOnTop(on) { applied.push(on); } }, initial });
+  const store = createControllerWindowStateStore(userData);
+  const owner = createControllerAlwaysOnTop({ window: { setAlwaysOnTop(on) { applied.push(on); } }, store, initial });
   dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData), owner);
   return { applied };
+}
+/** Disposes the running IPC and installs it again over the always-on-top choice a fresh store loads, as a relaunch does. */
+function relaunch() {
+  dispose?.();
+  return install(createControllerWindowStateStore(userData).load().alwaysOnTop);
 }
 const invoke = async (channel: string, sender: unknown, payload: unknown) => boundary.handlers.get(channel)?.({ sender }, payload);
 const readBack = () => invoke(CONTROLLER_CH.getAlwaysOnTop, contents, { sessionId: SESSION_ID });
@@ -72,4 +80,30 @@ it.each([
   const { applied } = install(false);
   const reply = await invoke(CONTROLLER_CH.setAlwaysOnTop, sender, payload);
   expect({ reply, readBack: await readBack(), applied }).toEqual({ reply: false, readBack: false, applied: [] });
+});
+
+it('keeps each value its own window sets across a relaunch over the same userData', async () => {
+  install(CONTROLLER_DEFAULT_ALWAYS_ON_TOP);
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: false });
+  relaunch();
+  const off = await readBack();
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: true });
+  relaunch();
+  expect({ off, on: await readBack() }).toEqual({ off: false, on: true });
+});
+
+it('keeps the accepted value across a relaunch when its guard rejects later sets of the other value', async () => {
+  install(true);
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: false });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, {}, { sessionId: SESSION_ID, alwaysOnTop: true });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: 'wrong', alwaysOnTop: true });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: 1 });
+  relaunch();
+  const keptOff = await readBack();
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: true });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, {}, { sessionId: SESSION_ID, alwaysOnTop: false });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: 'wrong', alwaysOnTop: false });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: 0 });
+  relaunch();
+  expect({ keptOff, keptOn: await readBack() }).toEqual({ keptOff: false, keptOn: true });
 });

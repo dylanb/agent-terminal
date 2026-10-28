@@ -19,6 +19,8 @@ export const isMinimized = (app: ElectronApplication) => controllerWindow(app, '
 export const isMaximized = (app: ElectronApplication) => controllerWindow(app, 'isMaximized');
 export const isFullScreen = (app: ElectronApplication) => controllerWindow(app, 'isFullScreen');
 export const isAlwaysOnTop = (app: ElectronApplication) => controllerWindow(app, 'isAlwaysOnTop');
+export const normalBounds = (app: ElectronApplication): Promise<WindowBounds> =>
+  app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
 
 /** Closes the controller window the way the operator does and resolves once it is minimized, so no later step can
  *  act on a window that is still open. */
