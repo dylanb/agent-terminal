@@ -8,6 +8,7 @@ import {
   waitForAlwaysOnTop, type WindowBounds,
 } from './controllerWindow';
 import { alwaysOnTopLocator, cardHeaderLocator, cardLocator, themeControlLocator } from '../helpers/controllerCards';
+import { createControllerWindowStateStore } from '../../src/main/controllerWindowState';
 
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
@@ -195,6 +196,22 @@ test('a window closed under a window manager that animates minimizing relaunches
   } finally {
     try { await h.dispose(); }
     finally { gate?.dispose(); }
+  }
+});
+
+test('a window saved where no attached display shows it relaunches at the default placement', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
+  const h = await createControllerDesktopHarness();
+  try {
+    const first = await h.launch(controllerTarget, h.fixture.nonGit);
+    const defaultPlacement = await normalBounds(first.app);
+    await first.app.close();
+    createControllerWindowStateStore(first.profile).saveBounds({ x: 5000, y: 5000, width: 700, height: 500 });
+
+    const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: first.profile });
+    await expect.poll(() => normalBounds(restarted.app)).toEqual(defaultPlacement);
+  } finally {
+    await h.dispose();
   }
 });
 

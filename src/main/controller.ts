@@ -25,7 +25,7 @@ void app.whenReady().then(async () => {
   applyDockIcon(app.dock, process.platform, iconLoc, 'controller');
   const windowState = createControllerWindowStateStore(app.getPath('userData'));
   const saved = windowState.load();
-  // untestable (the attached displays' work areas need a second screen) — tracked in #153.
+  // untestable (bounds saved on a second attached display need a second screen) — tracked in #153.
   const bounds = placeWindow(saved.bounds, screen.getAllDisplays().map(display => display.workArea));
   const window = new BrowserWindow({
     ...bounds,
