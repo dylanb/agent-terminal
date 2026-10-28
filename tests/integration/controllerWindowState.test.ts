@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
@@ -120,6 +120,37 @@ describe('the controller window-state store', () => {
     });
   });
 
+  it('reads the defaults without throwing when the saved file is JSON null, and the next save overwrites it', () => {
+    saveBoth(MOVED, false);
+    rewriteSaved(() => 'null');
+    let damaged: unknown;
+    expect.soft(() => { damaged = restarted(); }).not.toThrow();
+    saveBoth(MOVED_AGAIN, false);
+    expect({ damaged, overwritten: restarted() }).toEqual({ damaged: DEFAULTS, overwritten: { bounds: MOVED_AGAIN, alwaysOnTop: false } });
+  });
+
+  it.each([
+    ['vertical position', (content: string) => content.replace('99', '"99"')],
+    ['width', (content: string) => content.replace('777', '"777"')],
+    ['height', (content: string) => content.replace('555', 'true')],
+  ] as const)('defaults only the bounds when their %s is not a number, keeping the always-on-top choice', (_case, rewrite) => {
+    saveBoth(MOVED, false);
+    rewriteSaved(rewrite);
+    expect(restarted()).toEqual({ bounds: null, alwaysOnTop: false });
+  });
+
+  it('defaults only the bounds when their width is not finite, keeping the always-on-top choice', () => {
+    saveBoth(MOVED, false);
+    rewriteSaved(content => content.replace('777', '1e999'));
+    expect(restarted()).toEqual({ bounds: null, alwaysOnTop: false });
+  });
+
+  it('reads back only the position and size of saved bounds that carry other members', () => {
+    saveBoth(MOVED, false);
+    rewriteSaved(content => content.replace('555', '555, "show": false, "opacity": 0'));
+    expect(restarted()).toEqual({ bounds: MOVED, alwaysOnTop: false });
+  });
+
   it('logs a save into a userData it cannot write, without throwing', () => {
     const obstacle = join(userData, 'not-a-directory');
     writeFileSync(obstacle, '');
@@ -130,6 +161,24 @@ describe('the controller window-state store', () => {
     logged.mockClear();
     expect.soft(() => unwritable.saveAlwaysOnTop(false)).not.toThrow();
     expect({ boundsLogged, alwaysOnTopLogged: logged.mock.calls.length > 0 }).toEqual({ boundsLogged: true, alwaysOnTopLogged: true });
+  });
+});
+
+describe('the controller window-state store over a userData it refuses to write through', () => {
+  it('logs each save into a userData that is a symlink, saves nothing, and does not throw', () => {
+    const target = mkdtempSync(join(tmpdir(), 'controller-window-state-target-'));
+    try {
+      const linked = join(userData, 'linked-user-data');
+      symlinkSync(target, linked);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const refused = createControllerWindowStateStore(linked);
+      expect.soft(() => refused.saveBounds(MOVED)).not.toThrow();
+      const boundsLogged = logged.mock.calls.length > 0;
+      logged.mockClear();
+      expect.soft(() => refused.saveAlwaysOnTop(false)).not.toThrow();
+      expect({ boundsLogged, alwaysOnTopLogged: logged.mock.calls.length > 0, written: readdirSync(target), state: createControllerWindowStateStore(linked).load() })
+        .toEqual({ boundsLogged: true, alwaysOnTopLogged: true, written: [], state: DEFAULTS });
+    } finally { rmSync(target, { recursive: true, force: true }); }
   });
 });
 
@@ -168,6 +217,7 @@ describe('placing the window over the work areas of the attached displays', () =
     'across both displays': [at(1000, 300), [PRIMARY, SECOND]],
     'on a display that is no longer attached': [at(2000, 300), [PRIMARY]],
     'touching a work area edge with no overlap': [at(-800, 100), [PRIMARY]],
+    'touching a work area top edge from above with no overlap': [at(100, -600), [PRIMARY]],
     'level with a work area but entirely below it': [at(100, 1000), [PRIMARY]],
     'beside a work area but entirely to its right': [at(1280, 100), [PRIMARY]],
     'with no saved bounds': [null, [PRIMARY]],
@@ -182,6 +232,7 @@ describe('placing the window over the work areas of the attached displays', () =
       'across both displays': at(1000, 300),
       'on a display that is no longer attached': null,
       'touching a work area edge with no overlap': null,
+      'touching a work area top edge from above with no overlap': null,
       'level with a work area but entirely below it': null,
       'beside a work area but entirely to its right': null,
       'with no saved bounds': null,

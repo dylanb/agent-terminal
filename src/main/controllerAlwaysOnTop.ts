@@ -16,6 +16,7 @@ export function createControllerAlwaysOnTop(deps: ControllerAlwaysOnTopDeps): Co
     set(alwaysOnTop) {
       deps.window.setAlwaysOnTop(alwaysOnTop);
       current = alwaysOnTop;
+      deps.store.saveAlwaysOnTop(alwaysOnTop);
     },
   };
 }

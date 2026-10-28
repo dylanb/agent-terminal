@@ -4,7 +4,7 @@ import { createControllerDesktopHarness } from './controllerDesktop';
 import { heldHumanGate, type HeldHumanGate } from './autoGateHarness';
 import { STATUS_BUDGET_MS } from './controllerStatusObservation';
 import {
-  closeControllerWindow, isAlwaysOnTop, isFullScreen, isMaximized, isMinimized, normalBounds, settledNormalBounds,
+  closeControllerWindow, isAlwaysOnTop, isFullScreen, isMaximized, isMinimized, minimizedOnDesktop, normalBounds, restoredOnDesktopAt, settledNormalBounds,
   waitForAlwaysOnTop, type WindowBounds,
 } from './controllerWindow';
 import { alwaysOnTopLocator, cardHeaderLocator, cardLocator, themeControlLocator } from '../helpers/controllerCards';
@@ -163,6 +163,7 @@ test('tracer: a card collapsed before closing shows a gate reached while closed,
       .toEqual({ minimized: true, expanded: 'false' });
     await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
     await expect.poll(() => isMinimized(controller.app)).toBe(false);
+    await restoredOnDesktopAt(controller.app, h.fixture.env.DISPLAY, expected);
     await expect.soft(header).toHaveAttribute('aria-expanded', 'false');
     await expect.soft(card).toContainText('Needs a human');
     await controller.app.close();
@@ -174,5 +175,54 @@ test('tracer: a card collapsed before closing shows a gate reached while closed,
   } finally {
     try { await h.dispose(); }
     finally { gate?.dispose(); }
+  }
+});
+
+test('a window closed under a window manager that animates minimizing relaunches at its bounds from before closing', { tag: '@ownapp' }, async () => {
+  test.setTimeout(240_000);
+  const h = await createControllerDesktopHarness();
+  let gate: HeldHumanGate | undefined;
+  try {
+    gate = heldHumanGate(h.fixture, 'controller-window-animated-minimize');
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    const terminal = await h.launch(terminalTarget, gate.repo);
+    await gate.start(terminal.page);
+    const header = cardHeaderLocator(cardLocator(controller.page, gate.repo), gate.repo);
+    await moveAndResize(controller.app, { x: 110, y: 80, width: 920, height: 660 });
+    const before = await settledNormalBounds(controller.app, h.fixture.env.DISPLAY);
+    await header.click();
+    await expect(header).toHaveAttribute('aria-expanded', 'false');
+    await closeControllerWindow(controller.app);
+    await minimizedOnDesktop(controller.app, h.fixture.env.DISPLAY);
+    await gate.release();
+    await controller.app.close();
+
+    const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
+    await expect.poll(() => normalBounds(restarted.app)).toEqual(before);
+  } finally {
+    try { await h.dispose(); }
+    finally { gate?.dispose(); }
+  }
+});
+
+test('a window moved after it is restored relaunches at where it was moved, not where it was before closing', { tag: '@ownapp' }, async () => {
+  test.setTimeout(120_000);
+  const h = await createControllerDesktopHarness();
+  try {
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    await moveAndResize(controller.app, { x: 110, y: 80, width: 920, height: 660 });
+    const before = await settledNormalBounds(controller.app, h.fixture.env.DISPLAY);
+    await closeControllerWindow(controller.app);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
+    await expect.poll(() => isMinimized(controller.app)).toBe(false);
+    await restoredOnDesktopAt(controller.app, h.fixture.env.DISPLAY, before);
+    await moveAndResize(controller.app, { x: 200, y: 150, width: 840, height: 600 });
+    const moved = await settledNormalBounds(controller.app, h.fixture.env.DISPLAY);
+    await controller.app.close();
+
+    const restarted = await h.launch(controllerTarget, h.fixture.nonGit, { profile: controller.profile });
+    await expect.poll(() => normalBounds(restarted.app)).toEqual(moved);
+  } finally {
+    await h.dispose();
   }
 });

@@ -67,3 +67,27 @@ export async function settledNormalBounds(app: ElectronApplication, display: str
   }).toBe(true);
   return settled!;
 }
+
+/** Resolves once the X server reports the controller window unmapped: a window manager that animates minimizing has
+ *  finished moving the frame by then, so every move it reported has reached the window. */
+export async function minimizedOnDesktop(app: ElectronApplication, display: string | undefined): Promise<void> {
+  if (!display) throw new Error('minimizedOnDesktop needs the X display of createControllerDesktopHarness');
+  const xid = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readUInt32LE(0));
+  await expect.poll(async () => {
+    const { stdout } = await exec('xwininfo', ['-id', String(xid)], { env: { ...process.env, DISPLAY: display } });
+    return /^\s*Map State:\s*(\S+)/m.exec(stdout)?.[1];
+  }).toBe('IsUnMapped');
+}
+
+/** Resolves once the X server shows the controller window mapped at `bounds` and Electron reports the same bounds: a
+ *  window manager that animates restoring moves the mapped frame along the way, so this holds only once it has ended. */
+export async function restoredOnDesktopAt(app: ElectronApplication, display: string | undefined, bounds: WindowBounds): Promise<void> {
+  if (!display) throw new Error('restoredOnDesktopAt needs the X display of createControllerDesktopHarness');
+  const xid = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readUInt32LE(0));
+  const shown = (b: WindowBounds) => [b.x, b.y, b.width, b.height].join();
+  await expect.poll(async () => {
+    const { stdout } = await exec('xwininfo', ['-id', String(xid)], { env: { ...process.env, DISPLAY: display } });
+    const electron = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+    return { mapState: /^\s*Map State:\s*(\S+)/m.exec(stdout)?.[1], x: shown(await xWindowGeometry(display, xid)), electron: shown(electron) };
+  }).toEqual({ mapState: 'IsViewable', x: shown(bounds), electron: shown(bounds) });
+}
