@@ -82,6 +82,7 @@ const CONTROLLER_WIRE_NAMES = {
   setTheme: 'controller:setTheme',
   getAlwaysOnTop: 'controller:getAlwaysOnTop',
   setAlwaysOnTop: 'controller:setAlwaysOnTop',
+  alwaysOnTop: 'controller:alwaysOnTop',
 };
 
 const notOneSentence = (does: string | undefined): boolean =>

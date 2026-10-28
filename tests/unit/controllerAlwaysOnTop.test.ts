@@ -101,3 +101,32 @@ it('keeps showing the value main last accepted when a later request is rejected'
     expect({ requests, state: switchState(host) }).toEqual({ requests: 2, state: 'off' });
   } finally { dispose(); }
 });
+
+describe('always-on-top changed outside the window', () => {
+  it('shows a value main pushes before its first read replies, over that reply', async () => {
+    const service = statusService(undefined, { alwaysOnTop: true });
+    let reply!: (on: boolean) => void;
+    const read = new Promise<boolean>(done => { reply = done; });
+    const { host, dispose } = mountControllerPanes({ controller: { ...service.api, getAlwaysOnTop: () => read } });
+    try {
+      service.pushAlwaysOnTop(false);
+      reply(true);
+      await shown(host);
+      await settled();
+      expect(switchState(host)).toBe('off');
+    } finally { dispose(); }
+  });
+
+  it('follows each value main pushes later, in both directions, without asking main to change it', async () => {
+    const { host, service, dispose } = mountControllerPanes({ alwaysOnTop: true });
+    try {
+      await shown(host);
+      service.pushAlwaysOnTop(false);
+      await settled();
+      const off = switchState(host);
+      service.pushAlwaysOnTop(true);
+      await settled();
+      expect({ states: [off, switchState(host)], requested: service.requestedAlwaysOnTop }).toEqual({ states: ['off', 'on'], requested: [] });
+    } finally { dispose(); }
+  });
+});

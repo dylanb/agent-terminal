@@ -44,7 +44,7 @@ beforeEach(async () => {
   snapshot = { sessionId: SESSION_ID, terminals: [] };
   deliveries = 0;
   transport = await startControllerTransport(home);
-  dispose = installControllerIpc(contents, transport, createControllerSettingsStore(home), { current: () => true, set() {} });
+  dispose = installControllerIpc(contents, transport, createControllerSettingsStore(home), { current: () => true, set() {}, subscribe: () => () => {} });
 });
 
 afterEach(async () => {

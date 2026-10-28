@@ -1,5 +1,5 @@
 import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
-import type { CardStatusClass as Status } from '../../src/renderer/src/controllerCardStatus';
+import type { CardStatusClass as Status } from '../../src/shared/controllerCardStatus';
 
 export type WorkStatus = ControllerWorkStatus;
 
@@ -86,6 +86,12 @@ export function statusService(
   /** Each always-on-top value the controller was asked to set, in order. */
   const requestedAlwaysOnTop: boolean[] = [];
   let alwaysOnTop = options.alwaysOnTop;
+  const alwaysOnTopListeners = new Set<(alwaysOnTop: boolean) => void>();
+  /** Main changes always-on-top from elsewhere (the tray) and tells the window. */
+  const pushAlwaysOnTop = (next: boolean): void => {
+    alwaysOnTop = next;
+    alwaysOnTopListeners.forEach(listener => listener(next));
+  };
   let current = initial;
   const publish = (items: ControllerTerminal[]): void => {
     current = items;
@@ -121,8 +127,12 @@ export function statusService(
       if (options.alwaysOnTopReply !== 'refused') alwaysOnTop = next;
       return alwaysOnTop === 'unreadable' || alwaysOnTop === undefined ? CONTROLLER_DEFAULT_ALWAYS_ON_TOP : alwaysOnTop;
     },
+    onAlwaysOnTopChanged(listener) {
+      alwaysOnTopListeners.add(listener);
+      return () => { alwaysOnTopListeners.delete(listener); };
+    },
   };
-  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop };
+  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {

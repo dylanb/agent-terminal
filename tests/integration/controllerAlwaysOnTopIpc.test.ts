@@ -20,12 +20,17 @@ vi.mock('electron', () => ({
   },
 }));
 
-const contents = { isDestroyed: () => false, send() {} };
+/** Each always-on-top value main pushed to the window, with its payload. */
+const pushed: unknown[] = [];
+const contents = { isDestroyed: () => false, send(channel: string, payload: unknown) { if (channel === CONTROLLER_CH.alwaysOnTop) pushed.push(payload); } };
 const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {} };
 let userData: string;
 let dispose: (() => void) | undefined;
 
-beforeEach(() => { userData = mkdtempSync(join(tmpdir(), 'controller-always-on-top-ipc-')); });
+beforeEach(() => {
+  userData = mkdtempSync(join(tmpdir(), 'controller-always-on-top-ipc-'));
+  pushed.length = 0;
+});
 afterEach(() => {
   dispose?.();
   dispose = undefined;
@@ -39,7 +44,7 @@ function install(initial: boolean) {
   const store = createControllerWindowStateStore(userData);
   const owner = createControllerAlwaysOnTop({ window: { setAlwaysOnTop(on) { applied.push(on); } }, store, initial });
   dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData), owner);
-  return { applied };
+  return { applied, owner };
 }
 /** Disposes the running IPC and installs it again over the always-on-top choice a fresh store loads, as a relaunch does. */
 function relaunch() {
@@ -106,4 +111,31 @@ it('keeps the accepted value across a relaunch when its guard rejects later sets
   await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: 0 });
   relaunch();
   expect({ keptOff, keptOn: await readBack() }).toEqual({ keptOff: false, keptOn: true });
+});
+
+it('tells every subscriber each value it takes from its own window or the tray, and nothing a guard refused', async () => {
+  const { owner } = install(true);
+  const first: boolean[] = [];
+  const second: boolean[] = [];
+  const leaving: boolean[] = [];
+  owner.subscribe(on => { first.push(on); });
+  owner.subscribe(on => { second.push(on); });
+  const leave = owner.subscribe(on => { leaving.push(on); });
+  [first, second, leaving].forEach(values => { values.length = 0; });
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: false });
+  leave();
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, {}, { sessionId: SESSION_ID, alwaysOnTop: true });
+  owner.set(true);
+  expect({ first, second, leaving }).toEqual({ first: [false, true], second: [false, true], leaving: [false] });
+});
+
+it('pushes each value it takes, from its own window or the tray, to the window with the session id until disposed', async () => {
+  const { owner } = install(true);
+  const before = pushed.length;
+  await invoke(CONTROLLER_CH.setAlwaysOnTop, contents, { sessionId: SESSION_ID, alwaysOnTop: false });
+  owner.set(true);
+  dispose?.();
+  dispose = undefined;
+  owner.set(false);
+  expect(pushed.slice(before)).toEqual([{ sessionId: SESSION_ID, alwaysOnTop: false }, { sessionId: SESSION_ID, alwaysOnTop: true }]);
 });

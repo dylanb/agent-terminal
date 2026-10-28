@@ -18,7 +18,7 @@ it('exposes only the narrow controller API to the controller window', async () =
   expect(exposed.get('controller')).toEqual({
     subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
-    getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function),
+    getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function), onAlwaysOnTopChanged: expect.any(Function),
   });
 });
 
@@ -69,4 +69,24 @@ it('reads and sets always-on-top through the controller bridge, with the session
     reply: false,
     calls: [[CONTROLLER_CH.getAlwaysOnTop, { sessionId: SESSION_ID }], [CONTROLLER_CH.setAlwaysOnTop, { sessionId: SESSION_ID, alwaysOnTop: true }]],
   });
+});
+
+it('hands each always-on-top value main pushes to the listener until it unsubscribes', async () => {
+  process.argv = [...argv, '--agent-terminal-controller-window'];
+  await import('../../src/preload/index');
+  const { ipcRenderer } = await import('electron');
+  const { CONTROLLER_CH, SESSION_ID } = await import('../../src/shared/ipc');
+  vi.mocked(ipcRenderer.on).mockClear();
+  vi.mocked(ipcRenderer.removeListener).mockClear();
+  const api = exposed.get('controller') as { onAlwaysOnTopChanged(listener: (on: boolean) => void): () => void };
+  const received: boolean[] = [];
+  const unsubscribe = api.onAlwaysOnTopChanged(on => { received.push(on); });
+  const receive = vi.mocked(ipcRenderer.on).mock.calls.find(([channel]) => channel === CONTROLLER_CH.alwaysOnTop)?.[1];
+  receive?.({} as Electron.IpcRendererEvent, { sessionId: SESSION_ID, alwaysOnTop: false });
+  receive?.({} as Electron.IpcRendererEvent, { sessionId: SESSION_ID, alwaysOnTop: true });
+  unsubscribe();
+  expect({
+    received,
+    removed: Boolean(receive) && vi.mocked(ipcRenderer.removeListener).mock.calls.some(([channel, listener]) => channel === CONTROLLER_CH.alwaysOnTop && listener === receive),
+  }).toEqual({ received: [false, true], removed: true });
 });

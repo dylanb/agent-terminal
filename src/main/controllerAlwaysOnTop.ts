@@ -1,6 +1,7 @@
 export interface ControllerAlwaysOnTop {
   current(): boolean;
   set(alwaysOnTop: boolean): void;
+  subscribe(listener: (alwaysOnTop: boolean) => void): () => void;
 }
 
 export interface ControllerAlwaysOnTopDeps {
@@ -18,5 +19,6 @@ export function createControllerAlwaysOnTop(deps: ControllerAlwaysOnTopDeps): Co
       current = alwaysOnTop;
       deps.store.saveAlwaysOnTop(alwaysOnTop);
     },
+    subscribe: () => () => {},
   };
 }

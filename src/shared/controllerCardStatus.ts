@@ -1,6 +1,6 @@
-import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
-import type { ControllerWorkStatus } from '../../shared/ipc';
-import type { ControllerDirectoryCard } from '../../shared/controllerCards';
+import { CONTROLLER_OVERSIZED_STATUS_TEXT } from './controllerStatus';
+import type { ControllerWorkStatus } from './ipc';
+import type { ControllerDirectoryCard } from './controllerCards';
 
 export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' | 'idle';
 type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
@@ -74,4 +74,14 @@ export function attentionUpdate(previous: string, current: string): string | und
   if (current === previous) return undefined;
   if (current) return current;
   return previous === CONTROLLER_OVERSIZED_STATUS_TEXT ? 'Status available: no attention or error reported' : 'Attention and error cleared';
+}
+
+export interface CardCounts {
+  total: number;
+  connected: number;
+  disconnected: number;
+}
+
+export function cardCounts(_cards: readonly ControllerDirectoryCard[]): CardCounts {
+  return { total: 0, connected: 0, disconnected: 0 };
 }

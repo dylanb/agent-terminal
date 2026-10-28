@@ -1,4 +1,4 @@
-import { cardStatus, workConditions, type WorkCondition } from './controllerCardStatus';
+import { cardStatus, workConditions, type WorkCondition } from '../../shared/controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerWorkStatus } from '../../shared/ipc';
 import type { ControllerDirectoryCard } from '../../shared/controllerCards';

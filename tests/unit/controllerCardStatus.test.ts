@@ -1,8 +1,8 @@
 import { directoryCards } from '../../src/shared/controllerCards';
 import { describe, expect, it } from 'vitest';
-import { attentionText, attentionUpdate, cardStatus, statusSummary } from '../../src/renderer/src/controllerCardStatus';
+import { attentionText, attentionUpdate, cardCounts, cardStatus, statusSummary } from '../../src/shared/controllerCardStatus';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
-import { STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
+import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
 
 describe('controller card status', () => {
   it('gives every terminal the status text, class and summary label of the first matching status row', () => {
@@ -21,6 +21,22 @@ describe('controller card status', () => {
     expect(statusSummary(cases.map(c => directoryCards([c.terminal])[0]))).toEqual(SUMMARY_LABELS.map(label => ({
       label, statusClass: paintedAs[label], count: cases.filter(c => c.summary === label).length,
     })));
+  });
+});
+
+describe('controller card counts', () => {
+  it('counts every card, the connected ones and the disconnected ones, a shared directory and a re-registered one once each', () => {
+    const mix = distinctAttentionMix();
+    const { members, unrelated } = directoryConflictFixture();
+    const rejoined = [
+      { id: 'rejoined-old', launchDirectory: '/rejoined', repositoryRoot: null, status: 'disconnected' as const },
+      { id: 'rejoined-new', launchDirectory: '/rejoined', repositoryRoot: null },
+    ];
+    const conflict = [...members, unrelated, ...rejoined, STATUS_CASES.disconnected.terminal, STATUS_CASES['disconnected-with-error'].terminal];
+    expect({ mix: cardCounts(directoryCards(mix.terminals)), conflict: cardCounts(directoryCards(conflict)) }).toEqual({
+      mix: { total: mix.counts.total, connected: mix.counts.connected, disconnected: mix.counts.disconnected },
+      conflict: { total: 5, connected: 3, disconnected: 2 },
+    });
   });
 });
 

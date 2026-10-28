@@ -90,7 +90,8 @@ test('controller consolidates terminals launched in the same directory', { tag: 
   }
 });
 
-test('closing the controller window minimizes it instead of exiting', { tag: '@ownapp' }, async () => {
+test('on Linux, closing the controller window minimizes it instead of exiting', { tag: '@ownapp' }, async () => {
+  test.skip(process.platform === 'darwin', 'macOS hides the closed window; its native effect is the AC 26 gap tracked in #153');
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);

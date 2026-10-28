@@ -34,6 +34,10 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:setAlwaysOnTop',
     does: 'The controller window asks to be kept above other windows or not, and learns the value main holds afterwards.',
   },
+  alwaysOnTop: {
+    name: 'controller:alwaysOnTop',
+    does: 'Main tells the controller window whether it is kept above other windows each time that changes, from the window or the tray.',
+  },
 } as const satisfies ChannelSpecs;
 
 export type ControllerWorkStatus = {
@@ -67,6 +71,7 @@ export interface ControllerApi {
   setTheme(theme: Theme): Promise<void>;
   getAlwaysOnTop(): Promise<boolean>;
   setAlwaysOnTop(alwaysOnTop: boolean): Promise<boolean>;
+  onAlwaysOnTopChanged(listener: (alwaysOnTop: boolean) => void): () => void;
 }
 
 export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
