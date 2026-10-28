@@ -18,6 +18,7 @@ it('exposes only the narrow controller API to the controller window', async () =
   expect(exposed.get('controller')).toEqual({
     subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
+    getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function),
   });
 });
 
@@ -51,5 +52,21 @@ it('reads and saves the controller theme through the controller bridge, with the
   expect({ read, calls: vi.mocked(ipcRenderer.invoke).mock.calls }).toEqual({
     read: 'dark',
     calls: [[CONTROLLER_CH.getTheme, { sessionId: SESSION_ID }], [CONTROLLER_CH.setTheme, { sessionId: SESSION_ID, theme: 'dark' }]],
+  });
+});
+
+it('reads and sets always-on-top through the controller bridge, with the session id, and answers main\'s replies', async () => {
+  process.argv = [...argv, '--agent-terminal-controller-window'];
+  await import('../../src/preload/index');
+  const { ipcRenderer } = await import('electron');
+  const { CONTROLLER_CH, SESSION_ID } = await import('../../src/shared/ipc');
+  vi.mocked(ipcRenderer.invoke).mockClear().mockResolvedValue(false);
+  const api = exposed.get('controller') as { getAlwaysOnTop(): Promise<boolean>; setAlwaysOnTop(on: boolean): Promise<boolean> };
+  const read = await api.getAlwaysOnTop();
+  const reply = await api.setAlwaysOnTop(true);
+  expect({ read, reply, calls: vi.mocked(ipcRenderer.invoke).mock.calls }).toEqual({
+    read: false,
+    reply: false,
+    calls: [[CONTROLLER_CH.getAlwaysOnTop, { sessionId: SESSION_ID }], [CONTROLLER_CH.setAlwaysOnTop, { sessionId: SESSION_ID, alwaysOnTop: true }]],
   });
 });

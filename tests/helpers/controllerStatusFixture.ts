@@ -1,4 +1,4 @@
-import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
+import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
 import type { CardStatusClass as Status } from '../../src/renderer/src/controllerCardStatus';
 
 export type WorkStatus = ControllerWorkStatus;
@@ -68,7 +68,14 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
-  options: { activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal']; theme?: Theme | 'unreadable' } = {},
+  options: {
+    activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal'];
+    theme?: Theme | 'unreadable';
+    alwaysOnTop?: boolean | 'unreadable';
+    /** How main answers a request to change always-on-top: it applies it, refuses it (replying its unchanged value),
+     *  or the request rejects. */
+    alwaysOnTopReply?: 'applied' | 'refused' | 'rejected';
+  } = {},
 ) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
@@ -76,6 +83,9 @@ export function statusService(
   /** Each theme the controller was asked to save, in order. */
   const savedThemes: Theme[] = [];
   let theme = options.theme;
+  /** Each always-on-top value the controller was asked to set, in order. */
+  const requestedAlwaysOnTop: boolean[] = [];
+  let alwaysOnTop = options.alwaysOnTop;
   let current = initial;
   const publish = (items: ControllerTerminal[]): void => {
     current = items;
@@ -101,8 +111,18 @@ export function statusService(
       savedThemes.push(next);
       theme = next;
     },
+    async getAlwaysOnTop() {
+      if (alwaysOnTop === 'unreadable') throw new Error('always-on-top unreadable');
+      return alwaysOnTop ?? CONTROLLER_DEFAULT_ALWAYS_ON_TOP;
+    },
+    async setAlwaysOnTop(next) {
+      requestedAlwaysOnTop.push(next);
+      if (options.alwaysOnTopReply === 'rejected') throw new Error('always-on-top not set');
+      if (options.alwaysOnTopReply !== 'refused') alwaysOnTop = next;
+      return alwaysOnTop === 'unreadable' || alwaysOnTop === undefined ? CONTROLLER_DEFAULT_ALWAYS_ON_TOP : alwaysOnTop;
+    },
   };
-  return { api, activated, dismissed, publish, savedThemes };
+  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {

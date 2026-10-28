@@ -32,6 +32,9 @@ interface MountOptions {
   parent?: HTMLElement;
   /** The theme the controller fake holds as saved; `unreadable` makes reading it reject. */
   theme?: Theme | 'unreadable';
+  /** The always-on-top value the controller fake holds; `unreadable` makes reading it reject. */
+  alwaysOnTop?: boolean | 'unreadable';
+  alwaysOnTopReply?: 'applied' | 'refused' | 'rejected';
 }
 interface Mounted {
   host: HTMLElement;
@@ -47,7 +50,7 @@ export function mountControllerPanes(options: Omit<MountOptions, 'terminals'> & 
 export function mountControllerPanes(options: MountOptions & { controller?: ControllerApi } = {}): Mounted & { service: StatusService | undefined } {
   const host = document.createElement('main');
   (options.parent ?? document.body).append(host);
-  const service = options.controller ? undefined : statusService(options.terminals, { theme: options.theme });
+  const service = options.controller ? undefined : statusService(options.terminals, { theme: options.theme, alwaysOnTop: options.alwaysOnTop, alwaysOnTopReply: options.alwaysOnTopReply });
   const layout = fakeLayout(options.oneColumn);
   const applied: Theme[] = [];
   const deps = { controller: options.controller ?? service!.api, layout: layout.layout, applyTheme: (theme: Theme) => { applied.push(theme); } };

@@ -26,6 +26,14 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:setTheme',
     does: "The controller window saves its own theme choice, apart from agent-terminal's settings.",
   },
+  getAlwaysOnTop: {
+    name: 'controller:getAlwaysOnTop',
+    does: 'The controller window reads whether it is kept above other windows, which is on when main refuses the request.',
+  },
+  setAlwaysOnTop: {
+    name: 'controller:setAlwaysOnTop',
+    does: 'The controller window asks to be kept above other windows or not, and learns the value main holds afterwards.',
+  },
 } as const satisfies ChannelSpecs;
 
 export type ControllerWorkStatus = {
@@ -57,6 +65,8 @@ export interface ControllerApi {
   dismissTerminal(id: string): Promise<void>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;
+  getAlwaysOnTop(): Promise<boolean>;
+  setAlwaysOnTop(alwaysOnTop: boolean): Promise<boolean>;
 }
 
 export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
@@ -65,6 +75,8 @@ export interface ControllerSnapshot { sessionId: SessionId; terminals: Controlle
 export interface ControllerActivation { sessionId: SessionId; id: string }
 export interface ControllerThemeRequest { sessionId: SessionId }
 export interface ControllerThemeChoice { sessionId: SessionId; theme: Theme }
+export interface ControllerAlwaysOnTopRequest { sessionId: SessionId }
+export interface ControllerAlwaysOnTopChoice { sessionId: SessionId; alwaysOnTop: boolean }
 
 export interface ControllerVersionRange { min: number; max: number }
 export interface ControllerIncompatibility {
@@ -74,3 +86,4 @@ export interface ControllerIncompatibility {
 }
 
 export const CONTROLLER_DEFAULT_THEME: Theme = 'light';
+export const CONTROLLER_DEFAULT_ALWAYS_ON_TOP = true;

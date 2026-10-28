@@ -2,11 +2,13 @@ import { ipcMain, type WebContents } from 'electron';
 import { CONTROLLER_CH, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
+import type { ControllerAlwaysOnTop } from './controllerAlwaysOnTop';
 
 export function installControllerIpc(
   contents: Pick<WebContents, 'isDestroyed' | 'send'>,
   controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss'>,
   settings: ControllerSettingsStore,
+  _alwaysOnTop: ControllerAlwaysOnTop,
 ): () => void {
   const send = (terminals: ControllerSnapshot['terminals']) => {
     if (!contents.isDestroyed()) contents.send(CONTROLLER_CH.terminals, { sessionId: SESSION_ID, terminals } satisfies ControllerSnapshot);
