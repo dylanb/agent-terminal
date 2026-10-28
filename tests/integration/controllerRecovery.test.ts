@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { startControllerTransport } from '../../src/main/controllerTransport';
-import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 
 const identity = { launchDirectory: '/work/recovery', repositoryRoot: '/work/recovery' };
 
@@ -56,7 +56,7 @@ describe('registered terminal recovery', () => {
       peak = Math.max(peak, peers.size);
       if (attempts === 1) {
         initial = socket;
-        socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
+        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }));
       } else if (mode === 'interrupted') socket.terminate();
       else if (mode === 'malformed') socket.send('invalid');
     });
@@ -74,7 +74,7 @@ describe('registered terminal recovery', () => {
     await listen(socket => {
       registrations++;
       initial = socket;
-      socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
+      socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity, () => 'activated', () => { started = true; });
     cancel.push(stop);
@@ -123,7 +123,7 @@ describe('registered terminal recovery', () => {
     let starts = 0;
     await listen(socket => {
       attempts.push(socket);
-      if (attempts.length === 1) socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
+      if (attempts.length === 1) socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }));
     });
     cancel.push(registerControllerTerminal(home, identity, () => 'activated', () => { starts++; }));
     await vi.waitFor(() => expect(starts).toBe(1));
@@ -141,7 +141,7 @@ describe('registered terminal recovery', () => {
     let activations = 0;
     await listen(socket => {
       peer = socket;
-      if (state === 'registered') socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
+      if (state === 'registered') socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }));
     });
     const stop = registerControllerTerminal(home, identity,
       () => { activations++; return 'activated'; }, () => { starts++; });
@@ -149,8 +149,8 @@ describe('registered terminal recovery', () => {
     await vi.waitFor(() => expect(peer).toBeDefined());
     if (state === 'registered') await vi.waitFor(() => expect(starts).toBe(1));
     peer!.send(encodeControllerMessage(state === 'pending'
-      ? { version: 2, type: 'registered' }
-      : { version: 2, type: 'activate', requestId: 'queued-at-close' }));
+      ? { version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }
+      : { version: CONTROLLER_PROTOCOL_MAJOR, type: 'activate', requestId: 'queued-at-close' }));
     stop();
     await vi.waitFor(() => expect(peers.size).toBe(0));
     expect.soft(starts).toBe(state === 'registered' ? 1 : 0);

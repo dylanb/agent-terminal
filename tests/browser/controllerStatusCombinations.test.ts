@@ -15,7 +15,6 @@ const cases = Object.entries(STATUS_CASES);
 const conditionCases = cases.filter(([, c]) => c.terminal.status !== 'disconnected' && Boolean(c.terminal.work?.attention || c.terminal.work?.error));
 const directoryOf = (c: StatusCase): string => c.terminal.launchDirectory;
 
-/** Clicks each case's card header, so a card that starts open is collapsed. */
 function collapse(host: HTMLElement, rows: ReadonlyArray<[string, StatusCase]>): void {
   for (const [, c] of rows) {
     const card = cardIn(host, directoryOf(c));

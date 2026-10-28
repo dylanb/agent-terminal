@@ -129,7 +129,7 @@ export function showsFullReason(control: Element | undefined): boolean {
   return state === 'true';
 }
 
-/** The status class whose §24.1 tokens paint a card's accent and its shown written status, or why none does. */
+/** Each field names the status class painting that part, or says why no single class does. */
 export interface PaintedStatus { accent: string; text: string }
 interface PaintProbe { classes: readonly string[]; accentTestId: string; statusTestId: string }
 const PAINT_PROBE: PaintProbe = { classes: STATUS_CLASSES, accentTestId: CARD_ACCENT_TEST_ID, statusTestId: CARD_STATUS_TEST_ID };

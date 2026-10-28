@@ -11,7 +11,8 @@ rule follow that class (operator decision 2026-10-26). A card with no condition 
 read **Working**; it now reads **Activity unavailable** in the idle class. The expanded card's activity line reads
 **Working** instead of **Active**. The classification moves from the renderer module §23.6 named
 (`src/renderer/src/controllerCardStatus.ts`) to `src/shared/controllerCardClassification.ts`, so the main process
-can use the same rule, and §23.6 now names the shared module. Announcements are unchanged: an activity change alone is never announced. No IPC contract change.
+can use the same rule, and §23.6 now names the shared module. The renderer module keeps only the condition boxes
+and announcement text and is renamed `controllerCardConditions.ts`. Announcements are unchanged: an activity change alone is never announced. No IPC contract change.
 
 ## #265 — the controller's theme button names the theme it switches to; a collapsed card shrinks to its header
 

@@ -6,10 +6,10 @@ import { connectWebSocket } from './controllerWebSocket';
 
 export interface ScriptedControllerTerminal {
   sendStatus(work: ControllerWorkStatus): Promise<void>;
+  activations(): number;
   close(): Promise<void>;
 }
 
-/** Stands in for a terminal on the real controller's endpoint under `controllerHome`; resolves once registered. */
 export async function connectScriptedTerminal(
   controllerHome: string,
   identity: Pick<ControllerTerminal, 'launchDirectory' | 'repositoryRoot'>,
@@ -20,6 +20,13 @@ export async function connectScriptedTerminal(
     if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
     await closed;
   };
+  let activations = 0;
+  socket.on('message', (chunk: Buffer) => {
+    const message = parseControllerMessage(chunk.toString());
+    if (message.type !== 'activate') return;
+    activations++;
+    socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: message.requestId, outcome: 'activated' }));
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       socket.on('error', reject);
@@ -41,6 +48,7 @@ export async function connectScriptedTerminal(
     sendStatus: work => new Promise<void>((resolve, reject) => {
       socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => (error ? reject(error) : resolve()));
     }),
+    activations: () => activations,
     close,
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionText, attentionUpdate } from '../../src/renderer/src/controllerCardStatus';
+import { attentionText, attentionUpdate } from '../../src/renderer/src/controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
 

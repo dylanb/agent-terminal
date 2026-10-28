@@ -1,5 +1,5 @@
 import { ACTIVITY_WORDS, cardStatus } from '../../shared/controllerCardClassification';
-import { workConditions, type WorkCondition } from './controllerCardStatus';
+import { workConditions, type WorkCondition } from './controllerCardConditions';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
 import { createClampedReason, type ClampedReason } from './clampedReason';
