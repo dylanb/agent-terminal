@@ -46,26 +46,12 @@ async function xWindowGeometry(display: string, xid: number): Promise<WindowBoun
   return { x: field('Absolute upper-left X'), y: field('Absolute upper-left Y'), width: field('Width'), height: field('Height') };
 }
 
-/** The controller window's `getNormalBounds()` once the window manager has applied the last move or resize: Electron's
- *  window bounds equal the geometry the X server reports for the window. */
-export async function settledNormalBounds(app: ElectronApplication, display: string | undefined): Promise<WindowBounds> {
-  if (!display) throw new Error('settledNormalBounds needs the X display of createControllerDesktopHarness');
-  const read = () => app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0];
-    return {
-      xid: window.getNativeWindowHandle().readUInt32LE(0), bounds: window.getBounds(), normal: window.getNormalBounds(),
-      enlarged: window.isMaximized() || window.isFullScreen(),
-    };
-  });
-  if ((await read()).enlarged) throw new Error('settledNormalBounds reads a window that is neither maximized nor full screen');
-  let settled: WindowBounds | undefined;
-  await expect.poll(async () => {
-    const { xid, bounds, normal } = await read();
-    const x = await xWindowGeometry(display, xid);
-    settled = normal;
-    return [bounds.x, bounds.y, bounds.width, bounds.height].join() === [x.x, x.y, x.width, x.height].join();
-  }).toBe(true);
-  return settled!;
+/** Moves and resizes the controller window and resolves with its normal bounds once the window manager has applied
+ *  the whole change: Electron and the X server can agree on a geometry with only the resize applied. */
+export async function moveAndResize(app: ElectronApplication, display: string | undefined, bounds: WindowBounds): Promise<WindowBounds> {
+  await app.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), bounds);
+  await shownOnDesktopAt(app, display, bounds);
+  return normalBounds(app);
 }
 
 /** Resolves once the X server reports the controller window unmapped: a window manager that animates minimizing has
@@ -81,8 +67,8 @@ export async function minimizedOnDesktop(app: ElectronApplication, display: stri
 
 /** Resolves once the X server shows the controller window mapped at `bounds` and Electron reports the same bounds: a
  *  window manager that animates restoring moves the mapped frame along the way, so this holds only once it has ended. */
-export async function restoredOnDesktopAt(app: ElectronApplication, display: string | undefined, bounds: WindowBounds): Promise<void> {
-  if (!display) throw new Error('restoredOnDesktopAt needs the X display of createControllerDesktopHarness');
+export async function shownOnDesktopAt(app: ElectronApplication, display: string | undefined, bounds: WindowBounds): Promise<void> {
+  if (!display) throw new Error('shownOnDesktopAt needs the X display of createControllerDesktopHarness');
   const xid = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readUInt32LE(0));
   const shown = (b: WindowBounds) => [b.x, b.y, b.width, b.height].join();
   await expect.poll(async () => {
