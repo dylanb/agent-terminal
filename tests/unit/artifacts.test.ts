@@ -4,6 +4,7 @@ import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifac
 import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 import { assertRendersFromHostDocument } from './relocatable';
+import { byRole } from '../helpers/byRole';
 
 // §20.1/§20.2 artifact viewer organism. Markdown/CodeMirror and git/fs discovery are injected seams,
 // faked so the test observes the organism's own DOM/sink behavior, not the libraries or the filesystem.
@@ -624,6 +625,30 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     (v.host.querySelector('.art-todo') as HTMLButtonElement).click();
     expect(v.send).toHaveBeenCalledWith('a passage');
     expect(v.addToTodo).toHaveBeenCalledWith('a passage');
+  });
+
+  it('while an Add to todo is still being answered, neither it nor Send to agent starts again; it shows busy until it settles', async () => {
+    let answer!: () => void;
+    const addToTodo = vi.fn(() => new Promise<void>((r) => (answer = r)));
+    const v = mount(TREE_CURATED, { addToTodo });
+    await v.api.refresh();
+    v.setSelection('a passage');
+    document.dispatchEvent(new Event('selectionchange'));
+    const todo = byRole(v.host, 'button', 'Add to todo');
+    const send = byRole(v.host, 'button', 'Send to agent');
+
+    todo.click();
+    todo.click();
+    send.click();
+    expect(addToTodo).toHaveBeenCalledTimes(1);
+    expect(v.send).not.toHaveBeenCalled();
+    expect(todo.getAttribute('aria-busy')).toBe('true');
+
+    answer();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(todo.getAttribute('aria-busy')).toBeNull();
+    todo.click();
+    expect(addToTodo).toHaveBeenCalledTimes(2);
   });
 
 

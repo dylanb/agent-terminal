@@ -208,6 +208,51 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(name).toContain('request'); // …and is not the bare abbreviation
   });
 
+  it('ignores the gate while an approve is still being answered, shows Approve busy, and takes a decision again after', async () => {
+    const answers: Array<(landed: boolean) => void> = [];
+    const appGateDecision = vi.fn((_step: string, _turnKey: string, _option: string) => new Promise<boolean>((r) => answers.push(r)));
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'polish'] }), 'plan');
+    const approve = host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]')!;
+    const polish = host.querySelector<HTMLButtonElement>('[data-gate-option="polish"]')!;
+
+    approve.click();
+    approve.click();
+    polish.click();
+    expect({ decisions: appGateDecision.mock.calls.map((c) => c[2]), busy: approve.getAttribute('aria-busy') }).toEqual({
+      decisions: ['approve'],
+      busy: 'true',
+    });
+
+    answers[0](false);
+    await vi.waitFor(() => expect(approve.getAttribute('aria-busy')).toBeNull());
+    polish.click();
+    expect(appGateDecision.mock.calls.map((c) => c[2])).toEqual(['approve', 'polish']);
+  });
+
+  it('holds only the gate whose approve is still being answered: another worktree\'s gate takes a decision meanwhile', async () => {
+    const answers: Array<(landed: boolean) => void> = [];
+    const appGateDecision = vi.fn((_step: string, _turnKey: string, _option: string) => new Promise<boolean>((r) => answers.push(r)));
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    const gateA = appGate({ branch: 'feature-a', gateOptions: ['approve', 'polish'] });
+    const gateB = appGate({ branch: 'feature-b', gateOptions: ['approve', 'polish'], appTurn: { step: 'green', turnKey: 'consolidate-green' } });
+    const approve = () => host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]')!;
+
+    panel.render(gateA, 'plan');
+    approve().click();
+    panel.render(gateB, 'green');
+    approve().click();
+    panel.render(gateA, 'plan');
+    approve().click();
+    expect({
+      decisions: appGateDecision.mock.calls.map((c) => [c[0], c[2]]),
+      gateABusy: approve().getAttribute('aria-busy'),
+    }).toEqual({ decisions: [['plan', 'approve'], ['green', 'approve']], gateABusy: 'true' });
+
+    answers.forEach((answer) => answer(true));
+    await vi.waitFor(() => expect(approve().getAttribute('aria-busy')).toBeNull());
+  });
+
   it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {} });
     panel.render(appGate({ gateOptions: [] }), 'plan'); // an appTurn view but no options to offer
@@ -719,6 +764,26 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     expect(link.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
     link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
+  });
+
+  it('ignores the ref link while the browser is still being opened for it, shows it busy, and never navigates the app', async () => {
+    let opened!: () => void;
+    const openExternal = vi.fn(() => new Promise<void>((res) => (opened = res)));
+    const githubRef = vi.fn(async (kind: GithubRefKind) => (kind === 'issue' ? ref() : null));
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const link = refRow('Ticket')!.querySelector<HTMLAnchorElement>('a[href]')!;
+    const press = (): boolean => link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(press()).toBe(false);
+    expect(press()).toBe(false);
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(link.getAttribute('aria-busy')).toBe('true');
+
+    opened();
+    await vi.waitFor(() => expect(link.getAttribute('aria-busy')).toBeNull());
+    press();
+    expect(openExternal).toHaveBeenCalledTimes(2);
   });
 
   it('renders a short body verbatim with no ellipsis (truncateBody pass-through branch)', async () => {

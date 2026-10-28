@@ -47,6 +47,7 @@
     "src/renderer/src/flowView.ts",
     "src/renderer/src/loopStatus.ts",
     "src/renderer/src/spinner.ts",
+    "src/renderer/src/pressable.ts",
     "src/renderer/src/loopPanel.ts",
     "src/renderer/src/dockedPanelSync.ts",
     "src/renderer/src/statusBar.ts",

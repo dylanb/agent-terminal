@@ -2,12 +2,13 @@ import { cardStatus, workConditions, type WorkCondition } from './controllerCard
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus';
 import type { ControllerTerminal, ControllerWorkStatus } from '../../shared/ipc';
 import { createClampedReason, type ClampedReason } from './clampedReason';
+import { createPressGroup, onPress, type PressGroup } from './pressable';
 
 export interface ControllerCardDeps {
   terminal: ControllerTerminal;
   expandedByDefault: boolean;
-  onBringForward(): void;
-  onDismiss(): void;
+  onBringForward(): void | Promise<unknown>;
+  onDismiss(): void | Promise<unknown>;
   from?: CardState;
 }
 
@@ -16,7 +17,7 @@ type Focus = 'header' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
 export interface CardState {
-  readonly [HANDOVER]: { chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
+  readonly [HANDOVER]: { chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
 }
 
 export interface ControllerCard {
@@ -45,6 +46,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   const doc = host.ownerDocument;
   const status = cardStatus(terminal);
   const carried = deps.from?.[HANDOVER];
+  const actions = carried?.actions ?? createPressGroup();
   const reasons: { text: string; reason: ClampedReason }[] = [];
   const fullReasons = new Set<string>();
   const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -88,11 +90,11 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   host.append(card);
 
   const actionKind: Action = terminal.status === 'disconnected' ? 'dismiss' : 'bring-forward';
-  const action = (label: string, name: string, use: () => void) => {
+  const action = (label: string, name: string, use: () => unknown) => {
     const button = element('button', 'controller-card-action', label);
     button.type = 'button';
     button.setAttribute('aria-label', `${name} ${terminal.launchDirectory}`);
-    button.addEventListener('click', use);
+    actions.bind(button, use);
     return button;
   };
 
@@ -155,7 +157,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (held && !expanded) toggle.focus();
   }
   setExpanded(expanded);
-  toggle.addEventListener('click', () => {
+  onPress(toggle, () => {
     chosenExpanded = !expanded;
     setExpanded(chosenExpanded);
   });
@@ -179,7 +181,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
+    state: () => ({ [HANDOVER]: { chosenExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {

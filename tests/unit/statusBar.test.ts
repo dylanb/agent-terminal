@@ -135,6 +135,22 @@ describe('status bar (§22.3.1)', () => {
       expect(onOpenError).toHaveBeenCalledWith(expected);
     });
 
+    it('opens the ref once until the operating system answers, then again on the next press', async () => {
+      const answers: Array<(opened: boolean) => void> = [];
+      const openExternal = vi.fn(() => new Promise<boolean>((done) => { answers.push(done); }));
+      const { host, render } = mount({ githubRef: () => Promise.resolve(ref()), openExternal });
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      await flush();
+      const link = titleEl(host)!;
+      link.click();
+      link.click();
+      const pending = { opened: openExternal.mock.calls.length, busy: link.getAttribute('aria-busy') };
+      answers[0]?.(true);
+      await flush();
+      link.click();
+      expect({ pending, afterAnswer: openExternal.mock.calls.length }).toEqual({ pending: { opened: 1, busy: 'true' }, afterAnswer: 2 });
+    });
+
     it('does not offer to open a ref whose url never resolved', async () => {
       const openExternal = vi.fn();
       const { host, render } = mount({ githubRef: () => Promise.resolve(null), openExternal });

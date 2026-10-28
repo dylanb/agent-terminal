@@ -24,6 +24,13 @@ const textarea = (): HTMLTextAreaElement => host.querySelector('.flow-modal text
 const submitBtn = (): HTMLButtonElement => host.querySelector('.flow-modal .confirm')!;
 const cancelBtn = (): HTMLButtonElement => host.querySelector('.flow-modal .cancel')!;
 const open = (over: Partial<{ step: string }> = {}) => ({ step: 'plan', ...over });
+const buttonNamed = (name: string): HTMLElement => {
+  const found = [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].filter(
+    (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name,
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+};
 
 describe('redo composer (§27.9 / AC5)', () => {
   it('opens a dialog naming the step, with a free-text instruction field', () => {
@@ -117,6 +124,27 @@ describe('redo composer (§27.9 / AC5)', () => {
     await flush();
   });
 
+  it('ignores Submit and Cancel while a delivery is being answered, shows Submit busy, and takes a press again after', async () => {
+    const answers: Array<(delivered: boolean) => void> = [];
+    const submit = vi.fn(() => new Promise<boolean>((r) => answers.push(r)));
+    createRedoComposer(host).render(open(), submit);
+    textarea().value = 'once only';
+    textarea().dispatchEvent(new Event('input'));
+    const send = buttonNamed('Redo the work');
+    send.click();
+    send.click();
+    buttonNamed('Cancel').click();
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector<HTMLElement>('.flow-scrim')?.click();
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('.flow-modal')).not.toBeNull();
+    expect(send.getAttribute('aria-busy')).toBe('true');
+    answers[0](false);
+    await flush();
+    send.click();
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
   it('Cancel closes the dialog without submitting', () => {
     const submit = vi.fn();
     createRedoComposer(host).render(open(), submit);
@@ -128,7 +156,7 @@ describe('redo composer (§27.9 / AC5)', () => {
   it('Escape closes the dialog without submitting', () => {
     const submit = vi.fn();
     createRedoComposer(host).render(open(), submit);
-    host.querySelector('.flow-modal')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(submit).not.toHaveBeenCalled();
     expect(host.querySelector('.flow-modal')).toBeNull();
   });

@@ -117,14 +117,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       terminal,
       expandedByDefault: expandedFor(terminal),
       from: handover.get(terminal.id),
-      onBringForward() {
-        void deps.controller.activateTerminal(terminal.id).then(outcome => {
-          if (outcome === 'unavailable') announce();
-        }, announce);
-      },
-      onDismiss() {
-        void deps.controller.dismissTerminal(terminal.id).catch(announce);
-      },
+      onBringForward: () => deps.controller.activateTerminal(terminal.id).then(outcome => {
+        if (outcome === 'unavailable') announce();
+      }, announce),
+      onDismiss: () => deps.controller.dismissTerminal(terminal.id).catch(announce),
     }) }));
     if (!terminals.length) {
       const empty = doc.createElement('p');

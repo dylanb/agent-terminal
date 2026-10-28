@@ -92,6 +92,13 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     host.querySelector(`.install-report [data-destination="${id}"]`);
   const reportList = (): HTMLElement => host.querySelector('.install-report') as HTMLElement;
   const busy = (): string | null => button().getAttribute('aria-disabled');
+  const buttonNamed = (name: string): HTMLElement => {
+    const found = [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].filter(
+      (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').trim() === name,
+    );
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
 
   async function openConsent(
     conflicts: InstallDestinationId[],
@@ -318,7 +325,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     cancelBtn().click();
     expect(prompt()).toBeNull();
     expect(apply).not.toHaveBeenCalled();
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
   });
 
   it('groups the reported files under the destination each was written to', async () => {
@@ -502,7 +509,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(button().getAttribute('aria-busy')).toBe('true');
     applied.resolve(okResult());
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
-    expect(button().getAttribute('aria-busy')).toBe('false');
+    expect(button().getAttribute('aria-busy')).not.toBe('true');
   });
 
   it('does not yank focus back to the button if the user moved focus away during install (WCAG 2.4.3)', async () => {
@@ -544,7 +551,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     button().click();
     await vi.waitFor(() => expect(alert()?.textContent).toContain('refused: wrong session'));
     expect(apply).not.toHaveBeenCalled();
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
   });
 
   it('does not start a second run while one is already in flight', async () => {
@@ -558,13 +565,35 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     previewed.resolve(clean);
   });
 
+  it('applies a consented install once however often Install is pressed, shows the install button busy until it is answered, then runs again', async () => {
+    const applied = deferred<InstallExamplesResult>();
+    const apply = vi.fn(() => applied.promise);
+    const preview = vi.fn(async () => conflicting('flow'));
+    createInstallExamples(host, deps({ preview, apply }));
+    const installExamples = buttonNamed('Install examples — the bundled feature-dev-v3 flow');
+    installExamples.click();
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    const consent = buttonNamed('Install');
+    consent.click();
+    consent.click();
+    installExamples.click();
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(installExamples.getAttribute('aria-busy')).toBe('true');
+    applied.resolve(okResult());
+    await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+    await vi.waitFor(() => expect(installExamples.getAttribute('aria-busy')).not.toBe('true'));
+    installExamples.click();
+    await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+  });
+
   it('keeps the install button operable while the consent step is open so a scrim dismissal cannot strand it', async () => {
     const apply = vi.fn(async () => okResult());
     await openConsent(['flow'], { apply });
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
     scrim().click();
     expect(prompt()).toBeNull();
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -573,7 +602,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['flow'], { apply });
     prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(prompt()).toBeNull();
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -581,7 +610,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps());
     button().click();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
-    expect(busy()).toBe('false');
+    expect(busy()).not.toBe('true');
   });
 
   it('marks the install button aria-disabled while a run is in flight rather than removing it from the tab order (WCAG 2.4.3)', async () => {

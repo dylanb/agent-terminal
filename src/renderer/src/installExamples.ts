@@ -13,6 +13,7 @@ import {
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
+import { createPressGroup } from './pressable';
 import { RETIRED_FLOW_IDS } from '../../shared/retiredFlows';
 
 export interface InstallExamplesDeps {
@@ -160,15 +161,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     reportList.hidden = reportList.childElementCount === 0;
   }
 
-  let busy = false;
-  // Kept focusable while busy: `disabled` blurs the pressed button to <body> for the whole round-trip,
-  // so the progress announcement would arrive with focus nowhere (WCAG 2.4.3, 4.1.2).
-  function setBusy(v: boolean): void {
-    busy = v;
-    btn.setAttribute('aria-disabled', String(v));
-    btn.setAttribute('aria-busy', String(v));
-  }
-  setBusy(false);
+  const installGroup = createPressGroup();
+  installGroup.bind(btn, () => run());
 
   async function install(
     previewId: InstallPreviewId,
@@ -176,7 +170,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     removeRetired: boolean,
     returnFocus: () => void,
   ): Promise<void> {
-    setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
       const res = await deps.apply(previewId, replace, removeRetired);
@@ -189,7 +182,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
-      setBusy(false);
       returnFocus();
     }
   }
@@ -307,15 +299,16 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       cancel.type = 'button';
       cancel.className = 'pill cancel';
       cancel.textContent = 'Cancel';
-      cancel.addEventListener('click', () => close());
+      installGroup.bind(cancel, () => close());
       const confirm = d.createElement('button');
       confirm.type = 'button';
       confirm.className = 'pill signal confirm';
       confirm.textContent = 'Install';
-      confirm.addEventListener('click', () => {
+      installGroup.bind(confirm, () => {
         const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
+        const removeRetired = retiredBox?.checked ?? false;
         accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
-        void install(previewId, replace, retiredBox?.checked ?? false, returnFocus);
+        installGroup.run(btn, () => install(previewId, replace, removeRetired, returnFocus));
       });
       foot.append(cancel, confirm);
       cardEl.append(foot);
@@ -326,9 +319,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   }
 
   async function run(): Promise<void> {
-    if (busy) return;
     const returnFocus = captureFocusReturn(btn);
-    setBusy(true);
     reportList.replaceChildren();
     reportList.hidden = true;
     showStatus('cli-status', 'Checking…');
@@ -337,14 +328,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const response = await deps.preview();
       if (!response.ok) {
         showError(response.error);
-        setBusy(false);
         returnFocus();
         return;
       }
       preview = response;
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
-      setBusy(false);
       returnFocus();
       return;
     }
@@ -355,11 +344,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       await install(preview.previewId, [], false, returnFocus);
       return;
     }
-    setBusy(false);
     promptReplace(preview.previewId, conflicts, preview.retired, preview.retiredFallback, returnFocus);
   }
-
-  btn.addEventListener('click', () => void run());
 
   return {
     dispose: () => {

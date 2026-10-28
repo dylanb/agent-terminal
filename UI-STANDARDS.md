@@ -48,6 +48,28 @@ units §22.4 moves between frames. Their interface is a contract (UI §2).
 - **Organisms never import from sibling organisms.** Cross-organism behavior goes through the
   contract (UI §2.2), never DOM reach-across.
 
+### 1.4 Every control runs its action through `pressable`
+A control's press runs through `createPressGroup()` / `onPress()` in `src/renderer/src/pressable.ts`, never a
+hand-written click listener. Otherwise a control keeps accepting presses while the app is still answering the
+first one, and a second press starts the same action, or a related one, again.
+
+- **The action returns the promise for the work it starts** (an IPC `invoke`, an async handler). While it is
+  pending, every control in the group ignores presses and reports `aria-disabled="true"`, and the pressed one
+  reports `aria-busy="true"` and shows the `.spin` spinner. An action that returns no promise finishes at once.
+- **Related controls share one group**: one dialog's footer, one gate's options, one row's actions. Create the
+  group once per component instance, not inside a render, so controls rebuilt mid-action join it already busy.
+- **The busy display follows a rebuild**: a control rebuilt while its press is pending shows busy again when it
+  is bound under the same `key`; when the press itself rebuilt the pressed control away, busy shows on the group
+  control focus moved to. A dialog's controls bind to the `presses` group `createModalShell` hands its build, so
+  Escape and the scrim wait for them too.
+- **Other triggers share the guard**: `bind` returns the guarded press for Enter in a field; `within` serves
+  controls that other components add to a container later; `run(control, action)` runs work a press starts
+  only after a confirmation as a press of the control that asked for it.
+- Busy controls are never `disabled`: that would blur the pressed control to `<body>` for the whole round-trip
+  (WCAG 2.4.3).
+- A `no-restricted-syntax` lint rule in `eslint.config.mjs` fails any click listener or `onclick` in
+  `src/renderer/` outside `pressable.ts`.
+
 ---
 
 ## 2. The stable-interface contract (relocatability)
@@ -307,6 +329,7 @@ focus-restored-to-opener, and accept-is-not-dismiss.
 - [ ] A box that can outgrow its scroll container keeps both edges in scroll reach when it overflows — never plain flex or grid centring (UI §6, WCAG 2.2 SC 1.4.10).
 - [ ] Its tests read the screen by role and name through one helper, check inside the owning element, wait for painted state to settle, and use test data that tells the cases apart (UI §3.4).
 - [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4 items 5–6).
+- [ ] Every press runs through `pressable`; an action returns the promise for the work it starts, related controls share one group created per instance, a dialog's controls bind to the shell's `presses`, and a control rebuilt while its press is pending is bound under a `key` (UI §1.4).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
 - [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.
