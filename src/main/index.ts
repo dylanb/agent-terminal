@@ -121,6 +121,7 @@ import {
   type InstallDestination,
 } from './installExamples';
 import { createControllerStatus } from './controllerStatus';
+import { createLoopMessages } from './loopMessages';
 import { provideAppLoopView, observeAppLoopView } from './loopViewV2';
 import { artifactCheckCommand, resolveArtifactCheckScript } from './artifactCheck';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
@@ -220,6 +221,8 @@ async function createWindow(): Promise<void> {
         process.cwd(),
       ),
     })));
+  let refreshControllerStatus = (): void => {};
+  const loopMessages = createLoopMessages(() => refreshControllerStatus());
   let finishRegistration!: (accepted: boolean) => void;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
   const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
@@ -238,7 +241,7 @@ async function createWindow(): Promise<void> {
   }, report => {
     incompatibility = { sessionId: SESSION_ID, ...report };
     if (!win.isDestroyed()) win.webContents.send(CH.startupIncompatible, incompatibility);
-  });
+  }, id => loopMessages.dismiss(id));
   win.webContents.on('did-finish-load', () => {
     if (incompatibility) win.webContents.send(CH.startupIncompatible, incompatibility);
   });
@@ -453,7 +456,7 @@ async function createWindow(): Promise<void> {
     currentRun: composeCurrentRun(flowGlobalDir),
     runInProgressAt: composeRunInProgressAt(),
     onViewChanged: () => pushFlowChanged(),
-    emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    emitError: (_repoDir, reason) => loopMessages.post('error', reason),
     setTimer: (cb, ms) => {
       const id = ++nextAutoGateTimer;
       autoGateTimers.set(
@@ -579,7 +582,7 @@ async function createWindow(): Promise<void> {
       return abs ? { abs, rel: refactorResultRel(round) } : null;
     },
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
-    emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    emitError: (reason) => loopMessages.post('error', reason),
     onViewChanged: () => pushFlowChanged(),
     terminateFlow: (repoDir) => lifecycle.terminateUnattended(repoDir),
     gateReaching: autoGate.gateReaching,
@@ -649,7 +652,7 @@ async function createWindow(): Promise<void> {
     canEnterWork: () => appEngine.canEnter(),
     // Position 2 — an unresolved def keeps the surviving app-namespace step (reverting would be an AC 2
     // change), so surface the reason on the per-step loop-error path and dispatch nothing.
-    refuseUnresolved: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    refuseUnresolved: (reason) => loopMessages.post('error', reason),
     // Positions 4/5 — surface the durable bootstrap error, then DEFER an identity-guarded revert + push. The
     // entry action fires inside advance's `enter(view())`, whose reply view was captured at the entered step;
     // a synchronous revert's push would be overwritten by that stale reply, so the revert rides a later tick
@@ -755,11 +758,11 @@ async function createWindow(): Promise<void> {
     currentRun: inProgressRunIdentity,
     persistFailed: (repoDir, reason) => {
       audit.recordCommand(repoDir, 'pickup', `§27 pickup could not be saved for a relaunch: ${reason}`, 1);
-      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's pull request could not be saved, so a relaunch will not know it: ${reason}` });
+      loopMessages.post('error', `The run's pull request could not be saved, so a relaunch will not know it: ${reason}`);
     },
     forgetFailed: (repoDir, reason) => {
       audit.recordCommand(repoDir, 'pickup', `§27 a forgotten run pickup could not be removed: ${reason}`, 1);
-      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove ${runPickupRel()}.` });
+      loopMessages.post('error', `The run's saved pull request could not be removed, so a relaunch could trust it again: ${reason}. Remove ${runPickupRel()}.`);
     },
   });
   // §27.10 — bootstrap.yaml outlives its run, so once a run begins or ends in this process the persisted record
@@ -936,7 +939,7 @@ async function createWindow(): Promise<void> {
     current: () => {
       const repoKey = cwdTracker.repoKey() ?? resolveRepoKey(launchRoot);
       const load = resolveActiveDefinition(repoKey);
-      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity };
+      return { repoKey, flowName: load.ok ? load.definition.name : null, view: statusFlow.state(repoKey), activity: agentActivity, loopMessage: loopMessages.current() };
     },
     issueTitle: async (repoKey, number) => (await createGithubRefs()(repoKey, 'issue', number))?.title ?? null,
   });
@@ -944,6 +947,7 @@ async function createWindow(): Promise<void> {
     currentWork = work;
     for (const listener of statusListeners) listener(work);
   });
+  refreshControllerStatus = () => controllerStatus.refresh();
   const stopStatusCwd = cwdTracker.onChange(() => controllerStatus.refresh());
   const statusTimer = setInterval(() => controllerStatus.refresh(), 250);
   controllerStatus.refresh();
@@ -1144,7 +1148,7 @@ async function createWindow(): Promise<void> {
     persistAccept: (repoDir, loop, step, turnKey) => writeAppLoopState(repoDir, { loop, step, turnKey, status: 'accepted' }),
     terminateFlow: (repoDir) => lifecycle.terminateUnattended(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
-    emitError: (_repoDir, reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    emitError: (_repoDir, reason) => loopMessages.post('error', reason),
     onViewChanged: () => pushFlowChanged(),
   });
 
@@ -1191,8 +1195,8 @@ async function createWindow(): Promise<void> {
     recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
     clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
-    emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
-    emitNotice: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason, kind: 'notice' }),
+    emitError: (reason) => loopMessages.post('error', reason),
+    emitNotice: (reason) => loopMessages.post('notice', reason),
     // §28.5.1 — the raw fail-loud store; the executor wraps this call best-effort (like its other side-effects).
     recordBaseline: recordBaselineCommit,
     onViewChanged: () => pushFlowChanged(),
@@ -1233,7 +1237,7 @@ async function createWindow(): Promise<void> {
     const load = resolveActiveDefinition(repoKey);
     return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
   };
-  const refuseGateDecision = (reason: string): void => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason });
+  const refuseGateDecision = (reason: string): void => loopMessages.post('error', reason);
   const guardedGateDecision = createGuardedGateDecision({
     bindingOf: gateBindingOf,
     refuse: refuseGateDecision,
@@ -1328,7 +1332,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowAppRouteOut(m)) return;
         const held = pickupHoldRefusal(m.repoKey);
         if (held !== null) {
-          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: held });
+          loopMessages.post('error', held);
           return;
         }
         if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
@@ -1344,7 +1348,7 @@ async function createWindow(): Promise<void> {
         try {
           armInterrupt(m.repoKey, m.step);
         } catch (e) {
-          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}` });
+          loopMessages.post('error', `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}`);
           return;
         }
         pushFlowChanged();

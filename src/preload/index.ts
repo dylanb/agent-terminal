@@ -16,7 +16,6 @@ import {
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
-  type FlowLoopErrorMsg,
   type FlowAppBootstrapConflictMsg,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
@@ -170,11 +169,6 @@ const flowApi: FlowApi = {
     const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason, msg.repoKey, msg.step);
     ipcRenderer.on(CH.flowOnBootstrapError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
-  },
-  onLoopError: (cb) => {
-    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason, msg.kind ?? 'error');
-    ipcRenderer.on(CH.flowOnLoopError, handler);
-    return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>

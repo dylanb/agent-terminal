@@ -7,6 +7,8 @@ import { connectWebSocket } from './controllerWebSocket';
 export interface ScriptedControllerTerminal {
   sendStatus(work: ControllerWorkStatus): Promise<void>;
   activations(): number;
+  /** The loop message ids the controller asked this terminal to dismiss, in order. */
+  loopMessageDismissals(): string[];
   close(): Promise<void>;
 }
 
@@ -21,8 +23,10 @@ export async function connectScriptedTerminal(
     await closed;
   };
   let activations = 0;
+  const loopMessageDismissals: string[] = [];
   socket.on('message', (chunk: Buffer) => {
     const message = parseControllerMessage(chunk.toString());
+    if (message.type === 'dismiss-loop-message') loopMessageDismissals.push(message.id);
     if (message.type !== 'activate') return;
     activations++;
     socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: message.requestId, outcome: 'activated' }));
@@ -49,6 +53,7 @@ export async function connectScriptedTerminal(
       socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => (error ? reject(error) : resolve()));
     }),
     activations: () => activations,
+    loopMessageDismissals: () => [...loopMessageDismissals],
     close,
   };
 }

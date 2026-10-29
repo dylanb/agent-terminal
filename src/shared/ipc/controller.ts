@@ -18,6 +18,10 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:dismiss',
     does: 'The controller window removes one disconnected terminal, and an unknown, live or replaced id does nothing.',
   },
+  dismissLoopMessage: {
+    name: 'controller:dismissLoopMessage',
+    does: 'The controller window asks a live terminal to clear the loop message its card shows, and a replaced message or unknown terminal does nothing.',
+  },
   getTheme: {
     name: 'controller:getTheme',
     does: 'The controller window reads its own saved theme, which is light when nothing usable is saved.',
@@ -53,7 +57,12 @@ export type ControllerWorkStatus = {
   activity: 'active' | 'quiet' | 'unavailable';
   attention: null | { status: string; reasons: string[] };
   error: null | { reason: string };
+  /** Absent when either peer's minor predates loop messages. */
+  loopMessage?: ControllerLoopMessage | null;
 };
+
+/** The latest loop-mechanics failure or benign no-op the terminal reported, until the operator dismisses or a newer one replaces it. */
+export interface ControllerLoopMessage { id: string; kind: 'error' | 'notice'; reason: string }
 
 export interface ControllerTerminal {
   work?: ControllerWorkStatus;
@@ -67,6 +76,7 @@ export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
   dismissTerminal(id: string): Promise<void>;
+  dismissLoopMessage(terminalId: string, messageId: string): Promise<void>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;
   getAlwaysOnTop(): Promise<boolean>;
@@ -78,6 +88,7 @@ export const CONTROLLER_WINDOW_ARGUMENT = '--agent-terminal-controller-window';
 
 export interface ControllerSnapshot { sessionId: SessionId; terminals: ControllerTerminal[] }
 export interface ControllerActivation { sessionId: SessionId; id: string }
+export interface ControllerLoopMessageDismissal { sessionId: SessionId; terminalId: string; messageId: string }
 export interface ControllerThemeRequest { sessionId: SessionId }
 export interface ControllerThemeChoice { sessionId: SessionId; theme: Theme }
 export interface ControllerAlwaysOnTopRequest { sessionId: SessionId }

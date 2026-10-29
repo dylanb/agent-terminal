@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -13,13 +13,15 @@ function mount(terminal: ControllerTerminal, expanded = true) {
   const host = document.createElement('div');
   document.body.append(host);
   const calls = { bringForward: 0, dismiss: 0 };
+  const loopMessageDismissals: string[] = [];
   const deps = {
     card: directoryCards([terminal])[0],
     expandedByDefault: expanded,
     onAction() { calls[terminal.status === 'disconnected' ? 'dismiss' : 'bringForward'] += 1; },
+    onDismissLoopMessage(id: string) { loopMessageDismissals.push(id); },
   };
   const card = createControllerCard(host, deps);
-  return { host, calls, card, element: cardIn(host, terminal.launchDirectory) };
+  return { host, calls, loopMessageDismissals, card, element: cardIn(host, terminal.launchDirectory) };
 }
 
 const withWork = (work: Partial<WorkStatus>): ControllerTerminal => statusTerminal(work);
@@ -157,12 +159,36 @@ describe('controller card body', () => {
   });
 });
 
+describe('controller card loop message', () => {
+  it.each([
+    ['loop-error', 'Loop error', 'the turn stalled', 'Dismiss loop error'],
+    ['loop-notice', 'Notice', 'nothing to commit', 'Dismiss notice'],
+  ] as const)('shows the %s after the flow\'s conditions, with a Dismiss named for it and the directory that reports its message once', (key, title, reason, name) => {
+    const terminal = STATUS_CASES[key].terminal;
+    const { element, calls, loopMessageDismissals } = mount(terminal);
+    const dismiss = element ? dismissLoopMessageIn(element) : undefined;
+    dismiss?.click();
+    expect([
+      ...missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: implement', title, reason, 'Dismiss']),
+      ...(controlName(dismiss).startsWith(name) && controlName(dismiss).includes(terminal.launchDirectory) ? [] : [`Dismiss is named ${controlName(dismiss)}`]),
+      ...(element && isLastElement(element, bringForwardIn(element)) ? [] : ['Bring forward is not the last element']),
+      ...(calls.bringForward === 0 ? [] : ['brought forward']),
+    ]).toEqual([]);
+    expect(loopMessageDismissals).toEqual([(terminal.work as WorkStatus).loopMessage!.id]);
+  });
+
+  it('shows no loop message or its Dismiss when there is none', () => {
+    const { element } = mount(STATUS_CASES.idle.terminal);
+    expect(element && dismissLoopMessageIn(element)).toBeUndefined();
+  });
+});
+
 describe('controller card action while its work is being answered', () => {
   const settle = (): Promise<void> => new Promise(done => setTimeout(done, 0));
   function mountPending(terminal: ControllerTerminal, host = document.body.appendChild(document.createElement('div'))) {
     const answers: Array<() => void> = [];
     const answer = () => new Promise<void>(done => { answers.push(done); });
-    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, onAction: answer });
+    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, onAction: answer, onDismissLoopMessage() {} });
     return { host, card, answers };
   }
 
@@ -191,7 +217,7 @@ describe('controller card action while its work is being answered', () => {
     const state = old.state();
     old.dispose();
     const later: string[] = [];
-    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, from: state, onAction() { later.push('pressed'); } });
+    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, from: state, onAction() { later.push('pressed'); }, onDismissLoopMessage() {} });
     const rebuilt = cardIn(host, terminal.launchDirectory);
     const control = rebuilt ? bringForwardIn(rebuilt) : undefined;
     control?.click();

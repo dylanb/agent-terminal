@@ -1,12 +1,12 @@
 import { ipcMain, type WebContents } from 'electron';
-import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
+import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerLoopMessageDismissal, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
 import type { ControllerAlwaysOnTop } from './controllerAlwaysOnTop';
 
 export function installControllerIpc(
   contents: Pick<WebContents, 'isDestroyed' | 'send'>,
-  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss'>,
+  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss' | 'dismissLoopMessage'>,
   settings: ControllerSettingsStore,
   alwaysOnTop: ControllerAlwaysOnTop,
 ): () => void {
@@ -28,6 +28,10 @@ export function installControllerIpc(
   ipcMain.handle(CONTROLLER_CH.dismiss, (event, payload: ControllerActivation) => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID || typeof payload.id !== 'string') return;
     controller.dismiss(payload.id);
+  });
+  ipcMain.handle(CONTROLLER_CH.dismissLoopMessage, (event, payload: ControllerLoopMessageDismissal) => {
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID || typeof payload.terminalId !== 'string' || typeof payload.messageId !== 'string') return;
+    controller.dismissLoopMessage(payload.terminalId, payload.messageId);
   });
   ipcMain.handle(CONTROLLER_CH.getTheme, (event, payload: ControllerThemeRequest): Theme => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_THEME;
@@ -51,6 +55,7 @@ export function installControllerIpc(
     ipcMain.removeListener(CONTROLLER_CH.subscribe, subscribe);
     ipcMain.removeHandler(CONTROLLER_CH.activate);
     ipcMain.removeHandler(CONTROLLER_CH.dismiss);
+    ipcMain.removeHandler(CONTROLLER_CH.dismissLoopMessage);
     ipcMain.removeHandler(CONTROLLER_CH.getTheme);
     ipcMain.removeHandler(CONTROLLER_CH.setTheme);
     ipcMain.removeHandler(CONTROLLER_CH.getAlwaysOnTop);

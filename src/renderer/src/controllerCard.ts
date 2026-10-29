@@ -10,10 +10,11 @@ export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
   onAction(): void | Promise<unknown>;
+  onDismissLoopMessage(id: string): void | Promise<unknown>;
   from?: CardState;
 }
 
-type Action = 'bring-forward' | 'dismiss';
+type Action = 'bring-forward' | 'dismiss' | 'dismiss-loop-message';
 type Focus = 'header' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
@@ -91,6 +92,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   card.append(header, ' ', body);
   host.append(card);
 
+  let loopMessageDismiss: HTMLButtonElement | undefined;
   const actionKind: Action = model.kind === 'disconnected' ? 'dismiss' : 'bring-forward';
   const action = (label: string, name: string, use: () => unknown) => {
     const button = element('button', 'controller-card-action', label);
@@ -132,7 +134,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     for (const condition of workConditions(work)) appendCondition(condition);
   }
 
-  function appendCondition({ statusClass, title, reasons: texts }: WorkCondition): void {
+  function appendCondition({ statusClass, title, reasons: texts, loopMessageId }: WorkCondition): void {
     const box = element('section', `controller-condition controller-condition-${statusClass}`);
     box.append(element('p', 'controller-condition-title', title), ' ');
     body.append(' ', box);
@@ -146,6 +148,10 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
           else fullReasons.delete(text);
         },
       }) });
+    }
+    if (loopMessageId !== undefined) {
+      loopMessageDismiss = action('Dismiss', `Dismiss ${title.toLowerCase()}`, () => deps.onDismissLoopMessage(loopMessageId));
+      box.append(' ', loopMessageDismiss);
     }
   }
 
@@ -170,6 +176,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const active = doc.activeElement;
     if (active === toggle) return 'header';
     if (active === actionButton) return actionKind;
+    if (active && active === loopMessageDismiss) return 'dismiss-loop-message';
     const reason = reasons.find(({ reason }) => reason.control() === active);
     return reason && { reason: reason.text };
   }
@@ -178,6 +185,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     if (want === 'header') return toggle;
     if (body.hidden) return undefined;
     if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
+    if (want === 'dismiss-loop-message') return loopMessageDismiss;
     return want === actionKind ? actionButton : undefined;
   }
 

@@ -1,5 +1,5 @@
 import { ipcRenderer } from 'electron';
-import { CONTROLLER_CH, SESSION_ID, type ControllerApi, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest } from '../shared/ipc';
+import { CONTROLLER_CH, SESSION_ID, type ControllerApi, type ControllerAlwaysOnTopChoice, type ControllerLoopMessageDismissal, type ControllerAlwaysOnTopRequest, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest } from '../shared/ipc';
 
 export const controllerApi: ControllerApi = {
   subscribeTerminals(listener) {
@@ -9,6 +9,7 @@ export const controllerApi: ControllerApi = {
     return () => { ipcRenderer.removeListener(CONTROLLER_CH.terminals, receive); };
   },
   dismissTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.dismiss, { sessionId: SESSION_ID, id }),
+  dismissLoopMessage: (terminalId, messageId) => ipcRenderer.invoke(CONTROLLER_CH.dismissLoopMessage, { sessionId: SESSION_ID, terminalId, messageId } satisfies ControllerLoopMessageDismissal),
   activateTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.activate, { sessionId: SESSION_ID, id }),
   getTheme: () => ipcRenderer.invoke(CONTROLLER_CH.getTheme, { sessionId: SESSION_ID } satisfies ControllerThemeRequest),
   setTheme: theme => ipcRenderer.invoke(CONTROLLER_CH.setTheme, { sessionId: SESSION_ID, theme } satisfies ControllerThemeChoice),

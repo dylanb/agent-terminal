@@ -3,7 +3,7 @@ import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
@@ -16,6 +16,7 @@ export function registerControllerTerminal(
   onRegistered: () => void = () => {},
   subscribeStatus?: (listener: (work: ControllerWorkStatus) => void) => () => void,
   onIncompatible: (report: ControllerIncompatibility) => void = () => {},
+  dismissLoopMessage: (id: string) => void = () => {},
 ): () => void {
   let canceled = false;
   let started = false;
@@ -28,6 +29,7 @@ export function registerControllerTerminal(
   const attempt = () => {
     if (canceled) return;
     let registered = false;
+    let controllerMinor = 0;
     let unsubscribe: (() => void) | undefined;
     let sendingStatus = false;
     let pendingStatus: ControllerWorkStatus | undefined;
@@ -47,7 +49,9 @@ export function registerControllerTerminal(
         return;
       }
       sendingStatus = true;
-      current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }), error => {
+      const { loopMessage, ...older } = work;
+      const shared = controllerMinor >= CONTROLLER_LOOP_MESSAGE_MINOR ? { ...older, loopMessage } : older;
+      current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: shared }), error => {
         sendingStatus = false;
         if (error) { current.terminate(); return; }
         const latest = pendingStatus;
@@ -74,6 +78,7 @@ export function registerControllerTerminal(
         const message = parseControllerMessage(chunk.toString());
         if (!registered && message.type === 'registered') {
           registered = true;
+          controllerMinor = message.minor ?? 0;
           clearTimeout(deadline);
           unsubscribe = subscribeStatus?.(publishStatus);
           if (!started) {
@@ -90,6 +95,8 @@ export function registerControllerTerminal(
         } else if (registered && message.type === 'activate') {
           const outcome = activate();
           current.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'result', requestId: message.requestId, outcome }));
+        } else if (registered && message.type === 'dismiss-loop-message') {
+          dismissLoopMessage(message.id);
         } else {
           current.terminate();
         }

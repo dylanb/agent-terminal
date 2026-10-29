@@ -16,7 +16,7 @@ it('exposes only the narrow controller API to the controller window', async () =
   await import('../../src/preload/index');
   expect([...exposed.keys()]).toEqual(['controller']);
   expect(exposed.get('controller')).toEqual({
-    subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function),
+    subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function), dismissLoopMessage: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
     getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function), onAlwaysOnTopChanged: expect.any(Function),
   });
@@ -38,6 +38,17 @@ it('sends an occurrence-targeted dismissal through the controller bridge', async
   const api = exposed.get('controller') as { dismissTerminal?: (id: string) => Promise<void> };
   await api.dismissTerminal?.('retained-occurrence');
   expect(ipcRenderer.invoke).toHaveBeenCalledWith('controller:dismiss', { sessionId: SESSION_ID, id: 'retained-occurrence' });
+});
+
+it('sends a loop message dismissal naming its terminal and message through the controller bridge', async () => {
+  process.argv = [...argv, '--agent-terminal-controller-window'];
+  await import('../../src/preload/index');
+  const { ipcRenderer } = await import('electron');
+  const { SESSION_ID } = await import('../../src/shared/ipc');
+  vi.mocked(ipcRenderer.invoke).mockClear();
+  const api = exposed.get('controller') as { dismissLoopMessage?: (terminalId: string, messageId: string) => Promise<void> };
+  await api.dismissLoopMessage?.('terminal-a', 'message-a');
+  expect(ipcRenderer.invoke).toHaveBeenCalledWith('controller:dismissLoopMessage', { sessionId: SESSION_ID, terminalId: 'terminal-a', messageId: 'message-a' });
 });
 
 it('reads and saves the controller theme through the controller bridge, with the session id', async () => {

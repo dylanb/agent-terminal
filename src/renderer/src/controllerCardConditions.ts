@@ -2,15 +2,21 @@ import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../shared/controllerStatus'
 import type { ControllerWorkStatus } from '../../shared/ipc';
 
 export interface WorkCondition {
-  statusClass: 'needs-human' | 'error';
+  statusClass: 'needs-human' | 'error' | 'notice';
   title: string;
   reasons: readonly string[];
+  /** The loop message this condition shows, which the operator can dismiss. */
+  loopMessageId?: string;
 }
 
 export function workConditions(work: ControllerWorkStatus | undefined): WorkCondition[] {
   return [
     ...(work?.attention ? [{ statusClass: 'needs-human' as const, title: `Human needed: ${work.attention.status}`, reasons: work.attention.reasons }] : []),
     ...(work?.error ? [{ statusClass: 'error' as const, title: 'Error', reasons: [work.error.reason] }] : []),
+    ...(work?.loopMessage ? [{
+      statusClass: work.loopMessage.kind, title: work.loopMessage.kind === 'error' ? 'Loop error' : 'Notice',
+      reasons: [work.loopMessage.reason], loopMessageId: work.loopMessage.id,
+    }] : []),
   ];
 }
 
