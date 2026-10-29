@@ -80,6 +80,9 @@ const CONTROLLER_WIRE_NAMES = {
   dismiss: 'controller:dismiss',
   getTheme: 'controller:getTheme',
   setTheme: 'controller:setTheme',
+  getAlwaysOnTop: 'controller:getAlwaysOnTop',
+  setAlwaysOnTop: 'controller:setAlwaysOnTop',
+  alwaysOnTop: 'controller:alwaysOnTop',
 };
 
 const notOneSentence = (does: string | undefined): boolean =>
@@ -118,6 +121,7 @@ describe('IPC channel contract', () => {
       'CHANNELS',
       'CONTROLLER_CH',
       'CONTROLLER_CHANNELS',
+      'CONTROLLER_DEFAULT_ALWAYS_ON_TOP',
       'CONTROLLER_DEFAULT_THEME',
       'CONTROLLER_WINDOW_ARGUMENT',
       'DEFAULT_UI_SETTINGS',

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, screen } from 'electron';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { startControllerTransport } from './controllerTransport';
@@ -7,11 +7,18 @@ import { installNavigationGuards } from './windowGuards';
 import { CONTROLLER_WINDOW_ARGUMENT } from '../shared/ipc';
 import { installControllerIpc } from './controllerIpc';
 import { createControllerSettingsStore } from './controllerSettings';
+import { createControllerAlwaysOnTop } from './controllerAlwaysOnTop';
+import { createControllerWindowStateStore, placeWindow } from './controllerWindowState';
 import { errMsg } from './errno';
 import { applyDockIcon, resolveWindowIconPath } from './appIcon';
 import type { BundleLocation } from './bundleLocation';
+import { controllerCloseAction } from './controllerWindowPolicy';
+import { installControllerWindowBehaviour } from './controllerWindowBehaviour';
+import { controllerTrayMenuMode, watchTrayView, type ControllerTraySources } from './controllerTrayModel';
+import { createControllerTray } from './controllerTray';
+import { CONTROLLER_APP_NAME } from './controllerAppName';
 
-app.setName('Agent Terminal Controller');
+app.setName(CONTROLLER_APP_NAME);
 let quitting = false;
 app.on('before-quit', () => { quitting = true; });
 
@@ -21,19 +28,45 @@ void app.whenReady().then(async () => {
     : { packaged: false, appPath: app.getAppPath() };
   // untestable off macOS (no Linux e2e for the BrowserWindow.icon / dock assignment) — §12 gap tracked in #153.
   applyDockIcon(app.dock, process.platform, iconLoc, 'controller');
+  const windowState = createControllerWindowStateStore(app.getPath('userData'));
+  const saved = windowState.load();
+  // untestable (bounds saved on a second attached display need a second screen) — tracked in #153.
+  const bounds = placeWindow(saved.bounds, screen.getAllDisplays().map(display => display.workArea));
   const window = new BrowserWindow({
+    ...bounds,
     icon: resolveWindowIconPath(iconLoc, 'controller'),
+    alwaysOnTop: saved.alwaysOnTop,
     webPreferences: { preload: join(__dirname, '../preload/index.js'), additionalArguments: [CONTROLLER_WINDOW_ARGUMENT], contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   installNavigationGuards(window.webContents);
-  window.on('close', event => {
-    if (quitting) return;
-    event.preventDefault();
-    window.minimize();
+  const { open } = installControllerWindowBehaviour(window, {
+    closeAction: controllerCloseAction(process.platform),
+    quitting: () => quitting,
+    saveBounds: bounds => windowState.saveBounds(bounds),
+  });
+  // untestable (macOS Dock-click reopen is native) — tracked in #153.
+  app.on('activate', open);
+  const alwaysOnTop = createControllerAlwaysOnTop({ window, store: windowState, initial: saved.alwaysOnTop });
+  // untestable (the native tray; the operator's test scope leaves it to the manual checklist) — tracked in #153.
+  const tray = createControllerTray(
+    icon => resolveWindowIconPath(iconLoc, icon),
+    controllerTrayMenuMode(process.platform),
+    { open, setAlwaysOnTop: on => alwaysOnTop.set(on), quit: () => app.quit() },
+  );
+  const noTerminals: ControllerTraySources['subscribeTerminals'] = listener => {
+    listener([]);
+    return () => {};
+  };
+  let stopTray = watchTrayView({ subscribeTerminals: noTerminals, alwaysOnTop }, tray.show);
+  app.once('will-quit', () => {
+    stopTray();
+    tray.destroy();
   });
   try {
     const transport = await startControllerTransport(resolveAppHome(process.env, homedir()));
-    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')));
+    stopTray();
+    stopTray = watchTrayView({ subscribeTerminals: transport.subscribeTerminals, alwaysOnTop }, tray.show);
+    const disposeIpc = installControllerIpc(window.webContents, transport, createControllerSettingsStore(app.getPath('userData')), alwaysOnTop);
     window.once('closed', () => {
       disposeIpc();
       void transport.dispose().catch(error => console.error(errMsg(error)));

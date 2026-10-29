@@ -30,7 +30,7 @@ afterEach(() => {
   rmSync(userData, { recursive: true, force: true });
 });
 
-const install = () => { dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData)); };
+const install = () => { dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData), { current: () => true, set() {}, subscribe: () => () => {} }); };
 const invoke = async (channel: string, sender: unknown, payload: unknown) => boundary.handlers.get(channel)?.({ sender }, payload);
 const savedAfterRestart = () => createControllerSettingsStore(userData).theme();
 

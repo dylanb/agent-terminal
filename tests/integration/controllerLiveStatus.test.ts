@@ -87,7 +87,7 @@ it('carries real-socket status through the actual controller IPC snapshot bounda
   disposeIpc = installControllerIpc({
     isDestroyed: () => false,
     send(channel: string, value: ControllerSnapshot) { if (channel === CONTROLLER_CH.terminals) snapshot = value; },
-  }, server, createControllerSettingsStore(root));
+  }, server, createControllerSettingsStore(root), { current: () => true, set() {}, subscribe: () => () => {} });
   await terminal.sendStatus(work);
   await expect.poll(() => snapshot).toMatchObject({ sessionId: SESSION_ID, terminals: [expect.objectContaining({ launchDirectory: '/repo/ipc', work })] });
 });

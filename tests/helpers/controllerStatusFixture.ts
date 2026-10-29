@@ -1,4 +1,4 @@
-import type { ControllerApi, ControllerTerminal, ControllerWorkStatus, Theme } from '../../src/shared/ipc';
+import { CONTROLLER_DEFAULT_ALWAYS_ON_TOP, type ControllerApi, type ControllerTerminal, type ControllerWorkStatus, type Theme } from '../../src/shared/ipc';
 
 export type WorkStatus = ControllerWorkStatus;
 
@@ -77,7 +77,14 @@ export const STATUS_CASES: Readonly<Record<StatusCaseKey, StatusCase>> = Object.
 
 export function statusService(
   initial: ControllerTerminal[] = [statusTerminal()],
-  options: { activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal']; theme?: Theme | 'unreadable' } = {},
+  options: {
+    activation?: 'activated' | 'unavailable' | 'rejected' | ControllerApi['activateTerminal'];
+    theme?: Theme | 'unreadable';
+    alwaysOnTop?: boolean | 'unreadable';
+    /** How main answers a request to change always-on-top: it applies it, refuses it (replying its unchanged value),
+     *  or the request rejects. */
+    alwaysOnTopReply?: 'applied' | 'refused' | 'rejected';
+  } = {},
 ) {
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
@@ -85,6 +92,15 @@ export function statusService(
   /** Each theme the controller was asked to save, in order. */
   const savedThemes: Theme[] = [];
   let theme = options.theme;
+  /** Each always-on-top value the controller was asked to set, in order. */
+  const requestedAlwaysOnTop: boolean[] = [];
+  let alwaysOnTop = options.alwaysOnTop;
+  const alwaysOnTopListeners = new Set<(alwaysOnTop: boolean) => void>();
+  /** Main changes always-on-top from elsewhere (the tray) and tells the window. */
+  const pushAlwaysOnTop = (next: boolean): void => {
+    alwaysOnTop = next;
+    alwaysOnTopListeners.forEach(listener => listener(next));
+  };
   let current = initial;
   const publish = (items: ControllerTerminal[]): void => {
     current = items;
@@ -110,8 +126,24 @@ export function statusService(
       savedThemes.push(next);
       theme = next;
     },
+    async getAlwaysOnTop() {
+      if (alwaysOnTop === 'unreadable') throw new Error('always-on-top unreadable');
+      return alwaysOnTop ?? CONTROLLER_DEFAULT_ALWAYS_ON_TOP;
+    },
+    async setAlwaysOnTop(next) {
+      requestedAlwaysOnTop.push(next);
+      if (options.alwaysOnTopReply === 'rejected') throw new Error('always-on-top not set');
+      if (options.alwaysOnTopReply !== 'refused') alwaysOnTop = next;
+      return alwaysOnTop === 'unreadable' || alwaysOnTop === undefined ? CONTROLLER_DEFAULT_ALWAYS_ON_TOP : alwaysOnTop;
+    },
+    onAlwaysOnTopChanged(listener) {
+      alwaysOnTopListeners.add(listener);
+      return () => { alwaysOnTopListeners.delete(listener); };
+    },
   };
-  return { api, activated, dismissed, publish, savedThemes };
+  /** Whether the window still listens for always-on-top pushes. */
+  const followingAlwaysOnTop = (): boolean => alwaysOnTopListeners.size > 0;
+  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {
@@ -127,4 +159,28 @@ export function directoryConflictFixture(): { members: StatusTerminal[]; unrelat
     }),
   }));
   return { members: terminals.slice(0, 3), unrelated: terminals[3] };
+}
+
+/** The window header's and tray's counts for `distinctAttentionMix`, written independently of the production code. */
+export interface AttentionMixCounts {
+  total: number;
+  connected: number;
+  disconnected: number;
+  errors: number;
+  needsHuman: number;
+  working: number;
+}
+
+/** One card per terminal (no shared directory) in every attention class, each class a different size, so no two counts
+ *  a test compares can be swapped unnoticed (UI-STANDARDS.md §3.4 rule 4). */
+export function distinctAttentionMix(): { terminals: ControllerTerminal[]; counts: AttentionMixCounts } {
+  const sized = (key: string, size: number, work: WorkStatus | undefined, status?: 'disconnected') =>
+    Array.from({ length: size }, (_, index) => caseTerminal(`${key}-${index + 1}`, work, status));
+  const terminals = [
+    ...sized('mix-disconnected', 1, undefined, 'disconnected'),
+    ...sized('mix-flow-error', 3, workStatus({ error: failure, activity: 'quiet' })),
+    ...sized('mix-needs-human', 2, workStatus({ attention: human, activity: 'quiet' })),
+    ...sized('mix-working', 5, workStatus({ activity: 'active' })),
+  ];
+  return { terminals, counts: { total: 11, connected: 10, disconnected: 1, errors: 4, needsHuman: 2, working: 5 } };
 }

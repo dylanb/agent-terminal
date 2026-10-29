@@ -39,6 +39,8 @@
     "src/renderer/src/clampedReason.ts",
     "src/renderer/src/controllerFrame.ts",
     "src/renderer/src/themeToggle.ts",
+    "src/renderer/src/switch.ts",
+    "src/renderer/src/alwaysOnTopControl.ts",
     "src/renderer/src/monitor.ts",
     "src/renderer/src/shell.ts",
     "src/renderer/src/crossHighlight.ts",

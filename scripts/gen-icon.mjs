@@ -1,6 +1,6 @@
 // electron-builder and BrowserWindow reject SVG icons, so build/icon.svg is rasterized to the PNG
 // they consume.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -31,7 +31,8 @@ const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fil
 if (invokedDirectly) {
   const { Resvg } = await import('@resvg/resvg-js');
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  for (const name of ['icon', 'controller-icon']) {
+  const names = readdirSync(path.join(root, 'build')).filter(file => file.endsWith('.svg')).map(file => file.slice(0, -'.svg'.length));
+  for (const name of names) {
     const result = generateIcon({
       svgPath: path.join(root, 'build', `${name}.svg`),
       pngPath: path.join(root, 'build', `${name}.png`),

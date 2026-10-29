@@ -1,5 +1,7 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
+> **Changelog v2.225:** **§23.6 — the controller tray and remembered window ([#223](https://github.com/dylanb/agent-terminal/issues/223)).** The controller gains a tray icon whose badge (red for any card in the error class, else amber for one in the needs-human class) and menu counts come from the same card classification as the window header, including #267's activity combination, with **Open Controller**, **Always on top** and **Quit Controller**. Closing the window now hides it on macOS and still minimizes it on Linux; Quit comes from the tray or the application menu. **Always on top** (on for a new profile) and the window's bounds are remembered in their own file, apart from the theme. New IPC channels `controller:getAlwaysOnTop`, `controller:setAlwaysOnTop` and `controller:alwaysOnTop` (definitions in `src/shared/ipc.ts`); the wire protocol and terminals are unchanged.
+
 ## A pressed control waits for its answer
 
 §22.5 (new): a control kept accepting presses while the app was still answering its first one, so a

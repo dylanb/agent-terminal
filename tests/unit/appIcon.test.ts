@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { getConfig } from 'app-builder-lib/out/util/config/config';
 import { resolveWindowIconPath, resolveDockIconPath, applyDockIcon, type IconLocation } from '../../src/main/appIcon';
+import { controllerTrayIcon, type TrayBadge } from '../../src/main/controllerTrayModel';
 
 describe('resolveWindowIconPath', () => {
   it('resolves to the extraResources copy in a packaged app', () => {
@@ -154,10 +155,32 @@ describe('packaged controller icon (electron-builder merged config)', () => {
     expect(config.extraResources).toContainEqual({ from: source, to: shipped });
   });
 
+  it('ships each tray icon under the basename the packaged resolver reads back', async () => {
+    const config = await load('electron-builder.controller.yml');
+    const shipped = TRAY_BADGES.map(controllerTrayIcon).map(icon => ({
+      from: path.relative(root, resolveWindowIconPath({ packaged: false, appPath: root }, icon)),
+      to: path.basename(resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources' }, icon)),
+    }));
+    expect(config.extraResources).toEqual(expect.arrayContaining(shipped));
+  });
+
   it('leaves the terminal package on its own icon', async () => {
     const config = await load('electron-builder.yml');
     expect(config.mac?.icon).toBeUndefined();
     expect(config.linux?.icon).toBeUndefined();
     expect(config.extraResources).not.toContainEqual({ from: source, to: shipped });
+  });
+});
+
+const TRAY_BADGES: TrayBadge[] = ['none', 'needs-human', 'error'];
+
+describe('committed tray icons', () => {
+  it('has a PNG for every tray badge where the unpackaged controller reads it', () => {
+    const root = path.resolve(__dirname, '..', '..');
+    const notPng = TRAY_BADGES.map(controllerTrayIcon).filter(icon => {
+      const file = resolveWindowIconPath({ packaged: false, appPath: root }, icon);
+      return !existsSync(file) || !readFileSync(file).subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    });
+    expect(notPng).toEqual([]);
   });
 });

@@ -1,0 +1,83 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B141F"/>
+      <stop offset="1" stop-color="#081019"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2DD4BF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#2DD4BF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bezel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4F8F8"/>
+      <stop offset="1" stop-color="#E2EBEC"/>
+    </linearGradient>
+  </defs>
+
+  <!-- panel -->
+  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="#FFFFFF"/>
+  <rect x="28" y="28" width="968" height="968" rx="176" fill="none" stroke="#CBD5E1" stroke-width="3"/>
+
+  <!-- dashboard frame -->
+  <rect x="132" y="150" width="760" height="724" rx="44" fill="url(#bezel)" stroke="#0D9488" stroke-width="6"/>
+  <!-- title bar -->
+  <circle cx="186" cy="204" r="13" fill="#CBD5E1"/>
+  <circle cx="226" cy="204" r="13" fill="#CBD5E1"/>
+  <circle cx="266" cy="204" r="13" fill="#CBD5E1"/>
+  <line x1="132" y1="246" x2="892" y2="246" stroke="#0D9488" stroke-width="4"/>
+
+  <!-- glow behind the selected pane -->
+  <ellipse cx="682" cy="610" rx="250" ry="210" fill="url(#glow)"/>
+
+  <!-- pane: top-left -->
+  <g>
+    <rect x="176" y="286" width="316" height="252" rx="20" fill="url(#screen)" stroke="#2A4A5C" stroke-width="4"/>
+    <text x="202" y="340" font-family="monospace" font-size="34" fill="#5EEAD4">&gt;_</text>
+    <g stroke-linecap="round" stroke-width="10">
+      <line x1="202" y1="388" x2="300" y2="388" stroke="#46C7B8"/>
+      <line x1="202" y1="428" x2="440" y2="428" stroke="#2A4A5C"/>
+      <line x1="202" y1="468" x2="360" y2="468" stroke="#2A4A5C"/>
+      <line x1="202" y1="508" x2="270" y2="508" stroke="#2A4A5C"/>
+    </g>
+  </g>
+
+  <!-- pane: top-right -->
+  <g>
+    <rect x="532" y="286" width="316" height="252" rx="20" fill="url(#screen)" stroke="#2A4A5C" stroke-width="4"/>
+    <text x="558" y="340" font-family="monospace" font-size="34" fill="#5EEAD4">&gt;_</text>
+    <g stroke-linecap="round" stroke-width="10">
+      <line x1="558" y1="388" x2="760" y2="388" stroke="#2A4A5C"/>
+      <line x1="558" y1="428" x2="650" y2="428" stroke="#46C7B8"/>
+      <line x1="558" y1="468" x2="800" y2="468" stroke="#2A4A5C"/>
+      <line x1="558" y1="508" x2="700" y2="508" stroke="#2A4A5C"/>
+    </g>
+  </g>
+
+  <!-- pane: bottom-left -->
+  <g>
+    <rect x="176" y="578" width="316" height="252" rx="20" fill="url(#screen)" stroke="#2A4A5C" stroke-width="4"/>
+    <text x="202" y="632" font-family="monospace" font-size="34" fill="#5EEAD4">&gt;_</text>
+    <g stroke-linecap="round" stroke-width="10">
+      <line x1="202" y1="680" x2="420" y2="680" stroke="#2A4A5C"/>
+      <line x1="202" y1="720" x2="330" y2="720" stroke="#2A4A5C"/>
+      <line x1="202" y1="760" x2="290" y2="760" stroke="#46C7B8"/>
+    </g>
+  </g>
+
+  <!-- pane: bottom-right (selected) -->
+  <g>
+    <rect x="532" y="578" width="316" height="252" rx="20" fill="url(#screen)" stroke="#2DD4BF" stroke-width="12"/>
+    <text x="558" y="632" font-family="monospace" font-size="34" fill="#5EEAD4">&gt;_</text>
+    <g stroke-linecap="round" stroke-width="10">
+      <line x1="558" y1="680" x2="640" y2="680" stroke="#46C7B8"/>
+      <line x1="558" y1="720" x2="780" y2="720" stroke="#2A4A5C"/>
+    </g>
+    <rect x="558" y="748" width="26" height="30" rx="3" fill="#F59E0B"/>
+  </g>
+
+  <!-- pointer activating the selected pane -->
+  <path d="M742 700 L742 892 L788 848 L822 920 L856 904 L822 834 L884 834 Z"
+        fill="#FFFFFF" stroke="#0F1B2A" stroke-width="12" stroke-linejoin="round"/>
+  <!-- status badge -->
+  <circle cx="784" cy="784" r="216" fill="#E5484D" stroke="#FFFFFF" stroke-width="40"/>
+</svg>

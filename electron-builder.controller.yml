@@ -10,8 +10,12 @@ mac:
   icon: build/controller-icon.png
 linux:
   icon: build/controller-icon.png
-# Appended to the base config's extraResources; the packaged controller reads it back through
-# resolveWindowIconPath(…, 'controller').
+# Appended to the base config's extraResources; the packaged controller reads them back through
+# resolveWindowIconPath.
 extraResources:
   - from: build/controller-icon.png
     to: controller-icon.png
+  - from: build/controller-icon-needs-human.png
+    to: controller-icon-needs-human.png
+  - from: build/controller-icon-error.png
+    to: controller-icon-error.png

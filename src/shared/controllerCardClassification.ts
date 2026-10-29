@@ -58,3 +58,14 @@ export function statusSummary(cards: readonly ControllerDirectoryCard[]): Status
   const summaries = cards.map(card => cardStatus(card).summary);
   return SUMMARY_LABELS.map(label => ({ label, statusClass: SUMMARY_CLASS[label], count: summaries.filter(summary => summary === label).length }));
 }
+
+export interface CardCounts {
+  total: number;
+  connected: number;
+  disconnected: number;
+}
+
+export function cardCounts(cards: readonly ControllerDirectoryCard[]): CardCounts {
+  const disconnected = cards.filter(card => card.kind === 'disconnected').length;
+  return { total: cards.length, connected: cards.length - disconnected, disconnected };
+}

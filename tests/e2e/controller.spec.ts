@@ -6,6 +6,7 @@ import { createControllerHarness } from './controllerHarness';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { typeAtDesktop } from './controllerKeyboard';
+import { isFullScreen, isMinimized } from './controllerWindow';
 import { seedAutoGateRepo, seedTrustedFlow, autoGateFlowYaml, loopRoster } from './autoGateHarness';
 import { seedFakeGhGit, seedFakeAgentV2, exampleConfigDir } from './fakeTools';
 import { bringForwardLocator, cardLocator, cardsLocator, statusRowLocator } from '../helpers/controllerCards';
@@ -90,7 +91,8 @@ test('controller consolidates terminals launched in the same directory', { tag: 
   }
 });
 
-test('closing the controller window minimizes it instead of exiting', { tag: '@ownapp' }, async () => {
+test('on Linux, closing the controller window minimizes it instead of exiting', { tag: '@ownapp' }, async () => {
+  test.skip(process.platform === 'darwin', 'macOS hides the closed window; its native effect is the AC 26 gap tracked in #153');
   const h = await createControllerDesktopHarness();
   try {
     const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
@@ -103,6 +105,40 @@ test('closing the controller window minimizes it instead of exiting', { tag: '@o
     }));
     const outcome = await Promise.race([windowOutcome.catch(() => exited), exited]);
     expect(outcome).toBe('minimized');
+  } finally {
+    await h.dispose();
+  }
+});
+
+test('closing the controller window in full screen leaves full screen before it goes', { tag: '@ownapp' }, async () => {
+  test.skip(process.platform === 'darwin', 'macOS hides the closed window; its native effect is the AC 26 gap tracked in #153');
+  const h = await createControllerDesktopHarness();
+  try {
+    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
+    await expect.poll(() => isFullScreen(controller.app)).toBe(true);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(() => isMinimized(controller.app)).toBe(true);
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
+    await expect.poll(() => isMinimized(controller.app)).toBe(false);
+    expect(await isFullScreen(controller.app)).toBe(false);
+  } finally {
+    await h.dispose();
+  }
+});
+
+test('reopening the closed controller window restores it and gives it focus', { tag: '@ownapp' }, async () => {
+  const h = await createControllerDesktopHarness();
+  try {
+    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+    const shown = () => controller.app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return { visible: window.isVisible() && !window.isMinimized(), focused: window.isFocused() };
+    });
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(async () => (await shown()).visible).toBe(false);
+    await controller.app.evaluate(({ app }) => { app.emit('activate'); });
+    await expect.poll(shown).toEqual({ visible: true, focused: true });
   } finally {
     await h.dispose();
   }
