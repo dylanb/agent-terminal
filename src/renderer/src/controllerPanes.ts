@@ -139,7 +139,14 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       onClearHistory: directory.kind === 'conflict' ? undefined : () => {
         const id = directory.kind === 'single' ? directory.activationTargets[0] : directory.dismissOccurrenceId;
         const observed = snapshot.find(terminal => terminal.id === id)!;
-        void deps.controller.clearHistory(observed).catch(announce);
+        alert.replaceChildren();
+        void deps.controller.clearHistory(observed).then(outcome => {
+          if (disposed || outcome === 'cleared') return;
+          alert.replaceChildren();
+          alert.textContent = outcome === 'stale'
+            ? 'History changed. Review the current history and retry Clear history.'
+            : 'Clear history unavailable. Please retry.';
+        }).catch(announce);
       },
       onAction() {
         if (directory.kind === 'disconnected') {

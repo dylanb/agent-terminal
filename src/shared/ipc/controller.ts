@@ -52,6 +52,7 @@ export interface ControllerReceivedNotification { message: string; receivedAt: n
 export interface ControllerNotificationEntry extends ControllerReceivedNotification { count: number }
 
 export interface ControllerTerminal {
+  notificationVersion?: string;
   notifications?: ControllerNotificationEntry[];
   latestNotification?: ControllerReceivedNotification;
   work?: ControllerWorkStatus;

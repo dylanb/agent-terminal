@@ -1,3 +1,7 @@
+## #221 slice 4 — Clear refusal and history continuity
+
+§23.6 preserves expanded history and equivalent control focus across updates. Clear revalidates observed history and directory representation before deletion; stale or unavailable operations announce refusal and permit explicit retry without hiding newer messages. Unrelated status updates remain valid. Current-condition recovery suppression remains the approved slice 5.
+
 ## #221 slice 3 — initial Clear history
 
 §23.6 adds Clear history to expanded, nonempty history on live and disconnected cards. The typed controller request removes entries/counts/latest without changing card membership, live errors or human gates. Dismiss remains distinct. Stale-action feedback, interaction continuity and unchanged-condition recovery suppression remain the following approved increments.

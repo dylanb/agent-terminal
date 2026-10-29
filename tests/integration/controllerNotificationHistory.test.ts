@@ -240,3 +240,16 @@ it('an unrelated live-status update does not invalidate observed Clear or remove
   expect.soft(h.entries()).toEqual([]);
   expect.soft(h.terminal()!.work).toEqual(work);
 });
+
+it('refuses an old Clear when overlap rebuilds identical history at the same receipt time', async () => {
+  const h = await fixture(); const a = await h.connect();
+  await a.arrival('same current reason');
+  const observed = h.terminal()!;
+  const peer = await h.connect('/work/a');
+  await peer.close();
+  expect(h.entries()).toEqual(observed.notifications);
+  expect.soft(await clearObserved(h.registry(), observed)).toBe('stale');
+  expect.soft(h.entries()).toEqual(observed.notifications);
+  expect.soft(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  expect.soft(h.entries()).toEqual([]);
+});

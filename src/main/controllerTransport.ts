@@ -39,6 +39,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const current = new Map<WebSocket, NotificationCondition | null>();
   const members = (directory: string) => [...registrations].filter(([, terminal]) => terminal.launchDirectory === directory);
   const receive = (terminal: ControllerTerminal, notification: NotificationCondition) => {
+    terminal.notificationVersion = randomUUID();
     const entries = terminal.notifications ??= [];
     const repeated = entries.find(entry => entry.message === notification.message);
     if (repeated) repeated.count += 1;
@@ -94,7 +95,10 @@ export async function startControllerTransport(appHome: string): Promise<Control
           notificationsSupported = supportsControllerNotifications(message.minor);
           registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(notifications ? { notifications } : {}) });
           const peers = members(message.launchDirectory);
-          if (peers.length > 1) for (const [, peer] of peers) delete peer.notifications;
+          if (peers.length > 1) for (const [, peer] of peers) {
+            delete peer.notifications;
+            peer.notificationVersion = randomUUID();
+          }
           notify();
           socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
         } else if ((message.type === 'notification' || message.type === 'notification-current') && registrations.has(socket) && notificationsSupported) {
@@ -167,6 +171,9 @@ export async function startControllerTransport(appHome: string): Promise<Control
     clearHistory(observed) {
       const terminal = retained.get(observed.id) ?? [...registrations.values()].find(item => item.id === observed.id);
       if (!terminal || terminal.launchDirectory !== observed.launchDirectory) return 'stale';
+      if (terminal.status !== observed.status || members(terminal.launchDirectory).length > 1
+        || terminal.notificationVersion !== observed.notificationVersion) return 'stale';
+      terminal.notificationVersion = randomUUID();
       terminal.notifications = [];
       notify();
       return 'cleared';

@@ -13,11 +13,11 @@ export interface ControllerCardDeps {
 }
 
 type Action = 'bring-forward' | 'dismiss';
-type Focus = 'header' | Action | { reason: string };
+type Focus = 'header' | 'history' | 'clear' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
 export interface CardState {
-  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
+  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; historyExpanded: boolean; fullReasons: ReadonlySet<string>; focused: Focus | undefined };
 }
 
 export interface ControllerCard {
@@ -132,13 +132,16 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     body.append(' ', box);
   }
   body.append(' ', actionButton);
+  let history: HTMLButtonElement | undefined;
+  let clear: HTMLButtonElement | undefined;
+  let historyExpanded = carried?.historyExpanded ?? false;
   if (!duplicate) {
-    const history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
+    history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
     history.type = 'button';
-    history.setAttribute('aria-expanded', 'false');
+    history.setAttribute('aria-expanded', String(historyExpanded));
     const earlier = element('ol', 'controller-notification-history');
     earlier.id = `${cardId}-history`;
-    earlier.hidden = true;
+    earlier.hidden = !historyExpanded;
     history.setAttribute('aria-controls', earlier.id);
     for (const notification of notifications.slice(1)) {
       const item = element('li', 'controller-card-line');
@@ -148,13 +151,14 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
       if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
       earlier.append(item);
     }
-    const clear = notifications.length && deps.onClearHistory
+    clear = notifications.length && deps.onClearHistory
       ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
-    if (clear) clear.hidden = true;
+    if (clear) clear.hidden = !historyExpanded;
     history.addEventListener('click', () => {
-      earlier.hidden = !earlier.hidden;
+      historyExpanded = !historyExpanded;
+      earlier.hidden = !historyExpanded;
       if (clear) clear.hidden = earlier.hidden;
-      history.setAttribute('aria-expanded', String(!earlier.hidden));
+      history!.setAttribute('aria-expanded', String(historyExpanded));
     });
     body.append(' ', history, ' ', earlier);
     if (clear) body.append(' ', clear);
@@ -217,6 +221,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   function focused(): Focus | undefined {
     const active = doc.activeElement;
     if (active === toggle) return 'header';
+    if (history && active === history) return 'history';
+    if (clear && active === clear) return 'clear';
     if (active === actionButton) return actionKind;
     const reason = reasons.find(({ reason }) => reason.control() === active);
     return reason && { reason: reason.text };
@@ -225,6 +231,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   function shown(want: Focus): HTMLElement | undefined {
     if (want === 'header') return toggle;
     if (body.hidden) return undefined;
+    if (want === 'history') return history;
+    if (want === 'clear') return historyExpanded ? clear : undefined;
     if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
     return want === actionKind ? actionButton : undefined;
   }
@@ -233,7 +241,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
+    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, historyExpanded, fullReasons: new Set(fullReasons), focused: focused() } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {
