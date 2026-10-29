@@ -19,7 +19,6 @@ export interface ControllerRegistry {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
   dismiss(id: string): void;
-  /** Asks the live terminal `terminalId` to clear loop message `messageId`, only while that is the message it shows. */
   dismissLoopMessage(terminalId: string, messageId: string): void;
   dispose(): Promise<void>;
 }

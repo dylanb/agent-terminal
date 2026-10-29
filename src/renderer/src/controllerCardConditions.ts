@@ -5,7 +5,6 @@ export interface WorkCondition {
   statusClass: 'needs-human' | 'error' | 'notice';
   title: string;
   reasons: readonly string[];
-  /** The loop message this condition shows, which the operator can dismiss. */
   loopMessageId?: string;
 }
 
