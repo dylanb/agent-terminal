@@ -54,7 +54,7 @@ describe('initial controller registration', () => {
     peer.on('message', chunk => frames.push({ message: JSON.parse(chunk.toString()), published }));
     await once(peer, 'open');
     peer.send(encodeControllerMessage({ version: 2, type: 'register', ...identity }));
-    await vi.waitFor(() => expect(frames).toEqual([{ message: { version: 2, type: 'registered' }, published: true }]));
+    await vi.waitFor(() => expect(frames).toEqual([{ message: expect.objectContaining({ version: 2, type: 'registered' }), published: true }]));
   });
 
   it.each(['interrupted', 'malformed', 'silent'] as const)('retries %s initial registration repeatedly without overlap', async mode => {

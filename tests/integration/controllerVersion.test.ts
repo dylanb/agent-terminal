@@ -27,7 +27,7 @@ it.each([0, 7])('accepts compatible minor %i and drops unknown fields without ch
   await once(peer, 'open');
   const ack = once(peer, 'message');
   peer.send(JSON.stringify({ version: 2, minor, type: 'register', launchDirectory: '/work/newer', repositoryRoot: null, colour: 'teal' }));
-  expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 2, type: 'registered' });
+  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, type: 'registered' });
   expect(server.terminals()).toEqual([{ id: expect.any(String), launchDirectory: '/work/newer', repositoryRoot: null }]);
   const request = once(peer, 'message');
   const activation = server.activate(server.terminals()[0].id);
@@ -93,3 +93,16 @@ it.each([
   await vi.waitFor(() => expect(starts).toBe(1), { timeout: 30_000 });
   await vi.waitFor(() => expect(statuses).toEqual([{ version: 2, type: 'status', work: workStatus() }]));
 }, 35_000);
+
+
+it('advertises notification support to a notification-capable terminal without delaying registration', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const peer = connectWebSocket(resolveControllerEndpoint(root));
+  cleanups.push(() => peer.terminate());
+  await once(peer, 'open');
+  const ack = once(peer, 'message');
+  peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: '/notification-peer', repositoryRoot: null }));
+  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: 1, type: 'registered' });
+});

@@ -8,7 +8,7 @@ export const CARD_STATUS_TEST_ID = 'card-status';
 
 export interface RoleScope<L> {
   getByRole(
-    role: 'article' | 'button' | 'heading' | 'switch',
+    role: 'article' | 'button' | 'heading' | 'switch' | 'region',
     options?: { name?: string | RegExp; exact?: boolean; expanded?: boolean; pressed?: boolean; checked?: boolean },
   ): L;
   getByTestId(testId: string): L;
@@ -42,7 +42,7 @@ export const windowHeaderLocator = <L>(scope: RoleScope<L> & { locator(selector:
 export const accentLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_ACCENT_TEST_ID);
 export const statusRowLocator = <L>(card: RoleScope<L>): L => card.getByTestId(CARD_STATUS_TEST_ID);
 
-type DomRole = 'article' | 'button' | 'switch' | 'heading';
+type DomRole = 'article' | 'button' | 'switch' | 'heading' | 'region';
 const implicitRoles: Record<string, DomRole> = {
   ARTICLE: 'article', BUTTON: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
   H4: 'heading', H5: 'heading', H6: 'heading',
@@ -131,3 +131,6 @@ export function showsFullReason(control: Element | undefined): boolean {
   if (state === undefined) throw new Error('Show full reason exposes no state');
   return state === 'true';
 }
+
+export const receivedNotificationLocator = <L>(card: RoleScope<L>): L => card.getByRole('region', { name: /received notification/i });
+export const receivedNotificationIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['region'], /received notification/i)[0];
