@@ -94,6 +94,90 @@ it.each([
   await vi.waitFor(() => expect(statuses).toEqual([{ version: 2, type: 'status', work: workStatus() }]));
 }, 35_000);
 
+async function scriptedController(root: string, registered: Record<string, unknown>) {
+  const endpoint = resolveControllerEndpoint(root);
+  mkdirSync(dirname(endpoint), { recursive: true, mode: 0o700 });
+  const peers = new Set<WebSocket>();
+  const statuses: Array<{ work: Record<string, unknown> }> = [];
+  const server = createWebSocketTestServer(peer => {
+    peers.add(peer);
+    peer.on('error', () => {});
+    peer.once('message', () => {
+      peer.on('message', status => statuses.push(JSON.parse(status.toString())));
+      peer.send(JSON.stringify(registered));
+    });
+  });
+  await new Promise<void>(resolve => server.listen(endpoint, resolve));
+  cleanups.push(async () => {
+    for (const peer of peers) peer.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+  return { statuses, send: (message: unknown) => { for (const peer of peers) peer.send(JSON.stringify(message)); } };
+}
+
+const loopMessage = { id: 'message-a', kind: 'error', reason: 'the turn stalled' } as const;
+
+it.each([
+  { minor: undefined, sent: false },
+  { minor: 1, sent: true },
+])('sends the loop message only to a controller whose minor supports it: minor $minor', async ({ minor, sent }) => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, ...(minor === undefined ? {} : { minor }), type: 'registered' });
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus({ loopMessage })); return () => {}; }));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  expect(controller.statuses[0].work.loopMessage).toEqual(sent ? loopMessage : undefined);
+});
+
+it('hands a controller\'s dismissal of a loop message to the terminal', async () => {
+  const root = home();
+  const controller = await scriptedController(root, { version: 2, minor: 1, type: 'registered' });
+  const dismissed: string[] = [];
+  cleanups.push(registerControllerTerminal(root, { launchDirectory: '/work', repositoryRoot: null },
+    () => 'activated', () => {}, listener => { listener(workStatus({ loopMessage })); return () => {}; }, () => {}, undefined, id => dismissed.push(id)));
+  await vi.waitFor(() => expect(controller.statuses).toHaveLength(1));
+  controller.send({ version: 2, type: 'dismiss-loop-message', id: 'message-a' });
+  await vi.waitFor(() => expect(dismissed).toEqual(['message-a']));
+});
+
+async function registeredPeer(root: string, server: Awaited<ReturnType<typeof startControllerTransport>>, minor: number) {
+  const peer = connectWebSocket(resolveControllerEndpoint(root));
+  cleanups.push(() => peer.terminate());
+  await once(peer, 'open');
+  const received: unknown[] = [];
+  const ack = once(peer, 'message');
+  peer.send(JSON.stringify({ version: 2, minor, type: 'register', launchDirectory: `/work/minor-${minor}`, repositoryRoot: null }));
+  await ack;
+  peer.on('message', data => received.push(JSON.parse(data.toString())));
+  peer.send(JSON.stringify({ version: 2, type: 'status', work: workStatus({ loopMessage }) }));
+  await vi.waitFor(() => expect(server.terminals().find(t => t.launchDirectory === `/work/minor-${minor}`)?.work?.loopMessage).toEqual(loopMessage));
+  return { id: server.terminals().find(t => t.launchDirectory === `/work/minor-${minor}`)!.id, received };
+}
+
+it('confirms registration with its own minor version', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const peer = connectWebSocket(resolveControllerEndpoint(root));
+  cleanups.push(() => peer.terminate());
+  await once(peer, 'open');
+  const ack = once(peer, 'message');
+  peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: '/work', repositoryRoot: null }));
+  expect(JSON.parse((await ack)[0].toString())).toEqual({ version: 2, minor: 2, type: 'registered' });
+});
+
+it('asks a terminal to dismiss the loop message it shows, and never a replaced one or one sent to a terminal that predates loop messages', async () => {
+  const root = home();
+  const server = await startControllerTransport(root);
+  cleanups.push(() => server.dispose());
+  const current = await registeredPeer(root, server, 1);
+  const older = await registeredPeer(root, server, 0);
+  server.dismissLoopMessage(current.id, 'replaced-message');
+  server.dismissLoopMessage(older.id, 'message-a');
+  server.dismissLoopMessage(current.id, 'message-a');
+  await vi.waitFor(() => expect(current.received).toEqual([{ version: 2, type: 'dismiss-loop-message', id: 'message-a' }]));
+  expect(older.received).toEqual([]);
+});
 
 it('advertises notification support to a notification-capable terminal without delaying registration', async () => {
   const root = home();
@@ -103,6 +187,6 @@ it('advertises notification support to a notification-capable terminal without d
   cleanups.push(() => peer.terminate());
   await once(peer, 'open');
   const ack = once(peer, 'message');
-  peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: '/notification-peer', repositoryRoot: null }));
-  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: 1, type: 'registered' });
+  peer.send(JSON.stringify({ version: 2, minor: 2, type: 'register', launchDirectory: '/notification-peer', repositoryRoot: null }));
+  expect(JSON.parse((await ack)[0].toString())).toMatchObject({ version: 2, minor: 2, type: 'registered' });
 });

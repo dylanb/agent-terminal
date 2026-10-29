@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
 import { createTodoTab, type TodoTabDeps } from '../../src/renderer/src/todoTab';
 import { assertRendersFromHostDocument } from './relocatable';
+import { allByRole, byRole } from '../helpers/byRole';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -761,7 +762,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       expect(document.getElementById('todo-count')!.textContent).toBe('1');
     });
 
-    it('a rejected instantiateTemplate re-enables the Add todos button', async () => {
+    it('a rejected instantiateTemplate leaves Add todos usable: a further press instantiates again', async () => {
       wireMonitorPane();
       await flush();
       monitor.listTemplates.mockResolvedValue({
@@ -776,8 +777,152 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       const add = todoList().querySelector<HTMLButtonElement>('.tmpl-add')!;
       add.click();
       await flush();
-      expect(todoList().querySelector<HTMLButtonElement>('.tmpl-add')!.disabled).toBe(false);
+      expect(add.getAttribute('aria-disabled')).toBeNull();
+      add.click();
+      expect(monitor.instantiateTemplate).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+// A press that changes the list holds every list-changing control until main answers it, so two
+// changes can never race to replace the list.
+describe('Todo tab — a list change still being answered blocks every other list change', () => {
+  const LIST: TodoItem[] = [
+    makeTodo({ id: 't1', text: 'first', order: 1 }),
+    makeTodo({ id: 't2', text: 'second', order: 2 }),
+  ];
+  const MUTATIONS = ['todoAdd', 'todoUpdate', 'todoReorder', 'todoSetStatus', 'instantiateTemplate'] as const;
+  type Mutation = (typeof MUTATIONS)[number];
+
+  async function mountList(pending: Mutation): Promise<{
+    host: HTMLElement;
+    monitor: Record<Mutation | 'todoList' | 'todoDelete' | 'listTemplates', ReturnType<typeof vi.fn>>;
+    injected: ReturnType<typeof vi.fn>;
+    answer: () => void;
+    tab: ReturnType<typeof createTodoTab>;
+  }> {
+    const host = document.createElement('div');
+    const list = document.createElement('div');
+    const count = document.createElement('span');
+    host.append(list, count);
+    document.body.appendChild(host);
+    let answer!: () => void;
+    const monitor = {
+      todoList: vi.fn(async () => LIST),
+      todoAdd: vi.fn(async () => LIST),
+      todoUpdate: vi.fn(async () => LIST),
+      todoReorder: vi.fn(async () => LIST),
+      todoSetStatus: vi.fn(async () => LIST),
+      todoDelete: vi.fn(async () => LIST),
+      listTemplates: vi.fn(async () => ({ templates: [{ ref: 'pr-review', name: 'PR review checklist' }], defaultRef: 'pr-review' })),
+      instantiateTemplate: vi.fn(async () => LIST),
+    };
+    monitor[pending].mockImplementation(() => new Promise<TodoItem[]>((r) => (answer = () => r(LIST))));
+    const injected = vi.fn();
+    const tab = createTodoTab({ todoListEl: list, todoCountEl: count, monitor: monitor as unknown as TodoTabDeps['monitor'], doInject: injected });
+    tab.onRepoChanged('/repoA');
+    await flush();
+    return { host, monitor, injected, answer: () => answer(), tab };
+  }
+
+  it('a row redrawn while its change is still being answered shows that change busy, and is released with it', async () => {
+    const { host, answer, tab } = await mountList('todoSetStatus');
+    allByRole(host, 'checkbox', 'Mark todo done')[0].click();
+    tab.refresh();
+    await flush();
+    const redrawn = () => allByRole(host, 'checkbox', 'Mark todo done');
+    expect(redrawn().map((c) => c.getAttribute('aria-busy'))).toEqual(['true', null]);
+    answer();
+    await flush();
+    expect(redrawn().map((c) => c.getAttribute('aria-busy'))).toEqual([null, null]);
+    host.remove();
+  });
+
+  const enter = () => new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+  const otherRowDone = (host: HTMLElement) => allByRole(host, 'checkbox', 'Mark todo done').at(-1)!;
+
+  const CASES: {
+    control: string;
+    method: Mutation;
+    prepare: (host: HTMLElement) => void;
+    press: (host: HTMLElement) => HTMLElement;
+    otherTrigger?: (host: HTMLElement) => void;
+    injects?: number;
+  }[] = [
+    {
+      control: 'Mark todo done',
+      method: 'todoSetStatus',
+      prepare: () => {},
+      press: (host) => allByRole(host, 'checkbox', 'Mark todo done')[0],
+    },
+    {
+      control: 'Move down',
+      method: 'todoReorder',
+      prepare: () => {},
+      press: (host) => allByRole(host, 'button', 'Move down')[0],
+    },
+    {
+      control: 'Send todo to agent',
+      method: 'todoSetStatus',
+      prepare: () => {},
+      press: (host) => allByRole(host, 'button', 'Send todo to agent')[0],
+      injects: 1,
+    },
+    {
+      control: 'Save todo',
+      method: 'todoUpdate',
+      prepare: (host) => {
+        if (allByRole(host, 'button', 'Save todo').length === 0) allByRole(host, 'button', 'Edit todo')[0].click();
+      },
+      press: (host) => byRole(host, 'button', 'Save todo'),
+      otherTrigger: (host) => byRole(host, 'textbox', 'Edit todo text').dispatchEvent(enter()),
+    },
+    {
+      control: 'Add',
+      method: 'todoAdd',
+      prepare: (host) => {
+        (byRole(host, 'textbox', 'New todo') as HTMLTextAreaElement).value = 'third';
+      },
+      press: (host) => byRole(host, 'button', 'Add'),
+      otherTrigger: (host) => byRole(host, 'textbox', 'New todo').dispatchEvent(enter()),
+    },
+    {
+      control: 'Add todos',
+      method: 'instantiateTemplate',
+      prepare: (host) => {
+        if (allByRole(host, 'button', 'Add todos').length === 0) byRole(host, 'button', 'Add todos from a template').click();
+      },
+      press: (host) => byRole(host, 'button', 'Add todos'),
+    },
+  ];
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it.each(CASES)('$control: a second press, another trigger, or another row change starts nothing until main answers; it shows busy meanwhile', async ({ method, prepare, press, otherTrigger, injects = 0 }) => {
+    const { host, monitor, injected, answer } = await mountList(method);
+    const changes = () => MUTATIONS.reduce((n, m) => n + monitor[m].mock.calls.length, 0);
+    prepare(host);
+    await flush();
+    const pressed = press(host);
+
+    pressed.click();
+    pressed.click();
+    otherTrigger?.(host);
+    otherRowDone(host).click();
+    expect(changes()).toBe(1);
+    expect(monitor[method]).toHaveBeenCalledTimes(1);
+    expect(injected).toHaveBeenCalledTimes(injects);
+    expect(pressed.getAttribute('aria-busy')).toBe('true');
+
+    answer();
+    await flush();
+    prepare(host);
+    await flush();
+    press(host).click();
+    expect(monitor[method]).toHaveBeenCalledTimes(2);
   });
 });
 

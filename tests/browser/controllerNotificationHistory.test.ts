@@ -26,7 +26,7 @@ it.each(['light', 'dark'].flatMap(theme => ['pointer', 'Enter', 'Space'].map(inp
   };
   const host = document.createElement('main'); document.body.append(host);
   let activated = false;
-  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() { activated = true; } });
+  const component = createControllerCard(host, { card, expandedByDefault: true, onDismissLoopMessage() {}, onAction() { activated = true; } });
   try {
     const pane = cardIn(host, directory)!;
     const toggle = historyIn(pane);
@@ -62,7 +62,7 @@ it.each(['light', 'dark'].flatMap(theme => ['pointer', 'Enter', 'Space'].map(inp
 it('History reports zero retained entries and has no received message', async () => {
   const card = { ...directoryCards([statusTerminal()])[0], notifications: [] };
   const host = document.createElement('main'); document.body.append(host);
-  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
+  const component = createControllerCard(host, { card, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
   try {
     const pane = cardIn(host, directory)!;
     expect.soft(historyIn(pane)?.textContent ?? '').toMatch(/History\s+0\s*\/\s*3/i);
@@ -75,7 +75,7 @@ it('History reports zero retained entries and has no received message', async ()
 it('History reports one retained entry and has no earlier messages', async () => {
   const card = { ...directoryCards([statusTerminal()])[0], notifications: notifications.slice(0, 1) };
   const host = document.createElement('main'); document.body.append(host);
-  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
+  const component = createControllerCard(host, { card, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
   try {
     const pane = cardIn(host, directory)!;
     expect.soft(historyIn(pane)?.textContent ?? '').toMatch(/History\s+1\s*\/\s*3/i);
@@ -130,7 +130,7 @@ it('displays the latest entry repeat count in the received notification', async 
   const latest = { ...notifications[0], count: 12 };
   const card = { ...directoryCards([statusTerminal()])[0], notifications: [latest] };
   const host = document.createElement('main'); document.body.append(host);
-  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
+  const component = createControllerCard(host, { card, expandedByDefault: true, onDismissLoopMessage() {}, onAction() {} });
   try {
     const received = receivedNotificationIn(cardIn(host, directory)!);
     await expect.poll(() => received?.checkVisibility() ? received.innerText : '').toMatch(/12\s*(?:arrivals|times|×)|(?:×|received)\s*12/i);

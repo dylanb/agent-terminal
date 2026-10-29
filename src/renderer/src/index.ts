@@ -136,10 +136,6 @@ if (errorDialog) {
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
-  // §28.3.
-  window.flow.onLoopError((reason, kind) =>
-    showError({ title: kind === 'notice' ? 'Notice' : 'Loop error', message: reason }),
-  );
 }
 
 // §22.3.1.
@@ -210,7 +206,7 @@ if (flowStripHost) {
           const key = repo.repoKey();
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
-        openExternal: (url) => void window.flow.openExternal(url),
+        openExternal: (url) => window.flow.openExternal(url),
         appRouteOut: (step, turnKey, action) => {
           const key = repo.repoKey();
           if (!key) return;
@@ -225,7 +221,7 @@ if (flowStripHost) {
         },
         appGateDecision: (step, turnKey, option) => {
           const key = repo.repoKey();
-          if (key) window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
+          if (key) return window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
         },
         // §27.9/AC4 — request-changes opens the composer; its submit dispatches the two-way decision and the
         // composer holds open until it resolves (true → close, false → keep the feedback for a retry). Wired

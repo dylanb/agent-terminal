@@ -6,6 +6,7 @@ import { runKeyOf, type RunIdentity } from '../../shared/runIdentity';
 import type { FlowViewArgs } from './flowView';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn, captureSubtreeFocus } from './dom';
+import { onPress } from './pressable';
 
 type Proposed = Extract<PickupConfirmView, { state: 'proposed' }>;
 
@@ -40,7 +41,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
   /** `opener` is the control that opened it; the app's own raise returns focus to wherever the operator was. */
   const openDialog = (repoKey: string, held: Proposed, opener?: HTMLElement): void => {
     openFor = runKey(repoKey, held.run);
-    shell.render(({ doc: d, titleId, close, confirm: accept }) => {
+    shell.render(({ doc: d, titleId, close, confirm: accept, presses: footer }) => {
       const describedById = `${titleId}-desc`;
       const card = d.createElement('div');
       card.className = 'card';
@@ -100,14 +101,14 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
       const later = d.createElement('button');
       later.className = 'pill cancel';
       later.textContent = 'Not now';
-      later.addEventListener('click', () => {
-        openFor = null;
-        close();
-      });
       const ok = d.createElement('button');
       ok.className = 'pill signal confirm';
       ok.textContent = 'Confirm';
-      ok.addEventListener('click', () => {
+      footer.bind(later, () => {
+        openFor = null;
+        close();
+      });
+      footer.bind(ok, () => {
         const pr = parseNumber(prInput.value);
         const ticket = parseNumber(ticketInput.value);
         if (pr === null || ticket === null) {
@@ -116,16 +117,13 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
         }
         error.textContent = '';
         const returnFocus = captureFocusReturn(ok);
-        ok.disabled = true;
         const refused = (reason: string): void => {
-          ok.disabled = false;
           error.textContent = reason;
           returnFocus();
         };
-        deps.confirm(repoKey, held.run, pr, ticket).then(
+        return deps.confirm(repoKey, held.run, pr, ticket).then(
           (result) => {
             if (!result.ok) return refused(result.reason);
-            ok.disabled = false;
             openFor = null;
             accept();
           },
@@ -145,7 +143,7 @@ export function createPickupConfirm(host: HTMLElement, deps: PickupConfirmDeps):
   reopen.className = 'pill';
   reopen.textContent = 'Confirm ticket and PR…';
   reopen.setAttribute('aria-haspopup', 'dialog');
-  reopen.addEventListener('click', () => {
+  onPress(reopen, () => {
     if (shown !== null) openDialog(shown.repoKey, shown.held, reopen);
   });
 

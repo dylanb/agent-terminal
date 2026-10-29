@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { once } from 'node:events';
 import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { encodeControllerMessage, parseControllerMessage } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage, parseControllerMessage } from '../../src/shared/controllerProtocol';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { shellQuote } from '../../src/shared/shellQuote';
@@ -185,7 +185,7 @@ test('an unconfirmed captured peer does not prevent a real window restoring or a
     await once(socket, 'open');
     let requested = false;
     socket.on('message', (chunk: Buffer) => { if (parseControllerMessage(chunk.toString()).type === 'activate') requested = true; });
-    socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: null }));
+    socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'register', launchDirectory: directory, repositoryRoot: null }));
     await expect.poll(() => connected(controller.page, directory).then(items => items.length)).toBe(1);
     const original = await h.launch(terminalTarget, directory);
     await expect.poll(() => connected(controller.page, directory).then(items => items.length)).toBe(2);

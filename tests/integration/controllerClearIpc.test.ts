@@ -1,3 +1,4 @@
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import { once } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,7 +36,7 @@ beforeEach(async () => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'at-clear-ipc-')));
   registry = await startControllerTransport(home); published = [];
   boundary.contents.send = (channel, value) => { if (channel === CONTROLLER_CH.terminals) published = (value as ControllerSnapshot).terminals; };
-  dispose = installControllerIpc(boundary.contents, registry, createControllerSettingsStore(home));
+  dispose = installControllerIpc(boundary.contents, registry, createControllerSettingsStore(home), { current: () => false, set() {}, subscribe: () => () => {} });
 });
 afterEach(async () => {
   dispose?.(); for (const peer of peers.splice(0)) peer.terminate();
@@ -44,9 +45,9 @@ afterEach(async () => {
 async function register(directory: string) {
   const peer = connectWebSocket(resolveControllerEndpoint(home)); peers.push(peer);
   await once(peer, 'open'); const registered = once(peer, 'message');
-  peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+  peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
   await registered;
-  peer.send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId: directory, message: `Approval for ${directory}` } }));
+  peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId: directory, message: `Approval for ${directory}` } }));
   await expect.poll(() => published.find(t => t.launchDirectory === directory)?.notifications?.length).toBe(1);
   return published.find(t => t.launchDirectory === directory)!;
 }
@@ -79,7 +80,7 @@ it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malforme
 
 it('returns stale through real preload/main wiring after a new arrival and preserves it until fresh retry', async () => {
   const selected = await register('/work/selected');
-  peers[0].send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId: 'new', message: 'New protected arrival' } }));
+  peers[0].send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId: 'new', message: 'New protected arrival' } }));
   await expect.poll(() => published.find(t => t.id === selected.id)?.notifications?.length).toBe(2);
   const current = published.find(t => t.id === selected.id)!;
   expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('stale');

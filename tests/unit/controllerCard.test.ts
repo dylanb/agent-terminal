@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -13,13 +13,15 @@ function mount(terminal: ControllerTerminal, expanded = true) {
   const host = document.createElement('div');
   document.body.append(host);
   const calls = { bringForward: 0, dismiss: 0 };
+  const loopMessageDismissals: string[] = [];
   const deps = {
     card: directoryCards([terminal])[0],
     expandedByDefault: expanded,
     onAction() { calls[terminal.status === 'disconnected' ? 'dismiss' : 'bringForward'] += 1; },
+    onDismissLoopMessage(id: string) { loopMessageDismissals.push(id); },
   };
   const card = createControllerCard(host, deps);
-  return { host, calls, card, element: cardIn(host, terminal.launchDirectory) };
+  return { host, calls, loopMessageDismissals, card, element: cardIn(host, terminal.launchDirectory) };
 }
 
 const withWork = (work: Partial<WorkStatus>): ControllerTerminal => statusTerminal(work);
@@ -64,13 +66,13 @@ describe('controller card header control', () => {
 
 describe('controller card body', () => {
   it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available', () => {
-    const { terminal } = STATUS_CASES['flow-error-and-human'];
+    const { terminal, text } = STATUS_CASES['flow-error-and-human'];
     const { element } = mount(terminal);
     const status = element ? statusRowIn(element)?.textContent?.trim() : undefined;
     expect([
-      ...(status === 'Flow error' ? [] : [`status row reads ${status}`]),
+      ...(status === text ? [] : [`status row reads ${status}`]),
       ...missingInOrder(element?.textContent ?? '', [
-        'Flow error', '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Active',
+        text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Idle',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
       ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
@@ -86,10 +88,19 @@ describe('controller card body', () => {
     ['an unavailable ticket', withWork({ ticket: { availability: 'unavailable' } }), ['Ticket unavailable']],
     ['a loading flow', STATUS_CASES['flow-loading'].terminal, ['Flow loading']],
     ['an unavailable flow', STATUS_CASES['flow-unavailable'].terminal, ['Flow unavailable']],
-    ['unavailable activity', STATUS_CASES['working-activity-unavailable'].terminal, ['Activity unavailable']],
   ] as const)('shows the alternative text for %s', (_, terminal, texts) => {
     const { element } = mount(terminal);
     expect(missingInOrder(element?.textContent ?? '', texts)).toEqual([]);
+  });
+
+  it.each([
+    ['active', 'Working'], ['quiet', 'Idle'], ['unavailable', 'Activity unavailable'],
+  ] as const)('reads the %s activity line, after the flow line, as %s', (activity, word) => {
+    const { element } = mount(withWork({ activity, attention: { status: 'needs a human', reasons: ['Approve the plan'] } }));
+    const text = element?.textContent ?? '';
+    const flowLine = 'Flow: feature-dev — Step: implement';
+    const afterFlow = text.slice(text.indexOf(flowLine) + flowLine.length);
+    expect({ flowLine: text.includes(flowLine), activityLine: afterFlow.trimStart().slice(0, word.length) }).toEqual({ flowLine: true, activityLine: word });
   });
 
   it('shows the activity apart from the status text', () => {
@@ -110,7 +121,7 @@ describe('controller card body', () => {
       ...(element && statusRowIn(element)?.textContent?.trim() === status ? [] : ['wrong status row']),
       ...missingInOrder(element?.textContent ?? '', extra),
       ...(element && bringForwardIn(element) ? [] : ['no Bring forward']),
-      ...['#', 'Ticket', 'No ticket', 'No flow run started', 'Flow', 'Active', 'Idle', 'Activity'].filter(line => text.includes(line)).map(line => `shows "${line}"`),
+      ...['#', 'Ticket', 'No ticket', 'No flow run started', 'Flow', 'Working', 'Idle', 'Activity'].filter(line => text.includes(line)).map(line => `shows "${line}"`),
     ]).toEqual([]);
   });
 
@@ -134,10 +145,80 @@ describe('controller card body', () => {
     expect([
       ...(element ? [] : ['no card']),
       ...(element && statusRowIn(element)?.textContent?.trim() === 'Disconnected' ? [] : ['wrong status row']),
-      ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Active'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
+      ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Working'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
       ...(element && bringForwardIn(element) ? ['offers Bring forward'] : []),
       ...(controlName(dismiss).includes(terminal.launchDirectory) ? [] : ['Dismiss is not named with the directory']),
       ...(calls.dismiss === 1 && calls.bringForward === 0 ? [] : [`calls ${JSON.stringify(calls)}`]),
     ]).toEqual([]);
+  });
+});
+
+describe('controller card loop message', () => {
+  it.each([
+    ['loop-error', 'Loop error', 'the turn stalled', 'Dismiss loop error'],
+    ['loop-notice', 'Notice', 'nothing to commit', 'Dismiss notice'],
+  ] as const)('shows the %s after the flow\'s conditions, with a Dismiss named for it and the directory that reports its message once', (key, title, reason, name) => {
+    const terminal = STATUS_CASES[key].terminal;
+    const { element, calls, loopMessageDismissals } = mount(terminal);
+    const dismiss = element ? dismissLoopMessageIn(element) : undefined;
+    dismiss?.click();
+    expect([
+      ...missingInOrder(element?.textContent ?? '', ['Flow: feature-dev — Step: implement', title, reason, 'Dismiss']),
+      ...(controlName(dismiss).startsWith(name) && controlName(dismiss).includes(terminal.launchDirectory) ? [] : [`Dismiss is named ${controlName(dismiss)}`]),
+      ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
+      ...(calls.bringForward === 0 ? [] : ['brought forward']),
+    ]).toEqual([]);
+    expect(loopMessageDismissals).toEqual([(terminal.work as WorkStatus).loopMessage!.id]);
+  });
+
+  it('shows no loop message or its Dismiss when there is none', () => {
+    const { element } = mount(STATUS_CASES.idle.terminal);
+    expect(element && dismissLoopMessageIn(element)).toBeUndefined();
+  });
+});
+
+describe('controller card action while its work is being answered', () => {
+  const settle = (): Promise<void> => new Promise(done => setTimeout(done, 0));
+  function mountPending(terminal: ControllerTerminal, host = document.body.appendChild(document.createElement('div'))) {
+    const answers: Array<() => void> = [];
+    const answer = () => new Promise<void>(done => { answers.push(done); });
+    const card = createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, onAction: answer, onDismissLoopMessage() {} });
+    return { host, card, answers };
+  }
+
+  it.each([
+    ['Bring forward', 'working', bringForwardIn],
+    ['Dismiss', 'disconnected-with-error', dismissIn],
+  ] as const)('%s ignores further presses and reports busy until its work is answered', async (_, statusCase, find) => {
+    const { terminal } = STATUS_CASES[statusCase];
+    const { host, answers } = mountPending(terminal);
+    const card = cardIn(host, terminal.launchDirectory);
+    const control = card ? find(card) : undefined;
+    control?.click();
+    control?.click();
+    const pending = { dispatched: answers.length, busy: control?.getAttribute('aria-busy') ?? null };
+    answers[0]?.();
+    await settle();
+    control?.click();
+    expect({ pending, afterAnswer: answers.length }).toEqual({ pending: { dispatched: 1, busy: 'true' }, afterAnswer: 2 });
+  });
+
+  it('keeps Bring forward unavailable on a card rebuilt while the old card\'s press is still answered', async () => {
+    const { terminal } = STATUS_CASES.working;
+    const { host, card: old, answers } = mountPending(terminal);
+    const first = cardIn(host, terminal.launchDirectory);
+    (first && bringForwardIn(first))?.click();
+    const state = old.state();
+    old.dispose();
+    const later: string[] = [];
+    createControllerCard(host, { card: directoryCards([terminal])[0], expandedByDefault: true, from: state, onAction() { later.push('pressed'); }, onDismissLoopMessage() {} });
+    const rebuilt = cardIn(host, terminal.launchDirectory);
+    const control = rebuilt ? bringForwardIn(rebuilt) : undefined;
+    control?.click();
+    const pending = [...later];
+    answers[0]?.();
+    await settle();
+    control?.click();
+    expect({ pending, afterAnswer: later }).toEqual({ pending: [], afterAnswer: ['pressed'] });
   });
 });

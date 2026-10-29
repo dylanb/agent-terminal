@@ -1,4 +1,4 @@
-import type { AgentState, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
+import type { AgentState, ControllerLoopMessage, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
 import { isControllerIssueNumber } from '../shared/controllerStatus';
 import { errMsg } from './errno';
 
@@ -7,6 +7,7 @@ export interface ControllerStatusSource {
     repoKey: string;
     flowName: string | null;
     activity: AgentState;
+    loopMessage: ControllerLoopMessage | null;
     view: Pick<FlowStateView, 'stepName' | 'status' | 'runStarted' | 'error'> & {
       refs?: { ticket?: number };
       loop?: {
@@ -46,7 +47,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
   const refresh = () => {
     if (!alive) return;
     try {
-      const { repoKey, flowName, view, activity } = source.current();
+      const { repoKey, flowName, view, activity, loopMessage } = source.current();
       const rawNumber = view.refs?.ticket;
       const invalidTicket = rawNumber !== undefined && !isControllerIssueNumber(rawNumber);
       const number = isControllerIssueNumber(rawNumber) ? rawNumber : undefined;
@@ -68,6 +69,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
         activity,
         attention: loop?.humanNeeded ? { status: loop.status, reasons: [...new Set(reasons)] } : null,
         error: error ? { reason: error } : null,
+        loopMessage,
       };
       publish();
       if (fetchTitle && number !== undefined) {

@@ -9,6 +9,7 @@ import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
 import { createRepoContext, type RepoContext } from './repoContext';
 import { doInject, FLOW_CHANGED_EVENT, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
+import { onPress } from './pressable';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
 export {
@@ -52,20 +53,20 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
     else todoTab.refresh();
     if (persist) window.monitor.setSettings({ lastTab: tab });
   }
-  el.tabCapture.addEventListener('click', () => selectTab('capture'));
-  el.tabTodo.addEventListener('click', () => selectTab('todo'));
+  onPress(el.tabCapture, () => selectTab('capture'));
+  onPress(el.tabTodo, () => selectTab('todo'));
 
   // Capture is manual + single-slot (§21.1): nothing auto-emits, so there is no unread dot to raise.
-  el.captureLast.addEventListener('click', () => {
-    void window.monitor
+  onPress(el.captureLast, () =>
+    window.monitor
       .captureLast()
       // [] means nothing detected AND main kept the prior capture (a scrolled-away buffer must not
       // wipe it), so only replace when there's actually a report (§21.1).
       .then((events) => {
         if (events.length > 0) captureTab.showReport(events);
       })
-      .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
-  });
+      .catch(() => {}), // a rejected invoke (main restart) must not be an unhandled rejection
+  );
 
   window.monitor.onUpdate((msg) => status.update(msg));
 

@@ -29,7 +29,7 @@ export function createErrorDialog(host: HTMLElement, opts?: { onFocusLost?: () =
   return {
     render(opts) {
       if (!opts) return shell.render(null);
-      shell.render(({ doc, titleId, close }) => {
+      shell.render(({ doc, titleId, close, presses }) => {
         const describedById = `${titleId}-msg`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -48,7 +48,7 @@ export function createErrorDialog(host: HTMLElement, opts?: { onFocusLost?: () =
         const dismiss = doc.createElement('button');
         dismiss.className = 'pill dismiss';
         dismiss.textContent = 'Dismiss';
-        dismiss.addEventListener('click', close);
+        presses.bind(dismiss, close);
         foot.append(dismiss);
         card.append(foot);
 

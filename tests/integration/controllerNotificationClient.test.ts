@@ -7,7 +7,7 @@ import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
-import type { NotificationCondition, ControllerNotificationSource } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage, type NotificationCondition, type ControllerNotificationSource } from '../../src/shared/controllerProtocol';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
@@ -27,7 +27,7 @@ async function connect(minor: number | undefined, current: NotificationCondition
     peer.on('message', data => {
       const frame = JSON.parse(data.toString());
       received.push(frame);
-      if (frame.type === 'register') peer.send(JSON.stringify({ version: 2, type: 'registered', minor }));
+      if (frame.type === 'register') peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered', minor }));
     });
   });
   await new Promise<void>(resolve => server.listen(endpoint, resolve));
@@ -50,8 +50,8 @@ async function connect(minor: number | undefined, current: NotificationCondition
 }
 
 it('publishes every distinct arrival in order independently of status coalescing', async () => {
-  const h = await connect(1, null);
-  expect.soft(h.received.find(frame => frame.type === 'register')).toMatchObject({ version: 2, minor: 1 });
+  const h = await connect(2, null);
+  expect.soft(h.received.find(frame => frame.type === 'register')).toMatchObject({ version: 2, minor: 2 });
   const notifications = ['first', 'second', 'third'].map((message, index) => ({ conditionId: `stop-${index}`, message }));
   for (const notification of notifications) h.emit(notification);
   await h.flush();
@@ -59,12 +59,12 @@ it('publishes every distinct arrival in order independently of status coalescing
 });
 
 it.each([null, { conditionId: 'current-stop', message: 'Approve current release' }])('publishes authoritative current condition %j on registration', async current => {
-  const h = await connect(1, current);
+  const h = await connect(2, current);
   await h.flush();
   expect(h.received.filter(frame => frame.type === 'notification-current')).toEqual([{ version: 2, type: 'notification-current', notification: current }]);
 });
 
-it.each([0, undefined])('keeps legacy minor %s connected without sending notification extensions', async minor => {
+it.each([0, 1, undefined])('keeps legacy minor %s connected without sending notification extensions', async minor => {
   const h = await connect(minor, { conditionId: 'current-stop', message: 'Approve' });
   h.emit({ conditionId: 'next-stop', message: 'Next approval' });
   await h.flush();
@@ -75,7 +75,7 @@ it.each([0, undefined])('keeps legacy minor %s connected without sending notific
 it('publishes current-condition changes and resolution without creating notification arrivals', async () => {
   const first = { conditionId: 'first', message: 'First pending request' };
   const next = { conditionId: 'next', message: 'Next current request' };
-  const h = await connect(1, first);
+  const h = await connect(2, first);
   h.change(next); await h.flush();
   h.change(null); await h.flush();
   expect(h.received.filter(frame => frame.type === 'notification-current').map(frame => frame.notification)).toEqual([first, next, null]);

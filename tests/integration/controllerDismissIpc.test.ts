@@ -1,17 +1,14 @@
-import { once } from 'node:events';
-import WebSocket from 'ws';
-import { connectWebSocket } from '../helpers/controllerWebSocket';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot } from '../../src/shared/ipc';
 import { startControllerTransport } from '../../src/main/controllerTransport';
 import { installControllerIpc } from '../../src/main/controllerIpc';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
+import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
+import { workStatus } from '../helpers/controllerStatusFixture';
 
 const boundary = vi.hoisted(() => ({
   handlers: new Map<string, (event: { sender: unknown }, payload: unknown) => unknown>(),
@@ -38,32 +35,29 @@ const contents = {
     if (channel === CONTROLLER_CH.terminals) { snapshot = value; deliveries++; }
   },
 };
-const sockets: WebSocket[] = [];
+const clients: ScriptedControllerTerminal[] = [];
 beforeEach(async () => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'at-ipc-')));
   snapshot = { sessionId: SESSION_ID, terminals: [] };
   deliveries = 0;
   transport = await startControllerTransport(home);
-  dispose = installControllerIpc(contents, transport, createControllerSettingsStore(home));
+  dispose = installControllerIpc(contents, transport, createControllerSettingsStore(home), { current: () => true, set() {}, subscribe: () => () => {} });
 });
 
 afterEach(async () => {
   dispose?.();
-  for (const socket of sockets.splice(0)) socket.terminate();
+  await Promise.all(clients.splice(0).map(client => client.close()));
   await transport?.dispose();
   rmSync(home, { recursive: true, force: true });
 });
 
 async function register(directory: string, disconnect = true) {
-  const socket = connectWebSocket(resolveControllerEndpoint(home));
-  sockets.push(socket);
-  socket.on('error', () => socket.terminate());
-  await once(socket, 'open');
-  socket.send(encodeControllerMessage({ version: 2, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+  const client = await connectScriptedTerminal(home, { launchDirectory: directory, repositoryRoot: '/work' });
+  clients.push(client);
   await vi.waitFor(() => expect(snapshot.terminals.some(item => item.launchDirectory === directory)).toBe(true));
   const terminal = snapshot.terminals.find(item => item.launchDirectory === directory)!;
   if (disconnect) {
-    socket.terminate();
+    await client.close();
     await vi.waitFor(() => expect(snapshot.terminals.find(item => item.id === terminal.id)?.status).toBe('disconnected'));
   }
   return terminal.id;
@@ -106,3 +100,24 @@ it('publishes current state only to the owning window and stops delivery after d
   expect(transport.terminals()).toEqual([]);
   expect(deliveries).toBe(afterDisposal);
 });
+
+it.each(['foreign sender', 'incorrect session', 'non-string terminal', 'non-string message', 'null payload'] as const)(
+  'rejects a loop message dismissal with %s and passes only the authorized one to its terminal', async invalid => {
+    const client = await connectScriptedTerminal(home, { launchDirectory: '/work/loop', repositoryRoot: '/work' });
+    clients.push(client);
+    await client.sendStatus(workStatus({ loopMessage: { id: 'message-a', kind: 'error', reason: 'the turn stalled' } }));
+    await vi.waitFor(() => expect(snapshot.terminals.find(item => item.launchDirectory === '/work/loop')?.work?.loopMessage?.id).toBe('message-a'));
+    const terminalId = snapshot.terminals.find(item => item.launchDirectory === '/work/loop')!.id;
+    const valid = { sessionId: SESSION_ID, terminalId, messageId: 'message-a' };
+    const payload = invalid === 'null payload' ? null
+      : invalid === 'incorrect session' ? { ...valid, sessionId: 'wrong' }
+      : invalid === 'non-string terminal' ? { ...valid, terminalId: 42 }
+      : invalid === 'non-string message' ? { ...valid, messageId: 42 } : valid;
+    const dismiss = boundary.handlers.get(CONTROLLER_CH.dismissLoopMessage)!;
+    await dismiss({ sender: invalid === 'foreign sender' ? {} : contents }, payload);
+    expect(await transport.activate(terminalId)).toBe('activated');
+    expect(client.loopMessageDismissals()).toEqual([]);
+    await dismiss({ sender: contents }, valid);
+    await vi.waitFor(() => expect(client.loopMessageDismissals()).toEqual(['message-a']));
+  },
+);

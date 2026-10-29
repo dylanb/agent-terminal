@@ -1,4 +1,4 @@
-import { electron } from './registeredElectron';
+import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -58,6 +58,21 @@ import { verdictOutput } from '../helpers/consolidatorOutputs';
 
 let app: ElectronApplication;
 let page: Page;
+
+/** The terminal's latest loop message reaches its controller as `kind`, its reason holding each of `texts`, with no
+ *  popup in the terminal window; the controller then dismisses it, so a later identical message is a new one. */
+async function expectLoopMessage(kind: 'error' | 'notice', ...texts: (string | RegExp)[]): Promise<void> {
+  const controller = controllerOf(app);
+  const matches = () => {
+    const message = controller.loopMessage();
+    const shown = message?.kind === kind && texts.every((text) => (typeof text === 'string' ? message.reason.includes(text) : text.test(message.reason)));
+    return shown ? 'shown' : message ?? null;
+  };
+  await expect.poll(matches, { timeout: 15_000 }).toBe('shown');
+  await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
+  controller.dismissLoopMessage(controller.loopMessage()!.id);
+  await expect.poll(() => controller.loopMessage(), { timeout: 15_000 }).toBeNull();
+}
 // Per-test userData so persisted UI state (§20.2) never bleeds across runs or touches the dev's real
 // ~/.config/Electron. HOME=temp tests instead get userData under their HOME.
 let userDataDir: string;
@@ -2836,10 +2851,7 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
   expect(readIf(join(repo, '.agent-terminal', 'review-runs')).length).toBe(2); // initial + one retry, then stop (AC4)
 
   // The turn failure is never silent: dismiss the blocking error dialog so it does not intercept the panel.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
 
   // The panel offers all three route-out affordances on the review error (§27.12c) — the same surface N2 built.
   await loopReadout().click();
@@ -2886,13 +2898,9 @@ test('§27.4 — a review round whose reviewer is not installed as a sub-agent s
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText(missingAgent);
-  await expect(errorDialog).toContainText(/restart your agent session/i);
+  await expectLoopMessage('error', missingAgent, /restart your agent session/i);
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('Spawn each reviewer');
 
-  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -2974,13 +2982,9 @@ test('§27.4 — a reviewer this agent session cannot spawn stops the round at o
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText(PLAN_V2_ROSTER[0]);
-  await expect(errorDialog).toContainText(/restart your agent session/i);
+  await expectLoopMessage('error', PLAN_V2_ROSTER[0], /restart your agent session/i);
   expect(readIf(join(repo, '.agent-terminal', 'injected-log')).split('Spawn each reviewer').length - 1).toBe(1);
 
-  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -3091,7 +3095,20 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   expect(await loopPanel().locator('[data-gate-option]').count()).toBe(4);
   await expect(loopPanel().locator('[data-gate-option="impasse"]')).toHaveCount(0);
 
+  // Snapshot the gate the instant the app itself marks Approve busy: the hold lasts only until main answers.
+  await loopPanel().evaluate((panel) => {
+    const w = window as unknown as { __gateHeld?: unknown };
+    new MutationObserver(() => {
+      const approve = panel.querySelector('[data-gate-option="approve"]');
+      if (approve?.getAttribute('aria-busy') === 'true' && !w.__gateHeld) {
+        w.__gateHeld = { polish: panel.querySelector('[data-gate-option="polish"]')?.getAttribute('aria-disabled') ?? null };
+      }
+    }).observe(panel, { attributes: true, subtree: true, attributeFilter: ['aria-busy'] });
+  });
   await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __gateHeld?: unknown }).__gateHeld ?? null))
+    .toEqual({ polish: 'true' });
 
   // AC2 — approve runs the bound loop's declared gh side-effect (plan → PR non-draft flip) on the pr the flow
   // input resolved, reaches the terminal accept, and the flow advances off the loop step to the manual step.
@@ -3172,10 +3189,9 @@ test('a relaunched run past its pickup with no saved pickup is held until the op
     await typeCommand('fake-agent');
     await loopReadout().click({ timeout: 10_000 });
     await loopPanel().locator('[data-gate-option="approve"]').click({ timeout: 10_000 });
-    await expect(page.getByRole('alertdialog').filter({ hasText: 'Confirm the run' })).toBeVisible({ timeout: 10_000 });
+    await expectLoopMessage('error', 'Confirm the run');
     expect(readIf(appFlowState(repo))).toContain('step: plan');
     expect(readGhLog(logFile)).not.toContain('gh pr ready');
-    await page.keyboard.press('Escape');
 
     const notices = await page.evaluate(async (repoKey) => [
       (await window.flow.advance(repoKey, 'plan')).notice,
@@ -3185,8 +3201,7 @@ test('a relaunched run past its pickup with no saved pickup is held until the op
     expect(notices).toEqual([0, 1, 2].map(() => expect.stringContaining('Confirm the run')));
     const runStateBefore = readIf(appRunState(repo));
     await page.evaluate((repoKey) => window.flow.appRouteOut(repoKey, 'plan', 'consolidate-plan', 'retry'), repo);
-    await expect(page.getByRole('alertdialog').filter({ hasText: 'Confirm the run' })).toBeVisible({ timeout: 10_000 });
-    await page.keyboard.press('Escape');
+    await expectLoopMessage('error', 'Confirm the run');
     expect(readIf(appRunState(repo))).toBe(runStateBefore);
     expect(readIf(appFlowState(repo))).toContain('step: plan');
 
@@ -3574,6 +3589,7 @@ function withPickup(yaml: string, block: string): string {
 }
 
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
@@ -4488,9 +4504,12 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
     | { inputs?: Record<string, unknown> }
     | undefined;
   expect(Object.values(staleState?.inputs ?? {})).not.toContain('999');
-  const calls = readGhLog(logFile).slice(staleInputLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh ');
+  // The viewer's own working-tree read (`git status --porcelain -z`) can land after the mark, so only the
+  // pickup's exact preflight probe and its mutation sidecars show the stale answer started a pickup.
+  expect(readGhLog(logFile).slice(staleInputLogStart)).not.toMatch(/^git status --porcelain$/m);
+  for (const mutation of ['local-branch', 'remote-branch', 'pr-created', 'issue-assignee', 'issue-label', 'pr-label']) {
+    expect(existsSync(`${logFile}.${mutation}`), `pickup mutation .${mutation} fired for a stale answer`).toBe(false);
+  }
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -5043,11 +5062,7 @@ test('a §27 approve side-effect with no PR to act on is skipped with a notice, 
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
-  const dialog = page.locator('#flow-error-host .flow-modal');
-  await expect(dialog).toBeVisible({ timeout: 15_000 });
-  await expect(dialog).toContainText('Notice');
-  await expect(dialog).toContainText('no PR to mark ready');
-  await expect(dialog).not.toContainText('Loop error');
+  await expectLoopMessage('notice', 'no PR to mark ready');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done');
 
@@ -5073,11 +5088,8 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   // never resolved), naming the def that could not be found. The Advance control stays present behind it —
   // the route off the failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was
   // written (no turn ran). Dismiss the dialog so it does not intercept the control exercised below.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toContainText('no-such-v2-loop', { timeout: 10_000 });
+  await expectLoopMessage('error', 'no-such-v2-loop');
   expect(existsSync(appRunState(repo))).toBe(false);
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
   await expect(flowControl()).toHaveText('Advance');
   await flowControl().click(); // the route out completes the flow
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
@@ -5104,12 +5116,10 @@ test('a §27 step resolves its loop from the running flow’s own loop folder be
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click();
 
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toContainText('v9-flow-folder', { timeout: 10_000 });
+  await expectLoopMessage('error', 'v9-flow-folder');
   expect(existsSync(appRunState(repo))).toBe(false);
 
   // The loop view resolves the same flow-folder def the step did, so it shows the same refusal.
-  await errorDialog.locator('.dismiss').click();
   await loopReadout().click();
   await expect(loopPanel()).toContainText('v9-flow-folder', { timeout: 10_000 });
 
@@ -5142,10 +5152,7 @@ test('a §27 work turn with no valid artifact retries then errors, offering all 
 
   // The turn failure is never silent: it raises the shared blocking error-dialog surface.
   // Dismiss it so it does not intercept the panel controls exercised below.
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
 
   // The panel offers all three route-out affordances (§27.12c) — never a Terminate-only dead-end.
   await loopReadout().click();
@@ -5188,10 +5195,7 @@ test('a §27 turn that stalls on an agent question completes when the operator a
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
   expect(readIf(appRunState(repo))).toContain('stalled');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
 
   await typeCommand('yes');
 
@@ -5225,10 +5229,7 @@ test('a §27 turn stalled on an agent question does not resume after the flow is
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
 
   await page.locator('#flow-strip .flow-terminate').click();
   const confirm = page.locator('#flow-confirm-host .flow-modal');
@@ -5443,10 +5444,7 @@ test('malformed §27 consolidator output drives one retry then a recoverable err
   expect(readIf(join(repo, '.agent-terminal', 'consolidate-runs')).length).toBe(2); // initial + one retry
 
   // The error is never silent: dismiss the dialog, then the panel offers the §27 route-out (never a dead end).
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
   await loopReadout().click();
   await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 10_000 });
   await expect(loopPanel().locator('[data-app-route-out="terminate"]')).toBeVisible();
@@ -5498,10 +5496,7 @@ test('a §27 route-out Terminate refused while a live peer holds the worktree lo
   await flowControl().click();
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await errorDialog.locator('.dismiss').click();
-  await expect(errorDialog).toHaveCount(0);
+  await expectLoopMessage('error');
   await loopReadout().click();
   await expect(loopPanel().locator('[data-app-route-out="terminate"]')).toBeVisible({ timeout: 10_000 });
 
@@ -5635,7 +5630,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .toContain('176');
+    .toMatch(/\b176\b/);
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
@@ -5646,7 +5641,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .not.toContain('176');
+    .not.toMatch(/\b176\b/);
 
   await flowControl().click(); // Advance → plan again: because the input was cleared, the modal re-prompts
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
@@ -6029,6 +6024,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   await openQuickSend('todo');
   await page.locator('#todo-new').fill('s5 first todo');
   await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 's5 first todo' })).toBeVisible();
   await page.locator('#todo-new').fill('s5 second todo');
   await page.locator('#todo-add-btn').click();
   await expect(flowDerived()).toContainText('0 / 2', { timeout: 10_000 }); // total moved via the push
@@ -6792,7 +6788,7 @@ test('§28.3 — approve on a gate declaring a commit side-effect advances HEAD 
   rmSync(cfg, { recursive: true, force: true });
 });
 
-test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a Loop error) and does not advance HEAD', { tag: '@ownapp' }, async () => {
+test('§28.3 / AC3 — approve with nothing to commit sends the controller a notice (not a loop error), opens no popup and does not advance HEAD', { tag: '@ownapp' }, async () => {
   const repo = seedCommitFlowRepo('agent-term-e2e-commit-noop-', { withChange: false }); // clean tree — nothing to stage
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-commit-noop-home-'));
   const cfg = seedCommitGateConfig('agent-term-e2e-commit-noop-cfg-');
@@ -6817,15 +6813,14 @@ test('§28.3 / AC3 — approve with nothing to commit surfaces a Notice (not a L
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
-  // AC3 — nothing to commit is surfaced as a NOTICE (not a failure) and no empty commit is made.
-  const dialog = page.locator('#flow-error-host .flow-modal');
-  await expect(dialog).toBeVisible({ timeout: 15_000 });
-  await expect(dialog).toContainText('Notice');
-  await expect(dialog).toContainText('nothing to commit');
-  await expect(dialog).not.toContainText('Loop error');
+  // AC3 — nothing to commit reaches the controller as a NOTICE (not a failure), no popup opens, and no empty commit is made.
+  const controller = controllerOf(app);
+  await expect.poll(() => controller.loopMessage(), { timeout: 15_000 }).toMatchObject({ kind: 'notice', reason: expect.stringContaining('nothing to commit') });
+  await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
   expect(gitCount(repo)).toBe(before); // HEAD did not advance — no empty commit
 
-  await dialog.locator('.dismiss').click();
+  controller.dismissLoopMessage(controller.loopMessage()!.id);
+  await expect.poll(() => controller.loopMessage(), { timeout: 15_000 }).toBeNull();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -6927,15 +6922,12 @@ test('§28.5 / AC2 — a RED loop whose test PASSES never completes: it retries 
   // retry), never reaching a verdict. The failure is surfaced on the blocking loop-error dialog, never silent.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2);
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('Loop error');
+  await expectLoopMessage('error');
 
   // AC2 — no clean gate was reached, so HEAD never advanced and no baseline was recorded.
   expect(gitCount(repo)).toBe(before);
   expect(readBaselineCommit(repo)).toBeNull();
 
-  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -7104,15 +7096,12 @@ test('§28.5.3 / AC3 — a GREEN turn whose tests do NOT pass never completes: i
   // a non-passing outcome never satisfies the GREEN gate → the work turn retries once then routes out.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2);
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('Loop error');
+  await expectLoopMessage('error');
 
   // AC3 — no clean gate was reached, so HEAD never advanced and no flag was recorded.
   expect(gitCount(repo)).toBe(before);
   expect(readChangedTests(repo)).toBeNull();
 
-  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -7243,15 +7232,12 @@ test('§28.5.3 / AC2 — a refactor round whose tests do NOT pass never complete
 
   // a non-passing result never satisfies the refactor round's gate → the round retries once then routes out.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('Loop error');
+  await expectLoopMessage('error');
 
   // AC2 — no clean gate was reached, so HEAD never advanced and no flag was recorded.
   expect(gitCount(repo)).toBe(before);
   expect(readChangedTests(repo)).toBeNull();
 
-  await errorDialog.locator('.dismiss').click();
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -7646,7 +7632,7 @@ test('§28.7 S8 / #124 — a well-formed epic plan with an unresolvable epic iss
   await loopPanel().locator('[data-gate-option="approve"]').click();
   // The gate settles into the BLOCKED state first — a blocking error that the epic issue is unresolvable. Anchoring
   // the negative checks on this visible settle keeps them from passing by racing ahead of a state that would advance.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'no resolvable epic issue' })).toBeVisible({ timeout: 15_000 });
+  await expectLoopMessage('error', 'no resolvable epic issue');
   // #124 — no confirm-first preview was raised, nothing reached GitHub, and the flow HOLDS at plan-approve: the RED
   // here is the silent single-ticket accept that advanced the flow to `done`.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
@@ -7787,7 +7773,7 @@ test('§27.12 — a stalled goal session shows how to get it going, and the sess
   expect(readIf(join(repo, '.agent-terminal', 'goal-commands-seen')).trim().split('\n')).toHaveLength(1);
 
   // The operator types one of those to the agent; the session writes its turn-done file and the step goes on.
-  await page.getByRole('alertdialog', { name: 'Loop error' }).getByRole('button', { name: 'Dismiss' }).click();
+  await expectLoopMessage('error');
   await loopPanel().locator('[data-loop-close]').click();
   await typeCommand('If you have finished, write the turn-done file now.');
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
@@ -8205,7 +8191,7 @@ test('§28.7 — a sub-ticket label the repo lacks and cannot create is reported
   const mutationsBeforeConfirm = ghPromotionMutations(logFile);
   await preview.locator('.pill.danger.confirm').click();
 
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'gh label create agent-loop/subticket' })).toBeVisible({ timeout: 30_000 });
+  await expectLoopMessage('error', 'gh label create agent-loop/subticket');
   expect(ghPromotionMutations(logFile)).toEqual(mutationsBeforeConfirm);
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'promotion-176.yaml'))).toBe(false);
   expect(readIf(appFlowState(repo))).toContain('step: plan-approve'); // the gate stays re-decidable
@@ -8237,7 +8223,7 @@ test('§28.7 S8 / #124 — a corrupt promotion record BLOCKS at approve, BEFORE 
   await loopPanel().locator('[data-gate-option="approve"]').click();
   // The gate settles into the BLOCKED state first — the error naming the record unreadable. Anchoring the negative
   // checks on this visible settle keeps them from passing by racing ahead of a confirm dialog that would still render.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'unreadable' })).toBeVisible({ timeout: 15_000 });
+  await expectLoopMessage('error', 'unreadable');
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-approve.
@@ -8278,7 +8264,7 @@ test('§28.7 S8 / #124 — a readable but STALE promotion record BLOCKS at appro
   await loopPanel().locator('[data-gate-option="approve"]').click();
   // The gate settles into the BLOCKED state first — the error naming the diverged partial promotion. Anchoring the
   // negative checks on this visible settle keeps them from passing by racing ahead of a preview that would still render.
-  await expect(page.getByRole('alertdialog').filter({ hasText: 'partial promotion' })).toBeVisible({ timeout: 15_000 });
+  await expectLoopMessage('error', 'partial promotion');
   // #124 — no confirm-first preview was ever raised: the "Create …" confirm dialog does not appear.
   await expect(page.getByRole('alertdialog').filter({ hasText: 'Create sub-ticket' })).toHaveCount(0); // the confirm dialog (its line items / confirm button), not any error text containing "create"
   // Nothing reached GitHub, the gate is NOT accepted (still actionable), and the flow holds at plan-approve.

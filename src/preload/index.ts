@@ -16,7 +16,6 @@ import {
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
-  type FlowLoopErrorMsg,
   type FlowAppBootstrapConflictMsg,
   type FlowEpicPromotionPreviewMsg,
   type FlowStateView,
@@ -171,11 +170,6 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowOnBootstrapError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
   },
-  onLoopError: (cb) => {
-    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason, msg.kind ?? 'error');
-    ipcRenderer.on(CH.flowOnLoopError, handler);
-    return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
-  },
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
       cb({
@@ -212,7 +206,7 @@ const flowApi: FlowApi = {
   appRouteOut: (repoKey, step, turnKey, action) =>
     ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
   appGateDecision: (repoKey, step, turnKey, option) =>
-    ipcRenderer.send(CH.flowAppGateDecision, { sessionId: SESSION_ID, repoKey, step, turnKey, option }),
+    ipcRenderer.invoke(CH.flowAppGateDecision, { sessionId: SESSION_ID, repoKey, step, turnKey, option }) as Promise<boolean>,
   appRequestChanges: (repoKey, step, turnKey, feedback) =>
     ipcRenderer.invoke(CH.flowAppRequestChanges, { sessionId: SESSION_ID, repoKey, step, turnKey, feedback }) as Promise<boolean>,
   appRedo: (repoKey, step, turnKey, instruction) =>

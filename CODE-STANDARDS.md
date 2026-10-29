@@ -20,6 +20,13 @@ resolver**, never a parallel path literal, pinned by `expect(dest).toBe(resolve�
 writes to `resolveWindowIconPath`, and `exampleAssetsBuild.ts` to `resolveExampleFlowsDir` /
 `resolveExampleLoopsV2Dir` and their siblings — the same functions the runtime reads through.
 
+**A set of shipped assets is listed once, in the code that resolves them; every other copy of the list is
+derived from it or pinned by a test.** The build copies every entry of that list (`APP_ICONS` in
+`appIcon.ts`), the packaging config's entries are checked against the resolver by a test, and a generator
+finds its inputs by pattern (`gen-icon` renders every `build/*.svg`) rather than a hand-kept list. A copy
+that is neither derived nor tested goes stale silently — a renamed or added asset ships missing or out of
+date with every test green.
+
 **When the reader's resolution is precedence-aware, the writer targets a named branch of that order, not
 the resolver's result.** A resolver that consults an override chain (repo-local override, else the
 user-config copy) answers "where would this be read from *here, now*"; a writer calling it inherits ambient
@@ -48,6 +55,29 @@ snapshots of internal structures and assertions that re-spell the source are the
 sequences are legitimate only where the bytes ARE the contract (`ESC[200~…ESC[201~` paste framing, `\r`
 submit).
 
+## Expected results are written independently of the code they check
+
+A table of expected results that tests grade production code against (an oracle fixture) is written from
+the requirement, by hand, and never imports the code it checks. An expectation computed by that code
+passes whatever the code does, so the test can no longer catch the mistake it exists for. The fixture may
+import the contract's types (`src/shared/ipc`), never a classifier, formatter or constant that decides the
+answer. Each such fixture is listed in `EXPECTED_RESULTS_FIXTURES` in `eslint.config.mjs`, whose
+`no-restricted-imports` block enforces this; `tests/helpers/controllerStatusFixture.ts` (`STATUS_CASES`) is
+the shape to copy. A new oracle is added to that list in the change that creates it.
+
+## Test stand-ins speak the protocol through its own module
+
+A test that stands in for one side of the controller protocol (a scripted terminal, a fake controller)
+builds every message with `encodeControllerMessage` and the version constants
+(`CONTROLLER_PROTOCOL_MAJOR`, `CONTROLLER_PROTOCOL_MINOR`) from `src/shared/controllerProtocol.ts`, never a
+typed-in `version: 2`. A typed-in version goes stale silently on the next protocol bump: every copy has to
+be found by hand, and a test can keep passing against a message the app no longer sends. A test that only
+needs a registered terminal uses `connectScriptedTerminal` (`tests/helpers/scriptedControllerTerminal.ts`).
+The exception is a test whose subject *is* the wire format — version negotiation, malformed or fragmented
+frames, the parser's accept/reject rules — where the typed-in bytes are the contract; those files are
+listed in `WIRE_FORMAT_TESTS` in `eslint.config.mjs`. A `no-restricted-syntax` rule there flags a literal
+`version` or `minor` on a message a controller test builds.
+
 ## An injection seam names a domain concept, not the shape of what backs it
 
 A dependency injected for testability is part of the unit's public surface, so it names *what* the unit
@@ -61,6 +91,24 @@ unreachable branch, cover the real predicate with real fixtures, and gate a genu
 discriminated union, never a flat record with fields dead in some modes — a flat shape lets a caller pass a
 dummy the mode ignores. `BundleLocation` (`packaged: true` carries `resourcesPath`; `packaged: false`
 carries `appPath`) is the shape to copy.
+
+## Platform branches take the platform as a parameter
+
+CI and the Podman e2e run only on Linux, so a branch decided by reading `process.platform` inline runs its
+macOS arm only on a developer's Mac, and the macOS behaviour ends up untested or recorded as a gap. Code
+whose behaviour differs by operating system therefore takes the platform as an argument
+(`platform: NodeJS.Platform`) and returns the decision — a value, a template, the name of the action to take
+— so a unit test passes `'darwin'` and `'linux'` on any host and asserts both. `process.platform` is read
+once, at the composition root (`src/main/index.ts`, `src/main/controller.ts`), and handed down.
+`applyDockIcon` (`appIcon.ts`), `buildMenuTemplate` (`appMenu.ts`) and `probeShellCommand` are the shapes to
+copy.
+
+What remains untested is only the native call that carries the decision out (`window.hide()`,
+`tray.setContextMenu(…)`). That code chooses nothing itself: it executes a decision the tested function
+returned, and when no layer can drive it, it carries the `// untestable; tracked in #153` comment (CLAUDE.md
+TDD exemption). If a reviewer finds an `if (platform …)` in untested glue, that decision belongs in a tested
+function instead. Inline `process.platform` reads already in the code stay as they are until a change
+touches their branch.
 
 ## "Clean" is a claim about an observed, complete, green run
 
@@ -241,6 +289,17 @@ and keep the input-collecting UI open until the reply: close on success; on refu
 and show why. `flow:appRequestChanges` and the feedback composer are the live instance. Litmus: if the
 operation can fail on receiver-only state *and* the near side holds input a drop would lose, a one-way
 channel is a data-loss defect.
+
+**A value more than one surface can change has one owner — the side that applies it to the real thing — and
+every surface shows only what that owner reports.** The owner may be main (a window property), a terminal
+process (state the controller only mirrors), or the loop runner (run state). Each surface asks the owner for a
+change as a two-way request; the owner applies it, persists it if it persists, replies with the value it now
+holds, and pushes that value to every other surface. A surface displays the owner's reply or push, never its
+own guess, so two surfaces cannot disagree. Two races decide correctness: a push that arrives before a
+surface's first read replies is newer than that reply and wins, and a refused or failed request leaves the
+surface on the last value the owner reported. Always-on-top is the live instance: `controllerAlwaysOnTop.ts`
+owns it in main, and the window switch (`alwaysOnTopControl.ts`) and the tray item both request it. A value
+with a single surface that cannot be refused (the controller theme) needs none of this.
 
 ## A best-effort or cosmetic side effect must never abort the critical path it sits on
 

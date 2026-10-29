@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, dismissLoopMessageIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusService } from '../helpers/controllerStatusFixture';
 
@@ -45,7 +45,7 @@ describe('controller window header', () => {
 
 describe('controller window header with empty classes', () => {
   it('shows 0 for each summary class with no cards', () => {
-    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['working-activity-unavailable']];
+    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['needs-human-working']];
     const { host, dispose } = mountControllerPanes({ terminals: cases.map(c => c.terminal) });
     try {
       const text = windowHeaderIn(host)?.textContent ?? '';
@@ -171,6 +171,20 @@ describe('controller panes', () => {
   });
 });
 
+describe('dismiss a loop message', () => {
+  it('asks for the shown message of that card\'s terminal to be dismissed, without activating it, and the card then shows none', async () => {
+    const { terminal: shown } = STATUS_CASES['loop-error'];
+    const { host, service, dispose } = mountControllerPanes({ terminals: [shown, STATUS_CASES.working.terminal] });
+    try {
+      const card = cardIn(host, shown.launchDirectory);
+      (card && dismissLoopMessageIn(card))?.click();
+      await vi.waitFor(() => expect(cardIn(host, shown.launchDirectory)?.textContent).not.toContain('the turn stalled'));
+      expect(service.loopMessageDismissals).toEqual([[shown.id, 'loop-1']]);
+      expect(service.activated).toEqual([]);
+    } finally { dispose(); }
+  });
+});
+
 describe('dismiss disconnected cards', () => {
   it.each(['aside', 'main'])('dismisses the selected occurrence from %s without activating it', async tag => {
     const stale = { ...terminal, status: 'disconnected' as const };
@@ -199,6 +213,33 @@ describe('dismiss disconnected cards', () => {
       const other = cardIn(host, '/other');
       const header = other ? cardHeaderIn(other, '/other') : undefined;
       expect(livePeer ? header !== undefined && focused === header : host.contains(focused) && /launch.*terminal/i.test(focused.textContent ?? '')).toBe(true);
+    } finally { dispose(); }
+  });
+});
+
+describe('a card action while the controller is answering it', () => {
+  it.each([
+    ['Bring forward', 'activateTerminal', bringForwardIn, false],
+    ['Dismiss', 'dismissTerminal', dismissIn, true],
+  ] as const)('%s asks the controller once until it answers, then again', async (_, method, find, disconnected) => {
+    const shown = { ...terminal, ...(disconnected ? { status: 'disconnected' as const } : {}) };
+    const answers: Array<() => void> = [];
+    const requested: string[] = [];
+    const fake = statusService([shown]).api;
+    const { host, dispose } = mountControllerPanes({ controller: {
+      ...fake,
+      [method](id: string) { requested.push(id); return new Promise<void>(done => { answers.push(done); }); },
+    } });
+    try {
+      const card = cardIn(host, terminal.launchDirectory);
+      const control = card ? find(card) : undefined;
+      control?.click();
+      control?.click();
+      const pending = [...requested];
+      answers[0]?.();
+      await vi.waitFor(() => expect(control?.hasAttribute('aria-busy')).toBe(false));
+      control?.click();
+      expect({ pending, afterAnswer: requested }).toEqual({ pending: [terminal.id], afterAnswer: [terminal.id, terminal.id] });
     } finally { dispose(); }
   });
 });

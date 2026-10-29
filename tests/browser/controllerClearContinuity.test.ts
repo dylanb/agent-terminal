@@ -9,7 +9,7 @@ import '../../src/renderer/src/styles.css';
 
 const directory = '/fixed/worktree';
 const entries = [{ message: 'Newest original', receivedAt: 2000, count: 1 }, { message: 'Earlier distinct', receivedAt: 1000, count: 2 }];
-const initial = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
+const initial = (): ControllerTerminal => ({ ...statusTerminal({ activity: 'quiet', attention: { status: 'complete', reasons: ['Pending approval'] } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
 const arrival = (before: ControllerTerminal): ControllerTerminal => {
   const newest = { message: 'New protected arrival', receivedAt: 3000, count: 1 };
   return { ...before, notifications: [newest, ...entries], clearHistoryTarget: { ...before.clearHistoryTarget!, revision: 'arrival' } };
@@ -27,6 +27,27 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
     mounted.host.style.width = '320px';
     return { ...mounted, service, before, card: () => cardIn(mounted.host, directory)! };
   }
+  it(`${theme}/${placement}: pending Clear protects rebuilt card controls until its reply`, async () => {
+    let release!: () => void;
+    const h = mount(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return 'stale';
+    });
+    try {
+      historyIn(h.card())!.click();
+      clearHistoryIn(h.card())!.click();
+      h.service.publish([arrival(h.before)]);
+      await painted();
+      expect.soft(clearHistoryIn(h.card())!.getAttribute('aria-disabled')).toBe('true');
+      expect.soft(clearHistoryIn(h.card())!.getAttribute('aria-busy')).toBe('true');
+      historyIn(h.card())!.click();
+      expect.soft(historyIn(h.card())!.getAttribute('aria-expanded')).toBe('true');
+      release(); await painted();
+      expect.soft(clearHistoryIn(h.card())!.getAttribute('aria-disabled')).not.toBe('true');
+      historyIn(h.card())!.click();
+      expect.soft(historyIn(h.card())!.getAttribute('aria-expanded')).toBe('false');
+    } finally { release?.(); h.dispose(); }
+  });
   for (const focused of ['history', 'clear'] as const) for (const update of ['status', 'arrival'] as const) {
     it(`${theme}/${placement}: open history and ${focused} focus survive ${update}`, async () => {
       const h = mount();

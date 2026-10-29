@@ -1,9 +1,11 @@
+import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardClassification';
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
-import { attentionText, attentionUpdate, cardStatus, statusSummary, type CardStatusClass } from './controllerCardStatus';
+import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerNotificationEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
+import { createAlwaysOnTopControl } from './alwaysOnTopControl';
 import { createThemeToggle } from './themeToggle';
 
 export interface ControllerPanesDeps {
@@ -34,10 +36,10 @@ function windowHeader(doc: Document): { element: HTMLElement; render(directories
   return {
     element,
     render(directories) {
-      const disconnected = directories.filter(directory => directory.kind === 'disconnected').length;
+      const { total, connected, disconnected } = cardCounts(directories);
       counts.replaceChildren(...items([
-        [`${directories.length} ${directories.length === 1 ? 'card' : 'cards'}`],
-        [`${directories.length - disconnected} connected`],
+        [`${total} ${total === 1 ? 'card' : 'cards'}`],
+        [`${connected} connected`],
         [`${disconnected} disconnected`],
       ]));
       summary.replaceChildren(...items(statusSummary(directories).map(({ label, statusClass, count }) => [`${count} ${label}`, statusClass] as [string, string])));
@@ -64,12 +66,20 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   let previousNotifications = new Map<string, ControllerNotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   host.append(header.element, list, alert, status);
+  const controlSlot = () => {
+    const slot = doc.createElement('span');
+    slot.className = 'controller-header-control';
+    return slot;
+  };
+  const alwaysOnTopSlot = controlSlot();
+  const themeSlot = controlSlot();
+  header.element.append(' ', alwaysOnTopSlot, ' ', themeSlot);
+  const alwaysOnTopControl = createAlwaysOnTopControl(alwaysOnTopSlot, { controller: deps.controller });
   let themeToggle: { dispose(): void } | undefined;
   void deps.controller.getTheme().catch((): Theme => CONTROLLER_DEFAULT_THEME).then(theme => {
     if (disposed) return;
     deps.applyTheme(theme);
-    header.element.append(' ');
-    themeToggle = createThemeToggle(header.element, {
+    themeToggle = createThemeToggle(themeSlot, {
       theme,
       onChange(next) {
         deps.applyTheme(next);
@@ -138,7 +148,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       from: handover.get(directory.launchDirectory),
       onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
         alert.replaceChildren();
-        void deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
+        return deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
           if (disposed || outcome === 'cleared') return;
           alert.replaceChildren();
           alert.textContent = outcome === 'stale'
@@ -147,14 +157,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
         }).catch(announce);
       },
       onAction() {
-        if (directory.kind === 'disconnected') {
-          void deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
-          return;
-        }
+        if (directory.kind === 'disconnected') return deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
         const request = ++activation;
         const targets = directory.activationTargets;
         alert.replaceChildren();
-        void Promise.all(targets.map(async id => {
+        return Promise.all(targets.map(async id => {
           try { return await deps.controller.activateTerminal(id); }
           catch { return 'unavailable' as const; }
         })).then(outcomes => {
@@ -165,6 +172,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
             alert.textContent = `Terminal unavailable: ${failed} of ${targets.length} activation attempts unavailable or unconfirmed.`;
           }
         });
+      },
+      onDismissLoopMessage(id) {
+        if (directory.kind !== 'single') return;
+        return deps.controller.dismissLoopMessage(directory.activationTargets[0], id).catch(announce);
       },
     }) }));
     if (!directories.length) {
@@ -180,6 +191,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       disposed = true;
       unsubscribe();
       unsubscribeLayout();
+      alwaysOnTopControl.dispose();
       themeToggle?.dispose();
       cards.forEach(({ card }) => card.dispose());
       host.replaceChildren();

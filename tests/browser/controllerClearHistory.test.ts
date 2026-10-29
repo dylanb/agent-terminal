@@ -12,7 +12,7 @@ const entries = [
   { message: 'Newest receipt', receivedAt: 2000, count: 3 },
   { message: 'Earlier receipt', receivedAt: 1000, count: 2 },
 ];
-const terminal = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] }, error: { reason: 'Build failed before Clear' } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
+const terminal = (): ControllerTerminal => ({ ...statusTerminal({ activity: 'quiet', attention: { status: 'complete', reasons: ['Pending approval'] }, error: { reason: 'Build failed before Clear' } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
 const settled = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 afterEach(() => { document.body.replaceChildren(); document.documentElement.removeAttribute('data-theme'); });
 

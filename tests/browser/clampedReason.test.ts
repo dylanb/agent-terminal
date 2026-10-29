@@ -88,7 +88,7 @@ describe('a reason limited to three painted lines', () => {
 });
 
 describe('a reason across live updates', () => {
-  const blocked = (reason: string) => statusTerminal({ attention: { status: 'complete', reasons: [reason] } });
+  const blocked = (reason: string) => statusTerminal({ attention: { status: 'complete', reasons: [reason] }, activity: 'quiet' });
   const directory = blocked(LONG).launchDirectory;
   const card = (host: HTMLElement) => cardIn(host, directory);
 

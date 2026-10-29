@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
 }));
 
 const contents = { isDestroyed: () => false, send() {} };
-const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, clearHistory: () => 'unavailable' as const };
+const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, dismissLoopMessage() {}, clearHistory: () => 'unavailable' as const };
 let userData: string;
 let dispose: (() => void) | undefined;
 
@@ -30,7 +30,7 @@ afterEach(() => {
   rmSync(userData, { recursive: true, force: true });
 });
 
-const install = () => { dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData)); };
+const install = () => { dispose = installControllerIpc(contents, registry, createControllerSettingsStore(userData), { current: () => true, set() {}, subscribe: () => () => {} }); };
 const invoke = async (channel: string, sender: unknown, payload: unknown) => boundary.handlers.get(channel)?.({ sender }, payload);
 const savedAfterRestart = () => createControllerSettingsStore(userData).theme();
 

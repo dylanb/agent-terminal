@@ -1,3 +1,4 @@
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,24 +38,24 @@ async function fixture() {
     peers.add(peer);
     await once(peer, 'open');
     const registered = once(peer, 'message');
-    peer.send(JSON.stringify({ version: 2, minor: 1, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
+    peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'register', launchDirectory: directory, repositoryRoot: '/work' }));
     await registered;
     const id = registry.terminals().filter(t => t.launchDirectory === directory && t.status !== 'disconnected').at(-1)!.id;
     let revision = 0;
     async function flush(attention: ReturnType<typeof workStatus>['attention'] = null, error: ReturnType<typeof workStatus>['error'] = null) {
       const step = `barrier-${++revision}`;
-      peer.send(JSON.stringify({ version: 2, type: 'status', work: workStatus({ attention, error, flow: { availability: 'known', name: 'history', step, assignment: 'assigned' } }) }));
+      peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work: workStatus({ attention, error, flow: { availability: 'known', name: 'history', step, assignment: 'assigned' } }) }));
       await expect.poll(() => registry.terminals().find(t => t.id === id)?.work?.flow).toMatchObject({ step });
     }
     async function report(value: NotificationCondition | null) {
-      peer.send(JSON.stringify({ version: 2, type: 'notification-current', notification: value }));
+      peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification: value }));
       await flush();
     }
     await report(current);
     return {
       id, flush, report,
       async arrival(message: string, conditionId = `condition-${message}`) {
-        peer.send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId, message } }));
+        peer.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification: { conditionId, message } }));
         await flush();
       },
       async close() {

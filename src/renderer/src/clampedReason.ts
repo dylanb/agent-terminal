@@ -1,3 +1,5 @@
+import { onPress } from './pressable';
+
 export interface ClampedReasonDeps {
   text: string;
   full: boolean;
@@ -23,7 +25,7 @@ export function createClampedReason(host: HTMLElement, deps: ClampedReasonDeps):
   const toggle = doc.createElement('button');
   toggle.type = 'button';
   toggle.textContent = 'Show full reason';
-  toggle.addEventListener('click', () => {
+  onPress(toggle, () => {
     full = !full;
     deps.onToggle(full);
     render();

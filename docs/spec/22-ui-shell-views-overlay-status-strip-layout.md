@@ -49,4 +49,14 @@ flowchart TD
 - **The flow picker (§18.7.4)** sits in the rail directly below the flow status strip and acts on the worktree the strip is showing — it follows the strip's view, never an ambient worktree.
 - Hotkeys are defaults the user can remap in Settings (§7.7).
 
+### 22.5 A pressed control waits for its answer
+
+A press that starts work the app must answer (an IPC round-trip, a dialog submit) holds that control, and the
+controls related to it, until the answer arrives. Every renderer window does this, the controller included.
+While held, a further press on any of them does nothing. The pressed control shows a spinner and reports itself
+busy, and the held controls report themselves unavailable to assistive technology. Focus stays on the pressed
+control. Otherwise a second press while the first is pending starts the same action, or a conflicting one,
+again. An action whose answer arrives only as a later pushed state event is not held. How this is built is
+UI-STANDARDS.md §1.4.
+
 ---

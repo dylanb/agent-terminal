@@ -6,7 +6,9 @@ export const CONTROLLER_MAX_STATUS_BYTES = 1024 * 1024;
 
 // §23.6
 export const CONTROLLER_PROTOCOL_MAJOR = 2;
-export const CONTROLLER_PROTOCOL_MINOR = 1;
+export const CONTROLLER_PROTOCOL_MINOR = 2;
+/** The first minor whose peers carry `loopMessage` in status and understand `dismiss-loop-message`. */
+export const CONTROLLER_LOOP_MESSAGE_MINOR = 1;
 export const CONTROLLER_SUPPORTED_MAJORS: ControllerVersionRange = { min: 2, max: 2 };
 
 export class ControllerVersionMismatch extends Error {
@@ -20,7 +22,7 @@ export interface ControllerNotificationSource {
   subscribe(listener: (notification: NotificationCondition) => void): () => void;
 }
 
-export const supportsControllerNotifications = (minor: number | undefined): boolean => (minor ?? 0) >= 1;
+export const supportsControllerNotifications = (minor: number | undefined): boolean => (minor ?? 0) >= 2;
 
 export type ControllerMessage =
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'notification'; notification: NotificationCondition }
@@ -30,7 +32,8 @@ export type ControllerMessage =
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; minor?: number; type: 'registered' }
   | ({ version: typeof CONTROLLER_PROTOCOL_MAJOR; minor?: number; type: 'register' } & Pick<ControllerTerminal, 'launchDirectory' | 'repositoryRoot'>)
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'activate'; requestId: string }
-  | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'result'; requestId: string; outcome: 'activated' | 'unavailable' };
+  | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'result'; requestId: string; outcome: 'activated' | 'unavailable' }
+  | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'dismiss-loop-message'; id: string };
 
 const FIELDS: { [Type in Exclude<ControllerMessage['type'], 'incompatible'>]: readonly (keyof Extract<ControllerMessage, { type: Type }>)[] } = {
   notification: ['version', 'type', 'notification'],
@@ -40,6 +43,7 @@ const FIELDS: { [Type in Exclude<ControllerMessage['type'], 'incompatible'>]: re
   registered: ['version', 'minor', 'type'],
   activate: ['version', 'type', 'requestId'],
   result: ['version', 'type', 'requestId', 'outcome'],
+  'dismiss-loop-message': ['version', 'type', 'id'],
 };
 
 export function encodeControllerMessage(message: ControllerMessage): string {
@@ -100,6 +104,9 @@ export function parseControllerMessage(frame: string): ControllerMessage {
       break;
     case 'result':
       if (!requestId || (message.outcome !== 'activated' && message.outcome !== 'unavailable')) throw new Error('Invalid activation result');
+      break;
+    case 'dismiss-loop-message':
+      if (typeof message.id !== 'string' || message.id.length === 0) throw new Error('Invalid loop message dismissal');
       break;
     default: throw new Error('Unknown controller message');
   }
