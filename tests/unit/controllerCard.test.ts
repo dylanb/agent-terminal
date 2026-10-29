@@ -34,11 +34,6 @@ function missingInOrder(text: string, texts: readonly string[]): string[] {
   });
 }
 
-function isLastElement(card: HTMLElement, control: HTMLElement | undefined): boolean {
-  return Boolean(control) && [...card.querySelectorAll('*')].every(element => element === control || control!.contains(element)
-    || !(control!.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING));
-}
-
 describe('controller card header', () => {
   it.each([
     ['the repository root', { id: 'r', launchDirectory: '/left/repo-root/worktrees/feature', repositoryRoot: '/left/repo-root' }, 'repo-root'],
@@ -68,7 +63,7 @@ describe('controller card header control', () => {
 });
 
 describe('controller card body', () => {
-  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward last', () => {
+  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available', () => {
     const { terminal } = STATUS_CASES['flow-error-and-human'];
     const { element } = mount(terminal);
     const status = element ? statusRowIn(element)?.textContent?.trim() : undefined;
@@ -78,7 +73,7 @@ describe('controller card body', () => {
         'Flow error', '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Active',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
-      ...(element && isLastElement(element, bringForwardIn(element)) ? [] : ['Bring forward is not the last element']),
+      ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
     ]).toEqual([]);
   });
 
@@ -130,7 +125,7 @@ describe('controller card body', () => {
     }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0 } });
   });
 
-  it('shows a disconnected card as Disconnected with no work details and Dismiss last, which reports its use once', () => {
+  it('shows a disconnected card as Disconnected with no work details and Dismiss, which reports its use once', () => {
     const { terminal } = STATUS_CASES['disconnected-with-error'];
     const { element, calls } = mount(terminal);
     const dismiss = element ? dismissIn(element) : undefined;
@@ -141,7 +136,6 @@ describe('controller card body', () => {
       ...(element && statusRowIn(element)?.textContent?.trim() === 'Disconnected' ? [] : ['wrong status row']),
       ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Active'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
       ...(element && bringForwardIn(element) ? ['offers Bring forward'] : []),
-      ...(element && isLastElement(element, dismiss) ? [] : ['Dismiss is not the last element']),
       ...(controlName(dismiss).includes(terminal.launchDirectory) ? [] : ['Dismiss is not named with the directory']),
       ...(calls.dismiss === 1 && calls.bringForward === 0 ? [] : [`calls ${JSON.stringify(calls)}`]),
     ]).toEqual([]);

@@ -646,3 +646,5 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-notification-bell { width:1.25em; height:1.25em; fill:none; stroke:currentColor; stroke-width:2; color:var(--dim); }
 .controller-card[data-status="needs-human"] .controller-notification-bell { color:var(--status-needs-human-text); }
 .controller-card[data-status="error"] .controller-notification-bell { color:var(--status-error-text); }
+
+.controller-notification-history { min-width:0; padding-inline-start:var(--r); overflow-wrap:anywhere; white-space:pre-wrap; }

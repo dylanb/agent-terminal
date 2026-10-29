@@ -16,6 +16,7 @@ export class ControllerVersionMismatch extends Error {
 export interface NotificationCondition { conditionId: string; message: string }
 export interface ControllerNotificationSource {
   current(): NotificationCondition | null;
+  subscribeCurrent?(listener: (notification: NotificationCondition | null) => void): () => void;
   subscribe(listener: (notification: NotificationCondition) => void): () => void;
 }
 

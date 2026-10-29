@@ -1,3 +1,7 @@
+## #221 slice 2 — bounded controller history and directory recovery
+
+§23.6 and §24.2.3 T4 now retain three distinct messages per directory in memory, count exact-text repeats without changing order/time, and expose History N/3 on ordinary and disconnected cards. Same-run reconnect reuses history; Dismiss and restart forget it. Overlap discards history and rebuilds only from the current survivor. Current status, gate authority and manual collapse remain independent. Clear and interaction continuity remain the subsequent approved increments.
+
 ## #221 slice 1 — immediate controller notifications
 
 §24.2.3 T4 and §23.6 replace focus-delayed OS delivery with immediate controller arrivals and a separately highlighted latest received message, bell and receipt time. The status-bar alert and gate authority are unchanged. Additive protocol minor 1 negotiates arrival/current-condition messages without making the extension a startup requirement; older compatible peers keep ordinary status and activation. Delivery failure never falls back to OS notifications or interrupts terminal work. History and Clear are subsequent increments of #221.

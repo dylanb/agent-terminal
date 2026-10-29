@@ -45,7 +45,10 @@ export type ControllerWorkStatus = {
 
 export interface ControllerReceivedNotification { message: string; receivedAt: number }
 
+export interface ControllerNotificationEntry extends ControllerReceivedNotification { count: number }
+
 export interface ControllerTerminal {
+  notifications?: ControllerNotificationEntry[];
   latestNotification?: ControllerReceivedNotification;
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';

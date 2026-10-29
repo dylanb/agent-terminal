@@ -31,6 +31,7 @@ export function registerControllerTerminal(
     let registered = false;
     let unsubscribe: (() => void) | undefined;
     let unsubscribeNotifications: (() => void) | undefined;
+    let unsubscribeCurrent: (() => void) | undefined;
     let sendingStatus = false;
     let pendingStatus: ControllerWorkStatus | undefined;
     let current: WebSocket;
@@ -63,6 +64,7 @@ export function registerControllerTerminal(
       clearTimeout(deadline);
       unsubscribe?.();
       unsubscribeNotifications?.();
+      unsubscribeCurrent?.();
       pendingStatus = undefined;
       socket = undefined;
       scheduleRetry();
@@ -90,8 +92,18 @@ export function registerControllerTerminal(
                 current.send(encoded, error => { if (error) current.terminate(); });
               } catch { current.terminate(); }
             };
-            publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification: notifications.current() });
-            unsubscribeNotifications = notifications.subscribe(notification => publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification }));
+            const initial = notifications.current();
+            let currentId = initial?.conditionId;
+            publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification: initial });
+            unsubscribeNotifications = notifications.subscribe(notification => {
+              currentId = notification.conditionId;
+              publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification });
+            });
+            unsubscribeCurrent = notifications.subscribeCurrent?.(notification => {
+              if (notification?.conditionId === currentId) return;
+              currentId = notification?.conditionId;
+              publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification });
+            });
           }
           unsubscribe = subscribeStatus?.(publishStatus);
           if (!started) {

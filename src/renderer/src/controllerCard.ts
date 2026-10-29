@@ -110,8 +110,9 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
     actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
   }
-  if (model.kind === 'single' && model.latestNotification) {
-    const notification = model.latestNotification;
+  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? (model.latestNotification ? [{ ...model.latestNotification, count: 1 }] : []);
+  if (notifications[0]) {
+    const notification = notifications[0];
     const box = element('section', 'controller-notification');
     box.setAttribute('role', 'region');
     box.setAttribute('aria-label', 'Received notification');
@@ -126,9 +127,32 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
     time.dateTime = new Date(notification.receivedAt).toISOString();
     box.append(bell, ' ', element('p', 'controller-card-line', notification.message), ' ', time);
+    if (notification.count > 1) box.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
     body.append(' ', box);
   }
   body.append(' ', actionButton);
+  if (!duplicate) {
+    const history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
+    history.type = 'button';
+    history.setAttribute('aria-expanded', 'false');
+    const earlier = element('ol', 'controller-notification-history');
+    earlier.id = `${cardId}-history`;
+    earlier.hidden = true;
+    history.setAttribute('aria-controls', earlier.id);
+    for (const notification of notifications.slice(1)) {
+      const item = element('li', 'controller-card-line');
+      const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      time.dateTime = new Date(notification.receivedAt).toISOString();
+      item.append(element('p', 'controller-card-line', notification.message), ' ', time);
+      if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
+      earlier.append(item);
+    }
+    history.addEventListener('click', () => {
+      earlier.hidden = !earlier.hidden;
+      history.setAttribute('aria-expanded', String(!earlier.hidden));
+    });
+    body.append(' ', history, ' ', earlier);
+  }
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {
     const line = element('p', 'controller-card-line controller-card-ticket');
