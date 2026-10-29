@@ -78,6 +78,7 @@ const CONTROLLER_WIRE_NAMES = {
   terminals: 'controller:terminals',
   activate: 'controller:activate',
   dismiss: 'controller:dismiss',
+  clearHistory: 'controller:clearHistory',
   getTheme: 'controller:getTheme',
   setTheme: 'controller:setTheme',
 };

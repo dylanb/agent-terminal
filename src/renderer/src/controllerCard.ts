@@ -8,6 +8,7 @@ export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
   onAction(): void;
+  onClearHistory?(): void;
   from?: CardState;
 }
 
@@ -147,11 +148,16 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
       if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
       earlier.append(item);
     }
+    const clear = notifications.length && deps.onClearHistory
+      ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
+    if (clear) clear.hidden = true;
     history.addEventListener('click', () => {
       earlier.hidden = !earlier.hidden;
+      if (clear) clear.hidden = earlier.hidden;
       history.setAttribute('aria-expanded', String(!earlier.hidden));
     });
     body.append(' ', history, ' ', earlier);
+    if (clear) body.append(' ', clear);
   }
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {

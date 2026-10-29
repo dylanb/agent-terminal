@@ -136,6 +136,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       card: directory,
       expandedByDefault: expandedFor(directory),
       from: handover.get(directory.launchDirectory),
+      onClearHistory: directory.kind === 'conflict' ? undefined : () => {
+        const id = directory.kind === 'single' ? directory.activationTargets[0] : directory.dismissOccurrenceId;
+        const observed = snapshot.find(terminal => terminal.id === id)!;
+        void deps.controller.clearHistory(observed).catch(announce);
+      },
       onAction() {
         if (directory.kind === 'disconnected') {
           void deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);

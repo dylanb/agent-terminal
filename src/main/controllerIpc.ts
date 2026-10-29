@@ -1,11 +1,11 @@
 import { ipcMain, type WebContents } from 'electron';
-import { CONTROLLER_CH, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
+import { CONTROLLER_CH, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerClearRequest, type ControllerClearOutcome, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
 
 export function installControllerIpc(
   contents: Pick<WebContents, 'isDestroyed' | 'send'>,
-  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss'>,
+  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss' | 'clearHistory'>,
   settings: ControllerSettingsStore,
 ): () => void {
   const send = (terminals: ControllerSnapshot['terminals']) => {
@@ -24,6 +24,11 @@ export function installControllerIpc(
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID || typeof payload.id !== 'string') return;
     controller.dismiss(payload.id);
   });
+  ipcMain.handle(CONTROLLER_CH.clearHistory, (event, payload: ControllerClearRequest): ControllerClearOutcome => {
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID
+      || typeof payload.observed?.id !== 'string' || typeof payload.observed.launchDirectory !== 'string') return 'unavailable';
+    return controller.clearHistory(payload.observed);
+  });
   ipcMain.handle(CONTROLLER_CH.getTheme, (event, payload: ControllerThemeRequest): Theme => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_THEME;
     return settings.theme();
@@ -37,6 +42,7 @@ export function installControllerIpc(
     ipcMain.removeListener(CONTROLLER_CH.subscribe, subscribe);
     ipcMain.removeHandler(CONTROLLER_CH.activate);
     ipcMain.removeHandler(CONTROLLER_CH.dismiss);
+    ipcMain.removeHandler(CONTROLLER_CH.clearHistory);
     ipcMain.removeHandler(CONTROLLER_CH.getTheme);
     ipcMain.removeHandler(CONTROLLER_CH.setTheme);
   };

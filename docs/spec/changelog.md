@@ -1,3 +1,7 @@
+## #221 slice 3 — initial Clear history
+
+§23.6 adds Clear history to expanded, nonempty history on live and disconnected cards. The typed controller request removes entries/counts/latest without changing card membership, live errors or human gates. Dismiss remains distinct. Stale-action feedback, interaction continuity and unchanged-condition recovery suppression remain the following approved increments.
+
 ## #221 slice 2 — bounded controller history and directory recovery
 
 §23.6 and §24.2.3 T4 now retain three distinct messages per directory in memory, count exact-text repeats without changing order/time, and expose History N/3 on ordinary and disconnected cards. Same-run reconnect reuses history; Dismiss and restart forget it. Overlap discards history and rebuilds only from the current survivor. Current status, gate authority and manual collapse remain independent. Clear and interaction continuity remain the subsequent approved increments.

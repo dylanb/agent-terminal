@@ -6,7 +6,7 @@ import { lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
-import type { ControllerTerminal, ControllerNotificationEntry } from '../shared/ipc';
+import type { ControllerTerminal, ControllerClearOutcome, ControllerNotificationEntry } from '../shared/ipc';
 import { type NotificationCondition, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
@@ -19,6 +19,7 @@ export interface ControllerRegistry {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
   dismiss(id: string): void;
+  clearHistory(observed: ControllerTerminal): ControllerClearOutcome;
   dispose(): Promise<void>;
 }
 
@@ -162,6 +163,13 @@ export async function startControllerTransport(appHome: string): Promise<Control
       listeners.add(listener);
       listener(snapshot());
       return () => { listeners.delete(listener); };
+    },
+    clearHistory(observed) {
+      const terminal = retained.get(observed.id) ?? [...registrations.values()].find(item => item.id === observed.id);
+      if (!terminal || terminal.launchDirectory !== observed.launchDirectory) return 'stale';
+      terminal.notifications = [];
+      notify();
+      return 'cleared';
     },
     dismiss(id) {
       if (retained.delete(id)) notify();

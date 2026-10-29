@@ -18,6 +18,10 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:dismiss',
     does: 'The controller window removes one disconnected terminal, and an unknown, live or replaced id does nothing.',
   },
+  clearHistory: {
+    name: 'controller:clearHistory',
+    does: 'The controller window clears retained notifications for the observed terminal without changing its live work.',
+  },
   getTheme: {
     name: 'controller:getTheme',
     does: 'The controller window reads its own saved theme, which is light when nothing usable is saved.',
@@ -57,10 +61,14 @@ export interface ControllerTerminal {
   repositoryRoot: string | null;
 }
 
+export type ControllerClearOutcome = 'cleared' | 'stale' | 'unavailable';
+export interface ControllerClearRequest { sessionId: SessionId; observed: ControllerTerminal }
+
 export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
   dismissTerminal(id: string): Promise<void>;
+  clearHistory(observed: ControllerTerminal): Promise<ControllerClearOutcome>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;
 }

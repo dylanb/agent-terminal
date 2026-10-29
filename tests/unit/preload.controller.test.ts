@@ -17,6 +17,7 @@ it('exposes only the narrow controller API to the controller window', async () =
   expect([...exposed.keys()]).toEqual(['controller']);
   expect(exposed.get('controller')).toEqual({
     subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function),
+    clearHistory: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
   });
 });
