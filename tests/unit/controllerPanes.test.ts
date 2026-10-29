@@ -45,7 +45,7 @@ describe('controller window header', () => {
 
 describe('controller window header with empty classes', () => {
   it('shows 0 for each summary class with no cards', () => {
-    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['working-activity-unavailable']];
+    const cases = [STATUS_CASES['needs-human'], STATUS_CASES.working, STATUS_CASES['needs-human-working']];
     const { host, dispose } = mountControllerPanes({ terminals: cases.map(c => c.terminal) });
     try {
       const text = windowHeaderIn(host)?.textContent ?? '';
@@ -199,6 +199,33 @@ describe('dismiss disconnected cards', () => {
       const other = cardIn(host, '/other');
       const header = other ? cardHeaderIn(other, '/other') : undefined;
       expect(livePeer ? header !== undefined && focused === header : host.contains(focused) && /launch.*terminal/i.test(focused.textContent ?? '')).toBe(true);
+    } finally { dispose(); }
+  });
+});
+
+describe('a card action while the controller is answering it', () => {
+  it.each([
+    ['Bring forward', 'activateTerminal', bringForwardIn, false],
+    ['Dismiss', 'dismissTerminal', dismissIn, true],
+  ] as const)('%s asks the controller once until it answers, then again', async (_, method, find, disconnected) => {
+    const shown = { ...terminal, ...(disconnected ? { status: 'disconnected' as const } : {}) };
+    const answers: Array<() => void> = [];
+    const requested: string[] = [];
+    const fake = statusService([shown]).api;
+    const { host, dispose } = mountControllerPanes({ controller: {
+      ...fake,
+      [method](id: string) { requested.push(id); return new Promise<void>(done => { answers.push(done); }); },
+    } });
+    try {
+      const card = cardIn(host, terminal.launchDirectory);
+      const control = card ? find(card) : undefined;
+      control?.click();
+      control?.click();
+      const pending = [...requested];
+      answers[0]?.();
+      await vi.waitFor(() => expect(control?.hasAttribute('aria-busy')).toBe(false));
+      control?.click();
+      expect({ pending, afterAnswer: requested }).toEqual({ pending: [terminal.id], afterAnswer: [terminal.id, terminal.id] });
     } finally { dispose(); }
   });
 });

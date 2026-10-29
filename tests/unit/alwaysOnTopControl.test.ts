@@ -52,6 +52,32 @@ describe('the Always on top control', () => {
     });
   });
 
+  it('ignores a second press and shows busy until main answers the first, then accepts presses again', async () => {
+    const service = statusService(undefined, { alwaysOnTop: true });
+    let answer!: () => void;
+    const answered = new Promise<void>(done => { answer = done; });
+    const { host, dispose } = mount(service, {
+      ...service.api,
+      setAlwaysOnTop: next => answered.then(() => service.api.setAlwaysOnTop(next)),
+    });
+    await shown(host);
+    alwaysOnTopIn(host)?.click();
+    alwaysOnTopIn(host)?.click();
+    await settled();
+    const pending = { busy: alwaysOnTopIn(host)?.getAttribute('aria-busy') ?? null, requests: service.requestedAlwaysOnTop.length };
+    answer();
+    await settled();
+    const after = { busy: alwaysOnTopIn(host)?.getAttribute('aria-busy') ?? null, state: state(host) };
+    alwaysOnTopIn(host)?.click();
+    await settled();
+    expect({ pending, after, requested: service.requestedAlwaysOnTop }).toEqual({
+      pending: { busy: 'true', requests: 0 },
+      after: { busy: null, state: 'off' },
+      requested: [false, true],
+    });
+    dispose();
+  });
+
   it('shows a value main pushes before its first read replies, and follows later pushes', async () => {
     const service = statusService(undefined, { alwaysOnTop: true });
     let reply!: (on: boolean) => void;

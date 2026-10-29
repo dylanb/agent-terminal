@@ -54,7 +54,7 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
       // is the only place the displaced dialog's cancellation is signalled.
       if (pending) pending.onCancel?.();
       pending = opts;
-      shell.render(({ doc, titleId, close, confirm: accept }) => {
+      shell.render(({ doc, titleId, close, confirm: accept, presses: footGroup }) => {
         const messageId = `${titleId}-msg`;
         let describedById = messageId;
         const card = doc.createElement('div');
@@ -89,11 +89,11 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         const cancel = doc.createElement('button');
         cancel.className = 'pill cancel';
         cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
+        footGroup.bind(cancel, close);
         const confirm = doc.createElement('button');
         confirm.className = 'pill danger confirm';
         confirm.textContent = opts.confirmLabel;
-        confirm.addEventListener('click', () => {
+        footGroup.bind(confirm, () => {
           const run = opts.onConfirm;
           pending = null; // answered, so neither this close nor a later render may fire onCancel
           accept();

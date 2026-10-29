@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
-import { parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, parseControllerMessage, encodeControllerMessage } from '../../src/shared/controllerProtocol';
 import type { ControllerWorkStatus } from '../../src/shared/ipc';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
@@ -24,7 +24,7 @@ it('coalesces a burst for a paused receiver without replaying superseded snapsho
       const message = parseControllerMessage(chunk.toString());
       if (message.type === 'register') {
         socket.pause();
-        socket.send(encodeControllerMessage({ version: 2, type: 'registered' }));
+        socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'registered' }));
       } else if (message.type === 'status') received.push(message.work);
     });
   });

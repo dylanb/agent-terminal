@@ -22,7 +22,7 @@ export function createAlwaysOnTopControl(host: HTMLElement, deps: AlwaysOnTopCon
       label: 'Always on top',
       checked: shown,
       onChange(next) {
-        void deps.controller.setAlwaysOnTop(next).then(show, error => {
+        return deps.controller.setAlwaysOnTop(next).then(show, error => {
           console.error(`Controller always on top not set: ${error instanceof Error ? error.message : String(error)}`);
           show(reported ?? shown);
         });

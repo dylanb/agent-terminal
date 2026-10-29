@@ -1335,11 +1335,6 @@ async function createWindow(): Promise<void> {
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
       },
-      // §27.9/§27.13 / N5 / §6 / AC7 — approve (and other one-way options); the result is not observed here.
-      [CH.flowAppGateDecision]: (_e, m) => {
-        if (!isValidFlowAppGateDecision(m)) return;
-        void humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option);
-      },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
       // it; the consolidator honors it at its next invocation. Best-effort: a write failure (planted symlink,
@@ -1395,7 +1390,12 @@ async function createWindow(): Promise<void> {
       // "nothing captured, keep the prior report" (§6 live-session check).
       [CH.captureLast]: (_e, m) =>
         isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
-      // §27.9/AC4 — request-changes is TWO-way (unlike approve): it returns whether the round started so the
+      // §27.9/§27.13 / N5 / §6 / AC7 — approve, polish and back-to-red without a brief. The reply is whether the
+      // decision landed, sent once main has finished acting on it, so the gate's controls hold until then.
+      // Fail-closed to false.
+      [CH.flowAppGateDecision]: (_e, m) =>
+        isValidFlowAppGateDecision(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, m.option) : false,
+      // §27.9/AC4 — request-changes is TWO-way: it returns whether the round started so the
       // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
       [CH.flowAppRequestChanges]: (_e, m) =>
         isValidFlowAppRequestChanges(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'request-changes', m.feedback) : false,

@@ -1,5 +1,6 @@
+import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardClassification';
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
-import { attentionText, attentionUpdate, cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../../shared/controllerCardStatus';
+import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
 import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
@@ -136,14 +137,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       expandedByDefault: expandedFor(directory),
       from: handover.get(directory.launchDirectory),
       onAction() {
-        if (directory.kind === 'disconnected') {
-          void deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
-          return;
-        }
+        if (directory.kind === 'disconnected') return deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
         const request = ++activation;
         const targets = directory.activationTargets;
         alert.replaceChildren();
-        void Promise.all(targets.map(async id => {
+        return Promise.all(targets.map(async id => {
           try { return await deps.controller.activateTerminal(id); }
           catch { return 'unavailable' as const; }
         })).then(outcomes => {

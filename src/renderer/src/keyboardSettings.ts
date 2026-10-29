@@ -15,6 +15,7 @@ import {
 } from '../../shared/keymap';
 import type { KeymapProfileSetting } from '../../shared/ipc';
 import { FOCUS_VIEW_EVENT } from './paneActions';
+import { createPressGroup, onPress } from './pressable';
 
 // This organism backs shell view 4 (§7.7); it focuses its primary control when the shell announces
 // that view, mirroring terminal.ts/artifacts.ts (§22.4 / WCAG 2.4.3).
@@ -181,10 +182,11 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
   const seg = el('div', 'seg');
   seg.setAttribute('role', 'group');
   seg.setAttribute('aria-label', 'Layout profile');
+  const segGroup = createPressGroup();
   const segButtons = PROFILE_OPTIONS.map((o) => {
     const b = el('button', 'seg-opt', o.label);
     b.type = 'button';
-    b.addEventListener('click', () => deps.onProfileChange(o.value));
+    segGroup.bind(b, () => deps.onProfileChange(o.value));
     seg.appendChild(b);
     return { value: o.value, btn: b };
   });
@@ -252,15 +254,15 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
     if (capturing === action) {
       btn.textContent = 'Cancel';
       btn.setAttribute('aria-label', `Cancel recording ${ACTION_LABELS[action]}`);
-      btn.addEventListener('click', () => { endCapture(); render(); focusRowButton(action); });
+      onPress(btn, () => { endCapture(); render(); focusRowButton(action); });
     } else if (overridden) {
       btn.textContent = 'Reset';
       btn.setAttribute('aria-label', `Reset ${ACTION_LABELS[action]} to its default`);
-      btn.addEventListener('click', () => { deps.onReset(action); focusRowButton(action); });
+      onPress(btn, () => { deps.onReset(action); focusRowButton(action); });
     } else {
       btn.textContent = 'Set';
       btn.setAttribute('aria-label', `Record a new shortcut for ${ACTION_LABELS[action]}`);
-      btn.addEventListener('click', () => { startCapture(action); focusRowButton(action); });
+      onPress(btn, () => { startCapture(action); focusRowButton(action); });
     }
     ctl.appendChild(btn);
 

@@ -24,6 +24,8 @@ afterEach(() => {
 
 const field = (name: string): HTMLElement | undefined =>
   [...host.querySelectorAll<HTMLElement>('.field')].find((f) => f.querySelector('.nm')?.textContent === name);
+const buttonNamed = (name: string): HTMLElement | null =>
+  [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].find((b) => b.textContent?.trim() === name) ?? null;
 
 describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
   it('renders a labelled field per input with its catalog type and the bootstrap helper', () => {
@@ -55,7 +57,9 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     createFlowInputModal(host).render(
       prompt({ inputs: [{ name: '__proto__', type: 'free-text' }] }),
       'plan',
-      (v) => (submitted = v),
+      (v) => {
+        submitted = v;
+      },
     );
     (field('__proto__')!.querySelector('input') as HTMLInputElement).value = 'PWNED';
     (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
@@ -78,6 +82,28 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(submit).toHaveBeenCalledWith({ ticket: '176', note: 'urgent' });
   });
 
+  it('ignores Confirm and Cancel while a submit is still being answered, and shows Confirm busy', async () => {
+    let answer!: () => void;
+    const submit = vi.fn(() => new Promise<void>((res) => (answer = res)));
+    createFlowInputModal(host).render(prompt(), 'plan', submit);
+    (field('ticket')!.querySelector('input') as HTMLInputElement).value = '176';
+    const confirm = buttonNamed('Confirm & bootstrap')!;
+
+    confirm.click();
+    confirm.click();
+    buttonNamed('Cancel')!.click();
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector<HTMLElement>('.flow-scrim')?.click();
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(confirm.getAttribute('aria-busy')).toBe('true');
+
+    answer();
+    await vi.waitFor(() => expect(confirm.getAttribute('aria-busy')).toBeNull());
+    confirm.click();
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
   it('Cancel closes the modal without submitting', () => {
     const submit = vi.fn();
     createFlowInputModal(host).render(prompt(), 'plan', submit);
@@ -89,7 +115,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
   it('Escape closes the modal without submitting', () => {
     const submit = vi.fn();
     createFlowInputModal(host).render(prompt(), 'plan', submit);
-    host.querySelector('.flow-modal')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    host.querySelector('.flow-modal')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(submit).not.toHaveBeenCalled();
     expect(host.querySelector('.flow-modal')).toBeNull();
   });

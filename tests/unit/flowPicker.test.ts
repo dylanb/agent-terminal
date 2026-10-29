@@ -267,8 +267,7 @@ describe('flow picker — select mode (AC1)', () => {
     const pullsBeforePick = r.catalog.pulls().length;
     option(r.host, 'flow-b').click();
     await settle();
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
     refusal.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
     await settle();
 
@@ -324,9 +323,51 @@ describe('flow picker — select mode (AC1)', () => {
     picker.dispose();
   });
 
-  it('a slow earlier pick refused after a later pick succeeded leaves the later pick selected and announces nothing', async () => {
+  it('a later pick refused after an earlier pick was saved shows the saved pick again', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    r.select.respond({ ok: true });
+    r.select.respond({ ok: false, reason: 'Could not save the selection: disk full' });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
+    await settle();
+
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
+    picker.dispose();
+  });
+
+  it('keeps the picker busy when a view update redraws it while a pick is still being saved', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    const slow = r.select.respondLater();
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-b').click();
+    await settle();
+    r.views.fire('/repo-a', neverStarted(['a1', 'a2']));
+    await settle();
+    expect(trigger(r.host).getAttribute('aria-busy')).toBe('true');
+
+    slow.resolve({ ok: true });
+    await settle();
+    expect(trigger(r.host).getAttribute('aria-busy')).toBeNull();
+    picker.dispose();
+  });
+
+  it('a slow pick refused after the operator left the worktree, came back and picked again leaves the later pick standing', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    r.catalog.serve('/repo-b', listingOf(['only-in-b'], 'only-in-b'));
     const slow = r.select.respondLater();
     r.select.respond({ ok: true });
     const picker = createFlowPicker(r.host, r.deps);
@@ -336,10 +377,57 @@ describe('flow picker — select mode (AC1)', () => {
     await ensureOpen(r.host);
     option(r.host, 'flow-b').click();
     await settle();
+    r.views.fire('/repo-b', neverStarted(['b1']));
+    await settle();
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
     await ensureOpen(r.host);
     option(r.host, 'flow-c').click();
     await settle();
+
     slow.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
+    await settle();
+    expect({
+      calls: r.select.calls(),
+      alert: r.host.querySelector('[role="alert"]')?.textContent ?? '',
+      trigger: trigger(r.host).textContent,
+    }).toEqual({
+      calls: [
+        ['/repo-a', 'flow-b'],
+        ['/repo-a', 'flow-c'],
+      ],
+      alert: '',
+      trigger: 'Flow: flow-c',
+    });
+    picker.dispose();
+  });
+
+  it('ignores the picker while a pick is still being saved, shows the picker busy, and takes a pick again once it is answered', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
+    const slow = r.select.respondLater();
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['a1']));
+    await settle();
+    await ensureOpen(r.host);
+    const picked = option(r.host, 'flow-b');
+    picked.click();
+    picked.click();
+    trigger(r.host).click();
+    await settle();
+
+    expect(r.select.calls()).toEqual([['/repo-a', 'flow-b']]);
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-busy')).toBe('true');
+    expect(trigger(r.host).getAttribute('aria-disabled')).toBe('true');
+
+    slow.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
+    await settle();
+    expect(trigger(r.host).getAttribute('aria-disabled')).toBeNull();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-c').click();
     await settle();
 
     expect(r.select.calls()).toEqual([
@@ -347,17 +435,15 @@ describe('flow picker — select mode (AC1)', () => {
       ['/repo-a', 'flow-c'],
     ]);
     expect(trigger(r.host).textContent).toBe('Flow: flow-c');
-    expect(r.host.querySelector('[role="alert"]')?.textContent).toBe('');
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-c').getAttribute('aria-selected')).toBe('true');
     picker.dispose();
   });
 
-  it('two quick picks refused in order restore the selection from before either attempt', async () => {
+  it('a pick still being saved on one worktree leaves the next worktree’s picker usable', async () => {
     const r = rig();
-    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
-    const first = r.select.respondLater();
-    const second = r.select.respondLater();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-a'));
+    r.catalog.serve('/repo-b', listingOf(['only-in-b', 'other-b'], 'only-in-b'));
+    r.select.respondLater();
+    r.select.respond({ ok: true });
     const picker = createFlowPicker(r.host, r.deps);
 
     r.views.fire('/repo-a', neverStarted(['a1']));
@@ -365,45 +451,16 @@ describe('flow picker — select mode (AC1)', () => {
     await ensureOpen(r.host);
     option(r.host, 'flow-b').click();
     await settle();
+    r.views.fire('/repo-b', neverStarted(['b1']));
+    await settle();
     await ensureOpen(r.host);
-    option(r.host, 'flow-c').click();
-    await settle();
-    first.resolve({ ok: false, reason: 'Could not save the selection: read-only' });
-    await settle();
-    second.resolve({ ok: false, reason: 'Could not save the selection: read-only' });
+    option(r.host, 'other-b').click();
     await settle();
 
-    expect(trigger(r.host).textContent).toBe('Flow: flow-a');
-    expect(r.host.querySelector('[role="alert"]')?.textContent).toContain('read-only');
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-a').getAttribute('aria-selected')).toBe('true');
-    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).not.toBe('true');
-    picker.dispose();
-  });
-
-  it('a later pick refused after an earlier pick succeeded restores the earlier, written pick', async () => {
-    const r = rig();
-    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b', 'flow-c'], 'flow-a'));
-    const first = r.select.respondLater();
-    const second = r.select.respondLater();
-    const picker = createFlowPicker(r.host, r.deps);
-
-    r.views.fire('/repo-a', neverStarted(['a1']));
-    await settle();
-    await ensureOpen(r.host);
-    option(r.host, 'flow-b').click();
-    await settle();
-    await ensureOpen(r.host);
-    option(r.host, 'flow-c').click();
-    await settle();
-    first.resolve({ ok: true });
-    await settle();
-    second.resolve({ ok: false, reason: 'Could not save the selection: disk full' });
-    await settle();
-
-    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(r.select.calls()).toEqual([
+      ['/repo-a', 'flow-b'],
+      ['/repo-b', 'other-b'],
+    ]);
     picker.dispose();
   });
 
@@ -440,8 +497,7 @@ describe('flow picker — select mode (AC1)', () => {
     await ensureOpen(r.host);
     option(r.host, 'flow-b').click();
     await settle();
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
     failure.reject(new Error('ipc channel closed'));
     await settle();
 
@@ -466,8 +522,7 @@ describe('flow picker — select mode (AC1)', () => {
     await ensureOpen(r.host);
     option(r.host, 'flow-b').click();
     await settle();
-    await ensureOpen(r.host);
-    expect(option(r.host, 'flow-b').getAttribute('aria-selected')).toBe('true');
+    expect(trigger(r.host).textContent).toBe('Flow: flow-b');
     fail(pending);
     await settle();
 
@@ -1564,6 +1619,35 @@ describe('flow picker — use the default, and dismiss (AC4)', () => {
     picker.dispose();
   });
 
+  it('ignores the picker while "use the default" is still being saved, and shows it busy', async () => {
+    const r = rig();
+    r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
+    const slow = r.clearSelection.respondLater();
+    r.select.respond({ ok: true });
+    const picker = createFlowPicker(r.host, r.deps);
+
+    r.views.fire('/repo-a', neverStarted(['b1']));
+    await settle();
+    await ensureOpen(r.host);
+    const clear = useDefaultControl(r.host)!;
+    clear.click();
+    clear.click();
+    trigger(r.host).click();
+    await settle();
+
+    expect(r.clearSelection.calls()).toEqual([['/repo-a']]);
+    expect(options(r.host)).toEqual([]);
+    expect(trigger(r.host).getAttribute('aria-busy')).toBe('true');
+
+    slow.resolve({ ok: true });
+    await settle();
+    await ensureOpen(r.host);
+    option(r.host, 'flow-a').click();
+    await settle();
+    expect(r.select.calls()).toEqual([['/repo-a', 'flow-a']]);
+    picker.dispose();
+  });
+
   it('a refused clear announces its reason and restores the prior selection', async () => {
     const r = rig();
     r.catalog.serve('/repo-a', listingOf(['flow-a', 'flow-b'], 'flow-b'));
@@ -2003,6 +2087,55 @@ describe('flow picker — held-run recovery (AC14, AC16, AC17)', () => {
 
     expect(r.rebindHeldRun.calls()).toEqual([['/repo-a', { origin: 'repo', id: 'alpha-flow' }, 'refuse']]);
     expect(r.host.querySelector('[role="alert"]')?.textContent ?? '').toBe('');
+    r.picker.dispose();
+  });
+
+  it('ignores the recovery control while a rebind is in flight, shows the recovery control busy, and opens again once it is answered', async () => {
+    const r = await heldRig(heldView('record-missing'));
+    const first = r.rebindHeldRun.respondLater();
+    await openRecovery(r.host);
+    const chosen = option(r.host, 'alpha-flow');
+    chosen.click();
+    chosen.click();
+    recoverControl(r.host)!.click();
+    await settle();
+
+    expect(r.rebindHeldRun.calls()).toHaveLength(1);
+    expect(options(r.host)).toEqual([]);
+    expect(recoverControl(r.host)!.getAttribute('aria-busy')).toBe('true');
+
+    first.resolve({ ok: false, reason: 'The run could not be recovered: disk full' });
+    await settle();
+    recoverControl(r.host)!.click();
+    await settle();
+    expect(options(r.host).length).toBeGreaterThan(0);
+    r.picker.dispose();
+  });
+
+  it('a confirmed rebind that ends the run holds the recovery control busy until it is answered', async () => {
+    const r = await heldRig(
+      heldView('record-missing'),
+      recoveryListing({ recoveryOutcomes: [{ choice: { origin: 'global', id: 'beta-flow' }, outcome: 'ends' }] }),
+    );
+    const slow = r.rebindHeldRun.respondLater();
+    await openRecovery(r.host);
+    option(r.host, 'beta-flow').click();
+    await settle();
+    r.endRunConfirmations[0]!.proceed();
+    await settle();
+
+    expect(recoverControl(r.host)!.getAttribute('aria-busy')).toBe('true');
+    recoverControl(r.host)!.click();
+    await settle();
+    expect(options(r.host)).toEqual([]);
+
+    slow.resolve({ ok: false, reason: 'The run could not be recovered: disk full' });
+    await settle();
+    expect(recoverControl(r.host)!.getAttribute('aria-busy')).toBeNull();
+    recoverControl(r.host)!.click();
+    await settle();
+    expect(options(r.host).length).toBeGreaterThan(0);
+    expect(r.rebindHeldRun.calls()).toHaveLength(1);
     r.picker.dispose();
   });
 

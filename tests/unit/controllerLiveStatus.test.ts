@@ -36,7 +36,7 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
     const { text, status, component } = mount({ flow: { availability: 'known', name: 'delivery', step: 'work', assignment }, ticket: { availability: 'none' } }, tag);
     try {
       expect.soft(status()).toBe(statusText);
-      expect.soft(text()).toMatch(/\bactive\b/i);
+      expect.soft(text()).toMatch(/\bworking\b/i);
       expect.soft(text()).toMatch(ticketLine);
       if (assignment !== 'unassigned') expect.soft(text()).not.toMatch(/unassigned/i);
     } finally { component.dispose(); }
@@ -69,7 +69,7 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
       error: { reason: 'The work turn failed' },
     }, tag);
     try {
-      expect.soft(status()).toBe('Flow error');
+      expect.soft(status()).toBe('Flow error · Needs a human · Idle');
       expect.soft(text()).toMatch(/\bidle\b/i);
       expect.soft(text()).toContain('Human needed: awaiting-human');
       expect.soft(text()).toContain('Review the failing checks');
@@ -79,9 +79,9 @@ describe.each(['main', 'aside'])('live status in %s', tag => {
   });
 
   it('keeps malformed flow errors visible without asserting assignment', () => {
-    const { text, status, component } = mount({ flow: { availability: 'unavailable' }, error: { reason: 'Malformed flow definition' } }, tag);
+    const { text, status, component } = mount({ flow: { availability: 'unavailable' }, error: { reason: 'Malformed flow definition' }, activity: 'active' }, tag);
     try {
-      expect.soft(status()).toBe('Flow error');
+      expect.soft(status()).toBe('Flow error · Working');
       expect.soft(text()).toContain('Malformed flow definition');
       expect.soft(text()).not.toMatch(/unassigned/i);
     } finally { component.dispose(); }

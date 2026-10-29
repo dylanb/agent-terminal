@@ -1,6 +1,31 @@
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
-> **Changelog v2.225:** **§23.6 — the controller tray and remembered window ([#223](https://github.com/dylanb/agent-terminal/issues/223)).** The controller gains a tray icon whose badge (red for any error, else amber for a human) and menu counts come from the same card classification as the window header, with **Open Controller**, **Always on top** and **Quit Controller**. Closing the window now hides it on macOS and still minimizes it on Linux; Quit comes from the tray or the application menu. **Always on top** (on for a new profile) and the window's bounds are remembered in their own file, apart from the theme. New IPC channels `controller:getAlwaysOnTop`, `controller:setAlwaysOnTop` and `controller:alwaysOnTop` (definitions in `src/shared/ipc.ts`); the wire protocol and terminals are unchanged.
+> **Changelog v2.225:** **§23.6 — the controller tray and remembered window ([#223](https://github.com/dylanb/agent-terminal/issues/223)).** The controller gains a tray icon whose badge (red for any card in the error class, else amber for one in the needs-human class) and menu counts come from the same card classification as the window header, including #267's activity combination, with **Open Controller**, **Always on top** and **Quit Controller**. Closing the window now hides it on macOS and still minimizes it on Linux; Quit comes from the tray or the application menu. **Always on top** (on for a new profile) and the window's bounds are remembered in their own file, apart from the theme. New IPC channels `controller:getAlwaysOnTop`, `controller:setAlwaysOnTop` and `controller:alwaysOnTop` (definitions in `src/shared/ipc.ts`); the wire protocol and terminals are unchanged.
+
+## A pressed control waits for its answer
+
+§22.5 (new): a control kept accepting presses while the app was still answering its first one, so a
+second click could start the same action, or a related one, again. Every press that starts work the app
+must answer now holds that control and its related controls until the answer arrives. The pressed control
+shows the activity spinner and reports `aria-busy`, and the held controls report `aria-disabled`. All
+renderer controls go through one helper, and a lint rule fails any other click handler (UI-STANDARDS.md
+§1.4). IPC: `flow:appGateDecision` (approve, polish, back-to-red without a brief) now replies with whether the
+decision landed once main has acted on it, like `flow:appRequestChanges`, so a loop gate's controls hold
+until then. No payload changes.
+
+## #267 — controller cards show agent activity alongside flow errors and human requests, coloured by the combination
+
+§23.6: a card with a flow error or a human request showed only that condition, in the error or needs-a-human
+colour, so the operator could not tell an agent blocked on them from one still working. Its written status now
+names each condition, flow error first, then the activity (**Working**, **Idle** or **Activity unavailable**),
+joined by ` · `. A working agent's card is in the working class; an idle or unavailable one is in the error class
+with a flow error, otherwise needs-human. The colour, window-summary counts and one-column default open/closed
+rule follow that class (operator decision 2026-10-26). A card with no condition whose activity is unavailable
+read **Working**; it now reads **Activity unavailable** in the idle class. The expanded card's activity line reads
+**Working** instead of **Active**. The classification moves from the renderer module §23.6 named
+(`src/renderer/src/controllerCardStatus.ts`) to `src/shared/controllerCardClassification.ts`, so the main process
+can use the same rule, and §23.6 now names the shared module. The renderer module keeps only the condition boxes
+and announcement text and is renamed `controllerCardConditions.ts`. Announcements are unchanged: an activity change alone is never announced. No IPC contract change.
 
 > **Changelog v2.224:** **§23.6 — directory conflict cards ([#220](https://github.com/dylanb/agent-terminal/issues/220), operator decision 2026-10-26).** Overlapping live connections now share one conflict-only card with directory identity, instance count and all-original-window activation. This explicitly supersedes older overlap ticket/work/human-request display requirements: the operator must reduce the terminals to one before the survivor's current ordinary information returns. Header counts count cards; collapsed conflicts retain warning/count. Activation reports aggregate failures against the captured target set. Last departure retains one disconnected occurrence, reconnect replaces it, and focus/collapse continuity follows the directory. Wire protocol, human gates and T4 notifications are unchanged.
 

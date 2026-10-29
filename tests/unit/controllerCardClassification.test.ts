@@ -1,10 +1,10 @@
-import { directoryCards } from '../../src/shared/controllerCards';
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { attentionText, attentionUpdate, cardCounts, cardStatus, statusSummary } from '../../src/shared/controllerCardStatus';
-import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
-import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, SUMMARY_LABELS, statusTerminal } from '../helpers/controllerStatusFixture';
+import { cardCounts, cardStatus, statusSummary } from '../../src/shared/controllerCardClassification';
+import { directoryCards } from '../../src/shared/controllerCards';
+import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, SUMMARY_LABELS } from '../helpers/controllerStatusFixture';
 
-describe('controller card status', () => {
+describe('controller card classification', () => {
   it('gives every terminal the status text, class and summary label of the first matching status row', () => {
     const wrong = Object.entries(STATUS_CASES).flatMap(([key, { terminal, text, statusClass, summary }]) => {
       const actual = cardStatus(directoryCards([terminal])[0]);
@@ -37,28 +37,5 @@ describe('controller card counts', () => {
       mix: { total: mix.counts.total, connected: mix.counts.connected, disconnected: mix.counts.disconnected },
       conflict: { total: 5, connected: 3, disconnected: 2 },
     });
-  });
-});
-
-describe('controller attention text', () => {
-  it('words a terminal\'s attention and error as its card words them, each condition\'s title before its reasons', () => {
-    expect(attentionText(statusTerminal({ attention: { status: 'error', reasons: ['Check failed', 'Lint failed'] }, error: { reason: 'Broken build' } }).work))
-      .toBe('Human needed: error. Check failed. Lint failed. Error. Broken build');
-  });
-
-  it('is empty when nothing needs attention, and the oversized-status text when the status could not be read', () => {
-    const unread = statusTerminal();
-    expect([attentionText(statusTerminal().work), attentionText({ ...unread.work, unavailableReason: 'message-too-large' })])
-      .toEqual(['', CONTROLLER_OVERSIZED_STATUS_TEXT]);
-  });
-});
-
-describe('controller attention announcement', () => {
-  it('announces nothing when attention is unchanged, the new text when it changes, and which kind of clearing happened', () => {
-    const blocked = attentionText(statusTerminal({ attention: { status: 'complete', reasons: ['Review required'] } }).work);
-    const unread = statusTerminal();
-    const oversized = attentionText({ ...unread.work, unavailableReason: 'message-too-large' });
-    expect([attentionUpdate('', ''), attentionUpdate(blocked, blocked), attentionUpdate('', blocked), attentionUpdate(blocked, ''), attentionUpdate(oversized, '')])
-      .toEqual([undefined, undefined, blocked, 'Attention and error cleared', 'Status available: no attention or error reported']);
   });
 });

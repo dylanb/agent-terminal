@@ -1,9 +1,12 @@
-import { CONTROLLER_OVERSIZED_STATUS_TEXT } from './controllerStatus';
 import type { ControllerWorkStatus } from './ipc';
 import type { ControllerDirectoryCard } from './controllerCards';
 
 export type CardStatusClass = 'error' | 'needs-human' | 'working' | 'completed' | 'idle';
-type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
+export type SummaryLabel = 'errors' | 'need a human' | 'idle' | 'working';
+
+export const ACTIVITY_WORDS: Readonly<Record<ControllerWorkStatus['activity'], string>> = {
+  active: 'Working', quiet: 'Idle', unavailable: 'Activity unavailable',
+};
 
 const SUMMARY_LABELS: readonly SummaryLabel[] = ['errors', 'need a human', 'idle', 'working'];
 
@@ -21,19 +24,23 @@ export interface CardStatus {
   summary: SummaryLabel;
 }
 
+function conditionStatus(work: ControllerWorkStatus): [string, CardStatusClass] {
+  const text = [...(work.error ? ['Flow error'] : []), ...(work.attention ? ['Needs a human'] : []), ACTIVITY_WORDS[work.activity]].join(' · ');
+  if (work.activity === 'active') return [text, 'working'];
+  return [text, work.error ? 'error' : 'needs-human'];
+}
+
 function textAndClass(card: ControllerDirectoryCard): [string, CardStatusClass] {
   if (card.kind === 'conflict') return ['Duplicate directory', 'error'];
   if (card.kind === 'disconnected') return ['Disconnected', 'error'];
   const work = card.work;
-  if (work?.error) return ['Flow error', 'error'];
-  if (work?.attention) return ['Needs a human', 'needs-human'];
+  if (work?.error || work?.attention) return conditionStatus(work);
   if (work?.unavailableReason) return ['Status unavailable', 'needs-human'];
   if (!work) return ['Loading', 'idle'];
   if (work.flow.availability !== 'known' || work.flow.assignment === 'unavailable') return ['Status unknown', 'idle'];
   if (work.flow.assignment === 'unassigned') return ['Unassigned', 'idle'];
   if (work.flow.assignment === 'completed') return ['Completed', 'completed'];
-  if (work.activity === 'quiet') return ['Idle', 'idle'];
-  return ['Working', 'working'];
+  return [ACTIVITY_WORDS[work.activity], work.activity === 'active' ? 'working' : 'idle'];
 }
 
 export function cardStatus(card: ControllerDirectoryCard): CardStatus {
@@ -50,30 +57,6 @@ export interface StatusCount {
 export function statusSummary(cards: readonly ControllerDirectoryCard[]): StatusCount[] {
   const summaries = cards.map(card => cardStatus(card).summary);
   return SUMMARY_LABELS.map(label => ({ label, statusClass: SUMMARY_CLASS[label], count: summaries.filter(summary => summary === label).length }));
-}
-
-export interface WorkCondition {
-  statusClass: 'needs-human' | 'error';
-  title: string;
-  reasons: readonly string[];
-}
-
-export function workConditions(work: ControllerWorkStatus | undefined): WorkCondition[] {
-  return [
-    ...(work?.attention ? [{ statusClass: 'needs-human' as const, title: `Human needed: ${work.attention.status}`, reasons: work.attention.reasons }] : []),
-    ...(work?.error ? [{ statusClass: 'error' as const, title: 'Error', reasons: [work.error.reason] }] : []),
-  ];
-}
-
-export function attentionText(work: ControllerWorkStatus | undefined): string {
-  if (work?.unavailableReason) return CONTROLLER_OVERSIZED_STATUS_TEXT;
-  return workConditions(work).flatMap(condition => [condition.title, ...condition.reasons]).join('. ');
-}
-
-export function attentionUpdate(previous: string, current: string): string | undefined {
-  if (current === previous) return undefined;
-  if (current) return current;
-  return previous === CONTROLLER_OVERSIZED_STATUS_TEXT ? 'Status available: no attention or error reported' : 'Attention and error cleared';
 }
 
 export interface CardCounts {

@@ -308,7 +308,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   });
 
   it('the shared GATE_DECISION_OPTIONS set carries the §28.4.2 back-to-red control, so the wire accepts it (§27.9)', () => {
-    // §28.4.2 — back-to-red rides the existing one-way flow:appGateDecision channel (no operator note), so the
+    // §28.4.2 — back-to-red rides the existing flow:appGateDecision channel (no operator note), so the
     // only wire change is the shared set gaining the option. Single-sourced, so type + validator cannot drift.
     expect(GATE_DECISION_OPTIONS).toContain('back-to-red');
     const base = { sessionId: sid, repoKey: '/repo', step: 'green', turnKey: 'consolidate-green' };

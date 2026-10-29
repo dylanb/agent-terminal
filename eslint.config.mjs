@@ -63,6 +63,28 @@ const CARD_HELPER = [
   'tests/unit/controllerCards.test.ts',
   'tests/browser/controllerCards.test.ts',
 ];
+const PROTOCOL_MESSAGE = 'Build a controller message with CONTROLLER_PROTOCOL_MAJOR / CONTROLLER_PROTOCOL_MINOR from src/shared/controllerProtocol.ts, never a typed-in version (CODE-STANDARDS.md § Test stand-ins speak the protocol through its own module).';
+const TYPED_IN_VERSION = [
+  "CallExpression[callee.name='encodeControllerMessage'] ObjectExpression > Property[key.name=/^(version|minor)$/] > Literal",
+  "CallExpression[callee.object.name='JSON'][callee.property.name='stringify'] > ObjectExpression:has(> Property[key.name='type']) > Property[key.name=/^(version|minor)$/] > Literal",
+].map((selector) => ({ selector, message: PROTOCOL_MESSAGE }));
+const WIRE_FORMAT_TESTS = [
+  'tests/unit/controllerProtocol.test.ts',
+  'tests/unit/controllerStatusBounds.test.ts',
+  'tests/unit/controllerStatusProtocol.test.ts',
+  'tests/integration/controllerVersion.test.ts',
+  'tests/integration/controllerWebSocket.test.ts',
+  'tests/e2e/controllerWireVersion.spec.ts',
+];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'];
+
+const PRESS_HELPER_MESSAGE =
+  'Run a control\'s action through createPressGroup/onPress in src/renderer/src/pressable.ts, so a press cannot start it again while it is still running (UI-STANDARDS §1.4).';
+const RAW_CLICK = [
+  "CallExpression[callee.property.name='addEventListener'][arguments.0.value='click']",
+  "CallExpression[callee.property.name='addEventListener'][arguments.0.type='TemplateLiteral'][arguments.0.quasis.0.value.cooked='click']",
+  "AssignmentExpression[left.property.name='onclick']",
+].map((selector) => ({ selector, message: PRESS_HELPER_MESSAGE }));
 
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', 'coverage/**', '**/*.d.ts'] },
@@ -74,6 +96,16 @@ export default [
   },
   {
     files: CONTROLLER_TESTS,
+    ignores: [...CARD_HELPER, ...WIRE_FORMAT_TESTS],
+    rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...TYPED_IN_VERSION] },
+  },
+  {
+    files: CARD_HELPER,
+    ignores: WIRE_FORMAT_TESTS,
+    rules: { 'no-restricted-syntax': ['error', ...TYPED_IN_VERSION] },
+  },
+  {
+    files: WIRE_FORMAT_TESTS,
     ignores: CARD_HELPER,
     rules: { 'no-restricted-syntax': ['error', ...CARD_DOM, ...SWITCH_DOM, NO_SLEEP] },
   },
@@ -92,6 +124,20 @@ export default [
     rules: {
       'no-restricted-properties': ['error', ...CONTROLLER_PLATFORM_READS],
       'no-restricted-imports': ['error', { paths: CONTROLLER_PLATFORM_IMPORTS }],
+    },
+  },
+  {
+    files: ['src/renderer/**/*.ts'],
+    ignores: ['src/renderer/src/pressable.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
+  },
+  {
+    files: EXPECTED_RESULTS_FIXTURES,
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [{
+        regex: '(^|/)src/(?!shared/ipc(/|$))',
+        message: 'An expected-results fixture is written independently of the code it checks; import only the IPC contract from src/ (CODE-STANDARDS.md § Expected results are written independently of the code they check).',
+      }] }],
     },
   },
 ];

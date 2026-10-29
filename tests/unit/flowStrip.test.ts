@@ -62,6 +62,8 @@ const stateOf = (i: number) => {
   return cl.contains('active') ? 'active' : cl.contains('done') ? 'done' : 'todo';
 };
 const control = () => host.querySelector<HTMLButtonElement>('.flow-control');
+const buttonNamed = (name: string): HTMLElement | null =>
+  [...host.querySelectorAll<HTMLElement>('button, [role="button"]')].find((b) => b.textContent?.trim() === name) ?? null;
 const segs = () => [...host.querySelectorAll<HTMLElement>('.flow.vert .seg')];
 // A connector bar touches the current step when the active station is one of its two neighbours in
 // the interleaved station/seg column.
@@ -1167,6 +1169,42 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).toHaveBeenCalledWith('/repo', 'plan', { ticket: '176' });
   });
 
+  it('a prompt submit stays pending until provideInput is answered, so the modal can hold its Confirm (§24.2.3 T3)', async () => {
+    let submit: ((v: Record<string, string>) => unknown) | undefined;
+    let answer!: (v: FlowStateView) => void;
+    const promptView: FlowStateView = {
+      stepName: 'plan', runStarted: 'never-started' as const,
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      provideInput: vi.fn(() => new Promise<FlowStateView>((res) => (answer = res))),
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, s: (v: Record<string, string>) => unknown) => {
+        if (prompt) submit = s;
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(submit).toBeDefined());
+
+    let settled = false;
+    const pending = submit!({ ticket: '176' });
+    expect(pending).toBeInstanceOf(Promise);
+    void (pending as Promise<unknown>).then(() => (settled = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+
+    answer({ ...promptView, prompt: undefined });
+    await vi.waitFor(() => expect(settled).toBe(true));
+  });
+
   it('surfaces a provideInput write-failure from a prompt submit instead of swallowing it', async () => {
     const onError = vi.fn();
     let submit: ((v: Record<string, string>) => void) | undefined;
@@ -1442,9 +1480,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repo-step'); // prior UI preserved, host not cleared
   });
 
-  it('re-enables a control button when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
-    // The in-flight button is disabled, then re-enabled on the catch→refresh path; if state() ALSO
-    // rejects, the button must not be stranded disabled — the user can still retry.
+  it('a control can be used again when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
     const deps = fakeFlow('in_progress');
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
@@ -1454,8 +1490,32 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     deps.advance.mockRejectedValueOnce(new Error('advance failed'));
     deps.state.mockRejectedValueOnce(new Error('ipc down'));
     button.click();
+    await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
 
-    await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stranded disabled
+    button.click();
+    expect(deps.advance).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores its controls while a transition is still being answered, and shows the pressed one busy', async () => {
+    let answer!: (v: FlowStateView) => void;
+    const onTerminate = vi.fn();
+    const deps = { ...fakeFlow('in_progress'), onTerminate };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(buttonNamed('Advance')).not.toBeNull());
+    const inProgressView = await deps.state('/repo');
+    deps.advance.mockImplementationOnce(() => new Promise((res) => (answer = res)));
+
+    buttonNamed('Advance')!.click();
+    buttonNamed('Advance')!.click();
+    buttonNamed('Terminate')!.click();
+    expect(deps.advance).toHaveBeenCalledTimes(1);
+    expect(onTerminate).not.toHaveBeenCalled();
+    expect(buttonNamed('Advance')!.getAttribute('aria-busy')).toBe('true');
+
+    answer(inProgressView);
+    await vi.waitFor(() => expect(buttonNamed('Advance')!.getAttribute('aria-busy')).toBeNull());
+    buttonNamed('Advance')!.click();
+    expect(deps.advance).toHaveBeenCalledTimes(2);
   });
 
   it('dispose() unsubscribes the push handler and clears the host (UI-STANDARDS clean teardown)', async () => {
@@ -1687,20 +1747,43 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(document.activeElement).toBe(control());
     });
 
-    it('re-enables the Terminate control if both terminate() and the recovery state() reject (failure recovery)', async () => {
+    it('Terminate can be used again if both terminate() and the recovery state() reject (failure recovery)', async () => {
       const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
       const deps = { ...fakeFlow('in_progress'), onTerminate };
       createFlowStrip(host, deps).onRepoChanged('/repo');
       await vi.waitFor(() => expect(terminate()).not.toBeNull());
       const button = terminate()!;
-      // Make both the terminate call and refresh()'s re-pull reject, so no repaint detaches the
-      // button — only the finally re-enable can rescue it from being stranded disabled.
       deps.terminate.mockRejectedValueOnce(new Error('terminate failed'));
       deps.state.mockRejectedValueOnce(new Error('state failed'));
       button.click();
       await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
-      await vi.waitFor(() => expect(button.disabled).toBe(false));
-      expect(host.querySelector('.flow-terminate')).toBe(button); // never repainted
+      await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
+      expect(host.querySelector('.flow-terminate')).toBe(button);
+      button.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledTimes(2));
+    });
+
+    it('ignores the strip’s controls while a confirmed terminate is still being answered, and shows Terminate busy', async () => {
+      let answer!: (v: FlowStateView) => void;
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(buttonNamed('Terminate')).not.toBeNull());
+      const inProgressView = await deps.state('/repo');
+      deps.terminate.mockImplementationOnce(() => new Promise((res) => (answer = res)));
+
+      buttonNamed('Terminate')!.click();
+      buttonNamed('Terminate')!.click();
+      buttonNamed('Advance')!.click();
+      expect(deps.terminate).toHaveBeenCalledTimes(1);
+      expect(onTerminate).toHaveBeenCalledTimes(1);
+      expect(deps.advance).not.toHaveBeenCalled();
+      expect(buttonNamed('Terminate')!.getAttribute('aria-busy')).toBe('true');
+
+      answer(inProgressView);
+      await vi.waitFor(() => expect(buttonNamed('Terminate')!.getAttribute('aria-busy')).toBeNull());
+      buttonNamed('Terminate')!.click();
+      expect(deps.terminate).toHaveBeenCalledTimes(2);
     });
   });
 

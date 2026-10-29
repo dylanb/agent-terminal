@@ -8,7 +8,7 @@ import {
   type ControllerTrayView, type TrayBadge,
 } from '../../src/main/controllerTrayModel';
 import { resolveWindowIconPath } from '../../src/main/appIcon';
-import { cardCounts, statusSummary } from '../../src/shared/controllerCardStatus';
+import { cardCounts, statusSummary } from '../../src/shared/controllerCardClassification';
 import { directoryCards } from '../../src/shared/controllerCards';
 import type { ControllerTerminal } from '../../src/shared/ipc';
 import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, workStatus } from '../helpers/controllerStatusFixture';
@@ -16,14 +16,14 @@ import { directoryConflictFixture, distinctAttentionMix, STATUS_CASES, workStatu
 const at = (id: string, launchDirectory: string, overrides: Partial<ControllerTerminal> = {}): ControllerTerminal =>
   ({ id, launchDirectory, repositoryRoot: launchDirectory, work: workStatus({ activity: 'active' }), ...overrides });
 const working = (id: string, launchDirectory: string) => at(id, launchDirectory);
-const needingHuman = (id: string, launchDirectory: string) => at(id, launchDirectory, { work: workStatus({ attention: { status: 'needs a human', reasons: ['Approve the plan'] } }) });
-const failing = (id: string, launchDirectory: string) => at(id, launchDirectory, { work: workStatus({ error: { reason: 'Step exited 1' } }) });
+const needingHuman = (id: string, launchDirectory: string) => at(id, launchDirectory, { work: workStatus({ attention: { status: 'needs a human', reasons: ['Approve the plan'] }, activity: 'quiet' }) });
+const failing = (id: string, launchDirectory: string) => at(id, launchDirectory, { work: workStatus({ error: { reason: 'Step exited 1' }, activity: 'quiet' }) });
 const disconnected = (id: string, launchDirectory: string) => at(id, launchDirectory, { status: 'disconnected' });
 
 /** Six cards whose compared counts all differ: connected 5, errors 3 (1 disconnected), needs a human 2. */
 function conflictMix(): ControllerTerminal[] {
   const { members, unrelated } = directoryConflictFixture();
-  return [...members, unrelated, STATUS_CASES['needs-human'].terminal, STATUS_CASES.oversized.terminal, STATUS_CASES.disconnected.terminal, STATUS_CASES.working.terminal];
+  return [...members, { ...unrelated, work: { ...unrelated.work, activity: 'quiet' } }, STATUS_CASES['needs-human'].terminal, STATUS_CASES.oversized.terminal, STATUS_CASES.disconnected.terminal, STATUS_CASES.working.terminal];
 }
 
 describe('the tray view', () => {

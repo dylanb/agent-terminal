@@ -1,7 +1,9 @@
+import { onPress } from './pressable';
+
 export interface SwitchDeps {
   label: string;
   checked: boolean;
-  onChange(checked: boolean): void;
+  onChange(checked: boolean): void | Promise<unknown>;
 }
 
 export interface Switch {
@@ -27,10 +29,10 @@ export function createSwitch(host: HTMLElement, deps: SwitchDeps): Switch {
   let checked = deps.checked;
   const show = () => { button.setAttribute('aria-checked', String(checked)); };
   show();
-  button.addEventListener('click', () => {
+  onPress(button, () => {
     checked = !checked;
     show();
-    deps.onChange(checked);
+    return deps.onChange(checked);
   });
   host.append(button);
   return {

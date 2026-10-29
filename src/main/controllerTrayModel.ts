@@ -1,5 +1,5 @@
 import type { MenuItemConstructorOptions } from 'electron';
-import { cardCounts, statusSummary, type CardStatusClass } from '../shared/controllerCardStatus';
+import { cardCounts, statusSummary, type CardStatusClass } from '../shared/controllerCardClassification';
 import { directoryCards } from '../shared/controllerCards';
 import type { ControllerTerminal } from '../shared/ipc';
 import type { AppIcon } from './appIcon';

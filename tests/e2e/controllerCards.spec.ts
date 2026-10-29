@@ -7,10 +7,14 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, headerLabels, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, headerLabels, paintedStatusOf, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { STATUS_CASES, type StatusCase } from '../helpers/controllerStatusFixture';
+import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
+/** A real agent's activity at a human gate is whatever it last did, so a gated card's status names any activity word. */
+const NEEDS_A_HUMAN = /^Needs a human · (?:Working|Idle|Activity unavailable)$/;
 
 type Launched = Awaited<ReturnType<Awaited<ReturnType<typeof createControllerDesktopHarness>>['launch']>>;
 const focused = (launched: Launched) => launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFocused());
@@ -113,7 +117,7 @@ test('status cards on real terminals', { tag: '@ownapp' }, async () => {
     const { controller, a, b, gated, working, gate } = terminals;
     const cardA = cardLocator(controller.page, gated);
     const cardB = cardLocator(controller.page, working);
-    await expect.soft(statusRowLocator(cardA)).toHaveText('Needs a human');
+    await expect.soft(statusRowLocator(cardA)).toHaveText(NEEDS_A_HUMAN);
     await expect.soft(cardA).toContainText(gate.loop!.status);
     await expect.soft(cardA).toContainText(gate.loop!.verdictReason!);
     await expect.soft(statusRowLocator(cardB)).toHaveText('Working');
@@ -150,7 +154,7 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
     await expect.soft(headerB).toContainText('Working');
     await expect.soft(statusRowLocator(cardB)).toBeHidden();
     await expect.soft(headerA).toHaveAttribute('aria-expanded', 'true');
-    await expect.soft(statusRowLocator(cardA)).toHaveText('Needs a human');
+    await expect.soft(statusRowLocator(cardA)).toHaveText(NEEDS_A_HUMAN);
     await expect.soft(cardA.getByText(gate.loop!.verdictReason!)).toBeVisible();
 
     await focusController(terminals);
@@ -160,7 +164,7 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
 
     terminals.releaseWorking();
     await terminals.workingGated();
-    await expect.soft(statusRowLocator(cardB)).toHaveText('Needs a human');
+    await expect.soft(statusRowLocator(cardB)).toHaveText(NEEDS_A_HUMAN);
     await expect.soft(headerB).toHaveAttribute('aria-expanded', 'true');
     await expect.soft(statusRowLocator(cardB)).toBeVisible();
 
@@ -195,6 +199,39 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
   }
 });
 
+test('a card with a condition is coloured and counted by its agent\'s activity', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const clients: ScriptedControllerTerminal[] = [];
+  try {
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    await expect(controller.page.getByText(/no terminals connected/i)).toBeVisible();
+    const [gatedDirectory, failedDirectory] = h.fixture.repositories;
+    const [gated, failed] = await Promise.all([gatedDirectory, failedDirectory].map(async directory => {
+      const client = await connectScriptedTerminal(h.fixture.home, { launchDirectory: directory, repositoryRoot: directory });
+      clients.push(client);
+      return client;
+    }));
+    const cardA = cardLocator(controller.page, gatedDirectory);
+    const cardB = cardLocator(controller.page, failedDirectory);
+    const shows = async (a: StatusCase, b: StatusCase) => {
+      await gated.sendStatus(a.terminal.work!);
+      await failed.sendStatus(b.terminal.work!);
+      await expect.soft(statusRowLocator(cardA)).toHaveText(a.text);
+      await expect.soft(statusRowLocator(cardB)).toHaveText(b.text);
+      await expect.soft.poll(() => paintedStatusOf(cardA)).toEqual({ accent: a.statusClass, text: a.statusClass });
+      await expect.soft.poll(() => paintedStatusOf(cardB)).toEqual({ accent: b.statusClass, text: b.statusClass });
+      await expect.soft.poll(async () => unshownCounts((await windowHeaderLocator(controller.page).allTextContents()).join(' '),
+        headerLabels(label => [a, b].filter(c => c.summary === label).length, 2, 2))).toEqual([]);
+    };
+    await shows(STATUS_CASES['needs-human-working'], STATUS_CASES['flow-error-working']);
+    await shows(STATUS_CASES['needs-human'], STATUS_CASES['flow-error']);
+  } finally {
+    try { await Promise.all(clients.map(client => client.close())); }
+    finally { await h.dispose(); }
+  }
+});
+
 test('theme survives restart: Dark theme applies at once and after the controller restarts', { tag: '@ownapp' }, async () => {
   test.setTimeout(180_000);
   const h = await createControllerDesktopHarness();
@@ -212,7 +249,7 @@ test('theme survives restart: Dark theme applies at once and after the controlle
     const cardB = cardLocator(restarted.page, working);
     await expect.soft(themeControlLocator(restarted.page, { on: true })).toBeVisible();
     await expect.soft.poll(() => painted(restarted.page)).toBe('dark');
-    await expect(statusRowLocator(cardA)).toHaveText('Needs a human', { timeout: 30_000 });
+    await expect(statusRowLocator(cardA)).toHaveText(NEEDS_A_HUMAN, { timeout: 30_000 });
     await expect(statusRowLocator(cardB)).toHaveText('Working', { timeout: 30_000 });
   } finally {
     try { await h.dispose(); }

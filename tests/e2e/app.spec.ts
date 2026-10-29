@@ -3091,7 +3091,20 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   expect(await loopPanel().locator('[data-gate-option]').count()).toBe(4);
   await expect(loopPanel().locator('[data-gate-option="impasse"]')).toHaveCount(0);
 
+  // Snapshot the gate the instant the app itself marks Approve busy: the hold lasts only until main answers.
+  await loopPanel().evaluate((panel) => {
+    const w = window as unknown as { __gateHeld?: unknown };
+    new MutationObserver(() => {
+      const approve = panel.querySelector('[data-gate-option="approve"]');
+      if (approve?.getAttribute('aria-busy') === 'true' && !w.__gateHeld) {
+        w.__gateHeld = { polish: panel.querySelector('[data-gate-option="polish"]')?.getAttribute('aria-disabled') ?? null };
+      }
+    }).observe(panel, { attributes: true, subtree: true, attributeFilter: ['aria-busy'] });
+  });
   await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __gateHeld?: unknown }).__gateHeld ?? null))
+    .toEqual({ polish: 'true' });
 
   // AC2 — approve runs the bound loop's declared gh side-effect (plan → PR non-draft flip) on the pr the flow
   // input resolved, reaches the terminal accept, and the flow advances off the loop step to the manual step.
@@ -3574,6 +3587,7 @@ function withPickup(yaml: string, block: string): string {
 }
 
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+  test.setTimeout(WINDOW_TIMEOUT_MS + 180_000);
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
@@ -4488,9 +4502,12 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
     | { inputs?: Record<string, unknown> }
     | undefined;
   expect(Object.values(staleState?.inputs ?? {})).not.toContain('999');
-  const calls = readGhLog(logFile).slice(staleInputLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh ');
+  // The viewer's own working-tree read (`git status --porcelain -z`) can land after the mark, so only the
+  // pickup's exact preflight probe and its mutation sidecars show the stale answer started a pickup.
+  expect(readGhLog(logFile).slice(staleInputLogStart)).not.toMatch(/^git status --porcelain$/m);
+  for (const mutation of ['local-branch', 'remote-branch', 'pr-created', 'issue-assignee', 'issue-label', 'pr-label']) {
+    expect(existsSync(`${logFile}.${mutation}`), `pickup mutation .${mutation} fired for a stale answer`).toBe(false);
+  }
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -6029,6 +6046,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   await openQuickSend('todo');
   await page.locator('#todo-new').fill('s5 first todo');
   await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 's5 first todo' })).toBeVisible();
   await page.locator('#todo-new').fill('s5 second todo');
   await page.locator('#todo-add-btn').click();
   await expect(flowDerived()).toContainText('0 / 2', { timeout: 10_000 }); // total moved via the push

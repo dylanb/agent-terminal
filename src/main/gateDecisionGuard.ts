@@ -26,8 +26,7 @@ export function markedBindingRefusal(bindingOf: (repoKey: string, step: string) 
   return binding !== null && bindsNoSurvivingEngine(binding) ? MARKED_BINDING_REASON : null;
 }
 
-/** A gate-decision runner (approve one-way, request-changes/redo two-way): resolves to whether the decision
- *  was delivered. */
+/** A gate-decision runner: resolves to whether the decision was delivered. */
 export type GateDecisionRun = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string) => Promise<boolean>;
 
 /** Wrap `run` with the marked-binding refusal: when the named step binds no surviving engine, surface the reason and

@@ -158,13 +158,12 @@ describe('activation of captured directory connections', () => {
   it('does not let an old action overwrite a newer action result', async () => {
     let completeOld!: (value: 'unavailable') => void;
     const old = new Promise<'unavailable'>(resolve => { completeOld = resolve; });
-    let calls = 0;
-    const service = statusService(members.slice(0, 2), { activation: () => ++calls === 1 ? old : Promise.resolve('activated') });
+    const service = statusService([...members.slice(0, 2), unrelated], { activation: id => id === unrelated.id ? Promise.resolve('activated') : old });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
     try {
       action(host)?.click();
-      service.publish([members[1], members[2]]);
-      action(host)?.click();
+      const other = cardsIn(host).find(card => !matching(host).includes(card));
+      (other && bringForwardIn(other))?.click();
       await Promise.resolve();
       await Promise.resolve();
       completeOld('unavailable');
