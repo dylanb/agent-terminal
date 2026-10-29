@@ -1,3 +1,4 @@
+import { clearObserved } from '../helpers/controllerClear';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,9 +42,9 @@ async function fixture() {
     await registered;
     const id = registry.terminals().filter(t => t.launchDirectory === directory && t.status !== 'disconnected').at(-1)!.id;
     let revision = 0;
-    async function flush(attention: ReturnType<typeof workStatus>['attention'] = null) {
+    async function flush(attention: ReturnType<typeof workStatus>['attention'] = null, error: ReturnType<typeof workStatus>['error'] = null) {
       const step = `barrier-${++revision}`;
-      peer.send(JSON.stringify({ version: 2, type: 'status', work: workStatus({ attention, flow: { availability: 'known', name: 'history', step, assignment: 'assigned' } }) }));
+      peer.send(JSON.stringify({ version: 2, type: 'status', work: workStatus({ attention, error, flow: { availability: 'known', name: 'history', step, assignment: 'assigned' } }) }));
       await expect.poll(() => registry.terminals().find(t => t.id === id)?.work?.flow).toMatchObject({ step });
     }
     async function report(value: NotificationCondition | null) {
@@ -188,3 +189,21 @@ it('notification arrival creates no saved feature files under the controller hom
   await a.arrival('first'); await a.arrival('second'); await a.close();
   expect(h.files()).toEqual(before);
 });
+
+for (const disconnected of [false, true]) {
+  it(`clears every entry and repeat count while preserving ${disconnected ? 'disconnected' : 'live'} card and other directories`, async () => {
+    const h = await fixture(); const a = await h.connect(); const b = await h.connect('/work/b');
+    await a.arrival('one'); await a.arrival('two'); await a.arrival('one'); await b.arrival('unrelated');
+    await a.flush({ status: 'complete', reasons: ['Real current reason'] }, { reason: 'Actual live failure' });
+    if (disconnected) await a.close();
+    const before = h.terminal()!; const other = h.terminal('/work/b');
+    const result = await clearObserved(h.registry(), before);
+    expect.soft(h.entries()).toEqual([]);
+    expect.soft(h.terminal()?.latestNotification).toBeUndefined();
+    expect.soft(result).toBe('cleared');
+    expect.soft(h.terminal()?.id).toBe(before.id);
+    expect.soft(h.terminal()?.status).toBe(before.status);
+    expect.soft(h.terminal()?.work).toEqual(before.work);
+    expect.soft(h.terminal('/work/b')).toEqual(other);
+  });
+}

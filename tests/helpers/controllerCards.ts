@@ -137,3 +137,6 @@ export const receivedNotificationIn = (card: ParentNode): HTMLElement | undefine
 
 export const historyLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /History\s+\d\s*\/\s*3/i });
 export const historyIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /History\s+\d\s*\/\s*3/i);
+
+export const clearHistoryLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /Clear history/i });
+export const clearHistoryIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /Clear history/i);
