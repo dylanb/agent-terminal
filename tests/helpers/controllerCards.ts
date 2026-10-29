@@ -134,3 +134,6 @@ export function showsFullReason(control: Element | undefined): boolean {
 
 export const receivedNotificationLocator = <L>(card: RoleScope<L>): L => card.getByRole('region', { name: /received notification/i });
 export const receivedNotificationIn = (card: ParentNode): HTMLElement | undefined => roleMatches(card, ['region'], /received notification/i)[0];
+
+export const historyLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: /History\s+\d\s*\/\s*3/i });
+export const historyIn = (card: ParentNode): HTMLElement | undefined => controlIn(card, /History\s+\d\s*\/\s*3/i);
