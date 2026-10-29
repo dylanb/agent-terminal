@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest';
 import { createLoopMessages } from '../../src/main/loopMessages';
+import { CONTROLLER_MAX_STATUS_BYTES, CONTROLLER_PROTOCOL_MAJOR, encodeControllerMessage, parseControllerMessage } from '../../src/shared/controllerProtocol';
+import { statusTerminal } from '../helpers/controllerStatusFixture';
 
 it('holds only the latest loop message, each with its own identity, and starts with none', () => {
   const messages = createLoopMessages(() => {});
@@ -37,4 +39,15 @@ it('gives each reader its own copy', () => {
   messages.post('error', 'first');
   messages.current()!.reason = 'edited';
   expect(messages.current()?.reason).toBe('first');
+});
+
+it('keeps a reason too large for a status frame as a dismissible message, starting with the reason', () => {
+  const messages = createLoopMessages(() => {});
+  const reason = `gh failed: ${'x'.repeat(CONTROLLER_MAX_STATUS_BYTES)}`;
+  messages.post('error', reason);
+  const work = { ...statusTerminal().work, loopMessage: messages.current() };
+  const sent = parseControllerMessage(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'status', work }));
+  expect(sent).toMatchObject({ type: 'status', work: { loopMessage: { id: messages.current()?.id, kind: 'error' } } });
+  expect(sent.type === 'status' && reason.startsWith(sent.work.loopMessage!.reason.slice(0, 64))).toBe(true);
+  expect(sent.type === 'status' && sent.work.unavailableReason).toBeFalsy();
 });

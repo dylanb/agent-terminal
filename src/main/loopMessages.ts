@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { ControllerLoopMessage } from '../shared/ipc';
 
+const MAX_REASON_CHARS = 8 * 1024;
+
 export interface LoopMessages {
   current(): ControllerLoopMessage | null;
   post(kind: ControllerLoopMessage['kind'], reason: string): void;
@@ -13,7 +15,7 @@ export function createLoopMessages(onChange: () => void): LoopMessages {
   return {
     current: () => (latest ? { ...latest } : null),
     post(kind, reason) {
-      latest = { id: randomUUID(), kind, reason };
+      latest = { id: randomUUID(), kind, reason: reason.length > MAX_REASON_CHARS ? `${reason.slice(0, MAX_REASON_CHARS)}…` : reason };
       onChange();
     },
     dismiss(id) {
