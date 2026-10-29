@@ -1,106 +1,62 @@
-// OS attention notification (§24.2.3 T4). This surface only flags a human-needed stop; it must never
-// inject or drive agent-loop — the human does that by hand.
-
+import { randomUUID } from 'node:crypto';
 import type { FlowStateView } from '../shared/ipc';
 import { sameOccurrence, type Occurrence } from '../shared/occurrence';
 import { stripStatusControlChars } from '../shared/loopStatus';
+import type { ControllerNotificationSource, NotificationCondition } from '../shared/controllerProtocol';
 
-export interface LoopNotifyOpts {
-  title: string;
-  body: string;
-  /** The repo whose loop raised this: tags the §25 record when the OS refuses to deliver it. */
-  repoKey: string;
-  onActivate: () => void;
-}
-
+export interface LoopNotifyOpts { title: string; body: string; repoKey: string }
 export interface LoopNotifierDeps {
-  isFocused: () => boolean;
-  /** The window gained or lost focus. Losing it is what makes a pending entry worth raising. */
-  onFocusChanged: (listener: () => void) => void;
-  /** Returns a closer that dismisses the raised notification. */
-  notify: (opts: LoopNotifyOpts) => () => void;
-  focusWindow: () => void;
-  reveal: () => void;
+  notify?: (opts: LoopNotifyOpts) => void;
+  isFocused?: () => boolean;
+  onFocusChanged?: (listener: () => void) => void;
+  focusWindow?: () => void;
+  reveal?: () => void;
 }
-
-export interface LoopNotifier {
+export interface LoopNotifier extends ControllerNotificationSource {
   observe(repoKey: string, view: FlowStateView): void;
+  current(repoKey?: string): NotificationCondition | null;
 }
-
-// §16.3: bound the untrusted `status` length for the OS notification; the CWE-117 control-character
-// strip is the shared `stripStatusControlChars` so this sink and the audit record cannot drift.
 const STATUS_MAX = 80;
-const sanitizeStatus = (status: string): string => stripStatusControlChars(status).slice(0, STATUS_MAX);
 
-export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
-  // Both maps are per repo (§16.3): a same-repo return visit after a detour to another repo must stay
-  // deduped; a single shared slot would re-fire it.
-  // `pending` is the repo's current human-needed entry; `lastRaised` is the last one the OS was asked to
-  // show. They differ exactly while an entry is waiting for the user to look away — an entry skipped for
-  // focus is NOT signalled, or leaving the app (the moment the notification earns its keep) would find it
-  // already deduped and stay silent forever.
-  const pending = new Map<string, Occurrence>();
-  const lastRaised = new Map<string, Occurrence>();
-  let closeActive: (() => void) | null = null;
-  let activeRepoKey: string | null = null;
-  let observedRepoKey: string | null = null;
-
-  const clearActive = (): void => {
-    closeActive?.();
-    closeActive = null;
-    activeRepoKey = null;
-  };
-
-  const raiseIfDue = (repoKey: string): void => {
-    const occ = pending.get(repoKey);
-    if (!occ) return;
-    if (sameOccurrence(lastRaised.get(repoKey) ?? null, occ)) return;
-    clearActive(); // whatever is showing describes an entry the loop has moved past
-    if (deps.isFocused()) return;
-    lastRaised.set(repoKey, occ);
-    closeActive = deps.notify({
-      title: 'Agent loop needs you',
-      body: occ.iteration === undefined ? sanitizeStatus(occ.status) : `${sanitizeStatus(occ.status)} · iter ${occ.iteration}`,
-      repoKey,
-      onActivate: () => {
-        deps.focusWindow();
-        deps.reveal();
-      },
-    });
-    activeRepoKey = repoKey;
-  };
-
-  // A view is only recomputed when the loop moves, so focus alone would never re-run the decision. On BLUR
-  // a pending human-needed stop earns its notification for ANY repo, not only the observed one — `pending`
-  // is per-repo (§16.3), so a stop in a repo the user navigated away from (raised while focused, hence not
-  // yet signalled) would otherwise never surface. The observed repo keeps its original raise and goes LAST,
-  // so it wins the single active slot when it too is due. On focus the observed-only behavior is unchanged.
-  deps.onFocusChanged(() => {
-    if (!deps.isFocused()) {
-      for (const repoKey of pending.keys()) {
-        if (repoKey !== observedRepoKey) raiseIfDue(repoKey);
-      }
-    }
-    if (observedRepoKey !== null) raiseIfDue(observedRepoKey);
-  });
-
+export function createLoopNotifier(deps: LoopNotifierDeps = {}): LoopNotifier {
+  const lastRaised = new Map<string, Occurrence & { perStep: boolean }>();
+  const conditions = new Map<string, NotificationCondition>();
+  const listeners = new Set<(notification: NotificationCondition) => void>();
+  let observedRepoKey: string | undefined;
   return {
+    current(repoKey = observedRepoKey) {
+      const condition = repoKey === undefined ? undefined : conditions.get(repoKey);
+      return condition ? { ...condition } : null;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
     observe(repoKey, view) {
       observedRepoKey = repoKey;
       const loop = view.loop;
       if (!loop || loop.humanNeeded !== true) {
-        pending.delete(repoKey);
-        // §27.9.1 N9b.5(e) — under per-step gate authority a stop that ends was its own stop, so the next one
-        // notifies again; a run with no `auto` step keeps §24.2.3 T4's `{status, iteration}` dedup.
-        if (loop?.autoGate !== undefined) lastRaised.delete(repoKey);
-        if (activeRepoKey === repoKey) clearActive();
+        conditions.delete(repoKey);
+        if (loop?.autoGate !== undefined || lastRaised.get(repoKey)?.perStep) lastRaised.delete(repoKey);
         return;
       }
-      // §27.9.1 N9b.5(e) — under per-step gate authority a stop lasts while the view stays human-needed, so a
-      // status change within it (an error stop the operator Accepted into a halt) is not a second stop.
       const raised = lastRaised.get(repoKey);
-      pending.set(repoKey, loop.autoGate !== undefined && raised !== undefined ? raised : { repoKey, status: loop.status, iteration: loop.iteration });
-      raiseIfDue(repoKey);
+      const occurrence = loop.autoGate !== undefined && raised !== undefined
+        ? raised : { repoKey, status: loop.status, iteration: loop.iteration };
+      const message = stripStatusControlChars(occurrence.status).slice(0, STATUS_MAX)
+        + (occurrence.iteration === undefined ? '' : ` · iter ${occurrence.iteration}`);
+      if (!conditions.has(repoKey) || !sameOccurrence(raised ?? null, occurrence)) {
+        conditions.set(repoKey, { conditionId: randomUUID(), message });
+      }
+      if (sameOccurrence(raised ?? null, occurrence)) return;
+      lastRaised.set(repoKey, { ...occurrence, perStep: loop.autoGate !== undefined });
+      const condition = conditions.get(repoKey)!;
+      try { deps.notify?.({ title: 'Agent loop needs you', body: message, repoKey }); }
+      catch { /* A notification cannot interrupt terminal work. */ }
+      for (const listener of listeners) {
+        try { listener({ ...condition }); }
+        catch { /* Each notification consumer is best effort. */ }
+      }
     },
   };
 }

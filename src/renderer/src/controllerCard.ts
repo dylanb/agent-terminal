@@ -110,6 +110,24 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
     actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
   }
+  if (model.kind === 'single' && model.latestNotification) {
+    const notification = model.latestNotification;
+    const box = element('section', 'controller-notification');
+    box.setAttribute('role', 'region');
+    box.setAttribute('aria-label', 'Received notification');
+    const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    bell.classList.add('controller-notification-bell');
+    bell.setAttribute('viewBox', '0 0 24 24');
+    bell.setAttribute('aria-hidden', 'true');
+    bell.setAttribute('focusable', 'false');
+    const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
+    bell.append(outline);
+    const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+    time.dateTime = new Date(notification.receivedAt).toISOString();
+    box.append(bell, ' ', element('p', 'controller-card-line', notification.message), ' ', time);
+    body.append(' ', box);
+  }
   body.append(' ', actionButton);
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {

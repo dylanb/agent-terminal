@@ -1,3 +1,7 @@
+## #221 slice 1 — immediate controller notifications
+
+§24.2.3 T4 and §23.6 replace focus-delayed OS delivery with immediate controller arrivals and a separately highlighted latest received message, bell and receipt time. The status-bar alert and gate authority are unchanged. Additive protocol minor 1 negotiates arrival/current-condition messages without making the extension a startup requirement; older compatible peers keep ordinary status and activation. Delivery failure never falls back to OS notifications or interrupts terminal work. History and Clear are subsequent increments of #221.
+
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
 > **Changelog v2.224:** **§23.6 — directory conflict cards ([#220](https://github.com/dylanb/agent-terminal/issues/220), operator decision 2026-10-26).** Overlapping live connections now share one conflict-only card with directory identity, instance count and all-original-window activation. This explicitly supersedes older overlap ticket/work/human-request display requirements: the operator must reduce the terminals to one before the survivor's current ordinary information returns. Header counts count cards; collapsed conflicts retain warning/count. Activation reports aggregate failures against the captured target set. Last departure retains one disconnected occurrence, reconnect replaces it, and focus/collapse continuity follows the directory. Wire protocol, human gates and T4 notifications are unchanged.

@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
-import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
@@ -46,6 +46,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   });
   const webSockets = new WebSocketServer({ server, ...controllerWebSocketOptions });
   webSockets.on('connection', socket => {
+    let notificationsSupported = false;
     socket.on('error', () => socket.terminate());
     socket.on('close', () => {
       const terminal = registrations.get(socket);
@@ -64,9 +65,16 @@ export async function startControllerTransport(appHome: string): Promise<Control
           for (const [id, terminal] of retained) {
             if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
           }
+          notificationsSupported = supportsControllerNotifications(message.minor);
           registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
           notify();
           socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
+        } else if ((message.type === 'notification' || message.type === 'notification-current') && registrations.has(socket) && notificationsSupported) {
+          const terminal = registrations.get(socket)!;
+          if (message.notification) {
+            terminal.latestNotification = { message: message.notification.message, receivedAt: Date.now() };
+            notify();
+          }
         } else if (message.type === 'status' && registrations.has(socket)) {
           registrations.get(socket)!.work = message.work;
           notify();

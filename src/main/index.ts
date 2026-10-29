@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
@@ -222,6 +222,7 @@ async function createWindow(): Promise<void> {
     })));
   let finishRegistration!: (accepted: boolean) => void;
   const registration = new Promise<boolean>(resolve => { finishRegistration = resolve; });
+  const loopNotifier = createLoopNotifier();
   const statusListeners = new Set<(work: import('../shared/ipc').ControllerWorkStatus) => void>();
   let currentWork: import('../shared/ipc').ControllerWorkStatus | undefined;
   let incompatibility: StartupIncompatibleMsg | undefined;
@@ -238,7 +239,7 @@ async function createWindow(): Promise<void> {
   }, report => {
     incompatibility = { sessionId: SESSION_ID, ...report };
     if (!win.isDestroyed()) win.webContents.send(CH.startupIncompatible, incompatibility);
-  });
+  }, loopNotifier);
   win.webContents.on('did-finish-load', () => {
     if (incompatibility) win.webContents.send(CH.startupIncompatible, incompatibility);
   });
@@ -955,34 +956,6 @@ async function createWindow(): Promise<void> {
   });
 
 
-  // T4 (§24.2.3): the raise/dedup decision lives in loopNotifier (unit-tested); only the untestable
-  // Electron Notification surface is created here.
-  const loopNotifier = createLoopNotifier({
-    isFocused: () => !win.isDestroyed() && win.isFocused(),
-    onFocusChanged: (listener) => {
-      win.on('blur', listener);
-      win.on('focus', listener);
-    },
-    focusWindow: () => {
-      if (win.isDestroyed()) return;
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    },
-    reveal: () => send(CH.flowRevealLoop, { sessionId: SESSION_ID }),
-    // A refused raise is indistinguishable from one never attempted unless it is recorded: macOS denies
-    // an unsigned bundle outright (UNErrorDomain 1), which silently disabled this surface for its whole life.
-    notify: ({ title, body, repoKey, onActivate }) => {
-      if (!Notification.isSupported()) {
-        audit.recordNotifyFailed(repoKey, 'the platform supports no notifications');
-        return () => {};
-      }
-      const notification = new Notification({ title, body });
-      notification.on('click', onActivate);
-      notification.on('failed', (_event, error) => audit.recordNotifyFailed(repoKey, String(error)));
-      notification.show();
-      return () => notification.close();
-    },
-  });
   const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
     loopNotifier.observe(repoKey, view);
     // §25.5: every view computation observes the loop mirror, so a §27 loop advance is recorded whether it

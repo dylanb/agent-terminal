@@ -43,7 +43,10 @@ export type ControllerWorkStatus = {
   error: null | { reason: string };
 };
 
+export interface ControllerReceivedNotification { message: string; receivedAt: number }
+
 export interface ControllerTerminal {
+  latestNotification?: ControllerReceivedNotification;
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';
   id: string;
