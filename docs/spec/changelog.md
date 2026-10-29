@@ -1,3 +1,7 @@
+## #221 slice 5 — Clear survives unchanged recovery
+
+§23.6 preserves cleared history through same-run reconnect and unchanged current reports, including disconnected Clear. New qualifying stops remain eligible even with identical wording. Dismiss, restart and overlap forget suppression and rebuild only from current information, with fresh receipt time and count one. Live status and gate authority remain independent.
+
 ## #221 slice 4 — Clear refusal and history continuity
 
 §23.6 preserves expanded history and equivalent control focus across updates. Clear revalidates observed history and directory representation before deletion; stale or unavailable operations announce refusal and permit explicit retry without hiding newer messages. Unrelated status updates remain valid. Current-condition recovery suppression remains the approved slice 5.
