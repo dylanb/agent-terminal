@@ -116,18 +116,17 @@ Write the complete report to the finalize-summary artifact with these eight sect
 4. **Exceptions, blocks and checklist outcomes**: group by step, including exceptions and dispositions,
    blocks and reasons, completed checklist counts and unfinished-item summaries.
    Show one row per todo, identified by its audit identity rather than its text, with its step, latest
-   recorded text and elapsed time from first entering `active` through its final `done` transition.
+   recorded text and elapsed time from entering `in_progress` to the subsequent `done` transition.
+   Exclude time waiting in `active` before work starts; never use creation as the duration's start.
    Exception: when the history establishes a direct `active` → `done` completion with no
    `in_progress` interval, display exactly `0s`, excluding its waiting time. Explain this reporting
    convention beside the table; it does not mean the underlying timestamps are equal. Do not infer
-   a direct completion from missing history. For other completed todos, include time spent in
-   intermediate states: this is wall-clock elapsed time, not active work time.
-   Use creation as the start only when the audit semantics establish that new todos start `active`;
-   do not substitute the later `in_progress` timestamp. If either endpoint is unavailable, say
+   a direct completion from missing history. This is elapsed time between status transitions,
+   not a measurement of uninterrupted work. If either endpoint is unavailable, say
    `unavailable` instead of inventing a duration. Attribute cross-step completion explicitly.
    List unfinished todos separately, one row each, with their last known status and `not completed`
-   instead of an active-to-done duration; say `None` when there are none. Reopened items are unfinished
-   until they reach `done` again. Keep deleted items in the appropriate completed or unfinished group;
+   instead of an in-progress-to-done duration; say `None` when there are none. Reopened items are unfinished
+   until they reach `done` again; report their latest completion cycle. Keep deleted items in the appropriate completed or unfinished group;
    deletion is not completion. Do not show creation/deletion dates or separate rows for status/text
    mutations. Keep that event history in the cited audit evidence. Use a continuous Markdown table
    with no blank line between its header, separator and data rows, and verify its rendered structure.
