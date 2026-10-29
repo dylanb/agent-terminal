@@ -74,3 +74,15 @@ it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malforme
   expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
   expect.soft(published.find(t => t.id === other.id)).toEqual(other);
 });
+
+
+it('returns stale through real preload/main wiring after a new arrival and preserves it until fresh retry', async () => {
+  const selected = await register('/work/selected');
+  peers[0].send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId: 'new', message: 'New protected arrival' } }));
+  await expect.poll(() => published.find(t => t.id === selected.id)?.notifications?.length).toBe(2);
+  const current = published.find(t => t.id === selected.id)!;
+  expect.soft(await clearObserved(controllerApi, selected)).toBe('stale');
+  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual(current.notifications);
+  expect.soft(await clearObserved(controllerApi, current)).toBe('cleared');
+  expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
+});

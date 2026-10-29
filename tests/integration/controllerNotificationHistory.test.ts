@@ -207,3 +207,36 @@ for (const disconnected of [false, true]) {
     expect.soft(h.terminal('/work/b')).toEqual(other);
   });
 }
+
+
+it.each(['arrival', 'repeat', 'disconnect', 'replacement', 'overlap', 'dismiss'] as const)('refuses an observed Clear after %s and permits fresh explicit retry', async change => {
+  const h = await fixture(); const a = await h.connect();
+  await a.arrival('original');
+  const b = await h.connect('/work/b'); await b.arrival('unrelated');
+  const observed = h.terminal()!;
+  if (change === 'arrival') await a.arrival('new protected message');
+  if (change === 'repeat') await a.arrival('original');
+  if (change === 'disconnect' || change === 'replacement' || change === 'dismiss') await a.close();
+  if (change === 'replacement') await h.connect('/work/a', condition('replacement'));
+  if (change === 'overlap') await h.connect('/work/a', condition('overlapping'));
+  if (change === 'dismiss') h.registry().dismiss(a.id);
+  const before = h.registry().terminals();
+  expect.soft(await clearObserved(h.registry(), observed)).toBe('stale');
+  expect.soft(h.registry().terminals()).toEqual(before);
+  if (change === 'overlap') await a.close();
+  if (change === 'dismiss') await h.connect('/work/a', condition('fresh after dismissal'));
+  const current = h.terminal()!;
+  expect.soft(await clearObserved(h.registry(), current)).toBe('cleared');
+  expect.soft(h.entries()).toEqual([]);
+  expect.soft(h.terminal('/work/b')).toEqual(before.find(t => t.id === b.id));
+});
+
+it('an unrelated live-status update does not invalidate observed Clear or remove the updated live condition', async () => {
+  const h = await fixture(); const a = await h.connect(); await a.arrival('original');
+  const observed = h.terminal()!;
+  await a.flush({ status: 'complete', reasons: ['Still requires approval'] }, { reason: 'New live failure' });
+  const work = h.terminal()!.work;
+  expect.soft(await clearObserved(h.registry(), observed)).toBe('cleared');
+  expect.soft(h.entries()).toEqual([]);
+  expect.soft(h.terminal()!.work).toEqual(work);
+});
