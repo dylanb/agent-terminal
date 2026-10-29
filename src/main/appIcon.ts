@@ -3,9 +3,16 @@ import type { BundleLocation } from './bundleLocation';
 
 export type IconLocation = BundleLocation;
 
-export type AppIcon = 'terminal' | 'controller';
+const ICON_FILES = {
+  terminal: 'icon.png',
+  controller: 'controller-icon.png',
+  'controller-needs-human': 'controller-icon-needs-human.png',
+  'controller-error': 'controller-icon-error.png',
+} as const;
 
-const ICON_FILES: Record<AppIcon, string> = { terminal: 'icon.png', controller: 'controller-icon.png' };
+export type AppIcon = keyof typeof ICON_FILES;
+
+export const APP_ICONS = Object.keys(ICON_FILES) as AppIcon[];
 
 export function resolveWindowIconPath(loc: IconLocation, icon: AppIcon): string {
   return loc.packaged

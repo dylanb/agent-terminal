@@ -1,9 +1,9 @@
 import type { MenuItemConstructorOptions } from 'electron';
-import { cardCounts, statusSummary } from '../shared/controllerCardStatus';
+import { cardCounts, statusSummary, type CardStatusClass } from '../shared/controllerCardStatus';
 import { directoryCards } from '../shared/controllerCards';
 import type { ControllerTerminal } from '../shared/ipc';
-
-export const CONTROLLER_APP_NAME = 'Agent Terminal Controller';
+import type { AppIcon } from './appIcon';
+import { CONTROLLER_APP_NAME } from './controllerAppName';
 
 export type TrayBadge = 'none' | 'needs-human' | 'error';
 
@@ -29,25 +29,12 @@ export interface ControllerTraySources {
 
 export type ControllerTrayMenuMode = 'attached' | 'popup-on-right-click';
 
-/** An image as rows of 4-byte BGRA pixels, the layout of Electron's `NativeImage.toBitmap()`. */
-export interface TrayBitmap {
-  width: number;
-  height: number;
-  bgra: Uint8Array;
-}
-
-/** The light-theme `--status-needs-human` and `--status-error` of tokens.css, as [r, g, b]. */
-export const TRAY_BADGE_COLOURS: Readonly<Record<Exclude<TrayBadge, 'none'>, readonly [number, number, number]>> = {
-  'needs-human': [0xc9, 0x7f, 0x14],
-  error: [0xe5, 0x48, 0x4d],
-};
-
 export function controllerTrayView(terminals: readonly ControllerTerminal[], alwaysOnTop: boolean): ControllerTrayView {
   const cards = directoryCards(terminals);
   const summary = statusSummary(cards);
-  const count = (label: string) => summary.find(entry => entry.label === label)?.count ?? 0;
-  const errors = count('errors');
-  const needsHuman = count('need a human');
+  const count = (statusClass: CardStatusClass) => summary.find(entry => entry.statusClass === statusClass)?.count ?? 0;
+  const errors = count('error');
+  const needsHuman = count('needs-human');
   const { connected, disconnected } = cardCounts(cards);
   const badge: TrayBadge = errors ? 'error' : needsHuman ? 'needs-human' : 'none';
   return { badge, connected, errors, disconnectedErrors: disconnected, needsHuman, alwaysOnTop };
@@ -96,18 +83,12 @@ export function controllerTrayMenuMode(platform: NodeJS.Platform): ControllerTra
   return platform === 'darwin' ? 'popup-on-right-click' : 'attached';
 }
 
-export function paintTrayBadge(bitmap: TrayBitmap, badge: TrayBadge): TrayBitmap {
-  const bgra = Uint8Array.from(bitmap.bgra);
-  if (badge !== 'none') {
-    const [r, g, b] = TRAY_BADGE_COLOURS[badge];
-    const radius = Math.max(2, Math.round(Math.min(bitmap.width, bitmap.height) * 0.22));
-    const centreX = bitmap.width - radius;
-    const centreY = bitmap.height - radius;
-    for (let y = 0; y < bitmap.height; y += 1) {
-      for (let x = 0; x < bitmap.width; x += 1) {
-        if ((x + 0.5 - centreX) ** 2 + (y + 0.5 - centreY) ** 2 <= radius ** 2) bgra.set([b, g, r, 255], (y * bitmap.width + x) * 4);
-      }
-    }
-  }
-  return { width: bitmap.width, height: bitmap.height, bgra };
+const TRAY_ICONS: Readonly<Record<TrayBadge, AppIcon>> = {
+  none: 'controller',
+  'needs-human': 'controller-needs-human',
+  error: 'controller-error',
+};
+
+export function controllerTrayIcon(badge: TrayBadge): AppIcon {
+  return TRAY_ICONS[badge];
 }

@@ -2,12 +2,9 @@ node_modules/
 out/
 dist/
 build/*
-!build/icon.svg
-!build/icon.png
-!build/icon.svg.sha256
-!build/controller-icon.svg
-!build/controller-icon.png
-!build/controller-icon.svg.sha256
+!build/*.svg
+!build/*.png
+!build/*.svg.sha256
 test-results/
 playwright-report/
 .vitest-attachments/

@@ -4,7 +4,12 @@ export interface SwitchDeps {
   onChange(checked: boolean): void;
 }
 
-export function createSwitch(host: HTMLElement, deps: SwitchDeps): { set(checked: boolean): void; dispose(): void } {
+export interface Switch {
+  set(checked: boolean): void;
+  dispose(): void;
+}
+
+export function createSwitch(host: HTMLElement, deps: SwitchDeps): Switch {
   const doc = host.ownerDocument;
   const button = doc.createElement('button');
   button.type = 'button';

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, type Rectangle } from 'electron';
+import { app, BrowserWindow, screen } from 'electron';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { startControllerTransport } from './controllerTransport';
@@ -13,8 +13,10 @@ import { errMsg } from './errno';
 import { applyDockIcon, resolveWindowIconPath } from './appIcon';
 import type { BundleLocation } from './bundleLocation';
 import { controllerCloseAction } from './controllerWindowPolicy';
-import { CONTROLLER_APP_NAME, controllerTrayMenuMode, watchTrayView, type ControllerTraySources } from './controllerTrayModel';
+import { installControllerWindowBehaviour } from './controllerWindowBehaviour';
+import { controllerTrayMenuMode, watchTrayView, type ControllerTraySources } from './controllerTrayModel';
 import { createControllerTray } from './controllerTray';
+import { CONTROLLER_APP_NAME } from './controllerAppName';
 
 app.setName(CONTROLLER_APP_NAME);
 let quitting = false;
@@ -37,37 +39,17 @@ void app.whenReady().then(async () => {
     webPreferences: { preload: join(__dirname, '../preload/index.js'), additionalArguments: [CONTROLLER_WINDOW_ARGUMENT], contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   installNavigationGuards(window.webContents);
-  // Window managers that animate minimizing by sliding the frame (openbox) make Chromium report each step as a move,
-  // so a minimized window's own bounds are not where the operator left it.
-  let boundsBeforeMinimize: Rectangle | null = null;
-  window.on('minimize', () => { boundsBeforeMinimize = window.getNormalBounds(); });
-  window.on('restore', () => { boundsBeforeMinimize = null; });
-  // untestable (macOS hide-on-close and Dock-click reopen are native) — tracked in #153.
-  const closeAction = controllerCloseAction(process.platform);
-  window.on('close', event => {
-    if (quitting) {
-      windowState.saveBounds(boundsBeforeMinimize ?? window.getNormalBounds());
-      return;
-    }
-    event.preventDefault();
-    // A full-screen window ignores minimize, and hiding one on macOS leaves its Space behind as a black screen.
-    if (!window.isFullScreen()) {
-      window[closeAction]();
-      return;
-    }
-    window.once('leave-full-screen', () => window[closeAction]());
-    window.setFullScreen(false);
+  const { open } = installControllerWindowBehaviour(window, {
+    closeAction: controllerCloseAction(process.platform),
+    quitting: () => quitting,
+    saveBounds: bounds => windowState.saveBounds(bounds),
   });
-  const open = () => {
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-  };
+  // untestable (macOS Dock-click reopen is native) — tracked in #153.
   app.on('activate', open);
   const alwaysOnTop = createControllerAlwaysOnTop({ window, store: windowState, initial: saved.alwaysOnTop });
   // untestable (the native tray; the operator's test scope leaves it to the manual checklist) — tracked in #153.
   const tray = createControllerTray(
-    resolveWindowIconPath(iconLoc, 'controller'),
+    icon => resolveWindowIconPath(iconLoc, icon),
     controllerTrayMenuMode(process.platform),
     { open, setAlwaysOnTop: on => alwaysOnTop.set(on), quit: () => app.quit() },
   );

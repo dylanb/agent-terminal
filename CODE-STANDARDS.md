@@ -20,6 +20,13 @@ resolver**, never a parallel path literal, pinned by `expect(dest).toBe(resolve�
 writes to `resolveWindowIconPath`, and `exampleAssetsBuild.ts` to `resolveExampleFlowsDir` /
 `resolveExampleLoopsV2Dir` and their siblings — the same functions the runtime reads through.
 
+**A set of shipped assets is listed once, in the code that resolves them; every other copy of the list is
+derived from it or pinned by a test.** The build copies every entry of that list (`APP_ICONS` in
+`appIcon.ts`), the packaging config's entries are checked against the resolver by a test, and a generator
+finds its inputs by pattern (`gen-icon` renders every `build/*.svg`) rather than a hand-kept list. A copy
+that is neither derived nor tested goes stale silently — a renamed or added asset ships missing or out of
+date with every test green.
+
 **When the reader's resolution is precedence-aware, the writer targets a named branch of that order, not
 the resolver's result.** A resolver that consults an override chain (repo-local override, else the
 user-config copy) answers "where would this be read from *here, now*"; a writer calling it inherits ambient
@@ -259,6 +266,17 @@ and keep the input-collecting UI open until the reply: close on success; on refu
 and show why. `flow:appRequestChanges` and the feedback composer are the live instance. Litmus: if the
 operation can fail on receiver-only state *and* the near side holds input a drop would lose, a one-way
 channel is a data-loss defect.
+
+**A value more than one surface can change has one owner — the side that applies it to the real thing — and
+every surface shows only what that owner reports.** The owner may be main (a window property), a terminal
+process (state the controller only mirrors), or the loop runner (run state). Each surface asks the owner for a
+change as a two-way request; the owner applies it, persists it if it persists, replies with the value it now
+holds, and pushes that value to every other surface. A surface displays the owner's reply or push, never its
+own guess, so two surfaces cannot disagree. Two races decide correctness: a push that arrives before a
+surface's first read replies is newer than that reply and wins, and a refused or failed request leaves the
+surface on the last value the owner reported. Always-on-top is the live instance: `controllerAlwaysOnTop.ts`
+owns it in main, and the window switch (`alwaysOnTopControl.ts`) and the tray item both request it. A value
+with a single surface that cannot be refused (the controller theme) needs none of this.
 
 ## A best-effort or cosmetic side effect must never abort the critical path it sits on
 

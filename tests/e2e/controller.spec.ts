@@ -127,6 +127,23 @@ test('closing the controller window in full screen leaves full screen before it 
   }
 });
 
+test('reopening the closed controller window restores it and gives it focus', { tag: '@ownapp' }, async () => {
+  const h = await createControllerDesktopHarness();
+  try {
+    const controller = await h.launch({ kind: 'development', entry: resolve('out/main/controller.js') }, h.fixture.nonGit);
+    const shown = () => controller.app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      return { visible: window.isVisible() && !window.isMinimized(), focused: window.isFocused() };
+    });
+    await controller.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await expect.poll(async () => (await shown()).visible).toBe(false);
+    await controller.app.evaluate(({ app }) => { app.emit('activate'); });
+    await expect.poll(shown).toEqual({ visible: true, focused: true });
+  } finally {
+    await h.dispose();
+  }
+});
+
 test('terminals continue real PTY work after the controller explicitly quits', { tag: '@ownapp' }, async () => {
   const h = createControllerHarness();
   try {

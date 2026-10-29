@@ -1,10 +1,12 @@
 // untestable (native tray image, menu and clicks; no e2e observes the tray, operator decision) — tracked in #153.
-import { Menu, nativeImage, Tray } from 'electron';
+import { Menu, nativeImage, Tray, type NativeImage } from 'electron';
 import { errMsg } from './errno';
 import {
-  CONTROLLER_APP_NAME, controllerTrayMenu, paintTrayBadge,
-  type ControllerTrayActions, type ControllerTrayMenuMode, type ControllerTrayView, type TrayBitmap,
+  controllerTrayIcon, controllerTrayMenu,
+  type ControllerTrayActions, type ControllerTrayMenuMode, type ControllerTrayView, type TrayBadge,
 } from './controllerTrayModel';
+import type { AppIcon } from './appIcon';
+import { CONTROLLER_APP_NAME } from './controllerAppName';
 
 const ICON_PIXELS = 32;
 const ICON_SCALE = 2;
@@ -14,7 +16,7 @@ export interface ControllerTray {
   destroy(): void;
 }
 
-export function createControllerTray(iconPath: string, mode: ControllerTrayMenuMode, actions: ControllerTrayActions): ControllerTray {
+export function createControllerTray(iconPath: (icon: AppIcon) => string, mode: ControllerTrayMenuMode, actions: ControllerTrayActions): ControllerTray {
   try {
     return nativeTray(iconPath, mode, actions);
   } catch (error) {
@@ -23,17 +25,16 @@ export function createControllerTray(iconPath: string, mode: ControllerTrayMenuM
   }
 }
 
-function nativeTray(iconPath: string, mode: ControllerTrayMenuMode, actions: ControllerTrayActions): ControllerTray {
-  const icon = nativeImage.createFromPath(iconPath).resize({ width: ICON_PIXELS, height: ICON_PIXELS });
-  const base: TrayBitmap = { width: ICON_PIXELS, height: ICON_PIXELS, bgra: icon.toBitmap() };
-  const paintable = base.bgra.length === ICON_PIXELS * ICON_PIXELS * 4;
-  const image = (view: ControllerTrayView) => {
-    if (!paintable) return icon;
-    const painted = paintTrayBadge(base, view.badge);
-    return nativeImage.createFromBitmap(Buffer.from(painted.bgra), { width: painted.width, height: painted.height, scaleFactor: ICON_SCALE });
-  };
+function trayImage(path: string): NativeImage {
+  const resized = nativeImage.createFromPath(path).resize({ width: ICON_PIXELS, height: ICON_PIXELS });
+  return nativeImage.createFromBuffer(resized.toPNG(), { scaleFactor: ICON_SCALE });
+}
+
+function nativeTray(iconPath: (icon: AppIcon) => string, mode: ControllerTrayMenuMode, actions: ControllerTrayActions): ControllerTray {
+  const image = (badge: TrayBadge) => trayImage(iconPath(controllerTrayIcon(badge)));
+  const images: Record<TrayBadge, NativeImage> = { none: image('none'), 'needs-human': image('needs-human'), error: image('error') };
   const menu = (view: ControllerTrayView) => Menu.buildFromTemplate(controllerTrayMenu(view, actions));
-  const tray = new Tray(icon);
+  const tray = new Tray(images.none);
   tray.setToolTip(CONTROLLER_APP_NAME);
   let current: ControllerTrayView | undefined;
   tray.on('click', () => actions.open());
@@ -42,7 +43,7 @@ function nativeTray(iconPath: string, mode: ControllerTrayMenuMode, actions: Con
     if (tray.isDestroyed()) return;
     current = view;
     try {
-      tray.setImage(image(view));
+      tray.setImage(images[view.badge]);
       if (mode === 'attached') tray.setContextMenu(menu(view));
     } catch (error) {
       console.error(`Controller tray not updated: ${errMsg(error)}`);

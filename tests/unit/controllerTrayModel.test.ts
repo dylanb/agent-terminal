@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import type { MenuItemConstructorOptions } from 'electron';
 import {
-  controllerTrayMenu, controllerTrayMenuMode, controllerTrayView, paintTrayBadge, watchTrayView,
-  type ControllerTrayView, type TrayBadge, type TrayBitmap,
+  controllerTrayIcon, controllerTrayMenu, controllerTrayMenuMode, controllerTrayView, watchTrayView,
+  type ControllerTrayView, type TrayBadge,
 } from '../../src/main/controllerTrayModel';
+import { resolveWindowIconPath } from '../../src/main/appIcon';
 import { cardCounts, statusSummary } from '../../src/shared/controllerCardStatus';
 import { directoryCards } from '../../src/shared/controllerCards';
 import type { ControllerTerminal } from '../../src/shared/ipc';
@@ -45,9 +47,9 @@ describe('the tray view', () => {
     };
     const mismatches = Object.entries(sets).flatMap(([key, terminals]) => {
       const cards = directoryCards(terminals);
-      const summary = Object.fromEntries(statusSummary(cards).map(({ label, count }) => [label, count]));
+      const summary = Object.fromEntries(statusSummary(cards).map(({ statusClass, count }) => [statusClass, count]));
       const counts = cardCounts(cards);
-      const expected = { errors: summary.errors, needsHuman: summary['need a human'], connected: counts.connected, disconnectedErrors: counts.disconnected };
+      const expected = { errors: summary.error, needsHuman: summary['needs-human'], connected: counts.connected, disconnectedErrors: counts.disconnected };
       const { errors, needsHuman, connected, disconnectedErrors } = controllerTrayView(terminals, false);
       const actual = { errors, needsHuman, connected, disconnectedErrors };
       return JSON.stringify(actual) === JSON.stringify(expected) ? [] : [`${key}: got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`];
@@ -264,9 +266,11 @@ describe('the tray menu', () => {
   });
 });
 
+const ROOT = resolve(__dirname, '../..');
+
 /** The light-theme (`:root`) value of a colour token in tokens.css, as `rrggbb`, following `var()` references. */
 function lightToken(name: string): string {
-  const css = readFileSync(resolve(__dirname, '../../src/renderer/src/tokens.css'), 'utf8');
+  const css = readFileSync(resolve(ROOT, 'src/renderer/src/tokens.css'), 'utf8');
   const root = /:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
   const value = (token: string): string => {
     const raw = new RegExp(`${token}\\s*:\\s*([^;]+);`).exec(root)?.[1].trim() ?? '';
@@ -276,40 +280,33 @@ function lightToken(name: string): string {
   return value(name).replace('#', '').toLowerCase();
 }
 
-/** Every opaque colour in the bitmap, as `rrggbb`. */
-function opaqueColours(bitmap: TrayBitmap): Set<string> {
+/** Every fully opaque colour in a PNG, as `rrggbb`. */
+function opaqueColours(file: string): Set<string> {
+  const { data } = PNG.sync.read(readFileSync(file));
   const colours = new Set<string>();
-  for (let i = 0; i < bitmap.bgra.length; i += 4) {
-    const [b, g, r, a] = bitmap.bgra.subarray(i, i + 4);
-    if (a === 255) colours.add([r, g, b].map(channel => channel.toString(16).padStart(2, '0')).join(''));
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 255) colours.add([data[i], data[i + 1], data[i + 2]].map(channel => channel.toString(16).padStart(2, '0')).join(''));
   }
   return colours;
 }
 
-describe('the tray badge', () => {
-  it('paints nothing for no badge, and the cards\' light-theme amber and red for a human and an error', () => {
-    const size = 16;
-    const bgra = new Uint8Array(size * size * 4);
-    for (let pixel = 0; pixel < size * size; pixel += 1) bgra.set([pixel % 200, pixel % 200, pixel % 200, 255], pixel * 4);
-    const base: TrayBitmap = { width: size, height: size, bgra };
-    const original = Uint8Array.from(bgra);
+describe('the tray icon', () => {
+  it('is a different icon for no badge, a human and an error', () => {
+    const badges: TrayBadge[] = ['none', 'needs-human', 'error'];
+    expect(new Set(badges.map(controllerTrayIcon)).size).toBe(3);
+  });
+
+  it('shows the cards\' light-theme amber for a human and red for an error, and neither when nothing needs attention', () => {
     const amber = lightToken('--status-needs-human');
     const red = lightToken('--status-error');
-    const painted = (badge: TrayBadge) => {
-      const colours = opaqueColours(paintTrayBadge(base, badge));
-      return { amber: colours.has(amber), red: colours.has(red) };
+    const colours = (badge: TrayBadge) => {
+      const shown = opaqueColours(resolveWindowIconPath({ packaged: false, appPath: ROOT }, controllerTrayIcon(badge)));
+      return { amber: shown.has(amber), red: shown.has(red) };
     };
-    const none = paintTrayBadge(base, 'none');
-    expect({
-      none: { size: [none.width, none.height], unchanged: Buffer.from(none.bgra).equals(Buffer.from(original)) },
-      'needs-human': painted('needs-human'),
-      error: painted('error'),
-      baseUntouched: Buffer.from(base.bgra).equals(Buffer.from(original)),
-    }).toEqual({
-      none: { size: [size, size], unchanged: true },
+    expect({ none: colours('none'), 'needs-human': colours('needs-human'), error: colours('error') }).toEqual({
+      none: { amber: false, red: false },
       'needs-human': { amber: true, red: false },
       error: { amber: false, red: true },
-      baseUntouched: true,
     });
   });
 });
