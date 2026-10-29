@@ -71,7 +71,6 @@ export type FlowStripDeps = Omit<
   FlowApi,
   | 'onRevealLoop'
   | 'onBootstrapError'
-  | 'onLoopError'
   | 'onAppBootstrapConflict'
   | 'resolveAppBootstrapConflict'
   | 'onEpicPromotionPreview'

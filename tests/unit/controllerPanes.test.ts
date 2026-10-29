@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
+import { bringForwardIn, cardHeaderIn, cardIn, cardsIn, dismissIn, dismissLoopMessageIn, headerLabels, showsName, unshownCounts, windowHeaderIn, windowTitleIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { STATUS_CASES, statusService } from '../helpers/controllerStatusFixture';
 
@@ -168,6 +168,20 @@ describe('controller panes', () => {
     else reject(new Error('Connection closed'));
     await pending.catch(() => {});
     expect({ requested, children: host.childElementCount }).toEqual({ requested: [terminal.id], children: 0 });
+  });
+});
+
+describe('dismiss a loop message', () => {
+  it('asks for the shown message of that card\'s terminal to be dismissed, without activating it, and the card then shows none', async () => {
+    const { terminal: shown } = STATUS_CASES['loop-error'];
+    const { host, service, dispose } = mountControllerPanes({ terminals: [shown, STATUS_CASES.working.terminal] });
+    try {
+      const card = cardIn(host, shown.launchDirectory);
+      (card && dismissLoopMessageIn(card))?.click();
+      await vi.waitFor(() => expect(cardIn(host, shown.launchDirectory)?.textContent).not.toContain('the turn stalled'));
+      expect(service.loopMessageDismissals).toEqual([[shown.id, 'loop-1']]);
+      expect(service.activated).toEqual([]);
+    } finally { dispose(); }
   });
 });
 

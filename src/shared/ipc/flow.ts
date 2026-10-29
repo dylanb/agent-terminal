@@ -73,10 +73,6 @@ export const FLOW_CHANNELS = {
     name: 'flow:onBootstrapError',
     does: "Main reports that a loop step's bootstrap could not proceed, with the reason and the repo and step it failed on.",
   },
-  flowOnLoopError: {
-    name: 'flow:onLoopError',
-    does: 'Main reports a loop-mechanics failure, or a benign no-op as a notice, with its reason.',
-  },
   flowOnAppBootstrapConflict: {
     name: 'flow:onAppBootstrapConflict',
     does: "Main asks the operator what to do when a loop step's branch already exists locally, on the remote or with pull requests.",
@@ -368,25 +364,6 @@ export interface FlowBootstrapErrorMsg {
   repoKey: string;
   step: string;
   reason: string;
-}
-
-/** The severity a flow:onLoopError message carries: a genuine `error` (the default — a failed loop
- *  mechanic, framed as a blocking error dialog) or a non-blocking `notice` the operator should see but which
- *  must not raise a blocking dialog — a benign completed no-op (§28.3 nothing-to-commit) or a best-effort
- *  degradation that left the accept intact (§28.5.1 baseline-record-failed). One definition the main writer and
- *  the renderer both key on (CLAUDE.md shared-vocabulary). */
-export type FlowLoopMessageKind = 'error' | 'notice';
-
-/** flow:onLoopError push (§27.12/§28.3): main signals a loop-MECHANICS outcome after the loop was
- *  bootstrapped. `kind: 'error'` (default) is a FAILURE — a turn-runner error (no hosted agent, a stall, a
- *  missing artifact, a compose failure) or an un-persistable gate transition; the renderer raises a blocking
- *  error dialog carrying `reason`. `kind: 'notice'` is a benign completed no-op (§28.3 nothing-to-commit),
- *  surfaced on the same channel but framed as a notice, not a failure. Distinct channel from
- *  `flow:onBootstrapError` so pickup-time and run-time messages keep their own dialog titles. */
-export interface FlowLoopErrorMsg {
-  sessionId: SessionId;
-  reason: string;
-  kind?: FlowLoopMessageKind;
 }
 
 /** §6/§27.10. */
@@ -690,10 +667,6 @@ export interface FlowApi {
    *  rolled back, or a declared bootstrap the bound def has no contract for); the renderer raises a blocking
    *  error dialog. Returns an unsubscribe. */
   onBootstrapError(cb: (reason: string, repoKey: string, step: string) => void): () => void;
-  /** Subscribe to main's flow:onLoopError push (§27.12/§28.3): `cb` fires with the human-readable
-   *  `reason` and its `kind` — `'error'` (a loop-mechanics failure → blocking error dialog) or `'notice'`
-   *  (a benign completed no-op → framed as a notice, not a failure). Returns an unsubscribe. */
-  onLoopError(cb: (reason: string, kind: FlowLoopMessageKind) => void): () => void;
   /** §6/§27.10. */
   onAppBootstrapConflict(
     cb: (

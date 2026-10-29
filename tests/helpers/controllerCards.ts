@@ -33,6 +33,8 @@ export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text
 const activationName = /Bring (?:both |[0-9]+ terminals )?forward/;
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: activationName });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
+const loopMessageDismissalName = /^Dismiss (?:loop error|notice) /;
+export const dismissLoopMessageLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: loopMessageDismissalName });
 export const showFullReasonLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Show full reason' });
 export const cardHeaderLocator = <L extends Alternatives<L>>(card: RoleScope<L>, directory: string): L =>
   card.getByRole('button', { name: directoryPattern(directory), expanded: true })
@@ -95,6 +97,7 @@ const controlsIn = (scope: ParentNode, text: string | RegExp): HTMLElement[] => 
 const controlIn = (scope: ParentNode, text: string | RegExp): HTMLElement | undefined => controlsIn(scope, text)[0];
 export const bringForwardIn = (card: ParentNode) => controlIn(card, activationName);
 export const dismissIn = (card: ParentNode) => controlIn(card, 'Dismiss');
+export const dismissLoopMessageIn = (card: ParentNode) => controlIn(card, loopMessageDismissalName);
 export const showFullReasonIn = (card: ParentNode) => controlIn(card, 'Show full reason');
 export const showFullReasonsIn = (card: ParentNode): HTMLElement[] => controlsIn(card, 'Show full reason');
 export const windowTitleIn = (root: ParentNode): HTMLElement | undefined =>

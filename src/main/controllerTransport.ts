@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
 import type { ControllerTerminal } from '../shared/ipc';
-import { CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
 
@@ -19,6 +19,7 @@ export interface ControllerRegistry {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
   dismiss(id: string): void;
+  dismissLoopMessage(terminalId: string, messageId: string): void;
   dispose(): Promise<void>;
 }
 
@@ -34,6 +35,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
   if (!ownership.ok) throw new Error(ownership.reason);
   const sockets = new Set<Socket>();
   const registrations = new Map<WebSocket, ControllerTerminal>();
+  const minors = new Map<WebSocket, number>();
   const retained = new Map<string, ControllerTerminal>();
   const snapshot = () => structuredClone([...retained.values(), ...registrations.values()]);
   const pending = new Map<string, { socket: WebSocket; finish(outcome: 'activated' | 'unavailable'): void }>();
@@ -50,6 +52,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
     socket.on('close', () => {
       const terminal = registrations.get(socket);
       registrations.delete(socket);
+      minors.delete(socket);
       if (terminal && ![...registrations.values()].some(peer => peer.launchDirectory === terminal.launchDirectory)) {
         retained.set(terminal.id, { ...terminal, status: 'disconnected' });
       }
@@ -65,6 +68,7 @@ export async function startControllerTransport(appHome: string): Promise<Control
             if (terminal.launchDirectory === message.launchDirectory) retained.delete(id);
           }
           registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot });
+          minors.set(socket, message.minor ?? 0);
           notify();
           socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, minor: CONTROLLER_PROTOCOL_MINOR, type: 'registered' }));
         } else if (message.type === 'status' && registrations.has(socket)) {
@@ -127,6 +131,12 @@ export async function startControllerTransport(appHome: string): Promise<Control
     },
     dismiss(id) {
       if (retained.delete(id)) notify();
+    },
+    dismissLoopMessage(terminalId, messageId) {
+      const [socket, terminal] = [...registrations].find(([, registered]) => registered.id === terminalId) ?? [];
+      if (!socket || socket.readyState !== WebSocket.OPEN || (minors.get(socket) ?? 0) < CONTROLLER_LOOP_MESSAGE_MINOR) return;
+      if (terminal?.work?.loopMessage?.id !== messageId) return;
+      socket.send(encodeControllerMessage({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'dismiss-loop-message', id: messageId }));
     },
     async activate(id) {
       const socket = [...registrations].find(([, terminal]) => terminal.id === id)?.[0];

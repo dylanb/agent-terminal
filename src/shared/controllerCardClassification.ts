@@ -25,16 +25,17 @@ export interface CardStatus {
 }
 
 function conditionStatus(work: ControllerWorkStatus): [string, CardStatusClass] {
-  const text = [...(work.error ? ['Flow error'] : []), ...(work.attention ? ['Needs a human'] : []), ACTIVITY_WORDS[work.activity]].join(' · ');
+  const loopError = work.loopMessage?.kind === 'error';
+  const text = [...(work.error ? ['Flow error'] : []), ...(loopError ? ['Loop error'] : []), ...(work.attention ? ['Needs a human'] : []), ACTIVITY_WORDS[work.activity]].join(' · ');
   if (work.activity === 'active') return [text, 'working'];
-  return [text, work.error ? 'error' : 'needs-human'];
+  return [text, work.error || loopError ? 'error' : 'needs-human'];
 }
 
 function textAndClass(card: ControllerDirectoryCard): [string, CardStatusClass] {
   if (card.kind === 'conflict') return ['Duplicate directory', 'error'];
   if (card.kind === 'disconnected') return ['Disconnected', 'error'];
   const work = card.work;
-  if (work?.error || work?.attention) return conditionStatus(work);
+  if (work?.error || work?.loopMessage?.kind === 'error' || work?.attention) return conditionStatus(work);
   if (work?.unavailableReason) return ['Status unavailable', 'needs-human'];
   if (!work) return ['Loading', 'idle'];
   if (work.flow.availability !== 'known' || work.flow.assignment === 'unavailable') return ['Status unknown', 'idle'];

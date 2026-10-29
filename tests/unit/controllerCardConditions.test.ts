@@ -9,6 +9,13 @@ describe('controller attention text', () => {
       .toBe('Human needed: error. Check failed. Lint failed. Error. Broken build');
   });
 
+  it('words the latest loop message after the flow\'s own error, as a loop error or a notice by its kind', () => {
+    expect([
+      attentionText(statusTerminal({ error: { reason: 'Broken build' }, loopMessage: { id: 'm1', kind: 'error', reason: 'the turn stalled' } }).work),
+      attentionText(statusTerminal({ loopMessage: { id: 'm2', kind: 'notice', reason: 'nothing to commit' } }).work),
+    ]).toEqual(['Error. Broken build. Loop error. the turn stalled', 'Notice. nothing to commit']);
+  });
+
   it('is empty when nothing needs attention, and the oversized-status text when the status could not be read', () => {
     const unread = statusTerminal();
     expect([attentionText(statusTerminal().work), attentionText({ ...unread.work, unavailableReason: 'message-too-large' })])

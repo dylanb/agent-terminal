@@ -1,4 +1,4 @@
-import { electron } from './registeredElectron';
+import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -175,17 +175,12 @@ async function countAlertInsertions(): Promise<void> {
 }
 const alertInsertions = (): Promise<number> => page.evaluate(() => (window as unknown as { __alertInsertions: number }).__alertInsertions);
 
-/** Record every `CH.flowOnLoopError` error reason the renderer receives from now on (the dialog host shows only the latest). */
+/** Record every loop error reason the terminal reports to the controller from now on (the card shows only the latest). */
+let readLoopMessages: (() => { kind: string; reason: string }[]) | undefined;
 async function recordLoopErrors(): Promise<void> {
-  await page.evaluate(() => {
-    const w = window as unknown as { __loopErrors: string[] };
-    w.__loopErrors = [];
-    window.flow.onLoopError((reason, kind) => {
-      if (kind === 'error') w.__loopErrors.push(reason);
-    });
-  });
+  readLoopMessages = controllerOf(app!).recordLoopMessages();
 }
-const loopErrors = (): Promise<string[]> => page.evaluate(() => (window as unknown as { __loopErrors: string[] }).__loopErrors);
+const loopErrors = async (): Promise<string[]> => (readLoopMessages?.() ?? []).filter((m) => m.kind === 'error').map((m) => m.reason);
 
 /** The command entries of the repo's one §25 run file, read without a run identity (the test makes exactly one
  *  Start) — every one, or only the gate's. */
@@ -522,11 +517,14 @@ test('a manual Advance while a human approve runs its side-effect moves the flow
 
 const errorDialog = () => page.locator('#flow-error-host .flow-modal');
 
-/** Dismiss every blocking loop-error dialog currently shown, so the panel behind it can be opened. */
-async function dismissLoopErrors(): Promise<void> {
-  while ((await errorDialog().count()) > 0 && (await errorDialog().first().isVisible())) {
-    await errorDialog().first().locator('.dismiss').click();
-  }
+/** The terminal reported a loop error to the controller. */
+async function expectLoopError(): Promise<void> {
+  await expect.poll(() => controllerOf(app!).loopMessage()?.kind, { timeout: UI_MS }).toBe('error');
+}
+
+/** A loop error goes to the controller, never to a popup over the panel. */
+async function expectNoLoopPopup(): Promise<void> {
+  await expect(errorDialog()).toHaveCount(0);
 }
 
 const autoHaltReasons = (home: string, repo: string): (string[] | null)[] =>
@@ -573,8 +571,8 @@ test('auto gate halts with each visible reason: (b) the error stop of an `auto` 
   await flowControl().click();
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
-  await dismissLoopErrors();
+  await expectLoopError();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-auto-halt-reason="loop-error"]')).toBeVisible({ timeout: UI_MS });
   expect(flowState(repo)).toMatch(/^step: red$/m);
@@ -595,8 +593,8 @@ test('(b): a review round the operator Accepts out of its error at an `auto` ste
   await flowControl().click();
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
-  await dismissLoopErrors();
+  await expectLoopError();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="loop-error"]')).toBeVisible({ timeout: LOOP_ROUND_MS });
@@ -623,8 +621,8 @@ test('(b) negative: a Retry out of the error stop whose round then comes back cl
   await flowControl().click();
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
-  await dismissLoopErrors();
+  await expectLoopError();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="retry"]').click({ timeout: UI_MS });
   await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: done$/m);
@@ -646,8 +644,8 @@ test('(b) negative: at the `human` step of a run that also binds an `auto` step,
   await flowControl().click();
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
-  await dismissLoopErrors();
+  await expectLoopError();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason]')).toHaveCount(0);
@@ -669,8 +667,8 @@ test('(b) negative: at the `human` step of a run that also binds an `auto` step,
   await flowControl().click();
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await expect(errorDialog()).toBeVisible({ timeout: UI_MS });
-  await dismissLoopErrors();
+  await expectLoopError();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: complete$/m);
@@ -700,7 +698,7 @@ test('auto gate halts with each visible reason: (i) a failed `gh` effect of an e
   await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
   expect(readIf(logFile)).toMatch(/gh issue edit/);
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="failed-effect"]')).toBeVisible();
@@ -732,7 +730,7 @@ test('a human approve at a gate showing the failed-effect marker clears it: the 
 
   await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
   await approveOption().click({ timeout: UI_MS });
@@ -767,7 +765,7 @@ test('the strip\'s manual Advance at a gate showing the failed-effect marker cle
 
   await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$/m);
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
   await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
@@ -825,13 +823,13 @@ test('a failed effect on the last auto step is shown at run end: the failure rea
   await flowControl().click();
 
   await expect.poll(() => flowState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: finalize$/m);
-  await expect(errorDialog().first()).toBeVisible({ timeout: UI_MS });
+  await expectLoopError();
   // The approve's own side-effect failure is one delivery; reaching the run's end with the marker set is another.
   await expect.poll(async () => (await loopErrors()).length, { timeout: UI_MS }).toBe(2);
   await expect.poll(() => autoHaltReasons(home, repo), { timeout: UI_MS }).toEqual([['failed-effect']]);
   expect(auditGateEntries(home, repo).filter((e) => parseAutoHaltReasons(e.cmd) !== null).map((e) => gateDecisionDecider(e.cmd))).toEqual(['engine']);
 
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await expect(flowControl()).toHaveText('Advance', { timeout: UI_MS });
   await flowControl().click();
   await expect.poll(() => flowState(repo), { timeout: UI_MS }).toMatch(/^status: done$/m);
@@ -923,11 +921,11 @@ test('a failed `gh` effect of an `auto` approve survives a relaunch before the n
   await app?.close();
   app = undefined;
   await launchInto('agent-term-e2e-137-i-relaunch-', repo, home, { groom: GROOM_AGENT, red }, {}, null);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="retry"]').click({ timeout: UI_MS });
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: red$[\s\S]*verdict: clean/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-failed-effect="set"]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="failed-effect"]')).toBeVisible();
@@ -1389,9 +1387,8 @@ test('feature-dev-v3: every gate commit is pushed to the PR branch, and a failed
   expect(flowState(repo)).toMatch(/^step: impl-approve$/m);
   expect(runState(repo)).not.toMatch(/status: accepted/);
   expect(readIf(logFile).split('\n').filter((l) => /^gh pr edit .*--body-file/.test(l))).toEqual([]);
-  await expect(errorDialog()).toContainText('could not push plan-loop/issue-176 to the pull request', { timeout: UI_MS });
-  await errorDialog().locator('.dismiss').click();
-  await expect(errorDialog()).toHaveCount(0);
+  await expect.poll(() => controllerOf(app!).loopMessage()?.reason, { timeout: UI_MS }).toMatch(/could not push plan-loop\/issue-176 to the pull request/);
+  await expectNoLoopPopup();
   await expect(approveOption()).toBeVisible({ timeout: UI_MS });
 
   rmSync(pushFail);
@@ -1483,7 +1480,7 @@ test('auto gate concurrency, interrupt: an arm made at an earlier `human` step t
   rmSync(sentinel, { force: true });
 
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^status: error$/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await loopPanel().locator('[data-app-route-out="accept"]').click({ timeout: UI_MS });
   await expect.poll(() => runState(repo), { timeout: UI_MS }).toMatch(/^status: complete$/m);
@@ -1496,7 +1493,7 @@ test('auto gate concurrency, interrupt: an arm made at an earlier `human` step t
     .poll(() => runState(repo), { timeout: LOOP_ROUND_MS })
     .toMatch(/^step: red$[\s\S]*^status: complete$/m)
     .catch(failWithDiagnosis(home, repo));
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-auto-halt-reason="interrupt-armed"]')).toBeVisible({ timeout: UI_MS });
   await expect.poll(() => existsSync(armFile), { timeout: UI_MS }).toBe(false);
@@ -1595,7 +1592,7 @@ test('auto gate concurrency, epic preview: an `auto` plan-approve gate on an epi
   await approveOption().click({ timeout: UI_MS });
   await expect.poll(() => flowState(repo), { timeout: APPROVE_ADVANCE_MS }).toMatch(/^step: plan-approve$/m);
   await expect.poll(() => runState(repo), { timeout: LOOP_ROUND_MS }).toMatch(/^step: plan-approve$[\s\S]*verdict: clean/m);
-  await dismissLoopErrors();
+  await expectNoLoopPopup();
   await openLoopPanel();
   await expect(loopPanel().locator('[data-epic-preview]')).toBeVisible({ timeout: UI_MS });
   await expect(loopPanel().locator('[data-auto-halt-reason="epic-promotion"]')).toBeVisible({ timeout: UI_MS });

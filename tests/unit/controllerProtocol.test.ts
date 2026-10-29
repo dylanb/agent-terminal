@@ -16,6 +16,7 @@ describe('controller wire protocol', () => {
     { version: 2, type: 'activate', requestId: 'request-a' },
     { version: 2, type: 'result', requestId: 'request-a', outcome: 'activated' },
     { version: 2, type: 'result', requestId: 'request-a', outcome: 'unavailable' },
+    { version: 2, type: 'dismiss-loop-message', id: 'message-a' },
   ] as const)('round trips $type messages', message => {
     expect(parseControllerMessage(encodeControllerMessage(message).trimEnd())).toEqual(message);
   });
@@ -30,6 +31,9 @@ describe('controller wire protocol', () => {
     { ...registration, minor: '2' },
     { version: 2, type: 'activate', requestId: '' },
     { version: 2, type: 'result', requestId: 'request-a', outcome: 'queued' },
+    { version: 2, type: 'dismiss-loop-message', id: '' },
+    { version: 2, type: 'dismiss-loop-message', id: 7 },
+    { version: 2, type: 'dismiss-loop-message' },
     null,
     [],
   ])('rejects incompatible or malformed peer input %#', value => {

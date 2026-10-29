@@ -136,10 +136,6 @@ if (errorDialog) {
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
-  // §28.3.
-  window.flow.onLoopError((reason, kind) =>
-    showError({ title: kind === 'notice' ? 'Notice' : 'Loop error', message: reason }),
-  );
 }
 
 // §22.3.1.

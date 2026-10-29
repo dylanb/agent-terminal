@@ -7,7 +7,7 @@ import { autoGateFlowYaml, loopRoster, seedAutoGateRepo, seedTrustedFlow } from 
 import { exampleConfigDir, seedFakeAgentV2, seedFakeGhGit } from './fakeTools';
 import { exampleConsolidatorOutput } from '../../src/shared/consolidatorOutput';
 import { shellQuote } from '../../src/shared/shellQuote';
-import { bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, headerLabels, paintedStatusOf, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
+import { bringForwardLocator, cardHeaderLocator, cardLocator, themeControlLocator, dismissLocator, dismissLoopMessageLocator, headerLabels, paintedStatusOf, statusRowLocator, unshownCounts, windowHeaderLocator } from '../helpers/controllerCards';
 import { STATUS_CASES, type StatusCase } from '../helpers/controllerStatusFixture';
 import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
 
@@ -196,6 +196,34 @@ test('tracer bullet: one column, Bring forward, a new human gate and header clic
   } finally {
     try { await h.dispose(); }
     finally { removeAll(paths); }
+  }
+});
+
+test('a terminal\'s loop error shows on its card as an error, a notice does not, and the card\'s Dismiss reaches the terminal', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const clients: ScriptedControllerTerminal[] = [];
+  try {
+    const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+    await expect(controller.page.getByText(/no terminals connected/i)).toBeVisible();
+    const [directory] = h.fixture.repositories;
+    const terminal = await connectScriptedTerminal(h.fixture.home, { launchDirectory: directory, repositoryRoot: directory });
+    clients.push(terminal);
+    const card = cardLocator(controller.page, directory);
+    for (const key of ['loop-error', 'loop-notice'] as const) {
+      const shown = STATUS_CASES[key];
+      await terminal.sendStatus(shown.terminal.work!);
+      await expect.soft(statusRowLocator(card)).toHaveText(shown.text);
+      await expect.soft.poll(() => paintedStatusOf(card)).toEqual({ accent: shown.statusClass, text: shown.statusClass });
+      await expect(card).toContainText(shown.terminal.work!.loopMessage!.reason);
+      await dismissLoopMessageLocator(card).click();
+      await expect.poll(() => terminal.loopMessageDismissals().at(-1)).toBe(shown.terminal.work!.loopMessage!.id);
+    }
+    await terminal.sendStatus({ ...STATUS_CASES['loop-notice'].terminal.work!, loopMessage: null });
+    await expect(dismissLoopMessageLocator(card)).toHaveCount(0);
+  } finally {
+    try { await Promise.all(clients.map(client => client.close())); }
+    finally { await h.dispose(); }
   }
 });
 

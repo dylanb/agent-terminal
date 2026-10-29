@@ -36,6 +36,8 @@ const caseTerminal = (key: string, work: WorkStatus | undefined, status?: 'disco
 const running = { availability: 'known', name: 'feature-dev', step: 'implement', assignment: 'assigned' } as const;
 const human = { status: 'needs a human', reasons: ['Approve the plan'] };
 const failure = { reason: 'Step exited 1' };
+const loopError = { id: 'loop-1', kind: 'error', reason: 'the turn stalled' } as const;
+const loopNotice = { id: 'loop-2', kind: 'notice', reason: 'nothing to commit' } as const;
 
 const CASES = {
   disconnected: [caseTerminal('disconnected', undefined, 'disconnected'), 'Disconnected', 'error', 'errors'],
@@ -47,6 +49,11 @@ const CASES = {
   'flow-error-and-human': [caseTerminal('flow-error-and-human', workStatus({ error: failure, attention: human, activity: 'quiet' })), 'Flow error · Needs a human · Idle', 'error', 'errors'],
   'flow-error-and-human-working': [caseTerminal('flow-error-and-human-working', workStatus({ error: failure, attention: human, activity: 'active' })), 'Flow error · Needs a human · Working', 'working', 'working'],
   'flow-error-and-human-activity-unavailable': [caseTerminal('flow-error-and-human-activity-unavailable', workStatus({ error: failure, attention: human, activity: 'unavailable' })), 'Flow error · Needs a human · Activity unavailable', 'error', 'errors'],
+  'loop-error': [caseTerminal('loop-error', workStatus({ loopMessage: loopError, activity: 'quiet' })), 'Loop error · Idle', 'error', 'errors'],
+  'loop-error-working': [caseTerminal('loop-error-working', workStatus({ loopMessage: loopError, activity: 'active' })), 'Loop error · Working', 'working', 'working'],
+  'flow-and-loop-error': [caseTerminal('flow-and-loop-error', workStatus({ error: failure, loopMessage: loopError, attention: human, activity: 'quiet' })), 'Flow error · Loop error · Needs a human · Idle', 'error', 'errors'],
+  'loop-notice': [caseTerminal('loop-notice', workStatus({ loopMessage: loopNotice, activity: 'quiet' })), 'Idle', 'idle', 'idle'],
+  'loop-notice-and-human': [caseTerminal('loop-notice-and-human', workStatus({ loopMessage: loopNotice, attention: human, activity: 'quiet' })), 'Needs a human · Idle', 'needs-human', 'need a human'],
   'needs-human': [caseTerminal('needs-human', workStatus({ attention: human, activity: 'quiet' })), 'Needs a human · Idle', 'needs-human', 'need a human'],
   'needs-human-working': [caseTerminal('needs-human-working', workStatus({ attention: human, activity: 'active' })), 'Needs a human · Working', 'working', 'working'],
   'needs-human-activity-unavailable': [caseTerminal('needs-human-activity-unavailable', workStatus({ attention: human, activity: 'unavailable' })), 'Needs a human · Activity unavailable', 'needs-human', 'need a human'],
@@ -89,6 +96,8 @@ export function statusService(
   const listeners = new Set<(items: ControllerTerminal[]) => void>();
   const activated: string[] = [];
   const dismissed: string[] = [];
+  /** Each [terminal id, loop message id] the window asked to dismiss, in order. */
+  const loopMessageDismissals: [string, string][] = [];
   /** Each theme the controller was asked to save, in order. */
   const savedThemes: Theme[] = [];
   let theme = options.theme;
@@ -118,6 +127,10 @@ export function statusService(
       dismissed.push(id);
       publish(current.filter(item => item.id !== id));
     },
+    async dismissLoopMessage(terminalId, messageId) {
+      loopMessageDismissals.push([terminalId, messageId]);
+      publish(current.map(item => item.id === terminalId && item.work?.loopMessage?.id === messageId ? { ...item, work: { ...item.work, loopMessage: null } } : item));
+    },
     async getTheme() {
       if (theme === 'unreadable') throw new Error('theme unreadable');
       return theme ?? 'light';
@@ -143,7 +156,7 @@ export function statusService(
   };
   /** Whether the window still listens for always-on-top pushes. */
   const followingAlwaysOnTop = (): boolean => alwaysOnTopListeners.size > 0;
-  return { api, activated, dismissed, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
+  return { api, activated, dismissed, loopMessageDismissals, publish, savedThemes, requestedAlwaysOnTop, pushAlwaysOnTop, followingAlwaysOnTop };
 }
 
 export function directoryConflictFixture(): { members: StatusTerminal[]; unrelated: StatusTerminal } {

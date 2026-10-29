@@ -153,6 +153,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
           }
         });
       },
+      onDismissLoopMessage(id) {
+        if (directory.kind !== 'single') return;
+        return deps.controller.dismissLoopMessage(directory.activationTargets[0], id).catch(announce);
+      },
     }) }));
     if (!directories.length) {
       const empty = doc.createElement('p');

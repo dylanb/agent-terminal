@@ -8,6 +8,7 @@ import { startControllerTransport } from '../../src/main/controllerTransport';
 import { installControllerIpc } from '../../src/main/controllerIpc';
 import { createControllerSettingsStore } from '../../src/main/controllerSettings';
 import { connectScriptedTerminal, type ScriptedControllerTerminal } from '../helpers/scriptedControllerTerminal';
+import { workStatus } from '../helpers/controllerStatusFixture';
 
 const boundary = vi.hoisted(() => ({
   handlers: new Map<string, (event: { sender: unknown }, payload: unknown) => unknown>(),
@@ -99,3 +100,24 @@ it('publishes current state only to the owning window and stops delivery after d
   expect(transport.terminals()).toEqual([]);
   expect(deliveries).toBe(afterDisposal);
 });
+
+it.each(['foreign sender', 'incorrect session', 'non-string terminal', 'non-string message', 'null payload'] as const)(
+  'rejects a loop message dismissal with %s and passes only the authorized one to its terminal', async invalid => {
+    const client = await connectScriptedTerminal(home, { launchDirectory: '/work/loop', repositoryRoot: '/work' });
+    clients.push(client);
+    await client.sendStatus(workStatus({ loopMessage: { id: 'message-a', kind: 'error', reason: 'the turn stalled' } }));
+    await vi.waitFor(() => expect(snapshot.terminals.find(item => item.launchDirectory === '/work/loop')?.work?.loopMessage?.id).toBe('message-a'));
+    const terminalId = snapshot.terminals.find(item => item.launchDirectory === '/work/loop')!.id;
+    const valid = { sessionId: SESSION_ID, terminalId, messageId: 'message-a' };
+    const payload = invalid === 'null payload' ? null
+      : invalid === 'incorrect session' ? { ...valid, sessionId: 'wrong' }
+      : invalid === 'non-string terminal' ? { ...valid, terminalId: 42 }
+      : invalid === 'non-string message' ? { ...valid, messageId: 42 } : valid;
+    const dismiss = boundary.handlers.get(CONTROLLER_CH.dismissLoopMessage)!;
+    await dismiss({ sender: invalid === 'foreign sender' ? {} : contents }, payload);
+    expect(await transport.activate(terminalId)).toBe('activated');
+    expect(client.loopMessageDismissals()).toEqual([]);
+    await dismiss({ sender: contents }, valid);
+    await vi.waitFor(() => expect(client.loopMessageDismissals()).toEqual(['message-a']));
+  },
+);

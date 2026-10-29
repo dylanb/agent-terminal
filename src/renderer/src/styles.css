@@ -621,6 +621,7 @@ body:has(.controller-panes) { overflow:visible; }
 .controller-condition { display:grid; gap:4px; min-width:0; padding:var(--r); border-radius:var(--r); }
 .controller-condition-needs-human { background:var(--status-needs-human-tint); }
 .controller-condition-error { background:var(--status-error-tint); }
+.controller-condition-notice { background:var(--status-idle-tint); }
 .controller-condition-title { margin:0; font-weight:600; }
 .controller-condition-needs-human .controller-condition-title { color:var(--status-needs-human-text); }
 .controller-condition-error .controller-condition-title { color:var(--status-error-text); }
