@@ -117,7 +117,11 @@ Write the complete report to the finalize-summary artifact with these eight sect
    blocks and reasons, completed checklist counts and unfinished-item summaries.
    Show one row per todo, identified by its audit identity rather than its text, with its step, latest
    recorded text and elapsed time from first entering `active` through its final `done` transition.
-   Include time spent in intermediate states: this is wall-clock elapsed time, not active work time.
+   Exception: when the history establishes a direct `active` → `done` completion with no
+   `in_progress` interval, display exactly `0s`, excluding its waiting time. Explain this reporting
+   convention beside the table; it does not mean the underlying timestamps are equal. Do not infer
+   a direct completion from missing history. For other completed todos, include time spent in
+   intermediate states: this is wall-clock elapsed time, not active work time.
    Use creation as the start only when the audit semantics establish that new todos start `active`;
    do not substitute the later `in_progress` timestamp. If either endpoint is unavailable, say
    `unavailable` instead of inventing a duration. Attribute cross-step completion explicitly.
