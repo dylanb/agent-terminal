@@ -7,12 +7,10 @@ import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { resolveControllerEndpoint } from '../../src/main/controllerEndpoint';
 import { createWebSocketTestServer } from '../helpers/controllerWebSocket';
 import { workStatus } from '../helpers/controllerStatusFixture';
-import type { NotificationCondition, NotificationSource } from '../helpers/controllerNotifications';
+import type { NotificationCondition, ControllerNotificationSource } from '../../src/shared/controllerProtocol';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); cleanups.length = 0; });
-
-const register: (...args: [...Parameters<typeof registerControllerTerminal>, notifications?: NotificationSource]) => () => void = registerControllerTerminal;
 
 async function connect(minor: number | undefined, current: NotificationCondition | null) {
   const home = mkdtempSync(join(tmpdir(), 'at-notification-client-'));
@@ -22,6 +20,7 @@ async function connect(minor: number | undefined, current: NotificationCondition
   const peers = new Set<WebSocket>();
   const received: Array<Record<string, unknown>> = [];
   const arrivals = new Set<(notification: NotificationCondition) => void>();
+  const changes = new Set<(notification: NotificationCondition | null) => void>();
   let status: ((work: ReturnType<typeof workStatus>) => void) | undefined;
   const server = createWebSocketTestServer(peer => {
     peers.add(peer);
@@ -33,11 +32,13 @@ async function connect(minor: number | undefined, current: NotificationCondition
   });
   await new Promise<void>(resolve => server.listen(endpoint, resolve));
   cleanups.push(async () => { for (const peer of peers) peer.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  const stop = register(home, { launchDirectory: '/fixed/worktree', repositoryRoot: '/repo' }, () => 'activated', () => {},
-    listener => { status = listener; listener(workStatus()); return () => {}; }, () => {}, {
-      current: () => current,
-      subscribe(listener) { arrivals.add(listener); return () => { arrivals.delete(listener); }; },
-    });
+  const source: ControllerNotificationSource = {
+    current: () => current,
+    subscribe(listener) { arrivals.add(listener); return () => { arrivals.delete(listener); }; },
+    subscribeCurrent(listener) { changes.add(listener); return () => { changes.delete(listener); }; },
+  };
+  const stop = registerControllerTerminal(home, { launchDirectory: '/fixed/worktree', repositoryRoot: '/repo' }, () => 'activated', () => {},
+    listener => { status = listener; listener(workStatus()); return () => {}; }, () => {}, source);
   cleanups.push(stop);
   await expect.poll(() => received.filter(frame => frame.type === 'status').length).toBe(1);
   async function flush() {
@@ -45,7 +46,7 @@ async function connect(minor: number | undefined, current: NotificationCondition
     status!(workStatus({ error: { reason: 'transport barrier' } }));
     await expect.poll(() => received.filter(frame => frame.type === 'status').length).toBe(before + 1);
   }
-  return { received, emit(notification: NotificationCondition) { for (const listener of arrivals) listener(notification); }, flush };
+  return { received, change(notification: NotificationCondition | null) { current = notification; for (const listener of changes) listener(notification); }, emit(notification: NotificationCondition) { for (const listener of arrivals) listener(notification); }, flush };
 }
 
 it('publishes every distinct arrival in order independently of status coalescing', async () => {
@@ -69,4 +70,14 @@ it.each([0, undefined])('keeps legacy minor %s connected without sending notific
   await h.flush();
   expect(h.received.filter(frame => !['register', 'status'].includes(String(frame.type)))).toEqual([]);
   expect(h.received.filter(frame => frame.type === 'status')).toHaveLength(2);
+});
+
+it('publishes current-condition changes and resolution without creating notification arrivals', async () => {
+  const first = { conditionId: 'first', message: 'First pending request' };
+  const next = { conditionId: 'next', message: 'Next current request' };
+  const h = await connect(1, first);
+  h.change(next); await h.flush();
+  h.change(null); await h.flush();
+  expect(h.received.filter(frame => frame.type === 'notification-current').map(frame => frame.notification)).toEqual([first, next, null]);
+  expect(h.received.filter(frame => frame.type === 'notification')).toEqual([]);
 });

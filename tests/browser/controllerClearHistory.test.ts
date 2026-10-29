@@ -1,10 +1,9 @@
 import { afterEach, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
-import type { ControllerTerminal } from '../../src/shared/ipc';
+import type { ControllerTerminal, ControllerClearTarget, ControllerClearOutcome } from '../../src/shared/ipc';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
 import { cardIn, clearHistoryIn, dismissIn, historyIn, receivedNotificationIn, statusRowIn } from '../helpers/controllerCards';
-import type { ClearOutcome } from '../helpers/controllerClear';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';
 
@@ -13,7 +12,7 @@ const entries = [
   { message: 'Newest receipt', receivedAt: 2000, count: 3 },
   { message: 'Earlier receipt', receivedAt: 1000, count: 2 },
 ];
-const terminal = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] }, error: { reason: 'Build failed before Clear' } }), notifications: entries, latestNotification: entries[0] });
+const terminal = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] }, error: { reason: 'Build failed before Clear' } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
 const settled = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 afterEach(() => { document.body.replaceChildren(); document.documentElement.removeAttribute('data-theme'); });
 
@@ -21,9 +20,9 @@ it.each(['light', 'dark'].flatMap(theme => ['body', 'nested'].map(placement => (
   document.documentElement.dataset.theme = theme;
   const parent = document.createElement('section'); parent.style.width = '320px'; document.body.append(parent);
   const before = terminal(); const service = statusService([before]);
-  const api = { ...service.api, async clearHistory(observed: ControllerTerminal): Promise<ClearOutcome> {
-    if (observed.id !== before.id) return 'stale';
-    service.publish([{ ...before, notifications: [], latestNotification: undefined }]); return 'cleared';
+  const api = { ...service.api, async clearHistory(observed: ControllerClearTarget): Promise<ControllerClearOutcome> {
+    if (observed.revision !== before.clearHistoryTarget!.revision) return 'stale';
+    service.publish([{ ...before, notifications: [] }]); return 'cleared';
   } };
   const { host, dispose } = mountControllerPanes({ parent: placement === 'nested' ? parent : document.body, controller: api, oneColumn: true });
   try {
@@ -46,8 +45,8 @@ it.each(['light', 'dark'].flatMap(theme => ['body', 'nested'].map(placement => (
 it('offers distinct Clear and Dismiss actions on a disconnected one-entry card', async () => {
   const before = { ...terminal(), status: 'disconnected' as const, notifications: entries.slice(0, 1) };
   const service = statusService([before]);
-  const api = { ...service.api, async clearHistory(): Promise<ClearOutcome> {
-    service.publish([{ ...before, notifications: [], latestNotification: undefined }]); return 'cleared';
+  const api = { ...service.api, async clearHistory(): Promise<ControllerClearOutcome> {
+    service.publish([{ ...before, notifications: [] }]); return 'cleared';
   } };
   const { host, dispose } = mountControllerPanes({ controller: api });
   try {
@@ -61,4 +60,23 @@ it('offers distinct Clear and Dismiss actions on a disconnected one-entry card',
     dismissIn(card)?.click(); await settled();
     expect.soft(cardIn(host, directory)).toBeUndefined();
   } finally { dispose(); }
+});
+
+it.each(['body', 'nested'] as const)('passes the supplied Clear target unchanged in %s placement', async placement => {
+  const target = { id: 'history-identity-independent-of-activation', launchDirectory: directory, revision: 'observed-history' };
+  const before = { ...terminal(), clearHistoryTarget: target };
+  const service = statusService([before]);
+  const parent = document.createElement('section'); document.body.append(parent);
+  let requested: unknown;
+  const api = { ...service.api, async clearHistory(observed: ControllerClearTarget): Promise<ControllerClearOutcome> {
+    requested = observed;
+    return 'unavailable';
+  } };
+  const { host, dispose } = mountControllerPanes({ parent: placement === 'nested' ? parent : document.body, controller: api });
+  try {
+    historyIn(cardIn(host, directory)!)!.click();
+    clearHistoryIn(cardIn(host, directory)!)!.click(); await settled();
+    expect(requested).toEqual(target);
+    expect(service.activated).toEqual([]);
+  } finally { dispose(); parent.remove(); }
 });

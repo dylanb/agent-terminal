@@ -99,7 +99,7 @@ export function registerControllerTerminal(
               currentId = notification.conditionId;
               publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification });
             });
-            unsubscribeCurrent = notifications.subscribeCurrent?.(notification => {
+            unsubscribeCurrent = notifications.subscribeCurrent(notification => {
               if (notification?.conditionId === currentId) return;
               currentId = notification?.conditionId;
               publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification });

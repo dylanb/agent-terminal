@@ -6,7 +6,7 @@ import { lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { resolveControllerEndpoint } from './controllerEndpoint';
 import { randomUUID } from 'node:crypto';
-import type { ControllerTerminal, ControllerClearOutcome, ControllerNotificationEntry } from '../shared/ipc';
+import type { ControllerTerminal, ControllerClearTarget, ControllerClearOutcome, ControllerNotificationEntry } from '../shared/ipc';
 import { type NotificationCondition, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_SUPPORTED_MAJORS, supportsControllerNotifications, ControllerVersionMismatch, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import { createWorktreeLock } from './worktreeLock';
 import { isErrno } from './errno';
@@ -19,7 +19,7 @@ export interface ControllerRegistry {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activate(id: string): Promise<'activated' | 'unavailable'>;
   dismiss(id: string): void;
-  clearHistory(observed: ControllerTerminal): ControllerClearOutcome;
+  clearHistory(target: ControllerClearTarget): ControllerClearOutcome;
   dispose(): Promise<void>;
 }
 
@@ -39,9 +39,12 @@ export async function startControllerTransport(appHome: string): Promise<Control
   const current = new Map<WebSocket, NotificationCondition | null>();
   const directoryConditions = new Map<string, { current?: string; cleared?: string }>();
   const members = (directory: string) => [...registrations].filter(([, terminal]) => terminal.launchDirectory === directory);
+  const renewClearTarget = (terminal: ControllerTerminal) => {
+    if (terminal.notifications) terminal.clearHistoryTarget = { id: terminal.id, launchDirectory: terminal.launchDirectory, revision: randomUUID() };
+    else delete terminal.clearHistoryTarget;
+  };
   const receive = (terminal: ControllerTerminal, notification: NotificationCondition) => {
     if (directoryConditions.get(terminal.launchDirectory)?.cleared === notification.conditionId) return;
-    terminal.notificationVersion = randomUUID();
     const entries = terminal.notifications ??= [];
     const repeated = entries.find(entry => entry.message === notification.message);
     if (repeated) repeated.count += 1;
@@ -49,11 +52,9 @@ export async function startControllerTransport(appHome: string): Promise<Control
       entries.unshift({ message: notification.message, receivedAt: Date.now(), count: 1 });
       entries.splice(3);
     }
+    renewClearTarget(terminal);
   };
-  const snapshot = () => structuredClone([...retained.values(), ...registrations.values()].map(terminal => {
-    const latest = terminal.notifications?.[0];
-    return { ...terminal, ...(latest ? { latestNotification: { message: latest.message, receivedAt: latest.receivedAt } } : {}) };
-  }));
+  const snapshot = () => structuredClone([...retained.values(), ...registrations.values()]);
   const pending = new Map<string, { socket: WebSocket; finish(outcome: 'activated' | 'unavailable'): void }>();
   const listeners = new Set<(terminals: ControllerTerminal[]) => void>();
   const notify = () => { for (const listener of listeners) listener(snapshot()); };
@@ -72,7 +73,10 @@ export async function startControllerTransport(appHome: string): Promise<Control
       current.delete(socket);
       if (terminal) {
         const remaining = members(terminal.launchDirectory);
-        if (!remaining.length) retained.set(terminal.id, { ...terminal, work: undefined, status: 'disconnected' });
+        if (!remaining.length) {
+          renewClearTarget(terminal);
+          retained.set(terminal.id, { ...terminal, work: undefined, status: 'disconnected' });
+        }
         else if (remaining.length === 1) {
           const [survivorSocket, survivor] = remaining[0];
           const condition = current.get(survivorSocket);
@@ -96,13 +100,15 @@ export async function startControllerTransport(appHome: string): Promise<Control
             }
           }
           notificationsSupported = supportsControllerNotifications(message.minor);
-          registrations.set(socket, { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(notifications ? { notifications } : {}) });
+          const terminal: ControllerTerminal = { id: randomUUID(), launchDirectory: message.launchDirectory, repositoryRoot: message.repositoryRoot, ...(notifications ? { notifications } : {}) };
+          renewClearTarget(terminal);
+          registrations.set(socket, terminal);
           const peers = members(message.launchDirectory);
           if (peers.length > 1) {
             directoryConditions.delete(message.launchDirectory);
             for (const [, peer] of peers) {
               delete peer.notifications;
-              peer.notificationVersion = randomUUID();
+              renewClearTarget(peer);
             }
           }
           notify();
@@ -178,12 +184,12 @@ export async function startControllerTransport(appHome: string): Promise<Control
       listener(snapshot());
       return () => { listeners.delete(listener); };
     },
-    clearHistory(observed) {
-      const terminal = retained.get(observed.id) ?? [...registrations.values()].find(item => item.id === observed.id);
-      if (!terminal || terminal.launchDirectory !== observed.launchDirectory) return 'stale';
-      if (terminal.status !== observed.status || members(terminal.launchDirectory).length > 1
-        || terminal.notificationVersion !== observed.notificationVersion) return 'stale';
-      terminal.notificationVersion = randomUUID();
+    clearHistory(target) {
+      const terminal = retained.get(target.id) ?? [...registrations.values()].find(item => item.id === target.id);
+      if (!terminal || terminal.launchDirectory !== target.launchDirectory) return 'stale';
+      if (members(terminal.launchDirectory).length > 1
+        || terminal.clearHistoryTarget?.revision !== target.revision) return 'stale';
+      renewClearTarget(terminal);
       terminal.notifications = [];
       const state = directoryConditions.get(terminal.launchDirectory);
       if (state) state.cleared = state.current;

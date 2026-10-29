@@ -111,7 +111,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
     actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
   }
-  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? (model.latestNotification ? [{ ...model.latestNotification, count: 1 }] : []);
+  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? [];
   if (notifications[0]) {
     const notification = notifications[0];
     const box = element('section', 'controller-notification');

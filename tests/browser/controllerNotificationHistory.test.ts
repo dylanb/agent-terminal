@@ -21,8 +21,8 @@ afterEach(() => { document.body.replaceChildren(); document.documentElement.remo
 it.each(['light', 'dark'].flatMap(theme => ['pointer', 'Enter', 'Space'].map(input => ({ theme, input }))))('initial History control reveals ordered entries via $input in $theme', async ({ theme, input }) => {
   document.documentElement.dataset.theme = theme;
   const terminal = statusTerminal({ attention: { status: 'review', reasons: ['Live gate reason'] } });
-  const card: ControllerDirectoryCard & { notifications: ReceivedEntry[]; latestNotification: ReceivedEntry } = {
-    ...directoryCards([terminal])[0], notifications, latestNotification: notifications[0],
+  const card: ControllerDirectoryCard & { notifications: ReceivedEntry[] } = {
+    ...directoryCards([terminal])[0], notifications,
   };
   const host = document.createElement('main'); document.body.append(host);
   let activated = false;
@@ -59,30 +59,40 @@ it.each(['light', 'dark'].flatMap(theme => ['pointer', 'Enter', 'Space'].map(inp
   } finally { component.dispose(); }
 });
 
-it.each([0, 1])('History reports %s retained entries and has no earlier messages', async count => {
-  const terminal = statusTerminal();
-  const entries = notifications.slice(0, count);
-  const card = { ...directoryCards([terminal])[0], notifications: entries, latestNotification: entries[0] };
+it('History reports zero retained entries and has no received message', async () => {
+  const card = { ...directoryCards([statusTerminal()])[0], notifications: [] };
   const host = document.createElement('main'); document.body.append(host);
   const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
   try {
     const pane = cardIn(host, directory)!;
-    expect.soft(historyIn(pane)?.textContent ?? '').toMatch(new RegExp(`History\\s+${count}\\s*\\/\\s*3`, 'i'));
+    expect.soft(historyIn(pane)?.textContent ?? '').toMatch(/History\s+0\s*\/\s*3/i);
     historyIn(pane)?.click(); await settled();
     expect.soft(pane.innerText).not.toContain('Earlier proposal');
-    if (count) expect.soft(receivedNotificationIn(pane)?.textContent ?? '').toContain('Newest proposal');
-    else expect.soft(receivedNotificationIn(pane)).toBeUndefined();
+    expect.soft(receivedNotificationIn(pane)).toBeUndefined();
+  } finally { component.dispose(); }
+});
+
+it('History reports one retained entry and has no earlier messages', async () => {
+  const card = { ...directoryCards([statusTerminal()])[0], notifications: notifications.slice(0, 1) };
+  const host = document.createElement('main'); document.body.append(host);
+  const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
+  try {
+    const pane = cardIn(host, directory)!;
+    expect.soft(historyIn(pane)?.textContent ?? '').toMatch(/History\s+1\s*\/\s*3/i);
+    historyIn(pane)?.click(); await settled();
+    expect.soft(pane.innerText).not.toContain('Earlier proposal');
+    expect.soft(receivedNotificationIn(pane)?.textContent ?? '').toContain('Newest proposal');
   } finally { component.dispose(); }
 });
 
 it.each(['body', 'nested'] as const)('projects disconnected history and preserves manual collapse in %s placement', async placement => {
   const parent = document.createElement('section'); document.body.append(parent);
-  const terminal = { ...statusTerminal({ attention: { status: 'complete', reasons: ['Live gate reason'] } }), notifications, latestNotification: notifications[0] };
+  const terminal = { ...statusTerminal({ attention: { status: 'complete', reasons: ['Live gate reason'] } }), notifications };
   const { host, service, dispose } = mountControllerPanes({ parent: placement === 'nested' ? parent : document.body, terminals: [terminal] });
   try {
     cardHeaderIn(cardIn(host, directory)!, directory)?.click();
     const arrival = { message: 'Arrival after manual collapse', receivedAt: notifications[0].receivedAt + 1000, count: 1 };
-    const refreshed = { ...terminal, notifications: [arrival, ...notifications.slice(0, 2)], latestNotification: arrival };
+    const refreshed = { ...terminal, notifications: [arrival, ...notifications.slice(0, 2)] };
     service.publish([refreshed]);
     await settled();
     expect.soft(cardHeaderIn(cardIn(host, directory)!, directory)?.getAttribute('aria-expanded')).toBe('false');
@@ -103,7 +113,7 @@ it.each(['body', 'nested'] as const)('projects disconnected history and preserve
 });
 
 it('does not display or announce history while a directory has overlapping terminals', async () => {
-  const terminal = { ...statusTerminal(), notifications, latestNotification: notifications[0] };
+  const terminal = { ...statusTerminal(), notifications };
   const { host, service, dispose } = mountControllerPanes({ terminals: [terminal] });
   try {
     service.publish([terminal, { ...terminal, id: 'peer' }]);
@@ -116,13 +126,13 @@ it('does not display or announce history while a directory has overlapping termi
   } finally { dispose(); }
 });
 
-it('displays the latest entry repeat count in the received notification', () => {
+it('displays the latest entry repeat count in the received notification', async () => {
   const latest = { ...notifications[0], count: 12 };
-  const card = { ...directoryCards([statusTerminal()])[0], notifications: [latest], latestNotification: latest };
+  const card = { ...directoryCards([statusTerminal()])[0], notifications: [latest] };
   const host = document.createElement('main'); document.body.append(host);
   const component = createControllerCard(host, { card, expandedByDefault: true, onAction() {} });
   try {
     const received = receivedNotificationIn(cardIn(host, directory)!);
-    expect(received?.checkVisibility() ? received.innerText : '').toMatch(/12\s*(?:arrivals|times|×)|(?:×|received)\s*12/i);
+    await expect.poll(() => received?.checkVisibility() ? received.innerText : '').toMatch(/12\s*(?:arrivals|times|×)|(?:×|received)\s*12/i);
   } finally { component.dispose(); }
 });

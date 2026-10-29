@@ -69,7 +69,7 @@ for (const scenario of ['focused', 'unfocused', 'absent', 'restarting'] as const
         await expect.soft(notification).toContainText(source.loop!.status);
         await expect.soft.poll(async () => {
           const terminal = (await controllerSnapshot(controller.page)).find(item => item.launchDirectory === repo);
-          const receivedAt = (terminal as (typeof terminal & { latestNotification?: { receivedAt: number } }))?.latestNotification?.receivedAt;
+          const receivedAt = terminal?.notifications?.[0]?.receivedAt;
           return typeof receivedAt === 'number' && Number.isFinite(receivedAt)
             && receivedAt >= receiptLowerBound && receivedAt <= Date.now();
         }).toBe(true);

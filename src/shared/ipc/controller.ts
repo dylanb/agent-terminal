@@ -47,14 +47,13 @@ export type ControllerWorkStatus = {
   error: null | { reason: string };
 };
 
-export interface ControllerReceivedNotification { message: string; receivedAt: number }
+export interface ControllerNotificationEntry { message: string; receivedAt: number; count: number }
 
-export interface ControllerNotificationEntry extends ControllerReceivedNotification { count: number }
+export interface ControllerClearTarget { id: string; launchDirectory: string; revision: string }
 
 export interface ControllerTerminal {
-  notificationVersion?: string;
+  clearHistoryTarget?: ControllerClearTarget;
   notifications?: ControllerNotificationEntry[];
-  latestNotification?: ControllerReceivedNotification;
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';
   id: string;
@@ -63,13 +62,13 @@ export interface ControllerTerminal {
 }
 
 export type ControllerClearOutcome = 'cleared' | 'stale' | 'unavailable';
-export interface ControllerClearRequest { sessionId: SessionId; observed: ControllerTerminal }
+export interface ControllerClearRequest { sessionId: SessionId; target: ControllerClearTarget }
 
 export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
   dismissTerminal(id: string): Promise<void>;
-  clearHistory(observed: ControllerTerminal): Promise<ControllerClearOutcome>;
+  clearHistory(target: ControllerClearTarget): Promise<ControllerClearOutcome>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;
 }

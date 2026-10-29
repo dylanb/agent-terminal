@@ -1,7 +1,7 @@
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate, cardStatus, statusSummary, type CardStatusClass } from './controllerCardStatus';
 import { captureSubtreeFocus } from './dom';
-import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerReceivedNotification, type Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerNotificationEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
 import { createThemeToggle } from './themeToggle';
@@ -61,7 +61,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   status.setAttribute('role', 'status');
   status.setAttribute('aria-atomic', 'true');
   let previousAttention = new Map<string, string>();
-  let previousNotifications = new Map<string, ControllerReceivedNotification>();
+  let previousNotifications = new Map<string, ControllerNotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   host.append(header.element, list, alert, status);
   let themeToggle: { dispose(): void } | undefined;
@@ -95,10 +95,10 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
 
   function announceAttention(directories: readonly ControllerDirectoryCard[]): void {
     const currentAttention = new Map<string, string>();
-    const currentNotifications = new Map<string, ControllerReceivedNotification>();
+    const currentNotifications = new Map<string, ControllerNotificationEntry>();
     const announcements: string[] = [];
     for (const directory of directories) {
-      const notification = directory.kind === 'single' ? directory.latestNotification : previousNotifications.get(directory.launchDirectory);
+      const notification = directory.kind === 'single' ? directory.notifications?.[0] : previousNotifications.get(directory.launchDirectory);
       if (notification) currentNotifications.set(directory.launchDirectory, notification);
       if (directory.kind === 'disconnected') continue;
       const text = directory.kind === 'conflict' ? 'Duplicate directory' : attentionText(directory.work);
@@ -136,11 +136,9 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       card: directory,
       expandedByDefault: expandedFor(directory),
       from: handover.get(directory.launchDirectory),
-      onClearHistory: directory.kind === 'conflict' ? undefined : () => {
-        const id = directory.kind === 'single' ? directory.activationTargets[0] : directory.dismissOccurrenceId;
-        const observed = snapshot.find(terminal => terminal.id === id)!;
+      onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
         alert.replaceChildren();
-        void deps.controller.clearHistory(observed).then(outcome => {
+        void deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
           if (disposed || outcome === 'cleared') return;
           alert.replaceChildren();
           alert.textContent = outcome === 'stale'

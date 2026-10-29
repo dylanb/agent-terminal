@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
-import type { ControllerTerminal, ControllerClearOutcome } from '../../src/shared/ipc';
+import type { ControllerTerminal, ControllerClearOutcome, ControllerClearTarget } from '../../src/shared/ipc';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusService, statusTerminal } from '../helpers/controllerStatusFixture';
 import { cardIn, cardHeaderIn, clearHistoryIn, historyIn, receivedNotificationIn } from '../helpers/controllerCards';
@@ -9,16 +9,16 @@ import '../../src/renderer/src/styles.css';
 
 const directory = '/fixed/worktree';
 const entries = [{ message: 'Newest original', receivedAt: 2000, count: 1 }, { message: 'Earlier distinct', receivedAt: 1000, count: 2 }];
-const initial = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] } }), notifications: entries, latestNotification: entries[0] });
+const initial = (): ControllerTerminal => ({ ...statusTerminal({ attention: { status: 'complete', reasons: ['Pending approval'] } }), notifications: entries, clearHistoryTarget: { id: 'history-target', launchDirectory: directory, revision: 'initial' } });
 const arrival = (before: ControllerTerminal): ControllerTerminal => {
   const newest = { message: 'New protected arrival', receivedAt: 3000, count: 1 };
-  return { ...before, notifications: [newest, ...entries], latestNotification: newest };
+  return { ...before, notifications: [newest, ...entries], clearHistoryTarget: { ...before.clearHistoryTarget!, revision: 'arrival' } };
 };
 const painted = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 afterEach(() => { document.body.replaceChildren(); document.documentElement.removeAttribute('data-theme'); });
 
 for (const theme of ['light', 'dark'] as const) for (const placement of ['body', 'nested']) {
-  function mount(clear?: (observed: ControllerTerminal) => Promise<ControllerClearOutcome>) {
+  function mount(clear?: (observed: ControllerClearTarget) => Promise<ControllerClearOutcome>) {
     document.documentElement.dataset.theme = theme;
     const parent = document.createElement('section'); parent.style.width = '320px'; document.body.append(parent);
     const before = initial(); const service = statusService([before], { theme });
@@ -43,7 +43,7 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
     });
   }
   it(`${theme}/${placement}: Clear removal and conflict removal use the card fallback without stealing outside focus`, async () => {
-    const h = mount(async () => { h.service.publish([{ ...h.before, notifications: [], latestNotification: undefined }]); return 'cleared'; });
+    const h = mount(async () => { h.service.publish([{ ...h.before, notifications: [] }]); return 'cleared'; });
     try {
       historyIn(h.card())!.click(); clearHistoryIn(h.card())!.focus(); await userEvent.keyboard('{Enter}'); await painted();
       expect.soft(document.activeElement).toBe(cardHeaderIn(h.card(), directory));
@@ -64,8 +64,8 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
   it(`${theme}/${placement}: an older successful Clear reply cannot hide a later arrival`, async () => {
     let release!: () => void;
     const h = mount(async observed => {
-      h.service.publish([{ ...observed, notifications: [], latestNotification: undefined }]);
-      if (observed.notifications?.[0]?.message !== 'New protected arrival') {
+      h.service.publish([{ ...h.before, notifications: [] }]);
+      if (observed.revision !== 'arrival') {
         await new Promise<void>(resolve => { release = resolve; });
       }
       return 'cleared';
@@ -75,7 +75,7 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
       await painted();
       expect(receivedNotificationIn(h.card())).toBeUndefined();
       const newest = arrival(h.before).notifications![0];
-      h.service.publish([{ ...h.before, notifications: [newest], latestNotification: newest }]);
+      h.service.publish([{ ...arrival(h.before), notifications: [newest] }]);
       release(); await painted();
       expect.soft(receivedNotificationIn(h.card())?.innerText).toContain('New protected arrival');
       expect.soft(historyIn(h.card())?.textContent).toMatch(/History\s+1\s*\/\s*3/);
@@ -89,13 +89,13 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
   for (const result of ['stale', 'unavailable', 'rejected'] as const) {
     it(`${theme}/${placement}: ${result} Clear visibly refuses and supports explicit retry`, async () => {
       let release!: () => void;
-      let requested!: ControllerTerminal;
+      let requested!: ControllerClearTarget;
       let received!: () => void;
       const dispatched = new Promise<void>(resolve => { received = resolve; });
       const h = mount(async observed => {
         requested = observed; received();
-        if (observed.notifications?.[0]?.message === 'New protected arrival') {
-          h.service.publish([{ ...arrival(h.before), notifications: [], latestNotification: undefined }]);
+        if (observed.revision === 'arrival') {
+          h.service.publish([{ ...arrival(h.before), notifications: [] }]);
           return 'cleared';
         }
         await new Promise<void>(resolve => { release = resolve; });
@@ -105,7 +105,7 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
       try {
         historyIn(h.card())!.click(); clearHistoryIn(h.card())!.click();
         await dispatched;
-        expect(requested.notifications).toEqual(entries);
+        expect(requested).toEqual(h.before.clearHistoryTarget);
         h.service.publish([arrival(h.before)]);
         release(); await painted();
         const feedback = [...h.host.querySelectorAll<HTMLElement>('[role="alert"], [role="status"]')]
@@ -115,7 +115,7 @@ for (const theme of ['light', 'dark'] as const) for (const placement of ['body',
         expect.soft(h.service.activated).toEqual([]);
         if (historyIn(h.card())!.getAttribute('aria-expanded') !== 'true') historyIn(h.card())!.click();
         clearHistoryIn(h.card())!.click(); await painted();
-        expect.soft(requested.notifications).toEqual(arrival(h.before).notifications);
+        expect.soft(requested).toEqual(arrival(h.before).clearHistoryTarget);
         expect.soft(receivedNotificationIn(h.card())).toBeUndefined();
       } finally { h.dispose(); }
     });

@@ -27,7 +27,7 @@ it.each(['capacity', 'throw', 'callback'] as const)('contains notification trans
   try {
     await expect.poll(() => registry.terminals()[0]?.work).toEqual(workStatus());
     source.observe('/work', view('first'));
-    await expect.poll(() => registry.terminals()[0]?.latestNotification?.message).toBe('first · iter 1');
+    await expect.poll(() => registry.terminals()[0]?.notifications?.[0]?.message).toBe('first · iter 1');
     if (failure === 'capacity') {
       vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get').mockReturnValue(CONTROLLER_MAX_STATUS_BYTES);
     } else {
@@ -45,7 +45,7 @@ it.each(['capacity', 'throw', 'callback'] as const)('contains notification trans
     }
     expect(() => source.observe('/work', view('second'))).not.toThrow();
     await expect.poll(() => disconnected?.status).toBe('disconnected');
-    expect(disconnected?.latestNotification?.message).toBe('first · iter 1');
+    expect(disconnected?.notifications?.[0]?.message).toBe('first · iter 1');
     expect(source.current('/work')?.message).toBe('second · iter 1');
     source.observe('/work', view('working', false));
     expect(source.current('/work')).toBeNull();

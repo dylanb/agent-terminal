@@ -60,9 +60,9 @@ export async function historyGate() {
         const view = await state();
         return { human: view.loop?.humanNeeded, iteration: view.loop?.iteration, status: view.loop?.status };
       }, { timeout: 60_000 }).toEqual({ human: true, iteration: round, status: 'complete' });
-      await expect.poll(async () => (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)?.latestNotification?.message,
+      await expect.poll(async () => (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)?.notifications?.[0]?.message,
         { timeout: 30_000 }).toContain(`iter ${round}`);
-      return (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)!.latestNotification!;
+      return (await controllerSnapshot(controller.page)).find(t => t.launchDirectory === repo)!.notifications![0];
     }
     const first = await gate(1);
     return {

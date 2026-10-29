@@ -24,7 +24,7 @@ it('does not reconstruct an ended survivor request when overlap clears through t
   }, () => {}, source);
   let stopPeer = () => {};
   try {
-    await expect.poll(() => registry.terminals()[0]?.latestNotification?.message).toBe('complete · iter 1');
+    await expect.poll(() => registry.terminals()[0]?.notifications?.[0]?.message).toBe('complete · iter 1');
     const survivorId = registry.terminals()[0].id;
     stopPeer = registerControllerTerminal(home, identity, () => 'activated');
     await expect.poll(() => registry.terminals().length).toBe(2);
@@ -34,7 +34,7 @@ it('does not reconstruct an ended survivor request when overlap clears through t
     stopPeer();
     await expect.poll(() => registry.terminals().length).toBe(1);
     expect(registry.terminals()[0].notifications ?? []).toEqual([]);
-    expect(registry.terminals()[0].latestNotification).toBeUndefined();
+    expect(registry.terminals()[0].notifications?.[0]).toBeUndefined();
   } finally {
     stopPeer(); stop(); await registry.dispose(); rmSync(home, { recursive: true, force: true });
   }

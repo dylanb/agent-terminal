@@ -11,7 +11,6 @@ import { createControllerSettingsStore } from '../../src/main/controllerSettings
 import { controllerApi } from '../../src/preload/controller';
 import { CONTROLLER_CH, SESSION_ID, type ControllerSnapshot, type ControllerTerminal } from '../../src/shared/ipc';
 import { connectWebSocket } from '../helpers/controllerWebSocket';
-import { clearHistoryChannel, clearObserved } from '../helpers/controllerClear';
 
 const boundary = vi.hoisted(() => ({
   handlers: new Map<string, (event: { sender: unknown }, payload: unknown) => unknown>(),
@@ -54,23 +53,25 @@ async function register(directory: string) {
 
 it('round-trips Clear through preload and the installed handler, publishing deletion only for its observed target', async () => {
   const selected = await register('/work/selected'); const other = await register('/work/other');
-  expect.soft(await clearObserved(controllerApi, selected)).toBe('cleared');
+  expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('cleared');
   expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
-  expect.soft(published.find(t => t.id === selected.id)?.latestNotification).toBeUndefined();
+  expect.soft(published.find(t => t.id === selected.id)?.notifications?.[0]).toBeUndefined();
   expect.soft(published.find(t => t.id === other.id)).toEqual(other);
   expect.soft(published.map(t => t.id).sort()).toEqual([selected.id, other.id].sort());
 });
 
-it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malformed target'] as const)('refuses %s with an unavailable reply, preserving history; authorized retry succeeds', async invalid => {
+it.each(['foreign sender', 'wrong session', 'missing session', 'null', 'malformed target', 'missing revision', 'invalid revision', 'empty revision'] as const)('refuses %s with an unavailable reply, preserving history; authorized retry succeeds', async invalid => {
   const selected = await register('/work/selected'); const other = await register('/work/other');
   const payload = invalid === 'null' ? null : {
     ...(invalid === 'missing session' ? {} : { sessionId: invalid === 'wrong session' ? 'wrong' : SESSION_ID }),
-    observed: invalid === 'malformed target' ? { id: 42 } : selected,
+    target: invalid === 'malformed target' ? { id: 42 } : { ...selected.clearHistoryTarget!,
+      ...(invalid === 'missing revision' ? { revision: undefined } : invalid === 'invalid revision' ? { revision: 42 } : invalid === 'empty revision' ? { revision: '' } : {}),
+    },
   };
-  const result = await boundary.handlers.get(clearHistoryChannel)?.({ sender: invalid === 'foreign sender' ? {} : boundary.contents }, payload);
+  const result = await boundary.handlers.get(CONTROLLER_CH.clearHistory)?.({ sender: invalid === 'foreign sender' ? {} : boundary.contents }, payload);
   expect.soft(result).toBe('unavailable');
   expect.soft(published).toEqual(expect.arrayContaining([selected, other]));
-  expect.soft(await clearObserved(controllerApi, selected)).toBe('cleared');
+  expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('cleared');
   expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
   expect.soft(published.find(t => t.id === other.id)).toEqual(other);
 });
@@ -81,8 +82,8 @@ it('returns stale through real preload/main wiring after a new arrival and prese
   peers[0].send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId: 'new', message: 'New protected arrival' } }));
   await expect.poll(() => published.find(t => t.id === selected.id)?.notifications?.length).toBe(2);
   const current = published.find(t => t.id === selected.id)!;
-  expect.soft(await clearObserved(controllerApi, selected)).toBe('stale');
+  expect.soft(await controllerApi.clearHistory(selected.clearHistoryTarget!)).toBe('stale');
   expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual(current.notifications);
-  expect.soft(await clearObserved(controllerApi, current)).toBe('cleared');
+  expect.soft(await controllerApi.clearHistory(current.clearHistoryTarget!)).toBe('cleared');
   expect.soft(published.find(t => t.id === selected.id)?.notifications).toEqual([]);
 });

@@ -8,7 +8,7 @@ export const controllerApi: ControllerApi = {
     ipcRenderer.send(CONTROLLER_CH.subscribe, { sessionId: SESSION_ID });
     return () => { ipcRenderer.removeListener(CONTROLLER_CH.terminals, receive); };
   },
-  clearHistory: observed => ipcRenderer.invoke(CONTROLLER_CH.clearHistory, { sessionId: SESSION_ID, observed } satisfies ControllerClearRequest),
+  clearHistory: target => ipcRenderer.invoke(CONTROLLER_CH.clearHistory, { sessionId: SESSION_ID, target } satisfies ControllerClearRequest),
   dismissTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.dismiss, { sessionId: SESSION_ID, id }),
   activateTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.activate, { sessionId: SESSION_ID, id }),
   getTheme: () => ipcRenderer.invoke(CONTROLLER_CH.getTheme, { sessionId: SESSION_ID } satisfies ControllerThemeRequest),

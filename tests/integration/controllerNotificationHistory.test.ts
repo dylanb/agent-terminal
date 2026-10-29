@@ -1,4 +1,3 @@
-import { clearObserved } from '../helpers/controllerClear';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -145,7 +144,7 @@ it.each(['restart', 'dismiss'] as const)('%s with no current request restores no
   if (reset === 'restart') await h.restart(); else h.registry().dismiss(a.id);
   await h.connect('/work/a', null);
   expect(h.entries()).toEqual([]);
-  expect(h.terminal()?.latestNotification).toBeUndefined();
+  expect(h.terminal()?.notifications?.[0]).toBeUndefined();
 });
 
 it.each([true, false])('overlap discards all history and rebuilds only the current survivor (current=%s)', async pending => {
@@ -197,9 +196,9 @@ for (const disconnected of [false, true]) {
     await a.flush({ status: 'complete', reasons: ['Real current reason'] }, { reason: 'Actual live failure' });
     if (disconnected) await a.close();
     const before = h.terminal()!; const other = h.terminal('/work/b');
-    const result = await clearObserved(h.registry(), before);
+    const result = h.registry().clearHistory(before.clearHistoryTarget!);
     expect.soft(h.entries()).toEqual([]);
-    expect.soft(h.terminal()?.latestNotification).toBeUndefined();
+    expect.soft(h.terminal()?.notifications?.[0]).toBeUndefined();
     expect.soft(result).toBe('cleared');
     expect.soft(h.terminal()?.id).toBe(before.id);
     expect.soft(h.terminal()?.status).toBe(before.status);
@@ -221,12 +220,12 @@ it.each(['arrival', 'repeat', 'disconnect', 'replacement', 'overlap', 'dismiss']
   if (change === 'overlap') await h.connect('/work/a', condition('overlapping'));
   if (change === 'dismiss') h.registry().dismiss(a.id);
   const before = h.registry().terminals();
-  expect.soft(await clearObserved(h.registry(), observed)).toBe('stale');
+  expect.soft(h.registry().clearHistory(observed.clearHistoryTarget!)).toBe('stale');
   expect.soft(h.registry().terminals()).toEqual(before);
   if (change === 'overlap') await a.close();
   if (change === 'dismiss') await h.connect('/work/a', condition('fresh after dismissal'));
   const current = h.terminal()!;
-  expect.soft(await clearObserved(h.registry(), current)).toBe('cleared');
+  expect.soft(h.registry().clearHistory(current.clearHistoryTarget!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
   expect.soft(h.terminal('/work/b')).toEqual(before.find(t => t.id === b.id));
 });
@@ -236,7 +235,7 @@ it('an unrelated live-status update does not invalidate observed Clear or remove
   const observed = h.terminal()!;
   await a.flush({ status: 'complete', reasons: ['Still requires approval'] }, { reason: 'New live failure' });
   const work = h.terminal()!.work;
-  expect.soft(await clearObserved(h.registry(), observed)).toBe('cleared');
+  expect.soft(h.registry().clearHistory(observed.clearHistoryTarget!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
   expect.soft(h.terminal()!.work).toEqual(work);
 });
@@ -248,9 +247,9 @@ it('refuses an old Clear when overlap rebuilds identical history at the same rec
   const peer = await h.connect('/work/a');
   await peer.close();
   expect(h.entries()).toEqual(observed.notifications);
-  expect.soft(await clearObserved(h.registry(), observed)).toBe('stale');
+  expect.soft(h.registry().clearHistory(observed.clearHistoryTarget!)).toBe('stale');
   expect.soft(h.entries()).toEqual(observed.notifications);
-  expect.soft(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  expect.soft(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
 });
 
@@ -261,7 +260,7 @@ for (const disconnected of [false, true]) {
     const other = await h.connect('/work/b', condition('unrelated'));
     const otherBefore = h.terminal('/work/b');
     if (disconnected) await a.close();
-    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    expect(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
     expect(h.entries()).toEqual([]);
     if (!disconnected) {
       await a.report(pending); await a.flush({ status: 'complete', reasons: ['Still pending'] });
@@ -274,7 +273,7 @@ for (const disconnected of [false, true]) {
     expect.soft(h.terminal()?.work).toMatchObject({ attention: { reasons: ['Still pending'] }, error: { reason: 'Live error remains' } });
     await b.close(); h.time(3000); const c = await h.connect('/work/a', pending);
     expect.soft(h.entries()).toEqual([]);
-    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    expect(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
     await c.arrival('approval', 'new-qualifying-stop');
     expect.soft(h.entries()).toEqual([entry('approval', 3000)]);
     expect.soft(h.terminal('/work/b')).toEqual(otherBefore);
@@ -284,7 +283,7 @@ for (const disconnected of [false, true]) {
 
 it('an ended cleared condition stays absent on recovery, while a new offline same-word stop is received', async () => {
   const h = await fixture(); const a = await h.connect('/work/a', condition('approval'));
-  expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  expect(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
   await a.report(null); await a.close();
   const b = await h.connect('/work/a', null);
   expect.soft(h.entries()).toEqual([]);
@@ -299,7 +298,7 @@ for (const reset of ['restart', 'dismiss', 'overlap'] as const) for (const pendi
     const h = await fixture(); const current = condition('approval');
     const a = await h.connect('/work/a', current);
     await a.arrival('approval'); await a.arrival('old context'); await a.report(current);
-    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    expect(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
     const other = await h.connect('/work/b', condition('unrelated'));
     const otherBefore = h.terminal('/work/b');
     const next = pending ? current : null;
@@ -325,7 +324,7 @@ for (const reset of ['restart', 'dismiss', 'overlap'] as const) for (const pendi
 it('overlap ending with no current survivor forgets Clear before a later fresh connection', async () => {
   const h = await fixture(); const current = condition('approval');
   const a = await h.connect('/work/a', current);
-  expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  expect(h.registry().clearHistory(h.terminal()!.clearHistoryTarget!)).toBe('cleared');
   const b = await h.connect('/work/a', condition('peer'));
   await a.report(null); await b.report(null);
   await Promise.all([a.close(), b.close()]);
@@ -337,8 +336,8 @@ it('overlap ending with no current survivor forgets Clear before a later fresh c
 it.each(['dismiss', 'overlap'] as const)('%s forgets only its own Clear suppression, leaving another cleared directory suppressed through reconnect', async reset => {
   const h = await fixture(); const selected = condition('selected approval'); const unrelated = condition('unrelated approval');
   const a = await h.connect('/work/a', selected); const b = await h.connect('/work/b', unrelated);
-  expect(await clearObserved(h.registry(), h.terminal('/work/a')!)).toBe('cleared');
-  expect(await clearObserved(h.registry(), h.terminal('/work/b')!)).toBe('cleared');
+  expect(h.registry().clearHistory(h.terminal('/work/a')!.clearHistoryTarget!)).toBe('cleared');
+  expect(h.registry().clearHistory(h.terminal('/work/b')!.clearHistoryTarget!)).toBe('cleared');
   expect(h.entries('/work/a')).toEqual([]); expect(h.entries('/work/b')).toEqual([]);
   h.time(9000);
   if (reset === 'dismiss') {
@@ -351,4 +350,27 @@ it.each(['dismiss', 'overlap'] as const)('%s forgets only its own Clear suppress
   await b.close(); await h.connect('/work/b', unrelated);
   expect.soft(h.entries('/work/b')).toEqual([]);
   expect.soft(h.entries('/work/a')).toEqual([entry('selected approval', 9000)]);
+});
+
+it('publishes notification content only through retained entries in snapshots and cards', async () => {
+  const h = await fixture();
+  const peer = await h.connect();
+  await peer.arrival('one');
+  const published = h.terminal()!;
+  expect.soft(published.notifications).toEqual([entry('one', 1000)]);
+  expect.soft(published).not.toHaveProperty('latestNotification');
+  const card = directoryCards([published])[0];
+  expect.soft(card).toMatchObject({ notifications: [entry('one', 1000)] });
+  expect(card).not.toHaveProperty('latestNotification');
+});
+
+it('publishes a dedicated Clear target without live work or message content', async () => {
+  const h = await fixture(); const peer = await h.connect();
+  expect(h.terminal()).not.toHaveProperty('clearHistoryTarget');
+  await peer.arrival('approval');
+  const snapshot = h.terminal()!;
+  const target = { id: expect.any(String), launchDirectory: '/work/a', revision: expect.any(String) };
+  expect.soft(snapshot).toHaveProperty('clearHistoryTarget', target);
+  expect.soft(snapshot).not.toHaveProperty('notificationVersion');
+  expect(directoryCards([snapshot])[0]).toHaveProperty('clearHistoryTarget', target);
 });

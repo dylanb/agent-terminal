@@ -95,7 +95,7 @@ for (const reset of ['restart', 'dismiss'] as const) {
       expect.soft(await controllerSnapshot(g.controller().page)).toEqual([]);
       const earliestReceipt = Date.now();
       await g.reconnect(); await waitForConnections(g.controller().page, g.repo, 1);
-      await expect.poll(async () => (await controllerSnapshot(g.controller().page)).find(t => t.launchDirectory === g.repo)?.latestNotification?.message).toBe(second.message);
+      await expect.poll(async () => (await controllerSnapshot(g.controller().page)).find(t => t.launchDirectory === g.repo)?.notifications?.[0]?.message).toBe(second.message);
       const entries = await g.entries();
       expect.soft(entries).toEqual([{ message: second.message, receivedAt: expect.any(Number), count: 1 }]);
       expect.soft(entries[0]?.receivedAt).toBeGreaterThanOrEqual(earliestReceipt);

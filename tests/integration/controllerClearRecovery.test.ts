@@ -38,16 +38,16 @@ it('real source/client recovery keeps a continuing cleared per-step stop empty a
   try {
     source.observe('/work', view(true)); await connect();
     expect(registry.terminals()[0].notifications).toMatchObject([{ message: 'complete · iter 1', count: 1 }]);
-    expect(registry.clearHistory(registry.terminals()[0])).toBe('cleared');
+    expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     source.observe('/work', view(true, 'error')); await flush();
     expect.soft(registry.terminals()[0].notifications).toEqual([]);
     await disconnect(); await connect();
     expect.soft(registry.terminals()[0].notifications).toEqual([]);
     expect.soft(registry.terminals()[0].work?.attention?.reasons).toEqual(['Current gate']);
-    expect(registry.clearHistory(registry.terminals()[0])).toBe('cleared');
+    expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     source.observe('/work', view(false)); source.observe('/work', view(true)); await flush();
     expect.soft(registry.terminals()[0].notifications).toMatchObject([{ message: 'complete · iter 1', count: 1 }]);
-    expect(registry.clearHistory(registry.terminals()[0])).toBe('cleared');
+    expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     await disconnect(); source.observe('/work', view(false)); await connect();
     expect.soft(registry.terminals()[0].notifications).toEqual([]);
   } finally { stop(); await registry.dispose(); rmSync(home, { recursive: true, force: true }); }
@@ -68,7 +68,7 @@ it('a disposed source cannot refill its cleared directory after a fresh terminal
   let publish!: (work: ReturnType<typeof workStatus>) => void;
   try {
     await expect.poll(() => registry.terminals()[0]?.notifications?.length).toBe(1);
-    expect(registry.clearHistory(registry.terminals()[0])).toBe('cleared');
+    expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     stopOld(); await expect.poll(() => registry.terminals()[0]?.status).toBe('disconnected');
     stopNew = registerControllerTerminal(home, identity, () => 'activated', () => {}, listener => {
       publish = listener; listener(workStatus()); return () => {};

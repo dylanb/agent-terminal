@@ -4,21 +4,13 @@ import { sameOccurrence, type Occurrence } from '../shared/occurrence';
 import { stripStatusControlChars } from '../shared/loopStatus';
 import type { ControllerNotificationSource, NotificationCondition } from '../shared/controllerProtocol';
 
-export interface LoopNotifyOpts { title: string; body: string; repoKey: string }
-export interface LoopNotifierDeps {
-  notify?: (opts: LoopNotifyOpts) => void;
-  isFocused?: () => boolean;
-  onFocusChanged?: (listener: () => void) => void;
-  focusWindow?: () => void;
-  reveal?: () => void;
-}
 export interface LoopNotifier extends ControllerNotificationSource {
   observe(repoKey: string, view: FlowStateView): void;
   current(repoKey?: string): NotificationCondition | null;
 }
 const STATUS_MAX = 80;
 
-export function createLoopNotifier(deps: LoopNotifierDeps = {}): LoopNotifier {
+export function createLoopNotifier(): LoopNotifier {
   const lastRaised = new Map<string, Occurrence & { perStep: boolean }>();
   const conditions = new Map<string, NotificationCondition>();
   const listeners = new Set<(notification: NotificationCondition) => void>();
@@ -58,18 +50,16 @@ export function createLoopNotifier(deps: LoopNotifierDeps = {}): LoopNotifier {
         if (sameOccurrence(raised ?? null, occurrence)) return;
         lastRaised.set(repoKey, { ...occurrence, perStep: loop.autoGate !== undefined });
         const condition = conditions.get(repoKey)!;
-        try { deps.notify?.({ title: 'Agent loop needs you', body: message, repoKey }); }
-        catch { /* A notification cannot interrupt terminal work. */ }
         for (const listener of listeners) {
           try { listener({ ...condition }); }
-          catch { /* Each notification consumer is best effort. */ }
+          catch {}
         }
       } finally {
         const current = this.current();
         if (current?.conditionId !== previous?.conditionId) {
           for (const listener of currentListeners) {
             try { listener(current ? { ...current } : null); }
-            catch { /* Each notification consumer is best effort. */ }
+            catch {}
           }
         }
       }

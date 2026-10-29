@@ -13,7 +13,7 @@ it.each(['body', 'nested'] as const)('announces received arrivals with unchanged
   const observer = new MutationObserver(() => {});
   try {
     outside.focus();
-    const received = { ...terminal, latestNotification: { message: 'Review release proposal', receivedAt: 1000 } };
+    const received = { ...terminal, notifications: [{ message: 'Review release proposal', receivedAt: 1000, count: 1 }] };
     service.publish([received]);
     expect.soft(live.textContent).toContain(terminal.launchDirectory);
     expect.soft(live.textContent).toContain('Review release proposal');
@@ -21,10 +21,10 @@ it.each(['body', 'nested'] as const)('announces received arrivals with unchanged
     observer.observe(live, { childList: true, subtree: true, characterData: true });
     service.publish([structuredClone(received)]);
     expect.soft(observer.takeRecords(), 'unchanged received history is not announced again').toEqual([]);
-    const repeated = { ...received, latestNotification: { ...received.latestNotification, receivedAt: 2000 } };
+    const repeated = { ...received, notifications: [{ ...received.notifications[0], receivedAt: 2000 }] };
     service.publish([repeated]);
     expect.soft(observer.takeRecords(), 'a new receipt can announce the same text').not.toEqual([]);
-    const next = { ...repeated, latestNotification: { message: 'Review the second proposal', receivedAt: 2000 } };
+    const next = { ...repeated, notifications: [{ message: 'Review the second proposal', receivedAt: 2000, count: 1 }] };
     service.publish([next]);
     expect.soft(live.textContent).toContain('Review the second proposal');
     observer.takeRecords();
@@ -32,7 +32,7 @@ it.each(['body', 'nested'] as const)('announces received arrivals with unchanged
     service.publish([next, peer]);
     expect.soft(live.textContent).not.toContain('Review the second proposal');
     observer.takeRecords();
-    service.publish([{ ...next, latestNotification: { message: 'Hidden during overlap', receivedAt: 3000 } }, peer]);
+    service.publish([{ ...next, notifications: [{ message: 'Hidden during overlap', receivedAt: 3000, count: 1 }] }, peer]);
     expect.soft(observer.takeRecords(), 'conflicting member notifications stay silent').toEqual([]);
     service.publish([next]);
     expect.soft(live.textContent, 'unchanged history after conflict is not a fresh receipt').not.toContain('Review the second proposal');

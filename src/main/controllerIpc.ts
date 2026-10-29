@@ -26,8 +26,10 @@ export function installControllerIpc(
   });
   ipcMain.handle(CONTROLLER_CH.clearHistory, (event, payload: ControllerClearRequest): ControllerClearOutcome => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID
-      || typeof payload.observed?.id !== 'string' || typeof payload.observed.launchDirectory !== 'string') return 'unavailable';
-    return controller.clearHistory(payload.observed);
+      || typeof payload.target?.id !== 'string' || !payload.target.id
+      || typeof payload.target.launchDirectory !== 'string' || !payload.target.launchDirectory
+      || typeof payload.target.revision !== 'string' || !payload.target.revision) return 'unavailable';
+    return controller.clearHistory(payload.target);
   });
   ipcMain.handle(CONTROLLER_CH.getTheme, (event, payload: ControllerThemeRequest): Theme => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID) return CONTROLLER_DEFAULT_THEME;
