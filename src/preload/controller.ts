@@ -1,5 +1,5 @@
 import { ipcRenderer } from 'electron';
-import { CONTROLLER_CH, SESSION_ID, type ControllerApi, type ControllerAlwaysOnTopChoice, type ControllerLoopMessageDismissal, type ControllerAlwaysOnTopRequest, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest } from '../shared/ipc';
+import { CONTROLLER_CH, SESSION_ID, type ControllerApi, type ControllerClearRequest, type ControllerAlwaysOnTopChoice, type ControllerLoopMessageDismissal, type ControllerAlwaysOnTopRequest, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest } from '../shared/ipc';
 
 export const controllerApi: ControllerApi = {
   subscribeTerminals(listener) {
@@ -8,6 +8,7 @@ export const controllerApi: ControllerApi = {
     ipcRenderer.send(CONTROLLER_CH.subscribe, { sessionId: SESSION_ID });
     return () => { ipcRenderer.removeListener(CONTROLLER_CH.terminals, receive); };
   },
+  clearHistory: target => ipcRenderer.invoke(CONTROLLER_CH.clearHistory, { sessionId: SESSION_ID, target } satisfies ControllerClearRequest),
   dismissTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.dismiss, { sessionId: SESSION_ID, id }),
   dismissLoopMessage: (terminalId, messageId) => ipcRenderer.invoke(CONTROLLER_CH.dismissLoopMessage, { sessionId: SESSION_ID, terminalId, messageId } satisfies ControllerLoopMessageDismissal),
   activateTerminal: id => ipcRenderer.invoke(CONTROLLER_CH.activate, { sessionId: SESSION_ID, id }),

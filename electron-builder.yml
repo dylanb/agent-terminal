@@ -31,12 +31,8 @@ extraResources:
   - from: example/codex-skills
     to: example/codex-skills
 mac:
-  # No `identity:` override and no `hardenedRuntime: false`. macOS grants notification authorization only to
-  # a bundle whose signature binds its Info.plist (§24.2.3 T4), but pinning an ad-hoc identity here would
-  # also pin it for a release build — an ad-hoc signature cannot be notarized, and the hardened runtime it
-  # forces off is what Gatekeeper and notarization require. A release signs with a real Developer ID (which
-  # binds the Info.plist too); dev-mode notifications come from `scripts/sign-bundle.sh` on the vendored
-  # Electron, never from the distributed artifact's configuration.
+  # A release needs a real Developer ID and hardened runtime for notarization. Do not pin an
+  # ad-hoc identity here; development bundle signing belongs to scripts/sign-bundle.sh.
   target:
     - dmg
     - zip

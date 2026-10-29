@@ -6,7 +6,7 @@ export const CONTROLLER_MAX_STATUS_BYTES = 1024 * 1024;
 
 // §23.6
 export const CONTROLLER_PROTOCOL_MAJOR = 2;
-export const CONTROLLER_PROTOCOL_MINOR = 1;
+export const CONTROLLER_PROTOCOL_MINOR = 2;
 /** The first minor whose peers carry `loopMessage` in status and understand `dismiss-loop-message`. */
 export const CONTROLLER_LOOP_MESSAGE_MINOR = 1;
 export const CONTROLLER_SUPPORTED_MAJORS: ControllerVersionRange = { min: 2, max: 2 };
@@ -15,7 +15,18 @@ export class ControllerVersionMismatch extends Error {
   constructor(readonly version: number) { super(`Unsupported controller protocol version ${version}`); }
 }
 
+export interface NotificationCondition { conditionId: string; message: string }
+export interface ControllerNotificationSource {
+  current(): NotificationCondition | null;
+  subscribeCurrent(listener: (notification: NotificationCondition | null) => void): () => void;
+  subscribe(listener: (notification: NotificationCondition) => void): () => void;
+}
+
+export const supportsControllerNotifications = (minor: number | undefined): boolean => (minor ?? 0) >= 2;
+
 export type ControllerMessage =
+  | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'notification'; notification: NotificationCondition }
+  | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'notification-current'; notification: NotificationCondition | null }
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'status'; work: ControllerWorkStatus }
   | { type: 'incompatible'; supported: ControllerVersionRange }
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; minor?: number; type: 'registered' }
@@ -25,6 +36,8 @@ export type ControllerMessage =
   | { version: typeof CONTROLLER_PROTOCOL_MAJOR; type: 'dismiss-loop-message'; id: string };
 
 const FIELDS: { [Type in Exclude<ControllerMessage['type'], 'incompatible'>]: readonly (keyof Extract<ControllerMessage, { type: Type }>)[] } = {
+  notification: ['version', 'type', 'notification'],
+  'notification-current': ['version', 'type', 'notification'],
   status: ['version', 'type', 'work'],
   register: ['version', 'minor', 'type', 'launchDirectory', 'repositoryRoot'],
   registered: ['version', 'minor', 'type'],
@@ -68,6 +81,16 @@ export function parseControllerMessage(frame: string): ControllerMessage {
   if (message.version !== CONTROLLER_PROTOCOL_MAJOR) throw new ControllerVersionMismatch(message.version);
   const requestId = typeof message.requestId === 'string' && message.requestId.length > 0;
   switch (message.type) {
+    case 'notification':
+    case 'notification-current': {
+      const condition = message.notification as Record<string, unknown> | null;
+      if (message.type === 'notification-current' && condition === null) break;
+      if (!condition || typeof condition !== 'object' || Array.isArray(condition)
+        || typeof condition.conditionId !== 'string' || !condition.conditionId.trim()
+        || typeof condition.message !== 'string') throw new Error('Invalid controller notification');
+      message.notification = { conditionId: condition.conditionId, message: condition.message };
+      break;
+    }
     case 'status':
       if (!isControllerWorkStatus(message.work)) throw new Error('Invalid controller status');
       break;

@@ -23,7 +23,7 @@ test('a terminal speaking a newer minor version registers with the controller an
     terminal.on('message', (chunk: Buffer) => { replies += chunk.toString(); });
     terminal.send(`${JSON.stringify({ version: 2, minor: 7, type: 'register', launchDirectory: h.fixture.nonGit, repositoryRoot: null, colour: 'teal' })}`);
     await expect(cardLocator(controller.page, h.fixture.nonGit)).toHaveCount(1);
-    await expect.poll(() => replies).toBe('{"version":2,"minor":1,"type":"registered"}');
+    await expect.poll(() => replies ? JSON.parse(replies) : null).toMatchObject({ version: 2, type: 'registered' });
   } finally {
     terminal?.terminate();
     await h.dispose();

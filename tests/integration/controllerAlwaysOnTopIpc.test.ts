@@ -23,7 +23,7 @@ vi.mock('electron', () => ({
 /** Each always-on-top value main pushed to the window, with its payload. */
 const pushed: unknown[] = [];
 const contents = { isDestroyed: () => false, send(channel: string, payload: unknown) { if (channel === CONTROLLER_CH.alwaysOnTop) pushed.push(payload); } };
-const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, dismissLoopMessage() {} };
+const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, clearHistory: () => 'unavailable' as const, dismissLoopMessage() {} };
 let userData: string;
 let dispose: (() => void) | undefined;
 

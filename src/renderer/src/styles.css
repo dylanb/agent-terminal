@@ -646,3 +646,12 @@ body:has(.controller-panes) { overflow:visible; }
 .startup-dot { flex:none; width:10px; height:10px; border-radius:50%; background:var(--status-needs-human); }
 
 .controller-status-announcement { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+
+.controller-notification { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:var(--r); min-width:0; padding:var(--r); border:1px solid var(--hair); border-radius:var(--r); background:var(--bg); color:var(--text); }
+.controller-notification p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.controller-notification time { grid-column:2; }
+.controller-notification-bell { width:1.25em; height:1.25em; fill:none; stroke:currentColor; stroke-width:2; color:var(--dim); }
+.controller-card[data-status="needs-human"] .controller-notification-bell { color:var(--status-needs-human-text); }
+.controller-card[data-status="error"] .controller-notification-bell { color:var(--status-error-text); }
+
+.controller-notification-history { min-width:0; padding-inline-start:var(--r); overflow-wrap:anywhere; white-space:pre-wrap; }

@@ -1,3 +1,26 @@
+## #221 slice 5 — Clear survives unchanged recovery
+
+- 2026-10-29: §23.6 reconciliation: notification frames use minor 2, preserving minor 1 for loop-message status/dismissal. History and Clear compose the shared pressed-control guard while retaining stale-Clear checks.
+
+
+§23.6 preserves cleared history through same-run reconnect and unchanged current reports, including disconnected Clear. New qualifying stops remain eligible even with identical wording. Dismiss, restart and overlap forget suppression and rebuild only from current information, with fresh receipt time and count one. Live status and gate authority remain independent.
+
+## #221 slice 4 — Clear refusal and history continuity
+
+§23.6 preserves expanded history and equivalent control focus across updates. Clear revalidates observed history and directory representation before deletion; stale or unavailable operations announce refusal and permit explicit retry without hiding newer messages. Unrelated status updates remain valid. Current-condition recovery suppression remains the approved slice 5.
+
+## #221 slice 3 — initial Clear history
+
+§23.6 adds Clear history to expanded, nonempty history on live and disconnected cards. The typed controller request removes entries/counts/latest without changing card membership, live errors or human gates. Dismiss remains distinct. Stale-action feedback, interaction continuity and unchanged-condition recovery suppression remain the following approved increments.
+
+## #221 slice 2 — bounded controller history and directory recovery
+
+§23.6 and §24.2.3 T4 now retain three distinct messages per directory in memory, count exact-text repeats without changing order/time, and expose History N/3 on ordinary and disconnected cards. Same-run reconnect reuses history; Dismiss and restart forget it. Overlap discards history and rebuilds only from the current survivor. Current status, gate authority and manual collapse remain independent. Clear and interaction continuity remain the subsequent approved increments.
+
+## #221 slice 1 — immediate controller notifications
+
+§24.2.3 T4 and §23.6 replace focus-delayed OS delivery with immediate controller arrivals and a separately highlighted latest received message, bell and receipt time. The status-bar alert and gate authority are unchanged. Additive protocol minor 1 negotiates arrival/current-condition messages without making the extension a startup requirement; older compatible peers keep ordinary status and activation. Delivery failure never falls back to OS notifications or interrupts terminal work. History and Clear are subsequent increments of #221.
+
 > Entries older than v2.200 live in git history (`git log -p -- docs/spec/changelog.md`).
 
 ## Loop errors and notices go to the controller card, not a popup

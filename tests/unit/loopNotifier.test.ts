@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createLoopNotifier, type LoopNotifierDeps, type LoopNotifyOpts } from '../../src/main/loopNotifier';
+import { createLoopNotifier } from '../../src/main/loopNotifier';
+import type { NotificationCondition } from '../../src/shared/controllerProtocol';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
-
-// §24.2.3 T4 — the OS attention notification decision (raise / dedup / clear / activate). The
-// notification surface is injected, not the emulator/PTY, so spying it is permitted. Occurrence
-// identity is per-repo (`repoKey, status, iteration`) — the loop is repo-scoped (§16.3).
 
 const REPO = '/repo';
 
@@ -18,30 +15,21 @@ function loopView(loop: Partial<FlowLoopView> & { status: string; iteration: num
     loop: { pr: null, branch: null, ready: false, humanNeeded: true, ...loop },
   };
 }
-const NON_LOOP: FlowStateView = { stepName: 's', runStarted: 'never-started' as const, steps: ['s'], position: 1, total: 1, status: 'in_progress' };
 
-function harness(over: Partial<LoopNotifierDeps> = {}) {
-  const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
-  const focusWindow = vi.fn();
-  const reveal = vi.fn();
-  const deps: LoopNotifierDeps = {
-    isFocused: () => false,
-    onFocusChanged: () => {},
-    notify,
-    focusWindow,
-    reveal,
-    ...over,
-  };
-  return { notifier: createLoopNotifier(deps), notify, focusWindow, reveal };
+function harness() {
+  const notify = vi.fn<(notification: NotificationCondition) => void>();
+  const notifier = createLoopNotifier();
+  notifier.subscribe(notify);
+  return { notifier, notify };
 }
 
 describe('createLoopNotifier (§24.2.3 T4)', () => {
-  it('raises an OS notification on a distinct human-needed entry while unfocused', () => {
+  it('publishes a notification on a distinct human-needed entry immediately', () => {
     const { notifier, notify } = harness();
     notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].body).toContain('awaiting-human-pr-approval');
-    expect(notify.mock.calls[0][0].body).toContain('9');
+    expect(notify.mock.calls[0][0].message).toContain('awaiting-human-pr-approval');
+    expect(notify.mock.calls[0][0].message).toContain('9');
   });
 
   it('omits the iteration segment from the body when no round has run (a §27 run-less failure)', () => {
@@ -56,25 +44,23 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     };
     notifier.observe(REPO, runLessFailure);
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].body).toContain('error');
-    expect(notify.mock.calls[0][0].body).not.toContain('iter');
+    expect(notify.mock.calls[0][0].message).toContain('error');
+    expect(notify.mock.calls[0][0].message).not.toContain('iter');
   });
 
-  it('bounds length and strips control characters from a foreign status before the OS notification body', () => {
-    // CWE-117: `status` is read from an arbitrary repo's untrusted `.agent-loop/state.yaml` (§16.3),
-    // so it must reach the OS notification sink length-bounded and free of control characters.
+  it('bounds length and strips control characters from a foreign status before publication', () => {
     const { notifier, notify } = harness();
     const hostile = `awaiting-human\n${'x'.repeat(500)}`;
     notifier.observe(REPO, loopView({ status: hostile, iteration: 9 }));
-    const { body } = notify.mock.calls[0][0];
-    expect(body).not.toContain('\n');
-    expect(body.length).toBeLessThanOrEqual(100);
+    const { message } = notify.mock.calls[0][0];
+    expect(message).not.toContain('\n');
+    expect(message.length).toBeLessThanOrEqual(100);
   });
 
-  it('does not raise when the window is focused', () => {
-    const { notifier, notify } = harness({ isFocused: () => true });
+  it('publishes immediately without a focus dependency', () => {
+    const { notifier, notify } = harness();
     notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify.mock.calls.map(([message]) => message.message)).toEqual(['awaiting-human-pr-approval · iter 9']);
   });
 
   it('does not raise for a non-human-needed view', () => {
@@ -106,7 +92,7 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
-  it('raises the initial human-needed entry seen at start (no prior signalled occurrence) when unfocused', () => {
+  it('raises the initial human-needed entry seen at start (no prior signalled occurrence)', () => {
     const { notifier, notify } = harness();
     notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 1 }));
     expect(notify).toHaveBeenCalledTimes(1);
@@ -119,23 +105,13 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
-  it('on blur, raises a pending human-needed stop for a repo other than the one now observed (§16.3 per-repo)', () => {
-    // A stops for the human while the app is focused (so it is pending but not yet raised); the user then
-    // cd's to B (no stop), making B the observed repo. Leaving the app must still raise A's pending stop —
-    // the single-repo focus check missed a stop in a repo the user had navigated away from.
-    let focused = true;
-    const listeners: (() => void)[] = [];
-    const { notifier, notify } = harness({
-      isFocused: () => focused,
-      onFocusChanged: (l) => listeners.push(l),
-    });
+  it('publishes each repository stop in observation order', () => {
+    const { notifier, notify } = harness();
     notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    expect(notify).not.toHaveBeenCalled(); // focused → pending, not raised
-    notifier.observe('/repoB', NON_LOOP); // B is now the observed repo; A's stop stays pending
-    focused = false;
-    for (const l of listeners) l(); // blur
-    expect(notify).toHaveBeenCalledTimes(1);
-    expect(notify.mock.calls[0][0].repoKey).toBe('/repoA');
+    notifier.observe('/repoB', loopView({ status: 'error', iteration: 3 }));
+    expect(notify.mock.calls.map(([notification]) => notification.message)).toEqual([
+      'awaiting-human-pr-approval · iter 9', 'error · iter 3',
+    ]);
   });
 
   it('does not re-fire on a same-repo return visit after a detour to another repo (per-repo dedup)', () => {
@@ -149,53 +125,28 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
-  it('closes a showing repo-A notification when a distinct repo-B entry is observed (tracked closer)', () => {
-    const close = vi.fn();
-    const { notifier } = harness({ notify: () => close });
-    notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notifier.observe('/repoB', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    expect(close).toHaveBeenCalledTimes(1);
+  it('unsubscribed consumers receive no later arrivals', () => {
+    const notifier = createLoopNotifier();
+    const received: NotificationCondition[] = [];
+    const stop = notifier.subscribe(notification => received.push(notification));
+    notifier.observe(REPO, loopView({ status: 'error', iteration: 9 }));
+    stop();
+    notifier.observe(REPO, loopView({ status: 'complete', iteration: 10 }));
+    expect(received.map(notification => notification.message)).toEqual(['error · iter 9']);
   });
 
-  it('closes the showing notification on a non-human-needed view', () => {
-    const close = vi.fn();
-    const { notifier } = harness({ notify: () => close });
-    notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notifier.observe(REPO, loopView({ status: 'impl-draft', iteration: 9, humanNeeded: false }));
-    expect(close).toHaveBeenCalledTimes(1);
+  it('a failed subscriber cannot interrupt other consumers or current work', () => {
+    const notifier = createLoopNotifier();
+    notifier.subscribe(() => { throw new Error('controller disconnected'); });
+    const received: NotificationCondition[] = [];
+    notifier.subscribe(notification => received.push(notification));
+    expect.soft(() => notifier.observe(REPO, loopView({ status: 'error', iteration: 9 }))).not.toThrow();
+    expect.soft(received.map(notification => notification.message)).toEqual(['error · iter 9']);
+    expect.soft(notifier.current()).toEqual(received[0]);
+    expect(() => notifier.observe(REPO, loopView({ status: 'working', iteration: 9, humanNeeded: false }))).not.toThrow();
+    expect(notifier.current()).toBeNull();
   });
 
-  it('closes the showing notification on a null mirror (no loop)', () => {
-    const close = vi.fn();
-    const { notifier } = harness({ notify: () => close });
-    notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notifier.observe(REPO, NON_LOOP);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes the prior notification before raising a distinct human-needed entry', () => {
-    const close = vi.fn();
-    const { notifier } = harness({ notify: () => close });
-    notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notifier.observe(REPO, loopView({ status: 'awaiting-human-impl-triage', iteration: 9 }));
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not close one repo\'s notification when a different, non-loop repo is observed', () => {
-    const close = vi.fn();
-    const { notifier } = harness({ notify: () => close });
-    notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notifier.observe('/repoB', NON_LOOP);
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it('focuses the window and emits the reveal signal when the notification is activated', () => {
-    const { notifier, notify, focusWindow, reveal } = harness();
-    notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
-    notify.mock.calls[0][0].onActivate();
-    expect(focusWindow).toHaveBeenCalledTimes(1);
-    expect(reveal).toHaveBeenCalledTimes(1);
-  });
 });
 
 // §27.9.1 N9b.5(e) (#137) — a view carrying `autoGate` that stops needing a human ends that stop, so the next stop notifies.
@@ -224,4 +175,12 @@ describe('createLoopNotifier — distinct auto-gate stops (§27.9.1)', () => {
     notifier.observe(REPO, loopView({ status: 'complete', iteration: 1 }));
     expect(notify).toHaveBeenCalledTimes(1);
   });
+});
+
+it('a continuing per-step human stop publishes once despite status changes', () => {
+  const { notifier, notify } = harness();
+  const autoGate = { deciding: false, hung: false, haltReasons: [{ reason: 'stop-for-a-human' as const }] };
+  notifier.observe(REPO, loopView({ status: 'error', iteration: 1, autoGate }));
+  notifier.observe(REPO, loopView({ status: 'complete', iteration: 1, autoGate }));
+  expect(notify.mock.calls.map(([message]) => message.message)).toEqual(['error · iter 1']);
 });

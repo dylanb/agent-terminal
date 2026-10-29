@@ -6,9 +6,9 @@ interface DirectoryIdentity {
 }
 
 export type ControllerDirectoryCard = DirectoryIdentity & (
-  | { readonly kind: 'single'; readonly work?: ControllerWorkStatus; readonly activationTargets: readonly [string] }
+  | { readonly kind: 'single'; readonly notifications?: ControllerTerminal['notifications']; readonly clearHistoryTarget?: ControllerTerminal['clearHistoryTarget']; readonly work?: ControllerWorkStatus; readonly activationTargets: readonly [string] }
   | { readonly kind: 'conflict'; readonly activationTargets: readonly [string, string, ...string[]] }
-  | { readonly kind: 'disconnected'; readonly dismissOccurrenceId: string }
+  | { readonly kind: 'disconnected'; readonly notifications?: ControllerTerminal['notifications']; readonly clearHistoryTarget?: ControllerTerminal['clearHistoryTarget']; readonly dismissOccurrenceId: string }
 );
 
 export function directoryCards(terminals: readonly ControllerTerminal[]): ControllerDirectoryCard[] {
@@ -26,8 +26,8 @@ export function directoryCards(terminals: readonly ControllerTerminal[]): Contro
       launchDirectory: first.launchDirectory,
       repositoryRoot: shown.every(member => member.repositoryRoot === first.repositoryRoot) ? first.repositoryRoot : null,
     };
-    if (!live.length) return { ...identity, kind: 'disconnected', dismissOccurrenceId: first.id };
-    if (live.length === 1) return { ...identity, kind: 'single', work: structuredClone(first.work), activationTargets: [first.id] };
+    if (!live.length) return { ...identity, kind: 'disconnected', notifications: structuredClone(first.notifications), clearHistoryTarget: structuredClone(first.clearHistoryTarget), dismissOccurrenceId: first.id };
+    if (live.length === 1) return { ...identity, kind: 'single', notifications: structuredClone(first.notifications), clearHistoryTarget: structuredClone(first.clearHistoryTarget), work: structuredClone(first.work), activationTargets: [first.id] };
     return { ...identity, kind: 'conflict', activationTargets: [live[0].id, live[1].id, ...live.slice(2).map(member => member.id)] };
   });
 }

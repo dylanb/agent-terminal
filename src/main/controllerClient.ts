@@ -3,7 +3,7 @@ import { connect } from 'node:net';
 import WebSocket from 'ws';
 import { controllerWebSocketOptions } from './controllerWebSocket';
 import { resolveControllerEndpoint } from './controllerEndpoint';
-import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
+import { CONTROLLER_LOOP_MESSAGE_MINOR, CONTROLLER_PROTOCOL_MAJOR, CONTROLLER_PROTOCOL_MINOR, CONTROLLER_MAX_STATUS_BYTES, supportsControllerNotifications, type ControllerNotificationSource, type ControllerMessage, controllerUpdateTarget, parseControllerMessage, encodeControllerMessage } from '../shared/controllerProtocol';
 import type { ControllerIdentity } from './controllerIdentity';
 
 export const CONTROLLER_REGISTRATION_DEADLINE_MS = 2_000;
@@ -16,6 +16,7 @@ export function registerControllerTerminal(
   onRegistered: () => void = () => {},
   subscribeStatus?: (listener: (work: ControllerWorkStatus) => void) => () => void,
   onIncompatible: (report: ControllerIncompatibility) => void = () => {},
+  notifications?: ControllerNotificationSource,
   dismissLoopMessage: (id: string) => void = () => {},
 ): () => void {
   let canceled = false;
@@ -31,6 +32,8 @@ export function registerControllerTerminal(
     let registered = false;
     let controllerMinor = 0;
     let unsubscribe: (() => void) | undefined;
+    let unsubscribeNotifications: (() => void) | undefined;
+    let unsubscribeCurrent: (() => void) | undefined;
     let sendingStatus = false;
     let pendingStatus: ControllerWorkStatus | undefined;
     let current: WebSocket;
@@ -64,6 +67,8 @@ export function registerControllerTerminal(
     current.once('close', () => {
       clearTimeout(deadline);
       unsubscribe?.();
+      unsubscribeNotifications?.();
+      unsubscribeCurrent?.();
       pendingStatus = undefined;
       socket = undefined;
       scheduleRetry();
@@ -80,6 +85,31 @@ export function registerControllerTerminal(
           registered = true;
           controllerMinor = message.minor ?? 0;
           clearTimeout(deadline);
+          if (notifications && supportsControllerNotifications(message.minor)) {
+            const publishNotification = (frame: ControllerMessage) => {
+              if (canceled || current.readyState !== WebSocket.OPEN) return;
+              try {
+                const encoded = encodeControllerMessage(frame);
+                if (current.bufferedAmount + Buffer.byteLength(encoded) > CONTROLLER_MAX_STATUS_BYTES) {
+                  current.terminate();
+                  return;
+                }
+                current.send(encoded, error => { if (error) current.terminate(); });
+              } catch { current.terminate(); }
+            };
+            const initial = notifications.current();
+            let currentId = initial?.conditionId;
+            publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification: initial });
+            unsubscribeNotifications = notifications.subscribe(notification => {
+              currentId = notification.conditionId;
+              publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification', notification });
+            });
+            unsubscribeCurrent = notifications.subscribeCurrent(notification => {
+              if (notification?.conditionId === currentId) return;
+              currentId = notification?.conditionId;
+              publishNotification({ version: CONTROLLER_PROTOCOL_MAJOR, type: 'notification-current', notification });
+            });
+          }
           unsubscribe = subscribeStatus?.(publishStatus);
           if (!started) {
             started = true;

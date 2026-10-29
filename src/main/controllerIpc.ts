@@ -1,12 +1,12 @@
 import { ipcMain, type WebContents } from 'electron';
-import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerLoopMessageDismissal, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
+import { CONTROLLER_CH, CONTROLLER_DEFAULT_ALWAYS_ON_TOP, CONTROLLER_DEFAULT_THEME, isTheme, SESSION_ID, type ControllerActivation, type ControllerClearRequest, type ControllerClearOutcome, type ControllerAlwaysOnTopChoice, type ControllerAlwaysOnTopRequest, type ControllerLoopMessageDismissal, type ControllerSnapshot, type ControllerThemeChoice, type ControllerThemeRequest, type Theme } from '../shared/ipc';
 import type { ControllerRegistry } from './controllerTransport';
 import type { ControllerSettingsStore } from './controllerSettings';
 import type { ControllerAlwaysOnTop } from './controllerAlwaysOnTop';
 
 export function installControllerIpc(
   contents: Pick<WebContents, 'isDestroyed' | 'send'>,
-  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss' | 'dismissLoopMessage'>,
+  controller: Pick<ControllerRegistry, 'terminals' | 'subscribeTerminals' | 'activate' | 'dismiss' | 'clearHistory' | 'dismissLoopMessage'>,
   settings: ControllerSettingsStore,
   alwaysOnTop: ControllerAlwaysOnTop,
 ): () => void {
@@ -28,6 +28,13 @@ export function installControllerIpc(
   ipcMain.handle(CONTROLLER_CH.dismiss, (event, payload: ControllerActivation) => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID || typeof payload.id !== 'string') return;
     controller.dismiss(payload.id);
+  });
+  ipcMain.handle(CONTROLLER_CH.clearHistory, (event, payload: ControllerClearRequest): ControllerClearOutcome => {
+    if (event.sender !== contents || payload?.sessionId !== SESSION_ID
+      || typeof payload.target?.id !== 'string' || !payload.target.id
+      || typeof payload.target.launchDirectory !== 'string' || !payload.target.launchDirectory
+      || typeof payload.target.revision !== 'string' || !payload.target.revision) return 'unavailable';
+    return controller.clearHistory(payload.target);
   });
   ipcMain.handle(CONTROLLER_CH.dismissLoopMessage, (event, payload: ControllerLoopMessageDismissal) => {
     if (event.sender !== contents || payload?.sessionId !== SESSION_ID || typeof payload.terminalId !== 'string' || typeof payload.messageId !== 'string') return;
@@ -55,6 +62,7 @@ export function installControllerIpc(
     ipcMain.removeListener(CONTROLLER_CH.subscribe, subscribe);
     ipcMain.removeHandler(CONTROLLER_CH.activate);
     ipcMain.removeHandler(CONTROLLER_CH.dismiss);
+    ipcMain.removeHandler(CONTROLLER_CH.clearHistory);
     ipcMain.removeHandler(CONTROLLER_CH.dismissLoopMessage);
     ipcMain.removeHandler(CONTROLLER_CH.getTheme);
     ipcMain.removeHandler(CONTROLLER_CH.setTheme);

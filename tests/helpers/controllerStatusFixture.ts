@@ -123,6 +123,7 @@ export function statusService(
       if (options.activation === 'rejected') throw new Error('activation failed');
       return options.activation ?? 'activated';
     },
+    async clearHistory() { return 'unavailable'; },
     async dismissTerminal(id) {
       dismissed.push(id);
       publish(current.filter(item => item.id !== id));

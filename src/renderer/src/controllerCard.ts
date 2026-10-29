@@ -10,16 +10,17 @@ export interface ControllerCardDeps {
   card: ControllerDirectoryCard;
   expandedByDefault: boolean;
   onAction(): void | Promise<unknown>;
+  onClearHistory?(): void | Promise<unknown>;
   onDismissLoopMessage(id: string): void | Promise<unknown>;
   from?: CardState;
 }
 
 type Action = 'bring-forward' | 'dismiss' | 'dismiss-loop-message';
-type Focus = 'header' | Action | { reason: string };
+type Focus = 'header' | 'history' | 'clear' | Action | { reason: string };
 const HANDOVER = Symbol('controller card handover');
 
 export interface CardState {
-  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
+  readonly [HANDOVER]: { disconnected: boolean; chosenExpanded: boolean | undefined; historyExpanded: boolean; fullReasons: ReadonlySet<string>; focused: Focus | undefined; actions: PressGroup };
 }
 
 export interface ControllerCard {
@@ -98,7 +99,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const button = element('button', 'controller-card-action', label);
     button.type = 'button';
     button.setAttribute('aria-label', `${name} ${model.launchDirectory}`);
-    actions.bind(button, use);
+    actions.bind(button, use, { key: name });
     return button;
   };
 
@@ -112,7 +113,58 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     const label = count === 2 ? 'Bring both forward' : count > 2 ? `Bring ${count} terminals forward` : 'Bring forward';
     actionButton = action(label, `${label} ${finalSegment(model.repositoryRoot ?? model.launchDirectory)}`, deps.onAction);
   }
+  const notifications = model.kind === 'conflict' ? [] : model.notifications ?? [];
+  if (notifications[0]) {
+    const notification = notifications[0];
+    const box = element('section', 'controller-notification');
+    box.setAttribute('role', 'region');
+    box.setAttribute('aria-label', 'Received notification');
+    const bell = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    bell.classList.add('controller-notification-bell');
+    bell.setAttribute('viewBox', '0 0 24 24');
+    bell.setAttribute('aria-hidden', 'true');
+    bell.setAttribute('focusable', 'false');
+    const outline = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+    outline.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
+    bell.append(outline);
+    const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+    time.dateTime = new Date(notification.receivedAt).toISOString();
+    box.append(bell, ' ', element('p', 'controller-card-line', notification.message), ' ', time);
+    if (notification.count > 1) box.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
+    body.append(' ', box);
+  }
   body.append(' ', actionButton);
+  let history: HTMLButtonElement | undefined;
+  let clear: HTMLButtonElement | undefined;
+  let historyExpanded = carried?.historyExpanded ?? false;
+  if (!duplicate) {
+    history = element('button', 'controller-card-action', `History ${notifications.length}/3`);
+    history.type = 'button';
+    history.setAttribute('aria-expanded', String(historyExpanded));
+    const earlier = element('ol', 'controller-notification-history');
+    earlier.id = `${cardId}-history`;
+    earlier.hidden = !historyExpanded;
+    history.setAttribute('aria-controls', earlier.id);
+    for (const notification of notifications.slice(1)) {
+      const item = element('li', 'controller-card-line');
+      const time = element('time', 'controller-muted', new Date(notification.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      time.dateTime = new Date(notification.receivedAt).toISOString();
+      item.append(element('p', 'controller-card-line', notification.message), ' ', time);
+      if (notification.count > 1) item.append(' ', element('span', 'controller-muted', `${notification.count} arrivals`));
+      earlier.append(item);
+    }
+    clear = notifications.length && deps.onClearHistory
+      ? action('Clear history', 'Clear history for', deps.onClearHistory) : undefined;
+    if (clear) clear.hidden = !historyExpanded;
+    actions.bind(history, () => {
+      historyExpanded = !historyExpanded;
+      earlier.hidden = !historyExpanded;
+      if (clear) clear.hidden = earlier.hidden;
+      history!.setAttribute('aria-expanded', String(historyExpanded));
+    });
+    body.append(' ', history, ' ', earlier);
+    if (clear) body.append(' ', clear);
+  }
 
   function ticketLine(work: ControllerWorkStatus): HTMLElement {
     const line = element('p', 'controller-card-line controller-card-ticket');
@@ -175,6 +227,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   function focused(): Focus | undefined {
     const active = doc.activeElement;
     if (active === toggle) return 'header';
+    if (history && active === history) return 'history';
+    if (clear && active === clear) return 'clear';
     if (active === actionButton) return actionKind;
     if (active && active === loopMessageDismiss) return 'dismiss-loop-message';
     const reason = reasons.find(({ reason }) => reason.control() === active);
@@ -184,6 +238,8 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
   function shown(want: Focus): HTMLElement | undefined {
     if (want === 'header') return toggle;
     if (body.hidden) return undefined;
+    if (want === 'history') return history;
+    if (want === 'clear') return historyExpanded ? clear : undefined;
     if (typeof want !== 'string') return reasons.find(({ text, reason }) => text === want.reason && reason.control())?.reason.control();
     if (want === 'dismiss-loop-message') return loopMessageDismiss;
     return want === actionKind ? actionButton : undefined;
@@ -193,7 +249,7 @@ export function createControllerCard(host: HTMLElement, deps: ControllerCardDeps
     setExpandedByDefault(next) {
       if (chosenExpanded === undefined) setExpanded(next);
     },
-    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
+    state: () => ({ [HANDOVER]: { disconnected: model.kind === 'disconnected', chosenExpanded, historyExpanded, fullReasons: new Set(fullReasons), focused: focused(), actions } }),
     focusTarget: () => (carried?.focused ? shown(carried.focused) ?? toggle : undefined),
     header: () => toggle,
     dispose() {

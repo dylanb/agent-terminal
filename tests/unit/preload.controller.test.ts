@@ -16,7 +16,9 @@ it('exposes only the narrow controller API to the controller window', async () =
   await import('../../src/preload/index');
   expect([...exposed.keys()]).toEqual(['controller']);
   expect(exposed.get('controller')).toEqual({
-    subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function), dismissLoopMessage: expect.any(Function),
+    subscribeTerminals: expect.any(Function), activateTerminal: expect.any(Function), dismissTerminal: expect.any(Function),
+    clearHistory: expect.any(Function),
+    dismissLoopMessage: expect.any(Function),
     getTheme: expect.any(Function), setTheme: expect.any(Function),
     getAlwaysOnTop: expect.any(Function), setAlwaysOnTop: expect.any(Function), onAlwaysOnTopChanged: expect.any(Function),
   });

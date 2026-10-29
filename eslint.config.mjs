@@ -70,6 +70,7 @@ const TYPED_IN_VERSION = [
 ].map((selector) => ({ selector, message: PROTOCOL_MESSAGE }));
 const WIRE_FORMAT_TESTS = [
   'tests/unit/controllerProtocol.test.ts',
+  'tests/unit/controllerNotificationProtocol.test.ts',
   'tests/unit/controllerStatusBounds.test.ts',
   'tests/unit/controllerStatusProtocol.test.ts',
   'tests/integration/controllerVersion.test.ts',

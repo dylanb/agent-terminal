@@ -19,7 +19,7 @@ vi.mock('electron', () => ({
 }));
 
 const contents = { isDestroyed: () => false, send() {} };
-const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, dismissLoopMessage() {} };
+const registry = { terminals: () => [], subscribeTerminals: () => () => {}, activate: async () => 'unavailable' as const, dismiss() {}, dismissLoopMessage() {}, clearHistory: () => 'unavailable' as const };
 let userData: string;
 let dispose: (() => void) | undefined;
 

@@ -18,6 +18,10 @@ export const CONTROLLER_CHANNELS = {
     name: 'controller:dismiss',
     does: 'The controller window removes one disconnected terminal, and an unknown, live or replaced id does nothing.',
   },
+  clearHistory: {
+    name: 'controller:clearHistory',
+    does: 'The controller window clears retained notifications for the observed terminal without changing its live work.',
+  },
   dismissLoopMessage: {
     name: 'controller:dismissLoopMessage',
     does: 'The controller window asks a live terminal to clear the loop message its card shows, and a replaced message or unknown terminal does nothing.',
@@ -61,10 +65,15 @@ export type ControllerWorkStatus = {
   loopMessage?: ControllerLoopMessage | null;
 };
 
+export interface ControllerNotificationEntry { message: string; receivedAt: number; count: number }
+
+export interface ControllerClearTarget { id: string; launchDirectory: string; revision: string }
 /** The latest loop-mechanics failure or benign no-op the terminal reported, until the operator dismisses or a newer one replaces it. */
 export interface ControllerLoopMessage { id: string; kind: 'error' | 'notice'; reason: string }
 
 export interface ControllerTerminal {
+  clearHistoryTarget?: ControllerClearTarget;
+  notifications?: ControllerNotificationEntry[];
   work?: ControllerWorkStatus;
   status?: 'connected' | 'disconnected';
   id: string;
@@ -72,10 +81,14 @@ export interface ControllerTerminal {
   repositoryRoot: string | null;
 }
 
+export type ControllerClearOutcome = 'cleared' | 'stale' | 'unavailable';
+export interface ControllerClearRequest { sessionId: SessionId; target: ControllerClearTarget }
+
 export interface ControllerApi {
   subscribeTerminals(listener: (terminals: ControllerTerminal[]) => void): () => void;
   activateTerminal(id: string): Promise<'activated' | 'unavailable'>;
   dismissTerminal(id: string): Promise<void>;
+  clearHistory(target: ControllerClearTarget): Promise<ControllerClearOutcome>;
   dismissLoopMessage(terminalId: string, messageId: string): Promise<void>;
   getTheme(): Promise<Theme>;
   setTheme(theme: Theme): Promise<void>;

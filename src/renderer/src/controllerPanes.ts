@@ -2,7 +2,7 @@ import { cardCounts, cardStatus, statusSummary, type CardStatusClass } from '../
 import { directoryCards, type ControllerDirectoryCard } from '../../shared/controllerCards';
 import { attentionText, attentionUpdate } from './controllerCardConditions';
 import { captureSubtreeFocus } from './dom';
-import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type Theme } from '../../shared/ipc';
+import { CONTROLLER_DEFAULT_THEME, type ControllerApi, type ControllerNotificationEntry, type Theme } from '../../shared/ipc';
 import { createControllerCard, type ControllerCard } from './controllerCard';
 import type { ControllerLayout } from './controllerFrame';
 import { createAlwaysOnTopControl } from './alwaysOnTopControl';
@@ -63,6 +63,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
   status.setAttribute('role', 'status');
   status.setAttribute('aria-atomic', 'true');
   let previousAttention = new Map<string, string>();
+  let previousNotifications = new Map<string, ControllerNotificationEntry>();
   let cards: { directory: ControllerDirectoryCard; card: ControllerCard }[] = [];
   host.append(header.element, list, alert, status);
   const controlSlot = () => {
@@ -104,8 +105,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
 
   function announceAttention(directories: readonly ControllerDirectoryCard[]): void {
     const currentAttention = new Map<string, string>();
+    const currentNotifications = new Map<string, ControllerNotificationEntry>();
     const announcements: string[] = [];
     for (const directory of directories) {
+      const notification = directory.kind === 'single' ? directory.notifications?.[0] : previousNotifications.get(directory.launchDirectory);
+      if (notification) currentNotifications.set(directory.launchDirectory, notification);
       if (directory.kind === 'disconnected') continue;
       const text = directory.kind === 'conflict' ? 'Duplicate directory' : attentionText(directory.work);
       const key = directory.launchDirectory;
@@ -114,6 +118,11 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       const update = previous === 'Duplicate directory' && text !== previous
         ? `Duplicate directory cleared${text ? `. ${text}` : ''}` : attentionUpdate(previous, text);
       if (update) announcements.push(`${directory.launchDirectory}: ${update}`);
+      const previousNotification = previousNotifications.get(key);
+      if (directory.kind === 'single' && notification
+        && (notification.message !== previousNotification?.message || notification.receivedAt !== previousNotification?.receivedAt)) {
+        announcements.push(`${key}: Received notification. ${notification.message}`);
+      }
     }
     for (const [directory, text] of previousAttention) {
       if (text === 'Duplicate directory' && !currentAttention.has(directory)) announcements.push(`${directory}: Duplicate directory cleared`);
@@ -122,6 +131,7 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       status.textContent = announcements.join('\n');
     }
     previousAttention = currentAttention;
+    previousNotifications = currentNotifications;
   }
 
   const unsubscribe = deps.controller.subscribeTerminals(snapshot => {
@@ -136,6 +146,16 @@ export function createControllerPanes(host: HTMLElement, deps: ControllerPanesDe
       card: directory,
       expandedByDefault: expandedFor(directory),
       from: handover.get(directory.launchDirectory),
+      onClearHistory: directory.kind === 'conflict' || !directory.clearHistoryTarget ? undefined : () => {
+        alert.replaceChildren();
+        return deps.controller.clearHistory(directory.clearHistoryTarget!).then(outcome => {
+          if (disposed || outcome === 'cleared') return;
+          alert.replaceChildren();
+          alert.textContent = outcome === 'stale'
+            ? 'History changed. Review the current history and retry Clear history.'
+            : 'Clear history unavailable. Please retry.';
+        }).catch(announce);
+      },
       onAction() {
         if (directory.kind === 'disconnected') return deps.controller.dismissTerminal(directory.dismissOccurrenceId).catch(announce);
         const request = ++activation;
