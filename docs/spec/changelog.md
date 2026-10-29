@@ -1,3 +1,12 @@
+## The viewer's file watch no longer hangs the app on macOS
+
+§20.1: the live-reload watch walked everything under `.agent-terminal/`, not just the `loop/` tree the viewer
+shows, and opened one watcher per directory on every platform. A worktree whose `.agent-terminal/` held an
+agent's scratch builds (about 4,900 directories) hung the app on macOS: each watcher opened or closed rebuilds
+one shared FSEvents stream, so a cwd change blocked the main thread. The watch now covers
+`.agent-terminal/` itself and its `loop/` tree only, and on macOS it is one recursive watch filtered to the same
+directories the Linux per-directory watch covers. No IPC or payload changes.
+
 ## #221 slice 5 — Clear survives unchanged recovery
 
 - 2026-10-29: §23.6 reconciliation: notification frames use minor 2, preserving minor 1 for loop-message status/dismissal. History and Clear compose the shared pressed-control guard while retaining stale-Clear checks.
