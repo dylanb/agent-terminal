@@ -54,8 +54,8 @@ async function fixture() {
     await report(current);
     return {
       id, flush, report,
-      async arrival(message: string) {
-        peer.send(JSON.stringify({ version: 2, type: 'notification', notification: condition(message) }));
+      async arrival(message: string, conditionId = `condition-${message}`) {
+        peer.send(JSON.stringify({ version: 2, type: 'notification', notification: { conditionId, message } }));
         await flush();
       },
       async close() {
@@ -252,4 +252,103 @@ it('refuses an old Clear when overlap rebuilds identical history at the same rec
   expect.soft(h.entries()).toEqual(observed.notifications);
   expect.soft(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
   expect.soft(h.entries()).toEqual([]);
+});
+
+for (const disconnected of [false, true]) {
+  it(`Clear of a ${disconnected ? 'disconnected' : 'connected'} card survives repeated unchanged recovery but permits a new same-word stop`, async () => {
+    const h = await fixture(); const pending = condition('approval');
+    const a = await h.connect('/work/a', pending);
+    const other = await h.connect('/work/b', condition('unrelated'));
+    const otherBefore = h.terminal('/work/b');
+    if (disconnected) await a.close();
+    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    expect(h.entries()).toEqual([]);
+    if (!disconnected) {
+      await a.report(pending); await a.flush({ status: 'complete', reasons: ['Still pending'] });
+      expect.soft(h.entries()).toEqual([]);
+      await a.close();
+    }
+    h.time(2000); const b = await h.connect('/work/a', pending);
+    await b.flush({ status: 'complete', reasons: ['Still pending'] }, { reason: 'Live error remains' });
+    expect.soft(h.entries()).toEqual([]);
+    expect.soft(h.terminal()?.work).toMatchObject({ attention: { reasons: ['Still pending'] }, error: { reason: 'Live error remains' } });
+    await b.close(); h.time(3000); const c = await h.connect('/work/a', pending);
+    expect.soft(h.entries()).toEqual([]);
+    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    await c.arrival('approval', 'new-qualifying-stop');
+    expect.soft(h.entries()).toEqual([entry('approval', 3000)]);
+    expect.soft(h.terminal('/work/b')).toEqual(otherBefore);
+    await other.flush();
+  });
+}
+
+it('an ended cleared condition stays absent on recovery, while a new offline same-word stop is received', async () => {
+  const h = await fixture(); const a = await h.connect('/work/a', condition('approval'));
+  expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  await a.report(null); await a.close();
+  const b = await h.connect('/work/a', null);
+  expect.soft(h.entries()).toEqual([]);
+  expect.soft(h.terminal()?.work?.attention).toBeNull();
+  await b.close(); h.time(9000);
+  await h.connect('/work/a', { conditionId: 'new-offline-stop', message: 'approval' });
+  expect.soft(h.entries()).toEqual([entry('approval', 9000)]);
+});
+
+for (const reset of ['restart', 'dismiss', 'overlap'] as const) for (const pending of [true, false]) {
+  it(`${reset} forgets Clear suppression and rebuilds solely from current information (pending=${pending})`, async () => {
+    const h = await fixture(); const current = condition('approval');
+    const a = await h.connect('/work/a', current);
+    await a.arrival('approval'); await a.arrival('old context'); await a.report(current);
+    expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+    const other = await h.connect('/work/b', condition('unrelated'));
+    const otherBefore = h.terminal('/work/b');
+    const next = pending ? current : null;
+    if (reset === 'overlap') {
+      const peer = await h.connect('/work/a', condition('overlap-only'));
+      await peer.arrival('discarded overlap'); await a.report(next);
+      expect.soft(h.registry().terminals().filter(t => t.launchDirectory === '/work/a').flatMap(notificationEntries)).toEqual([]);
+      h.time(9000); await peer.close(); await a.flush();
+    } else {
+      await a.close();
+      if (reset === 'restart') await h.restart(); else h.registry().dismiss(a.id);
+      expect.soft(h.terminal()).toBeUndefined();
+      h.time(9000); await h.connect('/work/a', next);
+    }
+    expect.soft(h.entries()).toEqual(pending ? [entry('approval', 9000)] : []);
+    if (reset !== 'restart') {
+      expect.soft(h.terminal('/work/b')).toEqual(otherBefore);
+      await other.flush();
+    } else expect.soft(h.terminal('/work/b')).toBeUndefined();
+  });
+}
+
+it('overlap ending with no current survivor forgets Clear before a later fresh connection', async () => {
+  const h = await fixture(); const current = condition('approval');
+  const a = await h.connect('/work/a', current);
+  expect(await clearObserved(h.registry(), h.terminal()!)).toBe('cleared');
+  const b = await h.connect('/work/a', condition('peer'));
+  await a.report(null); await b.report(null);
+  await Promise.all([a.close(), b.close()]);
+  expect.soft(h.entries()).toEqual([]);
+  h.time(9000); await h.connect('/work/a', current);
+  expect.soft(h.entries()).toEqual([entry('approval', 9000)]);
+});
+
+it.each(['dismiss', 'overlap'] as const)('%s forgets only its own Clear suppression, leaving another cleared directory suppressed through reconnect', async reset => {
+  const h = await fixture(); const selected = condition('selected approval'); const unrelated = condition('unrelated approval');
+  const a = await h.connect('/work/a', selected); const b = await h.connect('/work/b', unrelated);
+  expect(await clearObserved(h.registry(), h.terminal('/work/a')!)).toBe('cleared');
+  expect(await clearObserved(h.registry(), h.terminal('/work/b')!)).toBe('cleared');
+  expect(h.entries('/work/a')).toEqual([]); expect(h.entries('/work/b')).toEqual([]);
+  h.time(9000);
+  if (reset === 'dismiss') {
+    await a.close(); h.registry().dismiss(a.id); await h.connect('/work/a', selected);
+  } else {
+    const peer = await h.connect('/work/a', condition('overlapping request'));
+    await peer.close(); await a.flush();
+  }
+  expect.soft(h.entries('/work/a')).toEqual([entry('selected approval', 9000)]);
+  await b.close(); await h.connect('/work/b', unrelated);
+  expect.soft(h.entries('/work/b')).toEqual([]);
+  expect.soft(h.entries('/work/a')).toEqual([entry('selected approval', 9000)]);
 });
