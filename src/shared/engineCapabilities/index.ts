@@ -1,3 +1,5 @@
+import { FLOW_POSITIONS } from './flow';
+
 export interface Explanation {
   does: string;
   when: string;
@@ -56,6 +58,9 @@ export interface LookupTier {
 export type GuideSection = 'where-things-live' | 'lookup-order';
 
 export interface EngineCapabilities {
+  title: string;
+  intro: string;
+  definitionTitles: Readonly<Record<Definition, string>>;
   positions: readonly PositionCapability[];
   lookupOrder: readonly LookupTier[];
   sectionTitles: Readonly<Record<GuideSection, string>>;
@@ -68,13 +73,23 @@ export interface EngineCapabilities {
 }
 
 export const ENGINE_CAPABILITIES: EngineCapabilities = {
-  positions: [],
-  lookupOrder: [],
-  sectionTitles: { 'where-things-live': '', 'lookup-order': '' },
+  title: 'Agent Terminal engine capabilities',
+  intro:
+    'What the engine accepts in a flow definition, and where flows and loops live. Generated from the definitions the engine itself loads, so it always matches the app that installed it.',
+  definitionTitles: { flow: 'Flow definitions', loop: 'Loop definitions' },
+  positions: [...FLOW_POSITIONS],
+  lookupOrder: [
+    { tier: 'repo-override', text: 'The repository’s loop override file, when its map names the loop.' },
+    { tier: 'flow-folder-operator', text: 'The operator tier’s folder named after the running flow’s `name`.' },
+    { tier: 'flow-folder-app-bundled', text: 'The app-bundled tier’s folder named after the running flow’s `name`.' },
+    { tier: 'operator', text: 'The shared operator tier, outside any flow folder.' },
+    { tier: 'app-bundled', text: 'The shared app-bundled tier, outside any flow folder.' },
+  ],
+  sectionTitles: { 'where-things-live': 'Where flows and loops live', 'lookup-order': 'How a loop name resolves' },
   markers: {
-    required: { always: '', never: '', conditional: '' },
-    unreadKeys: { rejected: '', ignored: '' },
-    notCheckedAtLoad: '',
-    selectsEngine: { yes: '', no: '' },
+    required: { always: '**Required.**', never: '**Optional.**', conditional: '**Required when**' },
+    unreadKeys: { rejected: 'A key not listed here fails the definition to load.', ignored: 'A key not listed here is ignored.' },
+    notCheckedAtLoad: 'Not checked when the definition loads; at run time:',
+    selectsEngine: { yes: 'Selects a working engine.', no: 'Selects no working engine.' },
   },
 };

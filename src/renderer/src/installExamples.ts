@@ -194,6 +194,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     conflicts: Conflict[],
     retired: RetiredExample[],
     retiredFallback: string | null,
+    alwaysReplaced: InstallDestinationFiles[],
     returnFocus: () => void,
   ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
@@ -215,6 +216,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
           ? [`The retired ${inWords(RETIRED_FLOW_IDS)} flows left files behind. They are kept unless you choose to remove them.`]
           : []),
         ...(conflicts.length === 0 ? ['The bundled examples are installed either way; only the ticked option removes anything.'] : []),
+        ...(alwaysReplaced.length > 0 ? ['The files listed as always replaced are replaced on every install.'] : []),
       ].join(' ');
       cardEl.append(h3, p);
 
@@ -292,6 +294,21 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         );
         retiredBox.setAttribute('data-retired', '');
       }
+      if (alwaysReplaced.length > 0) {
+        const rows = consentGroup('always', 'Always replaced');
+        for (const entry of alwaysReplaced) {
+          const row = d.createElement('div');
+          row.className = 'install-consent-opt ic-fixed';
+          const name = d.createElement('span');
+          name.className = 'ic-name';
+          name.textContent = DESTINATION_LABEL[entry.destination];
+          const files = d.createElement('span');
+          files.className = 'ic-files';
+          files.textContent = entry.files.join(', ');
+          row.append(name, files);
+          rows.append(row);
+        }
+      }
       cardEl.append(body);
 
       const foot = d.createElement('div');
@@ -345,7 +362,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       await install(preview.previewId, [], false, returnFocus);
       return;
     }
-    promptReplace(preview.previewId, conflicts, preview.retired, preview.retiredFallback, returnFocus);
+    promptReplace(preview.previewId, conflicts, preview.retired, preview.retiredFallback, preview.alwaysReplaced, returnFocus);
   }
 
   return {

@@ -16,7 +16,7 @@ import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
-import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
+import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -24,6 +24,7 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import { FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -45,10 +46,10 @@ export interface FlowInputDef {
 }
 
 /** A §18.1 step. `manual`: a human produces an artifact. `loop` (§24.2.3 T2): runs an agent-loop,
- *  binding its LoopDef by name (`loop`). The `action` kind (§18.2) is a later phase. */
+ *  binding its LoopDef by name (`loop`). */
 export interface FlowStepDef {
   id: string;
-  kind: 'manual' | 'loop';
+  kind: FlowStepKind;
   skill?: string;
   todoTemplate?: string;
   /** The bound agent-loop LoopDef name; `loop` steps only. */
@@ -61,7 +62,7 @@ export interface FlowStepDef {
   gateAuthority?: GateAuthority;
   /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
-  bootstrap?: 'pickup';
+  bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
    *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
@@ -70,9 +71,7 @@ export interface FlowStepDef {
   repeat?: { backTo: string; countInput: string };
 }
 
-/** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
- *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
-export const MAX_SLICES = 50;
+export { MAX_SLICES };
 
 export interface FlowDefinition {
   name: string;
@@ -85,11 +84,8 @@ export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
   | { ok: false; error: string };
 
-export { FLOW_HOME_SUBDIR, flowHomeDir };
+export { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowHomeDir };
 
-/** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
- *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is in flowHome.ts). */
-export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
 /** Whether `root` holds a flow definition at its flow home — the single presence gate the local-first loader
@@ -109,8 +105,6 @@ export function flowDefinitionFile(root: string): string {
 export function resumesAt(definition: FlowDefinition, step: string): boolean {
   return definition.steps.some((s) => s.id === step);
 }
-
-export const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
  *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
@@ -184,6 +178,8 @@ export function loadUntrustedFlowDefinition(file: string): FlowLoad {
   }
 }
 
+const isOneOf = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
+
 function parseFlowDefinition(raw: string, file: string): FlowLoad {
   let doc: unknown;
   try {
@@ -198,13 +194,12 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
 
-  // Only `manual` and `loop` kinds are in scope (§24.2.3 T1/T2); the `action` kind (§18.2) is rejected.
   const steps: FlowStepDef[] = [];
   for (const raw of doc.steps) {
     if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
       return { ok: false, error: 'flow.yaml step is missing an id' };
-    if (raw.kind !== 'manual' && raw.kind !== 'loop')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+    if (!isOneOf(FLOW_STEP_KINDS, raw.kind))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: ${FLOW_STEP_KINDS.join(', ')})` };
     if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
       return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
     // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
@@ -235,8 +230,8 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
     if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
-    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+    if (raw.bootstrap !== undefined && !isOneOf(FLOW_BOOTSTRAPS, raw.bootstrap))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: ${FLOW_BOOTSTRAPS.join(', ')})` };
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
@@ -262,7 +257,7 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
       ...(gateAuthority !== undefined ? { gateAuthority } : {}),
-      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+      ...(raw.bootstrap !== undefined ? { bootstrap: raw.bootstrap } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
       ...(repeat ? { repeat } : {}),
     });

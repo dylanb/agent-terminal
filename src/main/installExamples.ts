@@ -15,6 +15,7 @@ import {
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
   resolveEngineGuideFile,
+  ENGINE_GUIDE_FILE,
 } from './exampleAssets';
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
@@ -147,6 +148,13 @@ function flowHomeRels(flowHomeBundleDir: string): DestRelativePath[] | null {
   return rels;
 }
 
+/** Exactly the one generated file, never a walk of the directory it shares with the example trees. */
+function engineGuideFiles(bundleDir: string): Plan {
+  const src = path.join(bundleDir, ENGINE_GUIDE_FILE);
+  requireRegularIfPresent(src);
+  return absent(src) ? null : [copyOf(destRelative(ENGINE_GUIDE_FILE), src)];
+}
+
 function flowFiles(bundleDir: string): Plan {
   const rels = flowHomeRels(bundleDir);
   if (rels === null) return null;
@@ -186,7 +194,8 @@ function catalogFiles(catalogBundleDir: string): Plan {
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
-  overwrite: { mode: 'confirm-overwrite' } | { mode: 'forbid-overwrite' };
+  /** `always-replace` writes a differing file with no consent decision and is never offered as one. */
+  overwrite: { mode: 'confirm-overwrite' } | { mode: 'forbid-overwrite' } | { mode: 'always-replace' };
   /** `null` when this destination's root has no absolute location. `resolveAll` turns it into a refusal the
    *  user sees rather than a guessed path. */
   targetDir: string | null;
@@ -230,6 +239,9 @@ const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it 
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 const CODEX_ROOT_FIX = 'Set CODEX_HOME to an absolute path, or unset it to use ~/.codex.';
 
+const globalFlowHome = ({ flowGlobalDir }: InstallRoots): string | null =>
+  path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null;
+
 const inCodexHome = (dir: (home: string) => string): Pick<DestinationSpec, 'target' | 'toolHome'> => ({
   target: ({ codexHome }) => (codexHome === null ? null : dir(codexHome)),
   toolHome: ({ codexHome }) => codexHome,
@@ -239,7 +251,7 @@ const inCodexHome = (dir: (home: string) => string): Pick<DestinationSpec, 'targ
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveFeatureDevFlowDir,
-    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    target: globalFlowHome,
     rootFix: HOME_ROOT_FIX,
     plan: flowFiles,
     overwrite: { mode: 'confirm-overwrite' },
@@ -300,10 +312,10 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   },
   engineGuide: {
     bundle: (loc) => path.dirname(resolveEngineGuideFile(loc)),
-    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    target: globalFlowHome,
     rootFix: HOME_ROOT_FIX,
-    plan: () => [],
-    overwrite: { mode: 'confirm-overwrite' },
+    plan: engineGuideFiles,
+    overwrite: { mode: 'always-replace' },
   },
 };
 
@@ -331,20 +343,26 @@ type Classification = 'create' | 'identical' | 'differ';
 function allowsOverwrite(
   overwrite: InstallDestination['overwrite'],
 ): boolean {
-  return overwrite.mode === 'confirm-overwrite';
+  return overwrite.mode !== 'forbid-overwrite';
 }
 
-function classify(bytes: Buffer, targetFile: string): Classification {
-  let target: Buffer;
+const alwaysReplaces = (overwrite: InstallDestination['overwrite']): boolean => overwrite.mode === 'always-replace';
+
+/** `null` only when absent. An existing-but-unreadable target (EACCES, EISDIR, …) must not be silently
+ *  overwritten, so it throws — naming the file, which Node's own message for these does not. */
+function readTarget(file: { rel: DestRelativePath; real: string }): Buffer | null {
   try {
-    target = readFileSync(targetFile);
+    return readFileSync(file.real);
   } catch (e) {
-    // Only absence means "create"; an existing-but-unreadable target (EACCES, …) must not be silently
-    // overwritten — let it propagate to a reported error, preserving the non-destructive contract.
-    if (isErrno(e, 'ENOENT')) return 'create';
-    throw e;
+    if (isErrno(e, 'ENOENT')) return null;
+    throw new Error(`cannot read the existing ${file.rel}: ${errMsg(e)}`);
   }
-  return bytes.equals(target) ? 'identical' : 'differ';
+}
+
+function classify(file: ResolvedFile): Classification {
+  const target = readTarget(file);
+  if (target === null) return 'create';
+  return file.bytes().equals(target) ? 'identical' : 'differ';
 }
 
 /** A destination resolved for work: its plan, and the symlink-free real path each file resolves to inside
@@ -476,13 +494,9 @@ function hash(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function targetHash(file: string): string | null {
-  try {
-    return hash(readFileSync(file));
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return null;
-    throw error;
-  }
+function targetHash(file: ResolvedFile): string | null {
+  const target = readTarget(file);
+  return target === null ? null : hash(target);
 }
 
 function snapshotFile(
@@ -495,7 +509,7 @@ function snapshotFile(
     src: file.src,
     real: file.real,
     sourceHash: hash(file.bytes()),
-    targetHash: targetHash(file.real),
+    targetHash: targetHash(file),
   };
 }
 
@@ -553,6 +567,7 @@ function verifyAuthorization(
 
 interface PreparedInstallExamples {
   destinations: InstallDestinationPreview[];
+  alwaysReplaced: InstallDestinationFiles[];
   retired: RetiredExample[];
   retiredFallback: string | null;
   authorization: InstallAuthorization;
@@ -579,7 +594,7 @@ function prepareInstallExamples(
   try {
     const files = captureInstallSnapshot(resolution.destinations);
     const conflicts = new Set<InstallDestinationId>();
-    const previews = resolution.destinations.map((destination) => {
+    const previews = resolution.destinations.filter((d) => !alwaysReplaces(d.overwrite)).map((destination) => {
       const differing = files
         .filter(
           (file) =>
@@ -611,6 +626,9 @@ function prepareInstallExamples(
       ok: true,
       prepared: {
         destinations: previews,
+        alwaysReplaced: resolution.destinations
+          .filter((d) => alwaysReplaces(d.overwrite) && d.files.length > 0)
+          .map((d) => ({ destination: d.id, files: d.files.map((f) => f.rel) })),
         retired,
         retiredFallback: retiredFallbackOf(resolution.destinations),
         authorization: { files, conflicts, retired },
@@ -687,7 +705,7 @@ function applyInstallExamplesWithAuthorization(
     for (const dest of plan) {
       if (
         !allowsOverwrite(dest.overwrite) &&
-        dest.files.some((file) => classify(file.bytes(), file.real) === 'differ')
+        dest.files.some((file) => classify(file) === 'differ')
       ) {
         return {
           ok: false,
@@ -748,8 +766,8 @@ function applyInstallExamplesWithAuthorization(
             );
           }
         }
-        const cls = classify(file.bytes(), file.real);
-        if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
+        const cls = classify(file);
+        if (cls === 'identical' || (cls === 'differ' && !alwaysReplaces(dest.overwrite) && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
         }
@@ -842,7 +860,7 @@ export function createInstallExamplesCoordinator(
         destinations: preparation.prepared.destinations,
         retired: preparation.prepared.retired,
         retiredFallback: preparation.prepared.retiredFallback,
-        alwaysReplaced: [],
+        alwaysReplaced: preparation.prepared.alwaysReplaced,
       };
     },
     apply(message) {

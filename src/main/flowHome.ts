@@ -5,6 +5,10 @@ import path from 'node:path';
 import { confinedRealPath, resolveJail } from './confinedPath';
 
 export const FLOW_HOME_SUBDIR = '.agent-terminal';
+/** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
+ *  is read back (CLAUDE.md writer↔reader rule). */
+export const FLOW_DEF_FILE = 'flow.yaml';
+export const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** Where a root keeps its flow definition and app state (§18.1/§19.1/§23.4). */
 export function flowHomeDir(root: string): string {

@@ -15,7 +15,7 @@ import {
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
-import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
   AppBootstrapWipePolicy,
@@ -516,7 +516,7 @@ interface DefCandidate {
 function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
   let raw: string;
   try {
-    raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
+    raw = readFileSync(path.join(repoDir, LOOP_OVERRIDE_FILE), 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
     return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
@@ -527,9 +527,10 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   } catch {
     return null;
   }
-  if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
+  const loops = isRecord(doc) ? doc[LOOP_OVERRIDE_MAP_KEY] : undefined;
+  if (!isRecord(loops) || typeof loops[name] !== 'string') return null;
   const root = path.resolve(repoDir);
-  const target = path.resolve(root, doc.loops[name]);
+  const target = path.resolve(root, loops[name]);
   // The repo tier root is a jail sitting INSIDE untrusted content, where a link can be planted at the jail's
   // own final segment — resolveJail. A null here REFUSES with a reason (unlike a tier candidate, which falls
   // through to the next tier).
@@ -562,8 +563,8 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     return jail === null ? [] : [{ root, tierName, jail }];
   });
   const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
-    const defDir = path.join(dir, name);
-    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+    const defPath = path.join(dir, loopDefRelPath(name));
+    return { tierRoot: tier.root, defDir: path.dirname(defPath), defPath, tierName: tier.tierName, jail: tier.jail };
   };
   for (const tier of tierCandidates) {
     const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);

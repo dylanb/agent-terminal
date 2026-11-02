@@ -3,9 +3,15 @@
 // so the build must copy the committed trees there. Each destination comes from the runtime resolver
 // that reads it back (CLAUDE.md writer↔reader rule).
 
-import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { ENGINE_CAPABILITIES } from '../shared/engineCapabilities';
+import { renderEngineGuide } from './engineGuide';
+import { FLOWS_CATALOG_SUBDIR } from './flowHome';
+import { LOOPS_V2_SUBDIR } from './userConfig';
 import {
+  EXAMPLE_SUBDIR,
+  resolveEngineGuideFile,
   resolveExampleCodexSkillsDir,
   resolveExampleCommandsDir,
   resolveExampleFlowsDir,
@@ -28,40 +34,46 @@ function copyTree(src: string, dest: string): void {
 
 export function copyExampleFlows(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleFlowsDir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'flows'), dest);
+  copyTree(path.join(rootDir, EXAMPLE_SUBDIR, FLOWS_CATALOG_SUBDIR), dest);
   return dest;
 }
 
 export function copyExampleLoopsV2(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleLoopsV2Dir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'loops-v2'), dest);
+  copyTree(path.join(rootDir, EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR), dest);
   return dest;
 }
 
 export function copyExampleCommands(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleCommandsDir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'commands'), dest);
+  copyTree(path.join(rootDir, EXAMPLE_SUBDIR, 'commands'), dest);
   return dest;
 }
 
 export function copyExampleCodexSkills(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleCodexSkillsDir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'codex-skills'), dest);
+  copyTree(path.join(rootDir, EXAMPLE_SUBDIR, 'codex-skills'), dest);
   return dest;
 }
 
+export function writeEngineGuide(appPath: string): void {
+  const file = resolveEngineGuideFile({ packaged: false, appPath });
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, renderEngineGuide(ENGINE_CAPABILITIES));
+}
+
+/** Everything the bundle carries, written only under `mainOutDir`. */
 export function placeExampleAssets(rootDir: string, mainOutDir: string): void {
   copyExampleFlows(rootDir, mainOutDir);
   copyExampleLoopsV2(rootDir, mainOutDir);
   copyExampleCommands(rootDir, mainOutDir);
   copyExampleCodexSkills(rootDir, mainOutDir);
+  writeEngineGuide(mainOutDir);
 }
 
-export function writeEngineGuide(dir: string): void {
-  void dir;
-}
-
+/** `pnpm run dev` launches Electron on the repository root, so its app path is `rootDir`, where the committed
+ *  example trees already sit but the generated guide does not. */
 export function placeBuildOutputs(rootDir: string, mainOutDir: string): void {
-  void rootDir;
-  void mainOutDir;
+  placeExampleAssets(rootDir, mainOutDir);
+  writeEngineGuide(rootDir);
 }
