@@ -24,7 +24,9 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
-import { FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+import { FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+
+export const INPUT_TYPE_REFS = {} satisfies Partial<Record<ActedInputType, keyof FlowRefs>>;
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status

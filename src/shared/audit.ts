@@ -6,6 +6,7 @@ import yaml from 'js-yaml';
 import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
 import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
+import type { ActedInputType } from './engineCapabilities/flow';
 
 export interface AuditHeader {
   flow: string;
@@ -662,6 +663,8 @@ export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, 
       return `§27 bootstrap ${step} stale${suffix}`;
   }
 }
+
+export const INPUT_TYPE_AUDIT_EVENT = {} satisfies Partial<Record<ActedInputType, AuditEvent['type'] | null>>;
 
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
