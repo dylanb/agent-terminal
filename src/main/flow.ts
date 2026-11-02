@@ -24,9 +24,9 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
-import { FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
 
-export const INPUT_TYPE_REFS = {} satisfies Partial<Record<ActedInputType, keyof FlowRefs>>;
+export const INPUT_TYPE_REFS: Readonly<Record<ActedInputType, keyof FlowRefs>> = { 'github-ticket': 'ticket', pr: 'pr' };
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -400,15 +400,17 @@ export function createFlowMachine(
   const names = steps.map((s) => s.id);
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
-  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
+  const typedInput = (type: ActedInputType): { step: FlowStepDef; name: string } | undefined => {
     for (const step of steps) {
       const input = (step.inputs ?? []).find((i) => i.type === type);
       if (input) return { step, name: input.name };
     }
     return undefined;
   };
-  const ticketInput = typedInput('github-ticket');
-  const prInput = typedInput('pr');
+  const refInputs = ACTED_INPUT_TYPES.flatMap((type) => {
+    const input = typedInput(type);
+    return input ? [{ field: INPUT_TYPE_REFS[type], ...input }] : [];
+  });
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -464,14 +466,14 @@ export function createFlowMachine(
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
   };
-  const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
+  const computeRefs = (entered: readonly FlowStepDef[]): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
     // linkedIssues/pr went with the bridge.
-    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
-    const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
-    if (typeof ticket === 'number') refs.ticket = ticket;
-    if (typeof pr === 'number') refs.pr = pr;
+    for (const { field, step, name } of refInputs) {
+      const value = entered.includes(step) ? numericInput(name) : undefined;
+      if (typeof value === 'number') refs[field] = value;
+    }
     return hasFlowRefs(refs) ? refs : undefined;
   };
 
@@ -488,9 +490,7 @@ export function createFlowMachine(
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
-    const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
-    const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
-    const refs = computeRefs({ ticketStepEntered, prStepEntered });
+    const refs = computeRefs(entered);
     const withRefs = refs ? { ...base, refs } : base;
     // §27.15 — the loop-view provider is selected on the most-recent loop step's namespace binding. Every
     // binding names the surviving (§27) engine except an explicitly-`legacy` one, which names no surviving

@@ -6,7 +6,7 @@ import yaml from 'js-yaml';
 import { GATE_DECISION_OPTIONS, type FlowStatus, type GateDecisionOption, type TodoStatus } from './ipc';
 import { AUTO_HALT_REASONS, autoHaltLetter, autoHaltReasonLabel, type AutoHaltReason } from './gateAuthority';
 import { stripStatusControlChars } from './loopStatus';
-import type { ActedInputType } from './engineCapabilities/flow';
+import { isActedInputType, type ActedInputType } from './engineCapabilities/flow';
 
 export interface AuditHeader {
   flow: string;
@@ -664,7 +664,7 @@ export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, 
   }
 }
 
-export const INPUT_TYPE_AUDIT_EVENT = {} satisfies Partial<Record<ActedInputType, AuditEvent['type'] | null>>;
+export const INPUT_TYPE_AUDIT_EVENT: Readonly<Record<ActedInputType, 'ticket.assoc' | null>> = { 'github-ticket': 'ticket.assoc', pr: null };
 
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
@@ -678,7 +678,8 @@ export function inputEvents(
   for (const name of Object.keys(values)) {
     const value = values[name];
     events.push({ ts, type: 'input.resolved', name, value });
-    if (typeByName[name] === 'github-ticket') {
+    const type = typeByName[name];
+    if (isActedInputType(type) && INPUT_TYPE_AUDIT_EVENT[type] === 'ticket.assoc') {
       const ticket = Number(value);
       if (Number.isInteger(ticket) && ticket > 0) events.push({ ts, type: 'ticket.assoc', ticket });
     }

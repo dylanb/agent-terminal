@@ -10,6 +10,9 @@ export type FlowBootstrap = (typeof FLOW_BOOTSTRAPS)[number];
 
 export const ACTED_INPUT_TYPES = ['github-ticket', 'pr'] as const;
 export type ActedInputType = (typeof ACTED_INPUT_TYPES)[number];
+export function isActedInputType(v: unknown): v is ActedInputType {
+  return (ACTED_INPUT_TYPES as readonly unknown[]).includes(v);
+}
 
 /** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
  *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
