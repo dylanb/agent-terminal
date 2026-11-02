@@ -8,7 +8,8 @@ import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
 
 // After the main bundle is written, copy the app icons and the example trees next to it, and write the
 // generated engine guide there and under the repository root, so the unpackaged runtime resolvers
-// (app.getAppPath()/build/*.png and .../example/{flows,loops-v2,commands,engine-capabilities.md}) find them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
+// (app.getAppPath()/build/*.png and .../example/{flows,loops-v2,commands,engine-capabilities.md}) find
+// them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
 // bundle to seed from.
 function copyDevAssetsPlugin(): Plugin {
   let outDir = '';

@@ -17,6 +17,7 @@ interface Section {
 const DEFINITIONS: readonly Definition[] = ['flow', 'loop'];
 const code = (s: string): string => `\`${s}\``;
 const join = path.posix.join;
+const chapter = (title: string, body: string[]): Section => ({ level: 2, heading: title, tocText: title, body });
 
 /** GitHub-flavoured Markdown's heading anchor, before de-duplication. */
 function slug(heading: string): string {
@@ -82,44 +83,33 @@ function whereThingsLive(caps: EngineCapabilities): Section {
   const flowEntry = join('<catalog-id>', FLOW_DEF_FILE);
   const loopDef = loopDefRelPath('<loop>');
   const flowLoopDef = join('<flow-name>', loopDef);
-  return {
-    level: 2,
-    heading: caps.sectionTitles['where-things-live'],
-    tocText: caps.sectionTitles['where-things-live'],
-    body: [
-      `Paths write your home directory as ${code('~')}, the repository the terminal runs in as ${code('<repo>')}, and the installed app's bundle as ${code('<app>')}. ${code('<catalog-id>')} is a catalog entry's folder name; ${code('<flow-name>')} is the flow definition's ${code('name')} value, which names the flow's own loop folder whatever its catalog folder is called. ${code(APP_HOME_DIR_ENV)}, set to an absolute path, replaces ${code('~')} in every ${code(appHome)} path. ${code(CLAUDE_CONFIG_DIR_ENV)}, set to an absolute path, replaces ${code(config)}.`,
-      '',
-      `- Repository flow: ${code(join('<repo>', FLOW_HOME_SUBDIR, FLOW_DEF_FILE))}, the flow the repository runs when no catalog flow is picked.`,
-      `- Global flow: ${code(join(appHome, FLOW_DEF_FILE))}, the fallback for a repository with no flow of its own.`,
-      `- Flow catalog: ${code(join(appHome, FLOWS_CATALOG_SUBDIR, flowEntry))} and ${code(join('<repo>', FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, the flows the picker offers; a repository entry wins over a global one of the same name.`,
-      `- App-bundled flows: ${code(join('<app>', EXAMPLE_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, which Install examples copies into the flow catalog.`,
-      `- Operator loop tier: ${code(join(config, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join(config, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
-      `- App-bundled loop tier: ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
-      `- Repository loop override: ${code(join('<repo>', LOOP_OVERRIDE_FILE))}, whose ${code(LOOP_OVERRIDE_MAP_KEY)} map gives a loop name the repository-relative path of its definition.`,
-      `- This guide: ${code(join(appHome, ENGINE_GUIDE_FILE))}, replaced whole by every Install examples.`,
-    ],
-  };
+  return chapter(caps.sectionTitles['where-things-live'], [
+    `Paths write your home directory as ${code('~')}, the repository the terminal runs in as ${code('<repo>')}, and the installed app's bundle as ${code('<app>')}. ${code('<catalog-id>')} is a catalog entry's folder name; ${code('<flow-name>')} is the flow definition's ${code('name')} value, which names the flow's own loop folder whatever its catalog folder is called. ${code(APP_HOME_DIR_ENV)}, set to an absolute path, replaces ${code('~')} in every ${code(appHome)} path. ${code(CLAUDE_CONFIG_DIR_ENV)}, set to an absolute path, replaces ${code(config)}.`,
+    '',
+    `- Repository flow: ${code(join('<repo>', FLOW_HOME_SUBDIR, FLOW_DEF_FILE))}, the flow the repository runs when no catalog flow is picked.`,
+    `- Global flow: ${code(join(appHome, FLOW_DEF_FILE))}, the fallback for a repository with no flow of its own.`,
+    `- Flow catalog: ${code(join(appHome, FLOWS_CATALOG_SUBDIR, flowEntry))} and ${code(join('<repo>', FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, the flows the picker offers; a repository entry wins over a global one of the same name.`,
+    `- App-bundled flows: ${code(join('<app>', EXAMPLE_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, which Install examples copies into the flow catalog.`,
+    `- Operator loop tier: ${code(join(config, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join(config, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
+    `- App-bundled loop tier: ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
+    `- Repository loop override: ${code(join('<repo>', LOOP_OVERRIDE_FILE))}, whose ${code(LOOP_OVERRIDE_MAP_KEY)} map gives a loop name the repository-relative path of its definition.`,
+    `- This guide: ${code(join(appHome, ENGINE_GUIDE_FILE))}, replaced whole by every Install examples.`,
+  ]);
 }
 
 function lookupOrder(caps: EngineCapabilities): Section {
-  return {
-    level: 2,
-    heading: caps.sectionTitles['lookup-order'],
-    tocText: caps.sectionTitles['lookup-order'],
-    body: [
-      `A ${code('loop')} step's definition is looked up in this order; the first one found wins.`,
-      '',
-      ...caps.lookupOrder.map((t, i) => `${i + 1}. ${t.text}`),
-    ],
-  };
+  return chapter(caps.sectionTitles['lookup-order'], [
+    `A ${code('loop')} step's definition is looked up in this order; the first one found wins.`,
+    '',
+    ...caps.lookupOrder.map((t, i) => `${i + 1}. ${t.text}`),
+  ]);
 }
 
 function sections(caps: EngineCapabilities): Section[] {
   const byDefinition = DEFINITIONS.flatMap((d) => {
     const positions = caps.positions.filter((p) => p.definition === d);
     if (positions.length === 0) return [];
-    const title = caps.definitionTitles[d];
-    return [{ level: 2, heading: title, tocText: title, body: [] }, ...positions.flatMap((p) => positionSections(caps, p))];
+    return [chapter(caps.definitionTitles[d], []), ...positions.flatMap((p) => positionSections(caps, p))];
   });
   return [...byDefinition, whereThingsLive(caps), lookupOrder(caps)];
 }
