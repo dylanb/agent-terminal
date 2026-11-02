@@ -21,6 +21,7 @@ import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_ST
 import { phaseOutputRel } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
 import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { ENGINE_GUIDE_FILE, resolveEngineGuideFile } from '../../src/main/exampleAssets';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
 import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFixture';
@@ -2445,6 +2446,101 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   rmSync(home, { recursive: true, force: true });
   rmSync(configDir, { recursive: true, force: true });
   rmSync(codexHome, { recursive: true, force: true });
+});
+
+/** The guide the build placed next to the main bundle — the bytes every install must leave behind (#276). */
+const BUILT_GUIDE = resolveEngineGuideFile({ packaged: false, appPath: join(process.cwd(), 'out', 'main') });
+const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+const installedGuide = (appHome: string): string => join(flowHomeDir(appHome), ENGINE_GUIDE_FILE);
+/** The installed guide beside the built one; a match means something only when the build produced a guide. */
+const guideMatch = (appHome: string) => ({ installed: guideAt(installedGuide(appHome)), built: guideAt(BUILT_GUIDE) });
+const builtGuideInstalled = () => ({ installed: guideAt(BUILT_GUIDE), built: expect.any(String) });
+const STALE_GUIDE = '# An older guide\n\nA line the current build no longer writes.\n';
+
+async function installFromSettings(env: Record<string, string>): Promise<void> {
+  app = await electron.launch({ args: ['out/main/index.js'], env });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+}
+
+test('installing the examples writes the built engine guide into the app-state home and reports it (#276 I1)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    await expect(installReportGroup('engineGuide')).toContainText(ENGINE_GUIDE_FILE);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples replaces a stale engine guide without opening the dialog when nothing else differs (#276 I2a)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-stale-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-stale-cfg-'));
+  try {
+    mkdirSync(flowHomeDir(home), { recursive: true });
+    writeFileSync(installedGuide(home), STALE_GUIDE);
+    await installFromSettings(installEnv(home, configDir));
+    // Whichever comes first — the dialog or the result — so an opened dialog fails at the dialog check, not at a wait.
+    await expect(installExamplesPrompt().or(installExamplesStatus().filter({ hasText: 'created' })).first()).toBeVisible({ timeout: 15_000 });
+    await expect(installExamplesPrompt()).toBeHidden();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect(guideMatch(home)).toEqual(builtGuideInstalled());
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('the dialog lists the engine guide with no consent control, and confirming with nothing ticked still replaces it (#276 I2b/I4)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dialog-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dialog-cfg-'));
+  const myFlow = 'name: my-own-flow\nsteps:\n  - id: only\n    kind: manual\n';
+  try {
+    mkdirSync(flowHomeDir(home), { recursive: true });
+    writeFileSync(installedGuide(home), STALE_GUIDE);
+    writeFileSync(join(flowHomeDir(home), FLOW_DEF_FILE), myFlow);
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesPrompt()).toBeVisible({ timeout: 15_000 });
+    const guideGroup = installExamplesPrompt().getByRole('group').filter({ hasText: ENGINE_GUIDE_FILE });
+    await expect.soft(guideGroup).toHaveCount(1);
+    await expect.soft(guideGroup).toHaveAccessibleName(/\S/);
+    await expect.soft(guideGroup.getByRole('checkbox')).toHaveCount(0);
+    await expect.soft(installExamplesPrompt().getByRole('group', { name: 'Replace files in' }).getByRole('checkbox')).toHaveCount(1);
+    await installExamplesConfirm().click();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect({ guide: guideMatch(home), myFlow: guideAt(join(flowHomeDir(home), FLOW_DEF_FILE)) }).toEqual({ guide: builtGuideInstalled(), myFlow });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('with APP_HOME_DIR set, the engine guide is installed under that home and none under the default home (#276 I3)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-cfg-'));
+  const appHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-reloc-app-'));
+  try {
+    await installFromSettings(installEnv(home, configDir, join(home, '.codex'), appHome));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect({ relocated: guideMatch(appHome), underDefaultHome: existsSync(installedGuide(home)) }).toEqual({
+      relocated: builtGuideInstalled(),
+      underDefaultHome: false,
+    });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+    rmSync(appHome, { recursive: true, force: true });
+  }
 });
 
 test('with no Codex home, installing the examples creates nothing for Codex and says why (§18.1)', { tag: '@ownapp' }, async () => {

@@ -1,13 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills, placeExampleAssets } from '../../src/main/exampleAssetsBuild';
+import {
+  copyExampleFlows,
+  copyExampleLoopsV2,
+  copyExampleCommands,
+  copyExampleCodexSkills,
+  placeBuildOutputs,
+  placeExampleAssets,
+  writeEngineGuide,
+} from '../../src/main/exampleAssetsBuild';
+import { renderEngineGuide } from '../../src/main/engineGuide';
+import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
 import {
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
   resolveExampleCodexSkillsDir,
+  resolveEngineGuideFile,
 } from '../../src/main/exampleAssets';
 
 // The unpackaged runtime resolvers read <app.getAppPath()>/example/<tree>, and app.getAppPath() is the
@@ -105,6 +116,40 @@ describe('placeExampleAssets — places every bundled tree where its unpackaged 
       command: '# groom\n',
       skill: '---\nname: agent-terminal-loops\n---\n',
     });
+  });
+});
+
+const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
+
+describe('writeEngineGuide — places the one generated guide where its unpackaged resolver reads it (#276)', () => {
+  it('writes exactly one Markdown file, the render of the descriptor, at the resolved path', () => {
+    writeEngineGuide(out);
+    const file = resolveEngineGuideFile({ packaged: false, appPath: out });
+    const dir = path.dirname(file);
+    expect({
+      markdown: existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.md')) : [],
+      bytes: guideAt(file),
+    }).toEqual({ markdown: [path.basename(file)], bytes: renderEngineGuide(ENGINE_CAPABILITIES) });
+  });
+});
+
+describe('placeBuildOutputs — the build output and the dev app path both hold the guide (#276)', () => {
+  it('lays out the example trees and writes the render under the out dir and under the repository root', () => {
+    const repoRoot = path.resolve(__dirname, '..', '..');
+    const devRoot = mkdtempSync(path.join(tmpdir(), 'ex-dev-root-'));
+    try {
+      cpSync(path.join(repoRoot, 'example'), path.join(devRoot, 'example'), { recursive: true });
+      writeFileSync(resolveEngineGuideFile({ packaged: false, appPath: devRoot }), '# An older guide\n');
+      placeBuildOutputs(devRoot, out);
+      const render = renderEngineGuide(ENGINE_CAPABILITIES);
+      expect({
+        trees: existsSync(resolveExampleLoopsV2Dir({ packaged: false, appPath: out })),
+        built: guideAt(resolveEngineGuideFile({ packaged: false, appPath: out })),
+        dev: guideAt(resolveEngineGuideFile({ packaged: false, appPath: devRoot })),
+      }).toEqual({ trees: true, built: render, dev: render });
+    } finally {
+      rmSync(devRoot, { recursive: true, force: true });
+    }
   });
 });
 

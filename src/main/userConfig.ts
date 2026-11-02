@@ -5,6 +5,10 @@
 import os from 'node:os';
 import path from 'node:path';
 
+export const LOOPS_V2_SUBDIR = 'loops-v2';
+export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
+export const CLAUDE_CONFIG_DEFAULT_SUBDIR = '.claude';
+
 const trimmed = (v: string | undefined): string | undefined => {
   const t = v?.trim();
   return t ? t : undefined;

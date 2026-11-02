@@ -41,6 +41,7 @@ const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   codexLoops: 'Codex loop definitions',
   codexAgents: 'Codex reviewer agents',
   codexSkills: 'Codex skills',
+  engineGuide: 'Engine capabilities guide',
 };
 
 type Report = InstallExamplesReport;

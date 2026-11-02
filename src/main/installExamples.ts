@@ -14,6 +14,7 @@ import {
   resolveFeatureDevFlowDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
+  resolveEngineGuideFile,
 } from './exampleAssets';
 import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
@@ -295,6 +296,13 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     ...inCodexHome(codexSkillsDir),
     rootFix: CODEX_ROOT_FIX,
     plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  engineGuide: {
+    bundle: (loc) => path.dirname(resolveEngineGuideFile(loc)),
+    target: ({ flowGlobalDir }) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: () => [],
     overwrite: { mode: 'confirm-overwrite' },
   },
 };
@@ -834,6 +842,7 @@ export function createInstallExamplesCoordinator(
         destinations: preparation.prepared.destinations,
         retired: preparation.prepared.retired,
         retiredFallback: preparation.prepared.retiredFallback,
+        alwaysReplaced: [],
       };
     },
     apply(message) {

@@ -1,6 +1,10 @@
 import path from 'node:path';
 import type { BundleLocation } from './bundleLocation';
 
+export const EXAMPLE_SUBDIR = 'example';
+
+export const ENGINE_GUIDE_FILE = 'engine-capabilities.md';
+
 function bundleRoot(loc: BundleLocation): string {
   return loc.packaged ? loc.resourcesPath : loc.appPath;
 }
@@ -35,4 +39,8 @@ export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
 /** §18.1. */
 export function resolveExampleCodexSkillsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'codex-skills');
+}
+
+export function resolveEngineGuideFile(loc: BundleLocation): string {
+  return path.join(bundleRoot(loc), EXAMPLE_SUBDIR, ENGINE_GUIDE_FILE);
 }

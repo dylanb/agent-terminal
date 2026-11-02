@@ -41,6 +41,7 @@ export const INSTALL_DESTINATION_IDS = [
   'codexLoops',
   'codexAgents',
   'codexSkills',
+  'engineGuide',
 ] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
@@ -75,6 +76,7 @@ export type InstallExamplesPreview =
       retired: RetiredExample[];
       /** §18.1: the retired flow the installed fallback flow.yaml still is, or null. */
       retiredFallback: string | null;
+      alwaysReplaced: InstallDestinationFiles[];
     }
   | { ok: false; error: string };
 

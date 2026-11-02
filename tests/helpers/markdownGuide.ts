@@ -86,3 +86,36 @@ export function subHeadings(md: string, heading: GuideHeading): GuideHeading[] {
   const end = all.find((h) => h.line > heading.line && h.level <= heading.level)?.line ?? Number.POSITIVE_INFINITY;
   return all.filter((h) => h.line > heading.line && h.line < end);
 }
+
+/** The contents of each inline code span in `inline`, in order. */
+export function codeSpans(inline: string): string[] {
+  return [...inline.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+}
+
+export interface ListEntry {
+  /** The code span the item opens with. */
+  code: string;
+  /** The item's text, its more-indented continuation lines included. */
+  text: string;
+}
+
+const LEADING_CODE_ITEM = /^(\s*)(?:[-*+]|\d+[.)])\s+`([^`]+)`/;
+
+/** The list items in `body` that open with a code span — how the guide writes one entry per value or name. */
+export function listEntries(body: string): ListEntry[] {
+  const lines = body.split('\n');
+  const out: ListEntry[] = [];
+  lines.forEach((line, i) => {
+    const m = LEADING_CODE_ITEM.exec(line);
+    if (m === null) return;
+    const indent = m[1].length;
+    const item = [line];
+    for (const next of lines.slice(i + 1)) {
+      const nextIndent = next.length - next.trimStart().length;
+      if (next.trim() === '' || nextIndent <= indent) break;
+      item.push(next);
+    }
+    out.push({ code: m[2], text: item.join('\n') });
+  });
+  return out;
+}

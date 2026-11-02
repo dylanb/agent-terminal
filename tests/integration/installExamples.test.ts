@@ -40,6 +40,7 @@ import {
   type InstallExamplesResult,
 } from '../../src/shared/ipc';
 import { useBuiltBundle } from '../helpers/builtBundle';
+import { ENGINE_GUIDE_FILE } from '../../src/main/exampleAssets';
 
 const builtBundle = useBuiltBundle();
 
@@ -229,10 +230,11 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1);
-    // exclude that subtree so this still pins that the FLOW destination itself seeds only flow.yaml + templates.
+    // The flow home also holds the selectable catalog (a sibling destination nested under it, §18.7.1) and the
+    // engine guide (its own destination); exclude both so this still pins that the FLOW destination itself seeds
+    // only flow.yaml + templates.
     const catalogRel = path.relative(targetDirOf('flow'), flowCatalogDir(home));
-    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep));
+    const flowOnly = walk(targetDirOf('flow')).filter((r) => r !== catalogRel && !r.startsWith(catalogRel + path.sep) && r !== ENGINE_GUIDE_FILE);
     expect(flowOnly.sort()).toEqual([...FLOW_SET].sort());
   });
 

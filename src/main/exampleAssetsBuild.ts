@@ -56,3 +56,12 @@ export function placeExampleAssets(rootDir: string, mainOutDir: string): void {
   copyExampleCommands(rootDir, mainOutDir);
   copyExampleCodexSkills(rootDir, mainOutDir);
 }
+
+export function writeEngineGuide(dir: string): void {
+  void dir;
+}
+
+export function placeBuildOutputs(rootDir: string, mainOutDir: string): void {
+  void rootDir;
+  void mainOutDir;
+}
