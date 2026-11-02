@@ -6,7 +6,6 @@
 export type Definition = 'flow' | 'loop';
 export type Required = 'always' | 'never' | 'conditional';
 export type UnreadKeys = 'rejected' | 'ignored';
-export type Slice = 1 | 2 | 3 | 4 | 5;
 
 export interface OraclePosition<K extends string> {
   definition: Definition;
@@ -181,21 +180,21 @@ export type PositionKey =
 
 export type ClosedValue = string | boolean;
 
-export type ClosedSet = PositionKey & { values: readonly ClosedValue[]; slice: Slice };
+export type ClosedSet = PositionKey & { values: readonly ClosedValue[] };
 
 export const CLOSED_SETS: readonly ClosedSet[] = [
-  { position: 'flow.steps[]', key: 'kind', values: ['manual', 'loop'], slice: 1 },
-  { position: 'flow.steps[]', key: 'gate_authority', values: ['human', 'auto'], slice: 1 },
-  { position: 'flow.steps[]', key: 'loop_namespace', values: ['app', 'legacy'], slice: 1 },
-  { position: 'flow.steps[]', key: 'bootstrap', values: ['pickup'], slice: 1 },
-  { position: 'loop', key: 'version', values: ['v2'], slice: 3 },
-  { position: 'loop.work', key: 'completion', values: ['red', 'green', 'refactor'], slice: 3 },
-  { position: 'loop.work', key: 'frozen_check', values: [true], slice: 3 },
-  { position: 'loop.boundaries[]', key: 'mode', values: ['clear', 'compact'], slice: 3 },
-  { position: 'loop.report', key: 'polish', values: ['fix', 'defer'], slice: 3 },
-  { position: 'loop.pickup', key: 'on_conflict', values: ['abort', 'wipe-and-retry'], slice: 3 },
-  { position: 'loop.pickup.initial_labels[]', key: 'action', values: ['add', 'remove'], slice: 3 },
-  { position: 'loop.pickup.initial_labels[]', key: 'target', values: ['issue', 'pr'], slice: 3 },
+  { position: 'flow.steps[]', key: 'kind', values: ['manual', 'loop'] },
+  { position: 'flow.steps[]', key: 'gate_authority', values: ['human', 'auto'] },
+  { position: 'flow.steps[]', key: 'loop_namespace', values: ['app', 'legacy'] },
+  { position: 'flow.steps[]', key: 'bootstrap', values: ['pickup'] },
+  { position: 'loop', key: 'version', values: ['v2'] },
+  { position: 'loop.work', key: 'completion', values: ['red', 'green', 'refactor'] },
+  { position: 'loop.work', key: 'frozen_check', values: [true] },
+  { position: 'loop.boundaries[]', key: 'mode', values: ['clear', 'compact'] },
+  { position: 'loop.report', key: 'polish', values: ['fix', 'defer'] },
+  { position: 'loop.pickup', key: 'on_conflict', values: ['abort', 'wipe-and-retry'] },
+  { position: 'loop.pickup.initial_labels[]', key: 'action', values: ['add', 'remove'] },
+  { position: 'loop.pickup.initial_labels[]', key: 'target', values: ['issue', 'pr'] },
 ];
 
 /** Whether each accepted `loop_namespace` selects an engine that runs the step. */
@@ -227,32 +226,31 @@ export type OpenSet = OpenSetKey & {
   loadRejected: readonly string[];
   /** For an arg's open set, the side-effect kind it is read beside. */
   argOf?: OracleActedSideEffectKind;
-  slice: Slice;
 };
 
 export const OPEN_SETS = {
-  inputType: { position: 'flow.steps[].inputs[]', key: 'type', acted: ACTED_INPUT_TYPES, loadRejected: [], slice: 1 },
-  gateOption: { position: 'loop.gate[]', key: 'option', acted: ACTED_GATE_OPTIONS, loadRejected: [], slice: 3 },
-  sideEffectKind: { position: 'loop.gate[].side_effects[]', key: 'kind', acted: ACTED_SIDE_EFFECT_KINDS, loadRejected: ['exec'], slice: 3 },
-  ghAction: { position: 'loop.gate[].side_effects[]', key: 'action', argOf: 'gh', acted: ACTED_GH_ACTIONS, loadRejected: [], slice: 3 },
+  inputType: { position: 'flow.steps[].inputs[]', key: 'type', acted: ACTED_INPUT_TYPES, loadRejected: [] },
+  gateOption: { position: 'loop.gate[]', key: 'option', acted: ACTED_GATE_OPTIONS, loadRejected: [] },
+  sideEffectKind: { position: 'loop.gate[].side_effects[]', key: 'kind', acted: ACTED_SIDE_EFFECT_KINDS, loadRejected: ['exec'] },
+  ghAction: { position: 'loop.gate[].side_effects[]', key: 'action', argOf: 'gh', acted: ACTED_GH_ACTIONS, loadRejected: [] },
 } as const satisfies Record<string, OpenSet>;
 
-export type CrossFieldRule = PositionKey & { rule: string; slice: Slice };
+export type CrossFieldRule = PositionKey & { rule: string };
 
 /** Every rule the loaders enforce across fields, conditional requirements included. Ids, never wording. */
 export const CROSS_FIELD_RULES = [
-  { position: 'flow.steps[]', key: 'loop', rule: 'loop-step-needs-loop', slice: 1 },
-  { position: 'flow.steps[]', key: 'gate_authority', rule: 'gate-authority-only-on-loop-step', slice: 1 },
-  { position: 'flow.steps[]', key: 'loop_namespace', rule: 'app-namespace-needs-safe-loop-name', slice: 1 },
-  { position: 'flow.steps[].repeat', key: 'back_to', rule: 'back-to-names-earlier-step', slice: 1 },
-  { position: 'loop', key: 'name', rule: 'declared-name-matches-resolved-name', slice: 3 },
-  { position: 'loop', key: 'consolidator', rule: 'goal-excludes-consolidator', slice: 3 },
-  { position: 'loop', key: 'reviewers', rule: 'reviewers-need-consolidator-or-goal', slice: 3 },
-  { position: 'loop', key: 'outputs', rule: 'result-completion-needs-artifact-output', slice: 3 },
-  { position: 'loop.work', key: 'checkpoint', rule: 'checkpoint-needs-goal', slice: 3 },
-  { position: 'loop.gate[]', key: 'option', rule: 'request-changes-needs-review-rounds', slice: 3 },
-  { position: 'loop.boundaries[]', key: 'message', rule: 'compact-needs-message', slice: 3 },
-  { position: 'loop.inputs[]/outputs[]', key: 'id', rule: 'id-declared-once', slice: 3 },
+  { position: 'flow.steps[]', key: 'loop', rule: 'loop-step-needs-loop' },
+  { position: 'flow.steps[]', key: 'gate_authority', rule: 'gate-authority-only-on-loop-step' },
+  { position: 'flow.steps[]', key: 'loop_namespace', rule: 'app-namespace-needs-safe-loop-name' },
+  { position: 'flow.steps[].repeat', key: 'back_to', rule: 'back-to-names-earlier-step' },
+  { position: 'loop', key: 'name', rule: 'declared-name-matches-resolved-name' },
+  { position: 'loop', key: 'consolidator', rule: 'goal-excludes-consolidator' },
+  { position: 'loop', key: 'reviewers', rule: 'reviewers-need-consolidator-or-goal' },
+  { position: 'loop', key: 'outputs', rule: 'result-completion-needs-artifact-output' },
+  { position: 'loop.work', key: 'checkpoint', rule: 'checkpoint-needs-goal' },
+  { position: 'loop.gate[]', key: 'option', rule: 'request-changes-needs-review-rounds' },
+  { position: 'loop.boundaries[]', key: 'message', rule: 'compact-needs-message' },
+  { position: 'loop.inputs[]/outputs[]', key: 'id', rule: 'id-declared-once' },
 ] as const satisfies readonly CrossFieldRule[];
 
 export type OracleRuleId = (typeof CROSS_FIELD_RULES)[number]['rule'];
@@ -263,11 +261,10 @@ export const NOT_CHECKED_AT_LOAD = [
   {
     position: 'flow.steps[].repeat',
     key: 'count_input',
-    slice: 1,
     cases: ['no-input', 'non-integer', 'below-one', 'above-cap'],
     capCase: 'above-cap',
   },
-] as const satisfies readonly (PositionKey & { slice: Slice; cases: readonly string[]; capCase: string })[];
+] as const satisfies readonly (PositionKey & { cases: readonly string[]; capCase: string })[];
 
 /** Where a `{…}` slot fails to load. */
 export const SLOT_REJECTING: readonly PositionKey[] = [
@@ -327,19 +324,16 @@ export const turnKeyLayout = (kind: TurnKind, stepId: string): string => `${kind
 export type SectionKind = 'position' | 'where-things-live' | 'lookup-order' | 'turn-contract' | 'turn-composition';
 
 export type OracleSection =
-  | { kind: 'position'; position: PositionId; slice: Slice }
-  | { kind: Exclude<SectionKind, 'position'>; slice: Slice };
+  | { kind: 'position'; position: PositionId }
+  | { kind: Exclude<SectionKind, 'position'> };
 
-/** The sections the guide carries, by what they are; the slice that adds each. */
+/** The sections the guide carries, by what they are. */
 export const SECTIONS: readonly OracleSection[] = [
-  ...(Object.keys(FLOW_POSITIONS) as FlowPositionId[]).map((p) => ({ kind: 'position' as const, position: p, slice: 1 as const })),
-  { kind: 'where-things-live' as const, slice: 1 as const },
-  { kind: 'lookup-order' as const, slice: 1 as const },
-  ...(Object.keys(LOOP_POSITIONS) as LoopPositionId[]).map((p) => ({ kind: 'position' as const, position: p, slice: 3 as const })),
-  { kind: 'turn-contract' as const, slice: 5 as const },
-  { kind: 'turn-composition' as const, slice: 5 as const },
+  ...(Object.keys(FLOW_POSITIONS) as FlowPositionId[]).map((p) => ({ kind: 'position' as const, position: p })),
+  { kind: 'where-things-live' as const },
+  { kind: 'lookup-order' as const },
+  ...(Object.keys(LOOP_POSITIONS) as LoopPositionId[]).map((p) => ({ kind: 'position' as const, position: p })),
+  { kind: 'turn-contract' as const },
+  { kind: 'turn-composition' as const },
 ];
 
-export function sectionsThrough(slice: Slice): OracleSection[] {
-  return SECTIONS.filter((s) => s.slice <= slice);
-}

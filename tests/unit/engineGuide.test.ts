@@ -19,7 +19,7 @@ import {
   SIDE_EFFECT_ARGS,
   SLOT_EXPANDING,
   SLOT_REJECTING,
-  sectionsThrough,
+  SECTIONS,
   TIER_PATH_FRAGMENTS,
   TIER_SETTINGS,
   TURN_KINDS,
@@ -33,13 +33,10 @@ import { codeSpans, guideHeadings, guideTocLinks, listEntries, sectionBody, subH
 import { argHeading, composedShape, entryFor, headingTitled, intro, keyHeading, positionHeading, turnContractParts } from '../helpers/guideSections';
 import { descriptorArg, descriptorKey, descriptorOpenSet } from '../helpers/descriptorEntries';
 
-const SLICE = 5;
-/** The slice that adds each definition's positions to the guide. */
-const DEFINITION_SLICE: Readonly<Record<Definition, number>> = { flow: 1, loop: 3 };
 const GUIDE = renderEngineGuide(ENGINE_CAPABILITIES);
 const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);
 const positionIds = (d: Definition): PositionId[] => (Object.keys(POSITIONS) as PositionId[]).filter((id) => POSITIONS[id].definition === d);
-const ofDefinition = (d: Definition) => (s: { position: PositionId; slice: number }) => POSITIONS[s.position].definition === d && s.slice <= DEFINITION_SLICE[d];
+const ofDefinition = (d: Definition) => (s: { position: PositionId }) => POSITIONS[s.position].definition === d;
 
 /** `text` when it is non-empty, otherwise a problem is recorded and undefined returned. */
 function nonEmpty(problems: string[], what: string, text: string | undefined): string | undefined {
@@ -76,10 +73,10 @@ describe('the engine guide — table of contents (#276)', () => {
     expect(problems).toEqual([]);
   });
 
-  it('gives each section this slice adds a heading of its own, linked from the table of contents', () => {
+  it('gives each section a heading of its own, linked from the table of contents', () => {
     const linked = new Set(guideTocLinks(GUIDE).map((l) => l.anchor));
     const problems: string[] = [];
-    for (const section of sectionsThrough(SLICE)) {
+    for (const section of SECTIONS) {
       const what = section.kind === 'position' ? section.position : section.kind;
       const title = (ENGINE_CAPABILITIES.sectionTitles as Readonly<Record<string, string | undefined>>)[section.kind];
       const heading = section.kind === 'position' ? positionHeading(GUIDE, section.position) : headingTitled(GUIDE, title ?? '');
@@ -218,7 +215,7 @@ describe('the engine guide — loop_namespace engines and run-time outcomes (#27
 
   it('says which keys are not checked at load, with each run-time outcome and the engine cap', () => {
     const problems: string[] = [];
-    for (const { position, key, cases, capCase } of NOT_CHECKED_AT_LOAD.filter((k) => k.slice <= SLICE)) {
+    for (const { position, key, cases, capCase } of NOT_CHECKED_AT_LOAD) {
       const where = `${position} ${key}`;
       const doc = descriptorKey(ENGINE_CAPABILITIES, position, key);
       const outcomes = doc?.values.kind === 'not-checked-at-load' ? doc.values.outcomes : [];

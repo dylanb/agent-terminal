@@ -1,7 +1,5 @@
-// Build-time placement of the bundled example trees: the packaged app gets them via electron-builder
-// extraResources (electron-builder.yml); an unpackaged run reads them from <app.getAppPath()>/example/…,
-// so the build must copy the committed trees there. Each destination comes from the runtime resolver
-// that reads it back (CLAUDE.md writer↔reader rule).
+// The packaged app gets the example trees and the generated engine guide through electron-builder
+// extraResources; an unpackaged run reads them from <app.getAppPath()>/example/…, so the build places them there.
 
 import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

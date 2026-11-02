@@ -47,8 +47,6 @@ import {
   positionIdOf,
 } from '../helpers/descriptorEntries';
 
-/** The slice that adds each definition's positions to the descriptor. */
-const DEFINITION_SLICE: Readonly<Record<Definition, number>> = { flow: 1, loop: 3 };
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);
 
@@ -56,7 +54,7 @@ const descriptorPosition = (id: string): PositionCapability | undefined => descr
 const descriptorKey = (id: string, key: string): KeyCapability | undefined => descriptorKeyIn(ENGINE_CAPABILITIES, id, key);
 const sorted = (values: readonly unknown[]): string[] => values.map(String).sort();
 const positionIds = (d: Definition): PositionId[] => (Object.keys(POSITIONS) as PositionId[]).filter((id) => POSITIONS[id].definition === d);
-const ofDefinition = (d: Definition) => (s: { position: PositionId; slice: number }) => POSITIONS[s.position].definition === d && s.slice <= DEFINITION_SLICE[d];
+const ofDefinition = (d: Definition) => (s: { position: PositionId }) => POSITIONS[s.position].definition === d;
 
 /** The value-set kind the oracle records for a key: a closed set, an open set, not checked at load, or any value. */
 function oracleValuesKind(position: string, key: string): KeyCapability['values']['kind'] {

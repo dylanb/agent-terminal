@@ -47,8 +47,6 @@ export interface FlowInputDef {
   required: boolean;
 }
 
-/** A §18.1 step. `manual`: a human produces an artifact. `loop` (§24.2.3 T2): runs an agent-loop,
- *  binding its LoopDef by name (`loop`). */
 export interface FlowStepDef {
   id: string;
   kind: FlowStepKind;
@@ -62,8 +60,6 @@ export interface FlowStepDef {
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
   gateAuthority?: GateAuthority;
-  /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
-   *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
