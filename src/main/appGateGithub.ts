@@ -5,6 +5,7 @@ import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
+import type { ActedGhAction } from '../shared/engineCapabilities/loop';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
@@ -22,6 +23,8 @@ export type RunAppGateSideEffect = (
 ) => Promise<AppGateSideEffectResult>;
 
 export type AppGatePullRequest = PullRequest;
+
+export const GH_ACTION_HANDLERS = {} satisfies Partial<Record<ActedGhAction, unknown>>;
 
 export interface AppGateGitHubOperations {
   pullRequest(number: number): Promise<AppGatePullRequest>;

@@ -22,6 +22,11 @@ import type { RunAppGatePush } from './appGatePush';
 import { stripStatusControlChars } from '../shared/loopStatus';
 import { errMsg } from './errno';
 import type { SectionedReport } from './reportSections';
+import type { ActedSideEffectKind } from '../shared/engineCapabilities/loop';
+
+export const GATE_OPTION_HANDLERS = {} satisfies Partial<Record<GateDecisionOption, unknown>>;
+
+export const SIDE_EFFECT_HANDLERS = {} satisfies Partial<Record<ActedSideEffectKind, unknown>>;
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */

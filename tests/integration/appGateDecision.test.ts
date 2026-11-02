@@ -247,14 +247,29 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.advances).toEqual(['/repo']);
   });
 
-  it('skips a non-gh side-effect yet still accepts and advances (only gh actions run)', async () => {
-    const { deps, rec } = mkDeps({ gate: [{ option: 'approve', sideEffects: [{ kind: 'slack', args: { action: 'post' } }] }] });
-    await approve(deps);
-    expect(rec.sideEffects).toEqual([]); // the non-gh side-effect never reached the gh runner
-    expect(rec.commitSideEffects).toEqual([]); // nor the commit runner — an unknown kind routes to neither
-    expect(rec.accepts).toHaveLength(1);
-    expect(rec.advances).toEqual(['/repo']);
-  });
+  for (const holds of [true, false]) {
+    it(`${holds ? 'at a human gate' : 'at a gate that does not hold'}, skips a non-gh side-effect yet still accepts and advances (only gh actions run)`, async () => {
+      const { deps, rec } = mkDeps({ holds, gate: [{ option: 'approve', sideEffects: [{ kind: 'slack', args: { action: 'post' } }] }] });
+      expect(await approve(deps)).toBe(true);
+      expect(rec.sideEffects).toEqual([]); // the non-gh side-effect never reached the gh runner
+      expect(rec.commitSideEffects).toEqual([]); // nor the commit runner — an unknown kind routes to neither
+      expect(rec.errors).toEqual([]);
+      expect(rec.accepts).toHaveLength(1);
+      expect(rec.advances).toEqual(['/repo']);
+    });
+  }
+
+  for (const holds of [true, false]) {
+    it(`${holds ? 'at a human gate' : 'at a gate that does not hold'}, runs nothing for a promote side-effect at a non-epic approve, and still accepts and advances`, async () => {
+      const { deps, rec } = mkDeps({ holds, gate: [{ option: 'approve', sideEffects: [{ kind: 'promote', args: {} }] }] });
+      expect(await approve(deps)).toBe(true);
+      expect(rec.sideEffects).toEqual([]);
+      expect(rec.commitSideEffects).toEqual([]);
+      expect(rec.errors).toEqual([]);
+      expect(rec.accepts).toHaveLength(1);
+      expect(rec.advances).toEqual(['/repo']);
+    });
+  }
 });
 
 describe('runAppGateDecision — a failed side-effect never strands the flow (§27.13 / AC3)', () => {
