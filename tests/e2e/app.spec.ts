@@ -51,6 +51,8 @@ import {
 import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { LOOP_POSITIONS, type LoopPositionId } from '../helpers/engineCapabilityOracle';
+import { positionHeading } from '../helpers/guideSections';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2540,6 +2542,23 @@ test('with APP_HOME_DIR set, the engine guide is installed under that home and n
     rmSync(home, { recursive: true, force: true });
     rmSync(configDir, { recursive: true, force: true });
     rmSync(appHome, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples writes an engine guide with a section for every loop-definition position (#276 slice 3)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    const installed = guideAt(installedGuide(home)) ?? '';
+    const withoutSection = (Object.keys(LOOP_POSITIONS) as LoopPositionId[]).filter((id) => positionHeading(installed, id) === undefined);
+    expect(withoutSection).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
   }
 });
 

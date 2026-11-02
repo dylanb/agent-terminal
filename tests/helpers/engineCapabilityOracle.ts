@@ -7,7 +7,7 @@
 export type Definition = 'flow' | 'loop';
 export type Required = 'always' | 'never' | 'conditional';
 export type UnreadKeys = 'rejected' | 'ignored';
-export type Slice = 1 | 2 | 3 | 4;
+export type Slice = 1 | 2 | 3 | 4 | 5;
 
 export interface OraclePosition<K extends string> {
   definition: Definition;
@@ -226,6 +226,8 @@ export type OpenSet = OpenSetKey & {
   acted: readonly string[];
   /** Names the loader refuses although the key is otherwise open. */
   loadRejected: readonly string[];
+  /** For an arg's open set, the side-effect kind it is read beside. */
+  argOf?: OracleActedSideEffectKind;
   slice: Slice;
 };
 
@@ -233,7 +235,7 @@ export const OPEN_SETS = {
   inputType: { position: 'flow.steps[].inputs[]', key: 'type', acted: ACTED_INPUT_TYPES, loadRejected: [], slice: 1 },
   gateOption: { position: 'loop.gate[]', key: 'option', acted: ACTED_GATE_OPTIONS, loadRejected: [], slice: 3 },
   sideEffectKind: { position: 'loop.gate[].side_effects[]', key: 'kind', acted: ACTED_SIDE_EFFECT_KINDS, loadRejected: ['exec'], slice: 3 },
-  ghAction: { position: 'loop.gate[].side_effects[]', key: 'action', acted: ACTED_GH_ACTIONS, loadRejected: [], slice: 3 },
+  ghAction: { position: 'loop.gate[].side_effects[]', key: 'action', argOf: 'gh', acted: ACTED_GH_ACTIONS, loadRejected: [], slice: 3 },
 } as const satisfies Record<string, OpenSet>;
 
 export type CrossFieldRule = PositionKey & { rule: string; slice: Slice };
@@ -328,8 +330,8 @@ export const SECTIONS: readonly OracleSection[] = [
   { kind: 'where-things-live' as const, slice: 1 as const },
   { kind: 'lookup-order' as const, slice: 1 as const },
   ...(Object.keys(LOOP_POSITIONS) as LoopPositionId[]).map((p) => ({ kind: 'position' as const, position: p, slice: 3 as const })),
-  { kind: 'turn-contract' as const, slice: 4 as const },
-  { kind: 'turn-composition' as const, slice: 4 as const },
+  { kind: 'turn-contract' as const, slice: 5 as const },
+  { kind: 'turn-composition' as const, slice: 5 as const },
 ];
 
 export function sectionsThrough(slice: Slice): OracleSection[] {

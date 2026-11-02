@@ -1,87 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { renderEngineGuide } from '../../src/main/engineGuide';
-import {
-  ENGINE_CAPABILITIES,
-  type EngineCapabilities,
-  type KeyCapability,
-  type PositionCapability,
-} from '../../src/shared/engineCapabilities';
+import { ENGINE_CAPABILITIES, type EngineCapabilities } from '../../src/shared/engineCapabilities';
 import { MAX_SLICES } from '../../src/main/flow';
+import { GOAL_CONDITION_MAX_CHARS } from '../../src/main/loopDefV2';
 import {
   CLOSED_SETS,
   CROSS_FIELD_RULES,
-  FLOW_POSITIONS,
   LOOKUP_ORDER,
   LOOP_LAYOUT,
   LOOP_NAMESPACE_RUNS_ENGINE,
   NOT_CHECKED_AT_LOAD,
   OPEN_SETS,
   POSITIONS,
+  SIDE_EFFECT_ARGS,
   sectionsThrough,
   TIER_PATH_FRAGMENTS,
   TIER_SETTINGS,
-  type FlowPositionId,
+  type Definition,
+  type OpenSet,
   type PositionId,
 } from '../helpers/engineCapabilityOracle';
-import {
-  codeSpans,
-  guideHeadings,
-  guideTocLinks,
-  listEntries,
-  sectionBody,
-  subHeadings,
-  type GuideHeading,
-} from '../helpers/markdownGuide';
+import { codeSpans, guideHeadings, guideTocLinks, listEntries, sectionBody } from '../helpers/markdownGuide';
+import { argHeading, headingTitled, intro, keyHeading, positionHeading } from '../helpers/guideSections';
+import { descriptorArg, descriptorKey, descriptorOpenSet } from '../helpers/descriptorEntries';
 
-const SLICE = 1;
+const SLICE = 3;
+/** The slice that adds each definition's positions to the guide. */
+const DEFINITION_SLICE: Readonly<Record<Definition, number>> = { flow: 1, loop: 3 };
 const GUIDE = renderEngineGuide(ENGINE_CAPABILITIES);
-const FLOW_POSITION_IDS = Object.keys(FLOW_POSITIONS) as FlowPositionId[];
-const POSITION_IDS = new Set<string>(Object.keys(POSITIONS));
-
-const positionIdOf = (p: PositionCapability): string => (p.yamlPath === '' ? p.definition : `${p.definition}.${p.yamlPath}`);
-
-function descriptorPosition(caps: EngineCapabilities, id: PositionId): PositionCapability | undefined {
-  return caps.positions.find((p) => positionIdOf(p) === id);
-}
-
-function descriptorKey(caps: EngineCapabilities, id: PositionId, key: string): KeyCapability | undefined {
-  return descriptorPosition(caps, id)?.keys.find((k) => k.key === key);
-}
-
-function sectionEnd(md: string, heading: GuideHeading): number {
-  return guideHeadings(md).find((h) => h.line > heading.line && h.level <= heading.level)?.line ?? Number.POSITIVE_INFINITY;
-}
-
-const isPositionHeading = (h: GuideHeading): boolean => codeSpans(h.text).some((c) => POSITION_IDS.has(c));
-
-/** The heading of the position section that most closely encloses `heading`. */
-function owningPosition(md: string, heading: GuideHeading): GuideHeading | undefined {
-  return guideHeadings(md)
-    .filter((h) => isPositionHeading(h) && h.line < heading.line && heading.line < sectionEnd(md, h))
-    .at(-1);
-}
-
-function positionHeading(md: string, id: PositionId): GuideHeading | undefined {
-  return guideHeadings(md).find((h) => codeSpans(h.text).includes(id));
-}
-
-/** A key's heading: a heading under its position's section, owned by no position nested inside it. */
-function keyHeading(md: string, id: PositionId, key: string): GuideHeading | undefined {
-  const pos = positionHeading(md, id);
-  if (pos === undefined) return undefined;
-  return subHeadings(md, pos).find((h) => codeSpans(h.text).includes(key) && owningPosition(md, h)?.line === pos.line);
-}
-
-/** The text between a heading and the next heading of any level. */
-function intro(md: string, heading: GuideHeading): string {
-  const lines = md.split('\n');
-  const next = guideHeadings(md).find((h) => h.line > heading.line)?.line ?? lines.length;
-  return lines.slice(heading.line + 1, next).join('\n');
-}
-
-function headingTitled(md: string, title: string): GuideHeading | undefined {
-  return title.trim() === '' ? undefined : guideHeadings(md).find((h) => h.text.trim() === title.trim());
-}
+const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);
+const positionIds = (d: Definition): PositionId[] => (Object.keys(POSITIONS) as PositionId[]).filter((id) => POSITIONS[id].definition === d);
+const ofDefinition = (d: Definition) => (s: { position: PositionId; slice: number }) => POSITIONS[s.position].definition === d && s.slice <= DEFINITION_SLICE[d];
 
 /** `text` when it is non-empty, otherwise a problem is recorded and undefined returned. */
 function nonEmpty(problems: string[], what: string, text: string | undefined): string | undefined {
@@ -102,8 +51,6 @@ function expectOnlyMarker(problems: string[], what: string, text: string, own: s
 function expectIncludes(problems: string[], what: string, haystack: string, needle: string | undefined): void {
   if (needle !== undefined && !haystack.includes(needle)) problems.push(`${what}: the guide does not carry ${JSON.stringify(needle)}`);
 }
-
-const flowClosedSets = CLOSED_SETS.filter((s) => s.slice <= SLICE && POSITIONS[s.position].definition === 'flow');
 
 describe('the engine guide — table of contents (#276)', () => {
   it('has a table of contents whose every entry links to a heading, and lists every heading after it', () => {
@@ -134,10 +81,10 @@ describe('the engine guide — table of contents (#276)', () => {
   });
 });
 
-describe('the engine guide — flow-definition values (#276)', () => {
-  it('lists every value of each flow closed set under its key, with what it does and when to choose it', () => {
+describe.each(['flow', 'loop'] as const)('the engine guide — %s-definition values (#276)', (definition) => {
+  it('lists every value of each closed set under its key, with what it does and when to choose it', () => {
     const problems: string[] = [];
-    for (const set of flowClosedSets) {
+    for (const set of CLOSED_SETS.filter(ofDefinition(definition))) {
       const where = `${set.position} ${set.key}`;
       const key = descriptorKey(ENGINE_CAPABILITIES, set.position, set.key);
       const heading = keyHeading(GUIDE, set.position, set.key);
@@ -161,30 +108,10 @@ describe('the engine guide — flow-definition values (#276)', () => {
     expect(problems).toEqual([]);
   });
 
-  it('marks each loop_namespace value with whether it selects an engine that runs the step', () => {
-    const { yes, no } = ENGINE_CAPABILITIES.markers.selectsEngine;
+  it('documents every key a position reads, with what it does, whether it is required, and its cross-field rules', () => {
     const problems: string[] = [];
-    const runs = nonEmpty(problems, 'selects-engine marker', yes);
-    const none = nonEmpty(problems, 'selects-no-engine marker', no);
-    const heading = keyHeading(GUIDE, 'flow.steps[]', 'loop_namespace');
-    const entries = heading === undefined ? [] : listEntries(sectionBody(GUIDE, heading));
-    for (const [value, runsEngine] of Object.entries(LOOP_NAMESPACE_RUNS_ENGINE)) {
-      const entry = entries.find((e) => e.code === value);
-      if (entry === undefined) {
-        problems.push(`loop_namespace ${value}: no entry`);
-        continue;
-      }
-      const [carries, lacks] = runsEngine ? [runs, none] : [none, runs];
-      expectIncludes(problems, `loop_namespace ${value}`, entry.text, carries);
-      expectOnlyMarker(problems, `loop_namespace ${value}`, entry.text, carries, lacks === undefined ? [] : [lacks]);
-    }
-    expect(problems).toEqual([]);
-  });
-
-  it('documents every key a flow position reads, with what it does, whether it is required, and its cross-field rules', () => {
-    const problems: string[] = [];
-    for (const id of FLOW_POSITION_IDS) {
-      for (const [key, required] of Object.entries(FLOW_POSITIONS[id].keys)) {
+    for (const id of positionIds(definition)) {
+      for (const [key, required] of Object.entries(POSITIONS[id].keys)) {
         const where = `${id} ${key}`;
         const doc = descriptorKey(ENGINE_CAPABILITIES, id, key);
         const heading = keyHeading(GUIDE, id, key);
@@ -204,7 +131,7 @@ describe('the engine guide — flow-definition values (#276)', () => {
           const condition = doc?.required.kind === 'conditional' ? doc.required.condition : undefined;
           expectIncludes(problems, `${where} condition`, body, nonEmpty(problems, `${where} condition`, condition));
         }
-        for (const rule of CROSS_FIELD_RULES.filter((r) => r.slice <= SLICE && r.position === id && r.key === key)) {
+        for (const rule of CROSS_FIELD_RULES.filter((r) => ofDefinition(definition)(r) && r.position === id && r.key === key)) {
           const text = doc?.rules.find((r) => r.id === rule.rule)?.text;
           expectIncludes(problems, `${where} ${rule.rule}`, body, nonEmpty(problems, `${where} ${rule.rule}`, text));
         }
@@ -213,10 +140,10 @@ describe('the engine guide — flow-definition values (#276)', () => {
     expect(problems).toEqual([]);
   });
 
-  it('states for each flow position whether a key the loader does not read is rejected or ignored', () => {
+  it('states for each position whether a key the loader does not read is rejected or ignored', () => {
     const problems: string[] = [];
-    for (const id of FLOW_POSITION_IDS) {
-      const mode = FLOW_POSITIONS[id].unreadKeys;
+    for (const id of positionIds(definition)) {
+      const mode = POSITIONS[id].unreadKeys;
       const heading = positionHeading(GUIDE, id);
       const marker = nonEmpty(problems, `${mode} marker`, ENGINE_CAPABILITIES.markers.unreadKeys[mode]);
       if (heading === undefined) {
@@ -225,6 +152,57 @@ describe('the engine guide — flow-definition values (#276)', () => {
       }
       expectIncludes(problems, `${id} unread keys`, intro(GUIDE, heading), marker);
       expectOnlyMarker(problems, `${id} unread keys`, intro(GUIDE, heading), marker, Object.values(ENGINE_CAPABILITIES.markers.unreadKeys));
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('lists every name the engine acts on for each open set, with what it does and when, and what it does with any other name', () => {
+    const problems: string[] = [];
+    for (const set of OPEN_SET_LIST.filter(ofDefinition(definition))) {
+      const where = set.argOf === undefined ? `${set.position} ${set.key}` : `${set.position} ${set.argOf} ${set.key}`;
+      const values = descriptorOpenSet(ENGINE_CAPABILITIES, set);
+      const open = values?.kind === 'open' ? values : undefined;
+      const heading = set.argOf === undefined ? keyHeading(GUIDE, set.position, set.key) : argHeading(GUIDE, set.position, set.argOf, set.key);
+      if (open === undefined) problems.push(`${where}: the descriptor holds no open set`);
+      if (heading === undefined) problems.push(`${where}: no heading`);
+      const body = heading === undefined ? '' : sectionBody(GUIDE, heading);
+      const entries = listEntries(body);
+      for (const name of set.acted) {
+        const named = open?.acted.find((a) => a.name === name);
+        const does = nonEmpty(problems, `${where} ${name} does`, named?.does);
+        const when = nonEmpty(problems, `${where} ${name} when`, named?.when);
+        const entry = entries.find((e) => e.code === name);
+        if (entry === undefined) {
+          problems.push(`${where} ${name}: no entry`);
+          continue;
+        }
+        expectIncludes(problems, `${where} ${name}`, entry.text, does);
+        expectIncludes(problems, `${where} ${name}`, entry.text, when);
+      }
+      expectIncludes(problems, `${where} other names`, body, nonEmpty(problems, `${where} other names`, open?.otherNames));
+      for (const name of set.loadRejected) if (!codeSpans(body).includes(name)) problems.push(`${where}: does not name the load-rejected ${name}`);
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
+describe('the engine guide — loop_namespace engines and run-time outcomes (#276)', () => {
+  it('marks each loop_namespace value with whether it selects an engine that runs the step', () => {
+    const { yes, no } = ENGINE_CAPABILITIES.markers.selectsEngine;
+    const problems: string[] = [];
+    const runs = nonEmpty(problems, 'selects-engine marker', yes);
+    const none = nonEmpty(problems, 'selects-no-engine marker', no);
+    const heading = keyHeading(GUIDE, 'flow.steps[]', 'loop_namespace');
+    const entries = heading === undefined ? [] : listEntries(sectionBody(GUIDE, heading));
+    for (const [value, runsEngine] of Object.entries(LOOP_NAMESPACE_RUNS_ENGINE)) {
+      const entry = entries.find((e) => e.code === value);
+      if (entry === undefined) {
+        problems.push(`loop_namespace ${value}: no entry`);
+        continue;
+      }
+      const [carries, lacks] = runsEngine ? [runs, none] : [none, runs];
+      expectIncludes(problems, `loop_namespace ${value}`, entry.text, carries);
+      expectOnlyMarker(problems, `loop_namespace ${value}`, entry.text, carries, lacks === undefined ? [] : [lacks]);
     }
     expect(problems).toEqual([]);
   });
@@ -250,31 +228,36 @@ describe('the engine guide — flow-definition values (#276)', () => {
     }
     expect(problems).toEqual([]);
   });
+});
 
-  it('lists every input type the engine acts on, with what it does and when, and what it does with any other type', () => {
-    const { position, key, acted } = OPEN_SETS.inputType;
-    const doc = descriptorKey(ENGINE_CAPABILITIES, position, key);
-    const open = doc?.values.kind === 'open' ? doc.values : undefined;
-    const heading = keyHeading(GUIDE, position, key);
+describe('the engine guide — side-effect args and the work goal cap (#276)', () => {
+  it('documents each arg the engine reads beside a side-effect kind, with what it does and when', () => {
+    const { position } = OPEN_SETS.sideEffectKind;
     const problems: string[] = [];
-    if (open === undefined) problems.push(`${position} ${key}: the descriptor holds no open set`);
-    if (heading === undefined) problems.push(`${position} ${key}: no heading`);
-    const body = heading === undefined ? '' : sectionBody(GUIDE, heading);
-    const entries = listEntries(body);
-    for (const name of acted) {
-      const named = open?.acted.find((a) => a.name === name);
-      const does = nonEmpty(problems, `${name} does`, named?.does);
-      const when = nonEmpty(problems, `${name} when`, named?.when);
-      const entry = entries.find((e) => e.code === name);
-      if (entry === undefined) {
-        problems.push(`${name}: no entry`);
-        continue;
+    for (const [kind, args] of Object.entries(SIDE_EFFECT_ARGS)) {
+      for (const arg of args) {
+        const where = `${kind} ${arg}`;
+        const doc = descriptorArg(ENGINE_CAPABILITIES, position, kind, arg);
+        const does = nonEmpty(problems, `${where} does`, doc?.does);
+        const when = nonEmpty(problems, `${where} when`, doc?.when);
+        const heading = argHeading(GUIDE, position, kind, arg);
+        if (heading === undefined) {
+          problems.push(`${where}: no heading`);
+          continue;
+        }
+        expectIncludes(problems, `${where} does`, intro(GUIDE, heading), does);
+        expectIncludes(problems, `${where} when`, intro(GUIDE, heading), when);
       }
-      expectIncludes(problems, name, entry.text, does);
-      expectIncludes(problems, name, entry.text, when);
     }
-    expectIncludes(problems, 'other input types', body, nonEmpty(problems, 'other input types', open?.otherNames));
     expect(problems).toEqual([]);
+  });
+
+  it('states the engine’s cap on a work goal’s length under the goal key', () => {
+    const heading = keyHeading(GUIDE, 'loop.work', 'goal');
+    expect({
+      heading: heading !== undefined,
+      namesCap: heading !== undefined && sectionBody(GUIDE, heading).includes(String(GOAL_CONDITION_MAX_CHARS)),
+    }).toEqual({ heading: true, namesCap: true });
   });
 });
 

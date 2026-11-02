@@ -15,6 +15,8 @@ export interface ClosedValue extends Explanation {
 
 export interface ActedName extends Explanation {
   name: string;
+  /** The args the engine reads beside this name: a side-effect kind's keys other than `kind`. */
+  args?: readonly KeyCapability[];
 }
 
 export interface RunTimeOutcome {

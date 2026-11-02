@@ -1,40 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ENGINE_CAPABILITIES, type KeyCapability, type PositionCapability } from '../../src/shared/engineCapabilities';
 import { FLOW_DEF_FILE, loadFlowDefinitionFromFile } from '../../src/main/flow';
-import { resolveExampleFlowsDir } from '../../src/main/exampleAssets';
+import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import {
   CLOSED_SETS,
   CROSS_FIELD_RULES,
-  FLOW_POSITIONS,
   LOOKUP_ORDER,
+  LOOP_LAYOUT,
   NOT_CHECKED_AT_LOAD,
   OPEN_SETS,
-  type FlowKeyOf,
-  type FlowPositionId,
+  POSITIONS,
+  SIDE_EFFECT_ARGS,
+  type Definition,
+  type OpenSet,
+  type OracleRuleId,
+  type PositionId,
   type TierId,
 } from '../helpers/engineCapabilityOracle';
 import {
-  FLOW_REQUIRED_ONLY_VALUES,
-  FLOW_SAMPLES,
+  LOOP_BASE,
+  LOOP_SAMPLES,
   SAMPLE_LOOP,
-  flowFields,
-  flowWith,
-  loadFlowDoc,
+  fieldsAt,
+  loadAt,
   loadWithValue,
   plantLoopInTiers,
+  requiredOnlyValuesAt,
+  samplesAt,
+  type DefLoad,
 } from '../helpers/capabilityDefs';
+import {
+  descriptorActed,
+  descriptorKey as descriptorKeyIn,
+  descriptorOpenSet,
+  descriptorPosition as descriptorPositionIn,
+  positionIdOf,
+} from '../helpers/descriptorEntries';
 
-const SLICE = 1 as const;
+/** The slice that adds each definition's positions to the descriptor. */
+const DEFINITION_SLICE: Readonly<Record<Definition, number>> = { flow: 1, loop: 3 };
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const FLOW_POSITION_IDS = Object.keys(FLOW_POSITIONS) as FlowPositionId[];
+const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);
 
-const positionIdOf = (p: PositionCapability): string => (p.yamlPath === '' ? p.definition : `${p.definition}.${p.yamlPath}`);
-const descriptorPosition = (id: string): PositionCapability | undefined => ENGINE_CAPABILITIES.positions.find((p) => positionIdOf(p) === id);
-const descriptorKey = (id: string, key: string): KeyCapability | undefined => descriptorPosition(id)?.keys.find((k) => k.key === key);
+const descriptorPosition = (id: string): PositionCapability | undefined => descriptorPositionIn(ENGINE_CAPABILITIES, id);
+const descriptorKey = (id: string, key: string): KeyCapability | undefined => descriptorKeyIn(ENGINE_CAPABILITIES, id, key);
 const sorted = (values: readonly unknown[]): string[] => values.map(String).sort();
+const positionIds = (d: Definition): PositionId[] => (Object.keys(POSITIONS) as PositionId[]).filter((id) => POSITIONS[id].definition === d);
+const ofDefinition = (d: Definition) => (s: { position: PositionId; slice: number }) => POSITIONS[s.position].definition === d && s.slice <= DEFINITION_SLICE[d];
 
 /** The value-set kind the oracle records for a key: a closed set, an open set, not checked at load, or any value. */
 function oracleValuesKind(position: string, key: string): KeyCapability['values']['kind'] {
@@ -45,24 +61,81 @@ function oracleValuesKind(position: string, key: string): KeyCapability['values'
   return 'any';
 }
 
-/** The descriptor's keys at a flow position that have a sample, typed as the position's keys. */
-function descriptorFlowKeys<P extends FlowPositionId>(problems: string[], id: P, which: (k: KeyCapability) => boolean): FlowKeyOf<P>[] | undefined {
+/** The descriptor's keys at a position that have a sample. */
+function descriptorKeys(problems: string[], id: PositionId, which: (k: KeyCapability) => boolean): string[] | undefined {
   const position = descriptorPosition(id);
   if (position === undefined) {
     problems.push(`${id}: not in the descriptor`);
     return undefined;
   }
-  const samples: Readonly<Record<string, unknown>> = FLOW_SAMPLES[id];
+  const samples = samplesAt(id);
   const keys = position.keys.filter(which).map((k) => k.key);
   for (const key of keys.filter((k) => !(k in samples))) problems.push(`${id} ${key}: the descriptor lists a key the loader has no sample for`);
-  return keys.filter((k): k is FlowKeyOf<P> => k in samples);
+  return keys.filter((k) => k in samples);
 }
 
-describe('the descriptor matches the flow loader as the oracle records it (#276 D3)', () => {
-  it('lists each flow position with the oracle’s keys, required flags and unread-key mode', () => {
-    const descriptorFlow = ENGINE_CAPABILITIES.positions.filter((p) => p.definition === 'flow').map(positionIdOf);
+const sideEffect = (fields: Record<string, unknown>) => loadAt('loop.gate[].side_effects[]', fields);
+const workWith = (keys: readonly string[], values: Record<string, unknown> = {}) => fieldsAt('loop.work', keys, values);
+
+/** For each cross-field rule, a definition that breaks only it, and the same definition with the break mended. */
+const RULE_CASES: Readonly<Record<OracleRuleId, { breaks: () => DefLoad; mended: () => DefLoad }>> = {
+  'loop-step-needs-loop': {
+    breaks: () => loadAt('flow.steps[]', { id: 'second', kind: 'loop' }),
+    mended: () => loadAt('flow.steps[]', { id: 'second', kind: 'loop', loop: 'plan-loop' }),
+  },
+  'gate-authority-only-on-loop-step': {
+    breaks: () => loadAt('flow.steps[]', { id: 'second', kind: 'manual', gate_authority: 'human' }),
+    mended: () => loadAt('flow.steps[]', { id: 'second', kind: 'loop', loop: 'plan-loop', gate_authority: 'human' }),
+  },
+  'app-namespace-needs-safe-loop-name': {
+    breaks: () => loadAt('flow.steps[]', { id: 'second', kind: 'loop', loop: '../escape', loop_namespace: 'app' }),
+    mended: () => loadAt('flow.steps[]', { id: 'second', kind: 'loop', loop: 'plan-loop', loop_namespace: 'app' }),
+  },
+  'back-to-names-earlier-step': {
+    breaks: () => loadAt('flow.steps[]', { id: 'second', kind: 'manual', repeat: { back_to: 'second', count_input: 'slices' } }),
+    mended: () => loadAt('flow.steps[]', { id: 'second', kind: 'manual', repeat: { back_to: 'first', count_input: 'slices' } }),
+  },
+  'declared-name-matches-resolved-name': {
+    breaks: () => loadAt('loop', { ...LOOP_BASE, name: `not-${SAMPLE_LOOP}` }),
+    mended: () => loadAt('loop', { ...LOOP_BASE, name: SAMPLE_LOOP }),
+  },
+  'goal-excludes-consolidator': {
+    breaks: () => loadAt('loop', { ...LOOP_BASE, work: workWith(['recipe', 'artifact', 'goal']), consolidator: LOOP_SAMPLES['loop.consolidator'] }),
+    mended: () => loadAt('loop', { ...LOOP_BASE, work: workWith(['recipe', 'artifact']), consolidator: LOOP_SAMPLES['loop.consolidator'] }),
+  },
+  'reviewers-need-consolidator-or-goal': {
+    breaks: () => loadAt('loop', { ...LOOP_BASE, reviewers: [LOOP_SAMPLES['loop.reviewers[]']] }),
+    mended: () => loadAt('loop', { ...LOOP_BASE, reviewers: [LOOP_SAMPLES['loop.reviewers[]']], consolidator: LOOP_SAMPLES['loop.consolidator'] }),
+  },
+  'result-completion-needs-artifact-output': {
+    breaks: () => loadAt('loop.work', workWith(['recipe', 'artifact', 'completion'], { artifact: 'not-an-output' })),
+    mended: () => loadAt('loop.work', workWith(['recipe', 'artifact', 'completion'])),
+  },
+  'checkpoint-needs-goal': {
+    breaks: () => loadAt('loop.work', workWith(['recipe', 'artifact', 'checkpoint'])),
+    mended: () => loadAt('loop.work', workWith(['recipe', 'artifact', 'goal', 'checkpoint'])),
+  },
+  'request-changes-needs-review-rounds': {
+    breaks: () => loadAt('loop', { ...LOOP_BASE, gate: [{ option: 'request-changes' }] }),
+    mended: () => loadAt('loop', { ...LOOP_BASE, gate: [{ option: 'request-changes' }], reviewers: [], consolidator: LOOP_SAMPLES['loop.consolidator'] }),
+  },
+  'compact-needs-message': {
+    breaks: () => loadAt('loop.boundaries[]', { boundary: 'pre-work', mode: 'compact' }),
+    mended: () => loadAt('loop.boundaries[]', { boundary: 'pre-work', mode: 'compact', message: 'Keep the plan.' }),
+  },
+  'id-declared-once': {
+    breaks: () => loadAt('loop', { ...LOOP_BASE, outputs: [{ id: 'plan', path: 'plan.md' }, { id: 'plan', path: 'other.md' }] }),
+    mended: () => loadAt('loop', { ...LOOP_BASE, outputs: [{ id: 'plan', path: 'plan.md' }, { id: 'other', path: 'other.md' }] }),
+  },
+};
+
+describe.each(['flow', 'loop'] as const)('the descriptor matches the %s loader as the oracle records it (#276 D3)', (definition) => {
+  const ids = positionIds(definition);
+
+  it('lists each position with the oracle’s keys, required flags, value-set kinds and unread-key mode', () => {
+    const listed = ENGINE_CAPABILITIES.positions.filter((p) => p.definition === definition).map(positionIdOf);
     const actual = Object.fromEntries(
-      FLOW_POSITION_IDS.map((id) => {
+      ids.map((id) => {
         const p = descriptorPosition(id);
         return [
           id,
@@ -71,20 +144,20 @@ describe('the descriptor matches the flow loader as the oracle records it (#276 
       }),
     );
     const expected = Object.fromEntries(
-      FLOW_POSITION_IDS.map((id) => [
+      ids.map((id) => [
         id,
         {
-          unreadKeys: FLOW_POSITIONS[id].unreadKeys,
-          keys: Object.fromEntries(Object.entries(FLOW_POSITIONS[id].keys).map(([key, required]) => [key, { required, values: oracleValuesKind(id, key) }])),
+          unreadKeys: POSITIONS[id].unreadKeys,
+          keys: Object.fromEntries(Object.entries(POSITIONS[id].keys).map(([key, required]) => [key, { required, values: oracleValuesKind(id, key) }])),
         },
       ]),
     );
-    expect({ positions: descriptorFlow.sort(), byPosition: actual }).toEqual({ positions: [...FLOW_POSITION_IDS].sort(), byPosition: expected });
+    expect({ positions: listed.sort(), byPosition: actual }).toEqual({ positions: [...ids].sort(), byPosition: expected });
   });
 
-  it('lists the oracle’s values for each flow closed set, and the loader accepts each and rejects an unlisted one', () => {
+  it('lists the oracle’s values for each closed set, and the loader accepts each and rejects an unlisted one', () => {
     const problems: string[] = [];
-    for (const set of CLOSED_SETS.filter((s) => s.slice <= SLICE)) {
+    for (const set of CLOSED_SETS.filter(ofDefinition(definition))) {
       const where = `${set.position} ${set.key}`;
       const key = descriptorKey(set.position, set.key);
       const listed = key?.values.kind === 'closed' ? key.values.values.map((v) => v.value) : [];
@@ -97,73 +170,98 @@ describe('the descriptor matches the flow loader as the oracle records it (#276 
     expect(problems).toEqual([]);
   });
 
-  it('lists the oracle’s acted-on input types and marks the keys not checked at load', () => {
-    const { position, key, acted } = OPEN_SETS.inputType;
-    const inputType = descriptorKey(position, key);
-    const notChecked = NOT_CHECKED_AT_LOAD.filter((k) => k.slice <= SLICE).map((k) => descriptorKey(k.position, k.key)?.values.kind ?? null);
-    expect({
-      actedInputTypes: inputType?.values.kind === 'open' ? sorted(inputType.values.acted.map((a) => a.name)) : null,
-      notCheckedAtLoad: notChecked,
-    }).toEqual({ actedInputTypes: sorted(acted), notCheckedAtLoad: notChecked.map(() => 'not-checked-at-load') });
-  });
-
-  it('loads an input of a type the engine does not act on, which it ignores', () => {
-    const fields = flowFields('flow.steps[].inputs[]', ['name', 'type'], { type: 'not-an-acted-type' });
-    expect(loadFlowDoc(flowWith('flow.steps[].inputs[]', fields)).ok).toBe(true);
-  });
-
-  it('attaches the oracle’s cross-field rules to each flow key, and a definition breaking each rule fails to load', () => {
-    type SliceRule = Extract<(typeof CROSS_FIELD_RULES)[number], { slice: typeof SLICE }>;
-    const rules = CROSS_FIELD_RULES.filter((r): r is SliceRule => r.slice <= SLICE);
-    const actual = FLOW_POSITION_IDS.flatMap((id) => (descriptorPosition(id)?.keys ?? []).flatMap((k) => k.rules.map((r) => `${id} ${k.key} ${r.id}`)));
-    const breaking: Record<SliceRule['rule'], Record<string, unknown>> = {
-      'loop-step-needs-loop': flowWith('flow.steps[]', { id: 'second', kind: 'loop' }),
-      'gate-authority-only-on-loop-step': flowWith('flow.steps[]', { id: 'second', kind: 'manual', gate_authority: 'human' }),
-      'app-namespace-needs-safe-loop-name': flowWith('flow.steps[]', { id: 'second', kind: 'loop', loop: '../escape', loop_namespace: 'app' }),
-      'back-to-names-earlier-step': flowWith('flow.steps[]', { id: 'second', kind: 'manual', repeat: { back_to: 'second', count_input: 'slices' } }),
+  it('lists the oracle’s acted-on names for each open set', () => {
+    const sets = OPEN_SET_LIST.filter(ofDefinition(definition));
+    const listed = (set: OpenSet): string[] | null => {
+      const values = descriptorOpenSet(ENGINE_CAPABILITIES, set);
+      return values?.kind === 'open' ? sorted(values.acted.map((a) => a.name)) : null;
     };
+    expect(sets.map((s) => ({ key: s.key, acted: listed(s) }))).toEqual(sets.map((s) => ({ key: s.key, acted: sorted(s.acted) })));
+  });
+
+  it('attaches the oracle’s cross-field rules to each key, and a definition breaking each rule fails to load', () => {
+    const rules = CROSS_FIELD_RULES.filter(ofDefinition(definition));
+    const actual = ids.flatMap((id) => (descriptorPosition(id)?.keys ?? []).flatMap((k) => k.rules.map((r) => `${id} ${k.key} ${r.id}`)));
     expect({
       rules: actual.sort(),
-      loadsAnyway: rules.filter((r) => loadFlowDoc(breaking[r.rule]).ok).map((r) => r.rule),
-    }).toEqual({ rules: rules.map((r) => `${r.position} ${r.key} ${r.rule}`).sort(), loadsAnyway: [] });
+      loadsAnyway: rules.filter((r) => RULE_CASES[r.rule].breaks().ok).map((r) => r.rule),
+      mendedFails: rules.flatMap((r) => {
+        const mended = RULE_CASES[r.rule].mended();
+        return mended.ok ? [] : [`${r.rule}: ${mended.reason}`];
+      }),
+    }).toEqual({ rules: rules.map((r) => `${r.position} ${r.key} ${r.rule}`).sort(), loadsAnyway: [], mendedFails: [] });
   });
 
-  it('loads a definition with only each flow position’s always-required keys, and fails without any one of them', () => {
+  it('loads a definition with only each position’s always-required keys, and fails without any one of them', () => {
     const problems: string[] = [];
-    for (const id of FLOW_POSITION_IDS) {
-      const keys = descriptorFlowKeys(problems, id, (k) => k.required.kind === 'always');
+    for (const id of ids) {
+      const keys = descriptorKeys(problems, id, (k) => k.required.kind === 'always');
       if (keys === undefined) continue;
-      const values = FLOW_REQUIRED_ONLY_VALUES[id];
-      const load = (subset: typeof keys) => loadFlowDoc(flowWith(id, flowFields(id, subset, values)));
-      if (!load(keys).ok) problems.push(`${id}: the always-required keys alone do not load`);
+      const load = (subset: readonly string[]) => loadAt(id, fieldsAt(id, subset, requiredOnlyValuesAt(id)));
+      const alone = load(keys);
+      if (!alone.ok) problems.push(`${id}: the always-required keys alone do not load: ${alone.reason}`);
       for (const key of keys) if (load(keys.filter((k) => k !== key)).ok) problems.push(`${id}: loads without always-required ${key}`);
     }
     expect(problems).toEqual([]);
   });
 
-  it('loads a key the flow loader does not read at each position the descriptor marks it ignored', () => {
+  it('fails a key the loader does not read exactly where the descriptor marks it rejected, and loads it elsewhere', () => {
     const problems: string[] = [];
-    for (const id of FLOW_POSITION_IDS) {
+    for (const id of ids) {
       const position = descriptorPosition(id);
-      const keys = descriptorFlowKeys(problems, id, () => true);
+      const keys = descriptorKeys(problems, id, () => true);
       if (position === undefined || keys === undefined) continue;
-      const loads = loadFlowDoc(flowWith(id, { ...flowFields(id, keys), not_a_read_key: 'x' })).ok;
+      const loads = loadAt(id, { ...fieldsAt(id, keys), not_a_read_key: 'x' }).ok;
       if (loads !== (position.unreadKeys === 'ignored')) problems.push(`${id}: an unread key ${loads ? 'loads' : 'fails'} where the descriptor says ${position.unreadKeys}`);
     }
     expect(problems).toEqual([]);
   });
 });
 
-describe('every key the descriptor lists at a flow position loads together (#276 D4)', () => {
-  it('loads one definition per flow position that uses every key listed there', () => {
+describe.each(['flow', 'loop'] as const)('every key the descriptor lists at a %s position loads together (#276 D4)', (definition) => {
+  it('loads one definition per position that uses every key listed there', () => {
     const problems: string[] = [];
-    for (const id of FLOW_POSITION_IDS) {
-      const keys = descriptorFlowKeys(problems, id, () => true);
+    for (const id of positionIds(definition)) {
+      const keys = descriptorKeys(problems, id, () => true);
       if (keys === undefined) continue;
-      const load = loadFlowDoc(flowWith(id, flowFields(id, keys)));
-      if (!load.ok) problems.push(`${id}: ${load.error}`);
+      const load = loadAt(id, fieldsAt(id, keys));
+      if (!load.ok) problems.push(`${id}: ${load.reason}`);
     }
     expect(problems).toEqual([]);
+  });
+});
+
+describe('the flow loader’s open values (#276 D3)', () => {
+  it('marks the keys not checked at load', () => {
+    const notChecked = NOT_CHECKED_AT_LOAD.filter(ofDefinition('flow')).map((k) => descriptorKey(k.position, k.key)?.values.kind ?? null);
+    expect(notChecked).toEqual(notChecked.map(() => 'not-checked-at-load'));
+  });
+
+  it('loads an input of a type the engine does not act on, which it ignores', () => {
+    expect(loadAt('flow.steps[].inputs[]', fieldsAt('flow.steps[].inputs[]', ['name', 'type'], { type: 'not-an-acted-type' })).ok).toBe(true);
+  });
+});
+
+describe('the loop loader’s open values (#276 D3)', () => {
+  it('lists the oracle’s args for each side-effect kind the engine acts on', () => {
+    const { position, key, acted } = OPEN_SETS.sideEffectKind;
+    const args = (kind: string): string[] | null => {
+      const named = descriptorActed(ENGINE_CAPABILITIES, position, key, kind);
+      return named === undefined ? null : sorted((named.args ?? []).map((a) => a.key));
+    };
+    expect(Object.fromEntries(acted.map((kind) => [kind, args(kind)]))).toEqual(
+      Object.fromEntries(acted.map((kind) => [kind, sorted(SIDE_EFFECT_ARGS[kind])])),
+    );
+  });
+
+  it('loads a gate option, a side-effect kind and a gh action the engine does not act on, and refuses each load-rejected kind', () => {
+    const loadRejected = OPEN_SETS.sideEffectKind.loadRejected;
+    expect({
+      gateOption: loadAt('loop.gate[]', { option: 'not-an-acted-option' }).ok,
+      sideEffectKind: sideEffect({ kind: 'not-an-acted-kind' }).ok,
+      ghAction: sideEffect({ kind: 'gh', action: 'not-an-acted-action' }).ok,
+      loadRejectedLoads: loadRejected.filter((kind) => sideEffect({ kind }).ok),
+    }).toEqual({ gateOption: true, sideEffectKind: true, ghAction: true, loadRejectedLoads: [] });
   });
 });
 
@@ -192,7 +290,7 @@ describe('the descriptor’s lookup order is the order the loop resolver uses (#
   });
 });
 
-describe('every bundled flow definition loads (#276 B1)', () => {
+describe('every bundled definition loads (#276 B1)', () => {
   it('loads each flow.yaml in the bundled flow catalog', () => {
     const catalog = resolveExampleFlowsDir({ packaged: false, appPath: REPO_ROOT });
     const flows = readdirSync(catalog, { withFileTypes: true }).filter((e) => e.isDirectory());
@@ -201,5 +299,25 @@ describe('every bundled flow definition loads (#276 B1)', () => {
       return load.ok ? [] : [`${e.name}: ${load.error}`];
     });
     expect({ flows: flows.length > 1, failed }).toEqual({ flows: true, failed: [] });
+  });
+
+  it('resolves each loop definition in the bundled loop tree from its own folder, whether or not a flow binds it', () => {
+    const tree = resolveExampleLoopsV2Dir({ packaged: false, appPath: REPO_ROOT });
+    const dirs = (root: string): string[] => readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    const isLoopDir = (root: string, name: string): boolean => existsSync(path.join(root, LOOP_LAYOUT.defRelPath(name)));
+    const loops: { name: string; flow?: string; root: string }[] = dirs(tree).flatMap((d) =>
+      isLoopDir(tree, d) ? [{ name: d, root: tree }] : dirs(path.join(tree, d)).filter((n) => isLoopDir(path.join(tree, d), n)).map((name) => ({ name, flow: d, root: path.join(tree, d) })),
+    );
+    const repoDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'capability-bundled-repo-')));
+    try {
+      const failed = loops.flatMap(({ name, flow, root }) => {
+        const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: tree, retired: null }, repoDir, ...(flow === undefined ? {} : { flow }) });
+        if (!r.ok) return [`${flow ?? '(shared)'}/${name}: ${r.reason}`];
+        return r.defDir === path.join(root, name) ? [] : [`${flow ?? '(shared)'}/${name}: resolved to ${r.defDir}`];
+      });
+      expect({ loops: loops.length > 1, failed }).toEqual({ loops: true, failed: [] });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });

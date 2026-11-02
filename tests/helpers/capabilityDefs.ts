@@ -19,6 +19,7 @@ import {
   type FlowPositionId,
   type LoopKeyOf,
   type LoopPositionId,
+  type PositionId,
   type TierId,
 } from './engineCapabilityOracle';
 
@@ -133,7 +134,7 @@ export function flowWith(p: FlowPositionId, fields: Doc): Doc {
   }
 }
 
-const LOOP_BASE: Doc = {
+export const LOOP_BASE: Doc = {
   version: 'v2',
   work: { recipe: RECIPE, artifact: PLAN_OUTPUT.id },
   reviewers: [],
@@ -217,17 +218,37 @@ const DROPPED_BY_VALUE: readonly { set: Pick<ClosedSet, 'position' | 'key'>; val
   { set: { position: 'flow.steps[]', key: 'kind' }, value: 'manual', drop: ['gate_authority'] },
 ];
 
-/** Loads the definition that holds `value` under `set`'s key, every other key of its position at its sample. */
-export function loadWithValue(set: Pick<ClosedSet, 'position' | 'key'>, value: unknown): { ok: boolean } {
-  const drop = DROPPED_BY_VALUE.find((d) => d.set.position === set.position && d.set.key === set.key && d.value === value)?.drop ?? [];
-  const keys = positionKeys(set.position).filter((k) => !drop.includes(k));
-  const p = set.position;
+/** The sample value of every key the oracle lists at position `p`. */
+export function samplesAt(p: PositionId): Readonly<Record<string, unknown>> {
+  return POSITIONS[p].definition === 'flow' ? FLOW_SAMPLES[p as FlowPositionId] : LOOP_SAMPLES[p as LoopPositionId];
+}
+
+/** What a definition of only position `p`'s always-required keys sets instead of the sample. */
+export function requiredOnlyValuesAt(p: PositionId): Readonly<Record<string, unknown>> {
+  return (POSITIONS[p].definition === 'flow' ? FLOW_REQUIRED_ONLY_VALUES[p as FlowPositionId] : LOOP_REQUIRED_ONLY_VALUES[p as LoopPositionId]) ?? {};
+}
+
+/** Position `p`'s `keys` at their samples, or at `values` where it names them. */
+export function fieldsAt(p: PositionId, keys: readonly string[], values: Readonly<Record<string, unknown>> = {}): Doc {
+  return pick(samplesAt(p) as Record<string, unknown>, keys, values);
+}
+
+export type DefLoad = { ok: true } | { ok: false; reason: string };
+
+/** Loads, through its own loader, the whole definition that holds `fields` at position `p`. */
+export function loadAt(p: PositionId, fields: Doc): DefLoad {
   if (POSITIONS[p].definition === 'flow') {
-    const fp = p as FlowPositionId;
-    return loadFlowDoc(flowWith(fp, pick(FLOW_SAMPLES[fp], keys, { [set.key]: value })));
+    const load = loadFlowDoc(flowWith(p as FlowPositionId, fields));
+    return load.ok ? { ok: true } : { ok: false, reason: load.error };
   }
-  const lp = p as LoopPositionId;
-  return loadLoopDoc(loopWith(lp, pick(LOOP_SAMPLES[lp], keys, { [set.key]: value })));
+  const load = loadLoopDoc(loopWith(p as LoopPositionId, fields));
+  return load.ok ? { ok: true } : { ok: false, reason: load.reason };
+}
+
+/** Loads the definition that holds `value` under `set`'s key, every other key of its position at its sample. */
+export function loadWithValue(set: Pick<ClosedSet, 'position' | 'key'>, value: unknown): DefLoad {
+  const drop = DROPPED_BY_VALUE.find((d) => d.set.position === set.position && d.set.key === set.key && d.value === value)?.drop ?? [];
+  return loadAt(set.position, fieldsAt(set.position, positionKeys(set.position).filter((k) => !drop.includes(k)), { [set.key]: value }));
 }
 
 export interface PlantedTiers {
