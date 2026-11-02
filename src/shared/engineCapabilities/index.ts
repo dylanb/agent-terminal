@@ -36,11 +36,15 @@ export interface CrossFieldRule {
   text: string;
 }
 
+/** What the engine does with a `{…}` slot in the key's value. */
+export type SlotBehaviour = { kind: 'rejected' } | { kind: 'expanded'; slot: string };
+
 export interface KeyCapability extends Explanation {
   key: string;
   required: KeyRequirement;
   rules: readonly CrossFieldRule[];
   values: KeyValues;
+  slots?: SlotBehaviour;
 }
 
 export type Definition = 'flow' | 'loop';
@@ -58,7 +62,7 @@ export interface LookupTier {
   text: string;
 }
 
-export type GuideSection = 'where-things-live' | 'lookup-order';
+export type GuideSection = 'where-things-live' | 'lookup-order' | 'turn-contract' | 'turn-composition';
 
 export interface EngineCapabilities {
   title: string;
@@ -67,6 +71,8 @@ export interface EngineCapabilities {
   positions: readonly PositionCapability[];
   lookupOrder: readonly LookupTier[];
   sectionTitles: Readonly<Record<GuideSection, string>>;
+  /** How a loop's brief, work recipe and reviewer charters become the turns the engine runs. */
+  turnComposition: string;
   markers: {
     required: Readonly<Record<KeyRequirement['kind'], string>>;
     unreadKeys: Readonly<Record<PositionCapability['unreadKeys'], string>>;
@@ -88,7 +94,13 @@ export const ENGINE_CAPABILITIES: EngineCapabilities = {
     { tier: 'operator', text: 'The shared operator tier, outside any flow folder.' },
     { tier: 'app-bundled', text: 'The shared app-bundled tier, outside any flow folder.' },
   ],
-  sectionTitles: { 'where-things-live': 'Where flows and loops live', 'lookup-order': 'How a loop name resolves' },
+  sectionTitles: {
+    'where-things-live': 'Where flows and loops live',
+    'lookup-order': 'How a loop name resolves',
+    'turn-contract': '',
+    'turn-composition': '',
+  },
+  turnComposition: '',
   markers: {
     required: { always: '**Required.**', never: '**Optional.**', conditional: '**Required when**' },
     unreadKeys: { rejected: 'A key not listed here fails the definition to load.', ignored: 'A key not listed here is ignored.' },

@@ -52,7 +52,9 @@ import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
 import { LOOP_POSITIONS, type LoopPositionId } from '../helpers/engineCapabilityOracle';
-import { positionHeading } from '../helpers/guideSections';
+import { composedShape, positionHeading, turnContractParts } from '../helpers/guideSections';
+import { codeSpans } from '../helpers/markdownGuide';
+import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2555,6 +2557,24 @@ test('installing the examples writes an engine guide with a section for every lo
     const installed = guideAt(installedGuide(home)) ?? '';
     const withoutSection = (Object.keys(LOOP_POSITIONS) as LoopPositionId[]).filter((id) => positionHeading(installed, id) === undefined);
     expect(withoutSection).toEqual([]);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('installing the examples writes an engine guide with the turn contract and its turn-composition part (#276 slice 5)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-cfg-'));
+  try {
+    await installFromSettings(installEnv(home, configDir));
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    expect.soft(guideMatch(home)).toEqual(builtGuideInstalled());
+    const { sectionTitles } = ENGINE_CAPABILITIES;
+    const parts = turnContractParts(guideAt(installedGuide(home)) ?? '', { contract: sectionTitles['turn-contract'], composition: sectionTitles['turn-composition'] });
+    const marker = composedShape(completionMarker);
+    expect({ composition: parts.composition !== undefined, marker: codeSpans(parts.fixed).some((s) => marker.test(s)) }).toEqual({ composition: true, marker: true });
   } finally {
     await app.close();
     rmSync(home, { recursive: true, force: true });

@@ -320,6 +320,10 @@ export const LOOP_CAPABILITIES_KEYS: Readonly<Record<string, Required>> = {
 };
 
 export const TURN_KINDS = ['work', 'review', 'consolidate'] as const;
+export type TurnKind = (typeof TURN_KINDS)[number];
+
+/** The turn key a turn's done-signal file must hold, written out by hand. */
+export const turnKeyLayout = (kind: TurnKind, stepId: string): string => `${kind}-${stepId}`;
 
 export type SectionKind = 'position' | 'where-things-live' | 'lookup-order' | 'turn-contract' | 'turn-composition';
 

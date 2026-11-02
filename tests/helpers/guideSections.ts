@@ -2,7 +2,7 @@
 // ids, never by prose: a position is the heading carrying its id as a code span; a key, a heading under it
 // carrying the key; an arg, a heading under it carrying the side-effect kind and the arg.
 
-import { codeSpans, guideHeadings, subHeadings, type GuideHeading } from './markdownGuide';
+import { codeSpans, guideHeadings, listEntries, subHeadings, type GuideHeading } from './markdownGuide';
 import { POSITIONS, type PositionId } from './engineCapabilityOracle';
 
 const POSITION_IDS = new Set<string>(Object.keys(POSITIONS));
@@ -65,4 +65,39 @@ export function intro(md: string, heading: GuideHeading): string {
 
 export function headingTitled(md: string, title: string): GuideHeading | undefined {
   return title.trim() === '' ? undefined : guideHeadings(md).find((h) => h.text.trim() === title.trim());
+}
+
+/** The turn-contract section, its turn-composition part, and the rest of the section: the fixed vocabulary. */
+export interface TurnContractParts {
+  contract: GuideHeading | undefined;
+  composition: GuideHeading | undefined;
+  fixed: string;
+}
+
+export function turnContractParts(md: string, titles: { contract: string; composition: string }): TurnContractParts {
+  const contract = headingTitled(md, titles.contract);
+  if (contract === undefined) return { contract, composition: undefined, fixed: '' };
+  const composition = subHeadings(md, contract).find((h) => h.text.trim() === titles.composition.trim() && titles.composition.trim() !== '');
+  const inComposition = (line: number): boolean => composition !== undefined && line >= composition.line && line < sectionEnd(md, composition);
+  const fixed = md
+    .split('\n')
+    .filter((_, line) => line > contract.line && line < sectionEnd(md, contract) && !inComposition(line))
+    .join('\n');
+  return { contract, composition, fixed };
+}
+
+/** A pattern for what `compose` returns, whatever argument stands in for the one it is given. */
+export function composedShape(compose: (arg: string) => string): RegExp {
+  const sentinel = '\u0000';
+  const [before, after] = compose(sentinel).split(sentinel);
+  const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escape(before)}[^\\s\`]+${escape(after ?? '')}$`);
+}
+
+/** The text of the entry for `name` in `body`: a list item opening with it, or the intro of a heading opening with it. */
+export function entryFor(body: string, name: string): string | undefined {
+  const item = listEntries(body).find((e) => e.code === name);
+  if (item !== undefined) return item.text;
+  const heading = guideHeadings(body).find((h) => codeSpans(h.text)[0] === name);
+  return heading === undefined ? undefined : `${heading.text}\n${intro(body, heading)}`;
 }

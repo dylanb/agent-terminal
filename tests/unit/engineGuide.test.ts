@@ -3,10 +3,13 @@ import { renderEngineGuide } from '../../src/main/engineGuide';
 import { ENGINE_CAPABILITIES, type EngineCapabilities } from '../../src/shared/engineCapabilities';
 import { MAX_SLICES } from '../../src/main/flow';
 import { GOAL_CONDITION_MAX_CHARS } from '../../src/main/loopDefV2';
+import { completionMarker } from '../../src/main/appWorkTurn';
+import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import {
   CLOSED_SETS,
   CROSS_FIELD_RULES,
   LOOKUP_ORDER,
+  LOOP_CAPABILITIES_KEYS,
   LOOP_LAYOUT,
   LOOP_NAMESPACE_RUNS_ENGINE,
   NAMED_BOUNDARIES,
@@ -14,18 +17,23 @@ import {
   OPEN_SETS,
   POSITIONS,
   SIDE_EFFECT_ARGS,
+  SLOT_EXPANDING,
+  SLOT_REJECTING,
   sectionsThrough,
   TIER_PATH_FRAGMENTS,
   TIER_SETTINGS,
+  TURN_KINDS,
+  turnKeyLayout,
   type Definition,
   type OpenSet,
   type PositionId,
+  type PositionKey,
 } from '../helpers/engineCapabilityOracle';
-import { codeSpans, guideHeadings, guideTocLinks, listEntries, sectionBody } from '../helpers/markdownGuide';
-import { argHeading, headingTitled, intro, keyHeading, positionHeading } from '../helpers/guideSections';
+import { codeSpans, guideHeadings, guideTocLinks, listEntries, sectionBody, subHeadings } from '../helpers/markdownGuide';
+import { argHeading, composedShape, entryFor, headingTitled, intro, keyHeading, positionHeading, turnContractParts } from '../helpers/guideSections';
 import { descriptorArg, descriptorKey, descriptorOpenSet } from '../helpers/descriptorEntries';
 
-const SLICE = 3;
+const SLICE = 5;
 /** The slice that adds each definition's positions to the guide. */
 const DEFINITION_SLICE: Readonly<Record<Definition, number>> = { flow: 1, loop: 3 };
 const GUIDE = renderEngineGuide(ENGINE_CAPABILITIES);
@@ -368,5 +376,86 @@ describe('the engine guide follows its descriptor (#276)', () => {
       addedIsExplained: true,
       restUnchanged: true,
     });
+  });
+});
+
+/** Whether `spans` name a definition place: as one path (`work.recipe`, `loop.work.recipe`), or, for a position
+ *  that stands for two lists, once per list (`inputs[].path` and `outputs[].path`). */
+function namesPlace(spans: readonly string[], { position, key }: PositionKey): boolean {
+  const { yamlPath } = POSITIONS[position];
+  const paths = (p: string): string[] => (p === '' ? [key, `${position}.${key}`] : [`${p}.${key}`, `loop.${p}.${key}`]);
+  const named = (p: string): boolean => paths(p).some((form) => spans.includes(form));
+  return named(yamlPath) || yamlPath.split('/').every(named);
+}
+
+const TURN_TITLES = { contract: ENGINE_CAPABILITIES.sectionTitles['turn-contract'], composition: ENGINE_CAPABILITIES.sectionTitles['turn-composition'] };
+
+describe('the engine guide — the turn contract (#276)', () => {
+  const { contract, composition, fixed } = turnContractParts(GUIDE, TURN_TITLES);
+  const spans = codeSpans(fixed);
+  /** Each entry of the fixed vocabulary: a list item, or a heading with its intro. */
+  const entries = [...listEntries(fixed).map((e) => e.text), ...guideHeadings(fixed).map((h) => `${h.text}\n${intro(fixed, h)}`)];
+
+  it('states the artifact marker line the engine composes', () => {
+    const shape = composedShape(completionMarker);
+    expect({ section: contract !== undefined, marker: spans.some((s) => shape.test(s)) }).toEqual({ section: true, marker: true });
+  });
+
+  it('names the turn-done file and the turn key it must hold for each kind of turn', () => {
+    const missing = TURN_KINDS.filter((kind) => !spans.some((s) => composedShape((step) => turnKeyLayout(kind, step)).test(s)));
+    expect({ section: contract !== undefined, doneFile: spans.includes(TURN_DONE_FILENAME), missing }).toEqual({ section: true, doneFile: true, missing: [] });
+  });
+
+  it('lists every loop-capabilities.yaml key with whether it is required', () => {
+    const markers = ENGINE_CAPABILITIES.markers.required;
+    const problems: string[] = contract === undefined ? ['no turn-contract section'] : [];
+    for (const [key, required] of Object.entries(LOOP_CAPABILITIES_KEYS)) {
+      const entry = entryFor(fixed, key);
+      if (entry === undefined) {
+        problems.push(`${key}: no entry`);
+        continue;
+      }
+      const marker = nonEmpty(problems, `${required} marker`, markers[required]);
+      expectIncludes(problems, `${key} required`, entry, marker);
+      expectOnlyMarker(problems, `${key} required`, entry, marker, Object.values(markers));
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('names each slot the engine expands with the place it is expanded, and every place a slot is rejected', () => {
+    const problems: string[] = contract === undefined ? ['no turn-contract section'] : [];
+    for (const { slot, ...place } of SLOT_EXPANDING) {
+      const atPlace = (spans: string[]): boolean => namesPlace(spans, place) || (spans.includes(place.key) && [place.position, POSITIONS[place.position].yamlPath].some((p) => spans.includes(p)));
+      if (!entries.some((e) => codeSpans(e).includes(slot) && atPlace(codeSpans(e)))) problems.push(`${slot}: no entry naming it with ${place.position} ${place.key}`);
+    }
+    for (const place of SLOT_REJECTING) if (!namesPlace(spans, place)) problems.push(`${place.position} ${place.key}: not named as rejecting a slot`);
+    expect(problems).toEqual([]);
+  });
+
+  it('holds the turn-composition part as its own sub-section, linked from the table of contents, with a body', () => {
+    const linked = new Set(guideTocLinks(GUIDE).map((l) => l.anchor));
+    expect({
+      section: contract !== undefined,
+      composition: composition !== undefined,
+      linked: composition !== undefined && linked.has(composition.anchor),
+      body: composition !== undefined && sectionBody(GUIDE, composition).trim() !== '',
+    }).toEqual({ section: true, composition: true, linked: true, body: true });
+  });
+
+  it('renders the turn-composition prose it is given under that part’s heading', () => {
+    const titles = { contract: 'Fixture turn contract', composition: 'Fixture turn composition' };
+    const prose = 'Fixture prose on how turns are composed.';
+    const md = renderEngineGuide({
+      ...ENGINE_CAPABILITIES,
+      sectionTitles: { ...ENGINE_CAPABILITIES.sectionTitles, 'turn-contract': titles.contract, 'turn-composition': titles.composition },
+      turnComposition: prose,
+    });
+    const parts = turnContractParts(md, titles);
+    expect({
+      composition: parts.composition !== undefined,
+      underIt: parts.composition !== undefined && sectionBody(md, parts.composition).includes(prose),
+      notInFixed: !parts.fixed.includes(prose),
+      subOfContract: parts.contract !== undefined && parts.composition !== undefined && subHeadings(md, parts.contract).some((h) => h.line === parts.composition?.line),
+    }).toEqual({ composition: true, underIt: true, notInFixed: true, subOfContract: true });
   });
 });

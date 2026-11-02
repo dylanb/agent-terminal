@@ -6,15 +6,20 @@ import { ENGINE_CAPABILITIES, type KeyCapability, type PositionCapability } from
 import { FLOW_DEF_FILE, loadFlowDefinitionFromFile } from '../../src/main/flow';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
+import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
 import {
   CLOSED_SETS,
   CROSS_FIELD_RULES,
   LOOKUP_ORDER,
+  LOOP_CAPABILITIES_KEYS,
   LOOP_LAYOUT,
   NOT_CHECKED_AT_LOAD,
   OPEN_SETS,
   POSITIONS,
   SIDE_EFFECT_ARGS,
+  SLOT_EXPANDING,
+  SLOT_REJECTING,
+  positionKeys,
   type Definition,
   type OpenSet,
   type OracleRuleId,
@@ -31,6 +36,7 @@ import {
   plantLoopInTiers,
   requiredOnlyValuesAt,
   samplesAt,
+  withSlot,
   type DefLoad,
 } from '../helpers/capabilityDefs';
 import {
@@ -329,5 +335,62 @@ describe('every bundled definition loads (#276 B1)', () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the turn contract’s slots and loop-capabilities.yaml keys (#276 G6)', () => {
+  const place = (position: string, key: string): string => `${position} ${key}`;
+
+  it('marks exactly the places the oracle lists as rejecting a slot, and the slot each expanding place expands', () => {
+    const marked = ENGINE_CAPABILITIES.positions.flatMap((p) => p.keys.flatMap((k) => (k.slots === undefined ? [] : [{ at: place(positionIdOf(p), k.key), slots: k.slots }])));
+    expect({
+      rejected: marked.filter((m) => m.slots.kind === 'rejected').map((m) => m.at).sort(),
+      expanded: marked.flatMap((m) => (m.slots.kind === 'expanded' ? [`${m.at} ${m.slots.slot}`] : [])).sort(),
+    }).toEqual({
+      rejected: SLOT_REJECTING.map((r) => place(r.position, r.key)).sort(),
+      expanded: SLOT_EXPANDING.map((e) => `${place(e.position, e.key)} ${e.slot}`).sort(),
+    });
+  });
+
+  it('fails a definition with a slot at each slot-rejecting place, and loads it without the slot', () => {
+    const problems = SLOT_REJECTING.flatMap(({ position, key }) => {
+      const sample = samplesAt(position)[key];
+      if (typeof sample !== 'string') return [`${place(position, key)}: the sample is not a string`];
+      const load = (value: string) => loadAt(position, fieldsAt(position, positionKeys(position), { [key]: value })).ok;
+      return [
+        ...(load(withSlot(sample)) ? [`${place(position, key)}: loads with a slot`] : []),
+        ...(load(sample) ? [] : [`${place(position, key)}: fails without a slot`]),
+      ];
+    });
+    expect(problems).toEqual([]);
+  });
+
+  it('fails a loop-capabilities.yaml without each required key, and parses one without each optional key', () => {
+    const samples: Readonly<Record<string, unknown>> = {
+      test_globs: ['tests/**/*.test.ts'],
+      test_command: 'pnpm test',
+      build_command: 'pnpm run build',
+      select_template: 'red-loop',
+      red_check_command: 'node scripts/red-check.mjs',
+    };
+    const without = (key: string): boolean =>
+      parseLoopCapabilities(
+        Object.entries(samples)
+          .filter(([k]) => k !== key)
+          .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+          .join('\n'),
+      ).ok;
+    expect({
+      unsampled: Object.keys(LOOP_CAPABILITIES_KEYS).filter((k) => !(k in samples)),
+      parsesWhole: without(''),
+      parsesWithout: Object.keys(LOOP_CAPABILITIES_KEYS).filter(without).sort(),
+    }).toEqual({
+      unsampled: [],
+      parsesWhole: true,
+      parsesWithout: Object.entries(LOOP_CAPABILITIES_KEYS)
+        .filter(([, required]) => required === 'never')
+        .map(([k]) => k)
+        .sort(),
+    });
   });
 });

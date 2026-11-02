@@ -53,6 +53,9 @@ const BRIEF = 'brief.md';
 const CONSOLIDATE = 'consolidate.md';
 const PLAN_OUTPUT = { id: 'plan', path: 'plan.md' };
 
+/** `value` with an unexpanded `{…}` slot in it; a reference file of that name is planted beside each definition. */
+export const withSlot = (value: string): string => `{slot}-${value}`;
+
 export const LOOP_SAMPLES: { [P in LoopPositionId]: Record<LoopKeyOf<P>, unknown> } = {
   loop: {
     version: 'v2',
@@ -197,7 +200,7 @@ export function loadFlowDoc(doc: Doc): FlowLoad {
 function plantLoopDef(defFile: string, doc: Doc): void {
   const defDir = path.dirname(defFile);
   mkdirSync(defDir, { recursive: true });
-  for (const ref of [RECIPE, CHARTER, BRIEF, CONSOLIDATE]) writeFileSync(path.join(defDir, ref), `${ref}\n`);
+  for (const ref of [RECIPE, CHARTER, BRIEF, CONSOLIDATE].flatMap((r) => [r, withSlot(r)])) writeFileSync(path.join(defDir, ref), `${ref}\n`);
   writeFileSync(defFile, yaml.dump(doc));
 }
 
