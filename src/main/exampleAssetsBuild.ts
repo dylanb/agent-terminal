@@ -49,3 +49,10 @@ export function copyExampleCodexSkills(rootDir: string, mainOutDir: string): str
   copyTree(path.join(rootDir, 'example', 'codex-skills'), dest);
   return dest;
 }
+
+export function placeExampleAssets(rootDir: string, mainOutDir: string): void {
+  copyExampleFlows(rootDir, mainOutDir);
+  copyExampleLoopsV2(rootDir, mainOutDir);
+  copyExampleCommands(rootDir, mainOutDir);
+  copyExampleCodexSkills(rootDir, mainOutDir);
+}

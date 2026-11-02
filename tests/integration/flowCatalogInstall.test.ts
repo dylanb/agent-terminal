@@ -14,6 +14,9 @@ import { loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from '../..
 import { flowCatalogDir } from '../../src/main/flow';
 import type { InstallDestinationFiles, InstallDestinationId } from '../../src/shared/ipc';
 import { createCatalogFixture, type CatalogFixture } from '../helpers/catalogFixture';
+import { useBuiltBundle } from '../helpers/builtBundle';
+
+const builtBundle = useBuiltBundle();
 
 // A1 (#132) acceptance: the user-invoked Install-examples action seeds a CATALOG of more than one named
 // flow at the location the flow resolver reads (§18.1/§23.4 — <A>/.agent-terminal/flows/), keeping
@@ -53,7 +56,7 @@ let dirs: InstallDestination[];
 let fx: CatalogFixture;
 
 const seam = (): InstallDestination[] =>
-  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
+  exampleInstallDirs(builtBundle(), { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
 const withBundle = (id: InstallDestinationId, bundleDir: string): InstallDestination[] =>
   dirs.map((d) => (d.id === id ? { ...d, bundleDir } : d));
 

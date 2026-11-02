@@ -2367,7 +2367,7 @@ const consentBox = (dest: string) =>
 /** A temp HOME plus a temp Claude config root and Codex home, so a green run can never write into the
  *  developer's own ~/.claude or ~/.codex (§24.2.3; CLAUDE_CONFIG_DIR and CODEX_HOME are the tools' own
  *  redirects). The Codex home defaults to one that does not exist, so Codex counts as not installed. */
-function installEnv(home: string, configDir: string, codexHome: string = join(home, '.codex')): Record<string, string> {
+function installEnv(home: string, configDir: string, codexHome: string = join(home, '.codex'), appHome?: string): Record<string, string> {
   return {
     ...(process.env as Record<string, string>),
     APP_SHELL: 'bash',
@@ -2375,6 +2375,7 @@ function installEnv(home: string, configDir: string, codexHome: string = join(ho
     CLAUDE_CONFIG_DIR: configDir,
     CODEX_HOME: codexHome,
     APP_SUBMIT_DELAY_MS: '100',
+    ...(appHome !== undefined ? { APP_HOME_DIR: appHome } : {}),
   };
 }
 

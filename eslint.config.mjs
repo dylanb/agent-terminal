@@ -77,7 +77,33 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
-const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts'];
+const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts'];
+
+const ENGINE_GUIDE_PURE_MESSAGE =
+  'The engine guide is generated pure and deterministic: it renders only its descriptor and the constants it is handed, so every build writes the same bytes. No file system, environment, clock, randomness or engine module.';
+const ENGINE_GUIDE_PURE_RULES = {
+  'no-restricted-globals': ['error', ...['process', '__dirname', '__filename'].map((name) => ({ name, message: ENGINE_GUIDE_PURE_MESSAGE }))],
+  'no-restricted-properties': ['error',
+    { object: 'Date', property: 'now', message: ENGINE_GUIDE_PURE_MESSAGE },
+    { object: 'Math', property: 'random', message: ENGINE_GUIDE_PURE_MESSAGE },
+  ],
+  'no-restricted-syntax': ['error',
+    { selector: ":matches(NewExpression, CallExpression)[callee.name='Date']", message: ENGINE_GUIDE_PURE_MESSAGE },
+    { selector: "MemberExpression[property.name=/^(resolve|relative)$/]", message: ENGINE_GUIDE_PURE_MESSAGE },
+    { selector: "MetaProperty[meta.name='import']", message: ENGINE_GUIDE_PURE_MESSAGE },
+  ],
+};
+const ENGINE_GUIDE_LEAVES = {
+  appLoopPaths: ['APP_LOOP_DIR_SEGMENTS', 'ARTIFACTS_SUBDIR', 'LOOP_OVERRIDE_FILE', 'loopDefRelPath'],
+  flowHome: ['FLOW_HOME_SUBDIR', 'FLOW_DEF_FILE', 'FLOWS_CATALOG_SUBDIR'],
+  launchRoot: ['APP_HOME_DIR_ENV'],
+  userConfig: ['LOOPS_V2_SUBDIR', 'CLAUDE_CONFIG_DIR_ENV', 'CLAUDE_CONFIG_DEFAULT_SUBDIR'],
+  exampleAssets: ['EXAMPLE_SUBDIR', 'ENGINE_GUIDE_FILE'],
+};
+const ENGINE_GUIDE_LEAF_IMPORTS = Object.entries(ENGINE_GUIDE_LEAVES)
+  .map(([leaf, allowImportNames]) => ({ name: `./${leaf}`, allowImportNames, message: ENGINE_GUIDE_PURE_MESSAGE }));
+const ENGINE_GUIDE_PATH_IMPORTS = ['path', 'node:path']
+  .map((name) => ({ name, importNames: ['resolve', 'relative'], message: ENGINE_GUIDE_PURE_MESSAGE }));
 
 const PRESS_HELPER_MESSAGE =
   'Run a control\'s action through createPressGroup/onPress in src/renderer/src/pressable.ts, so a press cannot start it again while it is still running (UI-STANDARDS §1.4).';
@@ -131,6 +157,26 @@ export default [
     files: ['src/renderer/**/*.ts'],
     ignores: ['src/renderer/src/pressable.ts'],
     rules: { 'no-restricted-syntax': ['error', ...RAW_CLICK] },
+  },
+  {
+    files: ['src/main/engineGuide.ts'],
+    rules: {
+      ...ENGINE_GUIDE_PURE_RULES,
+      'no-restricted-imports': ['error', {
+        paths: [...ENGINE_GUIDE_LEAF_IMPORTS, ...ENGINE_GUIDE_PATH_IMPORTS],
+        patterns: [{
+          regex: `^(?!\\.\\./shared/|\\./(${Object.keys(ENGINE_GUIDE_LEAVES).join('|')})$|(node:)?path$)`,
+          message: ENGINE_GUIDE_PURE_MESSAGE,
+        }],
+      }],
+    },
+  },
+  {
+    files: ['src/shared/engineCapabilities/**/*.ts'],
+    rules: {
+      ...ENGINE_GUIDE_PURE_RULES,
+      'no-restricted-imports': ['error', { patterns: [{ regex: '^(?!\\./|\\.\\./(?!\\.\\./))', message: ENGINE_GUIDE_PURE_MESSAGE }] }],
+    },
   },
   {
     files: EXPECTED_RESULTS_FIXTURES,

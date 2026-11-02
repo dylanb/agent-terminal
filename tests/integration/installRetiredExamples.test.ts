@@ -14,6 +14,9 @@ import { RETIRED_LOOPS } from '../../src/main/retiredExamples';
 import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { SESSION_ID, type InstallDestinationId, type RetiredExample } from '../../src/shared/ipc';
+import { useBuiltBundle } from '../helpers/builtBundle';
+
+const builtBundle = useBuiltBundle();
 
 // §18.1 — Install examples offers to remove what the retired feature-dev and feature-dev-v2 flows left
 // in an installation: their catalog entries, their loop folders, and the reviewer agents of the loops only they
@@ -25,7 +28,7 @@ let codexHome: string;
 let dirs: InstallDestination[];
 
 const seam = (): InstallDestination[] =>
-  exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome });
+  exampleInstallDirs(builtBundle(), { flowGlobalDir: home, configDir: configRoot, codexHome });
 
 function plant(file: string, body = 'old\n'): string {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -215,7 +218,7 @@ describe('a removal that fails part-way', () => {
 
 describe('the preview names a fallback flow that is still a retired one', () => {
   const fallback = (body: string): string => plant(path.join(flowHomeDir(home), FLOW_DEF_FILE), body);
-  const shippedFlow = (): string => readFileSync(path.join(resolveFeatureDevFlowDir({ packaged: false, appPath: process.cwd() }), FLOW_DEF_FILE), 'utf8');
+  const shippedFlow = (): string => readFileSync(path.join(resolveFeatureDevFlowDir(builtBundle()), FLOW_DEF_FILE), 'utf8');
   const named = (id: string): string => shippedFlow().replace(/^name: .*$/m, `name: ${id}`);
 
   it.each(RETIRED_FLOW_IDS)('names %s when the fallback flow.yaml is that flow', (id) => {
@@ -281,16 +284,15 @@ describe('the coordinator removes only what its preview offered', () => {
 });
 
 describe('nothing the bundle still ships is ever offered for removal', () => {
-  const loc = { packaged: false as const, appPath: process.cwd() };
 
   it('ships no retired flow in the catalog or the loop tree', () => {
-    for (const root of [resolveExampleFlowsDir(loc), resolveExampleLoopsV2Dir(loc)]) {
+    for (const root of [resolveExampleFlowsDir(builtBundle()), resolveExampleLoopsV2Dir(builtBundle())]) {
       for (const id of RETIRED_FLOW_IDS) expect(readdirSync(root), root).not.toContain(id);
     }
   });
 
   it('ships no retired loop under any flow', () => {
-    const loops = resolveExampleLoopsV2Dir(loc);
+    const loops = resolveExampleLoopsV2Dir(builtBundle());
     for (const flow of readdirSync(loops)) {
       for (const loop of RETIRED_LOOPS) expect(readdirSync(path.join(loops, flow)), flow).not.toContain(loop);
     }

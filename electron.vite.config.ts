@@ -3,7 +3,7 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { APP_ICONS } from './src/main/appIcon';
 import { copyDevIcon } from './src/main/appIconBuild';
-import { copyExampleCodexSkills, copyExampleCommands, copyExampleFlows, copyExampleLoopsV2 } from './src/main/exampleAssetsBuild';
+import { placeExampleAssets } from './src/main/exampleAssetsBuild';
 import { ARTIFACT_CHECK_ENTRY } from './src/main/artifactCheck';
 
 // After the main bundle is written, copy the app icons and the example trees next to it so the
@@ -21,10 +21,7 @@ function copyDevAssetsPlugin(): Plugin {
       if (!outDir) return;
       const rootDir = path.resolve(outDir, '..', '..');
       APP_ICONS.forEach(icon => copyDevIcon(rootDir, outDir, icon));
-      copyExampleFlows(rootDir, outDir);
-      copyExampleLoopsV2(rootDir, outDir);
-      copyExampleCommands(rootDir, outDir);
-      copyExampleCodexSkills(rootDir, outDir);
+      placeExampleAssets(rootDir, outDir);
     },
   };
 }

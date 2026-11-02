@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills } from '../../src/main/exampleAssetsBuild';
+import { copyExampleFlows, copyExampleLoopsV2, copyExampleCommands, copyExampleCodexSkills, placeExampleAssets } from '../../src/main/exampleAssetsBuild';
 import {
   resolveExampleFlowsDir,
   resolveExampleLoopsV2Dir,
@@ -87,6 +87,24 @@ describe('copyExampleCommands — places the bundled commands where the unpackag
     expect(existsSync(path.join(out, 'example', 'commands'))).toBe(false);
     copyExampleCommands(root, out);
     expect(existsSync(path.join(out, 'example', 'commands'))).toBe(true);
+  });
+});
+
+describe('placeExampleAssets — places every bundled tree where its unpackaged resolver reads it', () => {
+  it('lays out the flows, loops, commands and Codex skills under the out dir', () => {
+    placeExampleAssets(root, out);
+    const loc = { packaged: false as const, appPath: out };
+    expect({
+      flow: readFileSync(path.join(resolveExampleFlowsDir(loc), 'feature-dev', 'todo-templates', 'a.md'), 'utf8'),
+      loop: readFileSync(path.join(resolveExampleLoopsV2Dir(loc), 'plan-loop', 'charter', 'principal.md'), 'utf8'),
+      command: readFileSync(path.join(resolveExampleCommandsDir(loc), 'groom-ticket.md'), 'utf8'),
+      skill: readFileSync(path.join(resolveExampleCodexSkillsDir(loc), 'agent-terminal-loops', 'SKILL.md'), 'utf8'),
+    }).toEqual({
+      flow: '# A\n- one\n',
+      loop: '# principal\n',
+      command: '# groom\n',
+      skill: '---\nname: agent-terminal-loops\n---\n',
+    });
   });
 });
 
