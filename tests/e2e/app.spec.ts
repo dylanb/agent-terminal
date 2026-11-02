@@ -2582,7 +2582,7 @@ test('installing the examples writes an engine guide with the turn contract and 
   }
 });
 
-test('launched as `pnpm run dev` launches it, installing the examples writes the one built guide with every section linked from its contents (#276)', { tag: '@ownapp' }, async () => {
+test('launched the way `pnpm run dev` launches it, installing the examples writes the one built guide with every section linked from its contents (#276)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-cfg-'));
   const devGuide = resolveEngineGuideFile({ packaged: false, appPath: process.cwd() });
