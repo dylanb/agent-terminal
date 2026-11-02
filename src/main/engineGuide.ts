@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { Definition, EngineCapabilities, KeyCapability, KeyValues, PositionCapability } from '../shared/engineCapabilities';
-import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR } from './flowHome';
+import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, TODO_TEMPLATES_SUBDIR } from './flowHome';
 import { APP_HOME_DIR_ENV } from './launchRoot';
 import { LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import { CLAUDE_CONFIG_DEFAULT_SUBDIR, CLAUDE_CONFIG_DIR_ENV, LOOPS_V2_SUBDIR } from './userConfig';
@@ -90,6 +90,7 @@ function whereThingsLive(caps: EngineCapabilities): Section {
     `- Global flow: ${code(join(appHome, FLOW_DEF_FILE))}, the fallback for a repository with no flow of its own.`,
     `- Flow catalog: ${code(join(appHome, FLOWS_CATALOG_SUBDIR, flowEntry))} and ${code(join('<repo>', FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, the flows the picker offers; a repository entry wins over a global one of the same name.`,
     `- App-bundled flows: ${code(join('<app>', EXAMPLE_SUBDIR, FLOWS_CATALOG_SUBDIR, flowEntry))}, which Install examples copies into the flow catalog.`,
+    `- To-do templates: ${code(`${TODO_TEMPLATES_SUBDIR}/`)} beside a flow's ${code(FLOW_DEF_FILE)}, whose Markdown files the template picker lists; a step's ${code('todo_template')} names one by its file name, with or without the extension.`,
     `- Operator loop tier: ${code(join(config, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join(config, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
     `- App-bundled loop tier: ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, loopDef))}, and a flow's own loops at ${code(join('<app>', EXAMPLE_SUBDIR, LOOPS_V2_SUBDIR, flowLoopDef))}.`,
     `- Repository loop override: ${code(join('<repo>', LOOP_OVERRIDE_FILE))}, whose ${code(LOOP_OVERRIDE_MAP_KEY)} map gives a loop name the repository-relative path of its definition.`,

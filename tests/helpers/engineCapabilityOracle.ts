@@ -302,6 +302,7 @@ export const TIER_PATH_FRAGMENTS = [
   '.claude/loops-v2/',
   'example/loops-v2/',
   LOOP_LAYOUT.overrideFile,
+  'todo-templates/',
 ] as const;
 export const TIER_SETTINGS = ['APP_HOME_DIR', 'CLAUDE_CONFIG_DIR'] as const;
 

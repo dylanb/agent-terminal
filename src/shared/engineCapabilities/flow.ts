@@ -160,7 +160,7 @@ export const FLOW_POSITIONS: readonly PositionCapability[] = [
       },
       {
         key: 'todo_template',
-        does: 'The to-do template the template picker selects by default for this step, from the templates the flow ships beside its definition.',
+        does: 'The to-do template the template picker selects by default for this step: the file name, with or without its extension, of one of the templates in the to-do templates folder beside the flow’s definition (see where flows and loops live).',
         when: 'Set it when the step has a checklist a person usually starts from. It must be a string.',
         required: { kind: 'never' },
         rules: [],

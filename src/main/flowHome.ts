@@ -9,6 +9,7 @@ export const FLOW_HOME_SUBDIR = '.agent-terminal';
  *  is read back (CLAUDE.md writer↔reader rule). */
 export const FLOW_DEF_FILE = 'flow.yaml';
 export const FLOWS_CATALOG_SUBDIR = 'flows';
+export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
 
 /** Where a root keeps its flow definition and app state (§18.1/§19.1/§23.4). */
 export function flowHomeDir(root: string): string {
