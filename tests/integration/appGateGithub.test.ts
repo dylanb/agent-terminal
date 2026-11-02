@@ -205,6 +205,18 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     expect(g.state.pullRequestBodies).toEqual(new Map());
   });
 
+  for (const action of ['constructor', 'toString', '__proto__']) {
+    it(`rejects an action named like an inherited object property (${action}) as unknown`, async () => {
+      const g = githubState();
+      await expect(
+        createAppGateGitHub(g.github)(action, { pr: 1, ticket: 1, bodyFile: '/x', bootstrap: null }),
+      ).rejects.toThrow(/unknown approve side-effect action/);
+      expect(g.state.ready).toEqual(new Set());
+      expect(g.state.issueBodies).toEqual(new Map());
+      expect(g.state.pullRequestBodies).toEqual(new Map());
+    });
+  }
+
   it('verifies the persisted bootstrap identity before marking its PR ready', async () => {
     const g = githubState();
     await createAppGateGitHub(g.github)('mark-ready', {

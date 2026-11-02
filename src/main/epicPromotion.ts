@@ -6,6 +6,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { epicPlanWellFormed, parseEpicPlan, type EpicSubTicket } from '../shared/epicPlan';
 import { errMsg } from './errno';
+import { APPROVE_OPTION, PROMOTE_KIND } from '../shared/engineCapabilities/loop';
 import { epicPromotionAuditCmd, type GateDecider } from '../shared/audit';
 import type { LoopDefV2 } from './loopDefV2';
 import type { EpicPromotionState } from './appLoopState';
@@ -17,8 +18,8 @@ const EPIC_PLAN_MAX_BYTES = 2 * 1024 * 1024;
 /** The ordered sub-tickets an epic-capable loop's plan declares, or null when the approve gate has no `promote`
  *  side-effect, the artifact is unreadable/oversized, or the plan is not classified an epic. */
 export function readEpicSubTicketsAtGate(def: LoopDefV2): EpicSubTicket[] | null {
-  const approve = def.gate.find((g) => g.option === 'approve');
-  const promote = approve?.sideEffects.find((se) => se.kind === 'promote');
+  const approve = def.gate.find((g) => g.option === APPROVE_OPTION);
+  const promote = approve?.sideEffects.find((se) => se.kind === PROMOTE_KIND);
   const artifactId = promote && typeof promote.args.artifact === 'string' ? promote.args.artifact : null;
   if (artifactId === null) return null;
   const binding = [...def.inputs, ...def.outputs].find((b) => b.id === artifactId);

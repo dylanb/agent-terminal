@@ -31,6 +31,7 @@ import {
   PICKUP_LABEL_ACTIONS,
   PICKUP_LABEL_TARGETS,
   POLISH_POLICIES,
+  REQUEST_CHANGES_OPTION,
   WORK_COMPLETIONS,
   isOneOf,
   type BoundaryMode,
@@ -440,8 +441,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
 
   const gate = toGate(rec.gate);
-  if (rounds.kind === 'none' && gate.some((g) => g.option === 'request-changes')) {
-    fail('gate option request-changes re-enters a review round, and this loop runs none');
+  if (rounds.kind === 'none' && gate.some((g) => g.option === REQUEST_CHANGES_OPTION)) {
+    fail(`gate option ${REQUEST_CHANGES_OPTION} re-enters a review round, and this loop runs none`);
   }
 
   let exec: ExecSideEffect | null = null;

@@ -22,11 +22,7 @@ import type { RunAppGatePush } from './appGatePush';
 import { stripStatusControlChars } from '../shared/loopStatus';
 import { errMsg } from './errno';
 import type { SectionedReport } from './reportSections';
-import type { ActedSideEffectKind } from '../shared/engineCapabilities/loop';
-
-export const GATE_OPTION_HANDLERS = {} satisfies Partial<Record<GateDecisionOption, unknown>>;
-
-export const SIDE_EFFECT_HANDLERS = {} satisfies Partial<Record<ActedSideEffectKind, unknown>>;
+import { ACTED_SIDE_EFFECT_KINDS, APPROVE_OPTION, isOneOf, type ActedSideEffectKind } from '../shared/engineCapabilities/loop';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs (§27.15). */
@@ -141,38 +137,40 @@ export type ApproveDecider =
 
 export const HUMAN_DECIDER: ApproveDecider = { kind: 'human' };
 
-/** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
- *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
- *  the bound def declares. */
-export async function runAppGateDecision(
-  repoDir: string,
-  step: string,
-  turnKey: string,
-  option: GateDecisionOption,
-  deps: AppGateDecisionDeps,
-  note?: string,
-): Promise<boolean> {
-  if (option === 'approve') {
-    const outcome = await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER);
-    return outcome.kind === 'advanced';
-  }
-  const humanAudit = (kind: GateDecisionAuditKind, exit: number, detail?: string): void =>
-    deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit);
-  const run = deps.readRunState(repoDir);
-  // §6/AC7
-  if (!run || run.step !== step || run.turnKey !== turnKey) return false;
-  if (run.status !== 'complete' || run.verdict === undefined) return false;
+interface GateOptionCall {
+  repoDir: string;
+  step: string;
+  turnKey: string;
+  option: GateDecisionOption;
+  deps: AppGateDecisionDeps;
+  note: string | undefined;
+}
 
-  const r = deps.resolveDef(repoDir, run.loop);
-  if (!r.ok) return false;
-  // AC9
-  const gateOpt = r.def.gate.find((g) => g.option === option);
-  if (!gateOpt) return false;
+type GateOptionHandler = (call: GateOptionCall) => Promise<boolean>;
 
+/** A non-approve option acts only when the persisted gate matches the identity it names, is AT the gate (a
+ *  verdict reached), and the bound def declares the option. */
+const atDeclaredGate =
+  (act: (call: GateOptionCall, humanAudit: (kind: GateDecisionAuditKind, exit: number, detail?: string) => void) => boolean): GateOptionHandler =>
+  async (call) => {
+    const { repoDir, step, turnKey, option, deps } = call;
+    const run = deps.readRunState(repoDir);
+    // §6/AC7
+    if (!run || run.step !== step || run.turnKey !== turnKey) return false;
+    if (run.status !== 'complete' || run.verdict === undefined) return false;
+    const r = deps.resolveDef(repoDir, run.loop);
+    if (!r.ok) return false;
+    // AC9
+    if (!r.def.gate.some((g) => g.option === option)) return false;
+    return act(call, (kind, exit, detail) => deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit));
+  };
+
+export const GATE_OPTION_HANDLERS: Readonly<Record<GateDecisionOption, GateOptionHandler>> = {
+  approve: async ({ repoDir, step, turnKey, deps }) => (await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER)).kind === 'advanced',
   // §27.9/§19.4 (AC4) — request-changes is not approve: a blank note fires no round, and the delivered/dropped
   // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
   // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
-  if (option === 'request-changes') {
+  'request-changes': atDeclaredGate(({ repoDir, step, turnKey, deps, note }, humanAudit) => {
     const feedback = validFeedback(note);
     if (feedback === undefined) return false;
     if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
@@ -181,11 +179,13 @@ export async function runAppGateDecision(
     }
     humanAudit('decision-dropped', 1, 'the loop was busy');
     return false;
-  }
+  }),
+  // impasse is never executed here.
+  impasse: atDeclaredGate(() => false),
   // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
   // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
   // instruction on a drop, and a blank note fires nothing.
-  if (option === 'redo') {
+  redo: atDeclaredGate(({ repoDir, step, turnKey, deps, note }, humanAudit) => {
     const instruction = validInstruction(note);
     if (instruction === undefined) return false;
     if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
@@ -194,11 +194,11 @@ export async function runAppGateDecision(
     }
     humanAudit('decision-dropped', 1, 'the loop was busy');
     return false;
-  }
+  }),
   // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
   // and the operator can retry (§27.9.1 N9b.5(d)).
-  if (option === 'polish') {
+  polish: atDeclaredGate(({ repoDir, step, deps }, humanAudit) => {
     let entered = false;
     try {
       deps.enterPolish(repoDir, step);
@@ -210,13 +210,13 @@ export async function runAppGateDecision(
     }
     deps.onViewChanged();
     return entered;
-  }
+  }),
   // §28.4.2 — back-to-red is the human counterpart to §28.4.1's automatic loop-back: it re-enters the current
   // slice's RED step (reopenSlice) so the operator can redo missed work. Like polish it carries no note to lose:
   // it neither accepts nor advances — the flow jumps back and the loop re-runs from RED. Best-effort like polish
   // (CWE-703/755): a throwing reopen (the flow-state write cannot land) is surfaced and the operator can retry,
   // never rejecting the decision path.
-  if (option === 'back-to-red') {
+  'back-to-red': atDeclaredGate(({ repoDir, step, deps, note }, humanAudit) => {
     const brief = validInstruction(note?.trim());
     if (brief !== undefined) {
       try {
@@ -240,15 +240,116 @@ export async function runAppGateDecision(
     }
     deps.onViewChanged();
     return reopened;
-  }
-  // impasse is never executed here.
-  return false;
+  }),
+};
+
+interface SideEffectCall {
+  repoDir: string;
+  def: LoopDefV2;
+  refs: AppGateRefs;
+  deps: AppGateDecisionDeps;
+  gateAudit(kind: GateDecisionAuditKind, exit: number, detail?: string): void;
+}
+
+type SideEffectHandler = (se: GateSideEffect, call: SideEffectCall, notify: (notice: string) => void) => Promise<boolean>;
+
+export const SIDE_EFFECT_HANDLERS: Readonly<Record<ActedSideEffectKind, SideEffectHandler>> = {
+  gh: async (se, { def, refs, deps, gateAudit }, notify) => {
+    const action = typeof se.args.action === 'string' ? se.args.action : '';
+    const ctx: AppGateSideEffectCtx = {
+      pr: refs.pr,
+      ticket: refs.ticket,
+      bodyFile: resolveGateSideEffectBodyFile(def, se),
+      bootstrap: refs.bootstrap,
+    };
+    try {
+      const result = await deps.runSideEffect(action, ctx);
+      if (result.outcome === 'no-target') {
+        gateAudit('side-effect-skipped', 0, `${action}: ${result.reason}`);
+        notify(`${action} skipped: ${result.reason}`);
+      } else {
+        gateAudit('side-effect', 0, action);
+      }
+      return true;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
+      deps.emitError(`approve side-effect failed: ${reason}`);
+      return false;
+    }
+  },
+  commit: async (se, { repoDir, refs, deps, gateAudit }, notify) => {
+    // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
+    // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
+    const label = typeof se.args.label === 'string' ? se.args.label : '';
+    try {
+      const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
+      if (result.outcome === 'committed') {
+        // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
+        gateAudit('side-effect', 0, `commit: ${label}`);
+        // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
+        // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
+        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
+        // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
+        // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
+        // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
+        // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
+        // an automatic block.
+        try {
+          deps.recordBaseline(repoDir, result.branch, result.sha);
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          gateAudit('baseline-record-failed', 1, reason);
+          deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
+        }
+      } else {
+        // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
+        // wording must never read as a failure.
+        gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
+        notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      gateAudit('side-effect-failed', 1, `commit: ${reason}`);
+      deps.emitError(`approve side-effect failed: ${reason}`);
+      return false;
+    }
+    // §28.3
+    if (refs.bootstrap === null) return true;
+    const branch = refs.bootstrap.branch;
+    try {
+      await deps.runPushSideEffect(branch);
+      gateAudit('side-effect', 0, `push: ${branch}`);
+      return true;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      gateAudit('side-effect-failed', 1, `push: ${branch}: ${reason}`);
+      deps.emitError(`could not push ${branch} to the pull request: ${reason}`);
+      return false;
+    }
+  },
+  // Consumed at the gate by `epicPromotion.ts`, never run here.
+  promote: async () => true,
+};
+
+/** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
+ *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
+ *  the bound def declares. */
+export async function runAppGateDecision(
+  repoDir: string,
+  step: string,
+  turnKey: string,
+  option: GateDecisionOption,
+  deps: AppGateDecisionDeps,
+  note?: string,
+): Promise<boolean> {
+  return GATE_OPTION_HANDLERS[option]({ repoDir, step, turnKey, option, deps, note });
 }
 
 /** The approve operation both deciders invoke (§27.9.1 N9b.5(c)): the same identity check, accept, effects,
  *  audit and advance, returning the outcome the engine branches on. Every entry carries its decider (N9b.9). */
 export async function runAppApprove(repoDir: string, step: string, turnKey: string, deps: AppGateDecisionDeps, decider: ApproveDecider): Promise<GateApproveOutcome> {
-  const option: GateDecisionOption = 'approve';
+  const option: GateDecisionOption = APPROVE_OPTION;
   const by: GateDecider = decider.kind;
   let accepted = false;
   const effectFailures: string[] = [];
@@ -301,82 +402,10 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   }
 
   const refs = deps.refs(repoDir);
+  const call: SideEffectCall = { repoDir, def: r.def, refs, deps, gateAudit };
   /** False when the side-effect failed; an unknown kind is skipped. */
-  const runEffect = async (se: GateSideEffect, notify: (notice: string) => void): Promise<boolean> => {
-    if (se.kind === 'gh') {
-      const action = typeof se.args.action === 'string' ? se.args.action : '';
-      const ctx: AppGateSideEffectCtx = {
-        pr: refs.pr,
-        ticket: refs.ticket,
-        bodyFile: resolveGateSideEffectBodyFile(r.def, se),
-        bootstrap: refs.bootstrap,
-      };
-      try {
-        const result = await deps.runSideEffect(action, ctx);
-        if (result.outcome === 'no-target') {
-          gateAudit('side-effect-skipped', 0, `${action}: ${result.reason}`);
-          notify(`${action} skipped: ${result.reason}`);
-        } else {
-          gateAudit('side-effect', 0, action);
-        }
-        return true;
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        gateAudit('side-effect-failed', 1, `${action}: ${reason}`);
-        deps.emitError(`approve side-effect failed: ${reason}`);
-        return false;
-      }
-    }
-    if (se.kind !== 'commit') return true;
-    // §28.3 — the label is the descriptor's identity; the executor sources it from se.args and never
-    // re-derives it from run-state/branch. An empty label is rejected by the port (surfaced as a failure).
-    const label = typeof se.args.label === 'string' ? se.args.label : '';
-    try {
-      const result = await deps.runCommitSideEffect({ label, dirtyAtPhaseStart: [] });
-      if (result.outcome === 'committed') {
-        // The commit LANDED — audit its success first, so a later baseline failure can never re-attribute it.
-        gateAudit('side-effect', 0, `commit: ${label}`);
-        // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
-        // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
-        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
-        // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
-        // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
-        // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-        // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
-        // an automatic block.
-        try {
-          deps.recordBaseline(repoDir, result.branch, result.sha);
-        } catch (e) {
-          const reason = e instanceof Error ? e.message : String(e);
-          gateAudit('baseline-record-failed', 1, reason);
-          deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
-        }
-      } else {
-        // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
-        // wording must never read as a failure.
-        gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
-        notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
-      }
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      gateAudit('side-effect-failed', 1, `commit: ${reason}`);
-      deps.emitError(`approve side-effect failed: ${reason}`);
-      return false;
-    }
-    // §28.3
-    if (refs.bootstrap === null) return true;
-    const branch = refs.bootstrap.branch;
-    try {
-      await deps.runPushSideEffect(branch);
-      gateAudit('side-effect', 0, `push: ${branch}`);
-      return true;
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      gateAudit('side-effect-failed', 1, `push: ${branch}: ${reason}`);
-      deps.emitError(`could not push ${branch} to the pull request: ${reason}`);
-      return false;
-    }
-  };
+  const runEffect = async (se: GateSideEffect, notify: (notice: string) => void): Promise<boolean> =>
+    isOneOf(ACTED_SIDE_EFFECT_KINDS, se.kind) ? SIDE_EFFECT_HANDLERS[se.kind](se, call, notify) : true;
   /** §27.10 — false when a report could not be rebuilt. */
   const assembleReports = (): boolean => {
     let ok = true;

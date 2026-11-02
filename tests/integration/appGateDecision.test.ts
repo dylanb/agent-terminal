@@ -270,6 +270,17 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
       expect(rec.advances).toEqual(['/repo']);
     });
   }
+
+  for (const kind of ['constructor', 'toString', '__proto__']) {
+    it(`at a human gate, skips a side-effect kind named like an inherited object property (${kind}) and still accepts and advances`, async () => {
+      const { deps, rec } = mkDeps({ holds: true, gate: [{ option: 'approve', sideEffects: [{ kind, args: {} }] }] });
+      expect(await approve(deps)).toBe(true);
+      expect(rec.sideEffects).toEqual([]);
+      expect(rec.commitSideEffects).toEqual([]);
+      expect(rec.errors).toEqual([]);
+      expect(rec.advances).toEqual(['/repo']);
+    });
+  }
 });
 
 describe('runAppGateDecision — a failed side-effect never strands the flow (§27.13 / AC3)', () => {

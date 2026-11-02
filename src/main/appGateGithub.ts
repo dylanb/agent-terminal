@@ -5,7 +5,7 @@ import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
-import type { ActedGhAction } from '../shared/engineCapabilities/loop';
+import { ACTED_GH_ACTIONS, isOneOf, type ActedGhAction } from '../shared/engineCapabilities/loop';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
@@ -24,8 +24,6 @@ export type RunAppGateSideEffect = (
 
 export type AppGatePullRequest = PullRequest;
 
-export const GH_ACTION_HANDLERS = {} satisfies Partial<Record<ActedGhAction, unknown>>;
-
 export interface AppGateGitHubOperations {
   pullRequest(number: number): Promise<AppGatePullRequest>;
   markPullRequestReady(number: number): Promise<void>;
@@ -37,60 +35,66 @@ export interface AppGateGitHubOperations {
   ): Promise<void>;
 }
 
+async function verifyBootstrap(github: AppGateGitHubOperations, ctx: AppGateSideEffectCtx): Promise<void> {
+  const bootstrap = ctx.bootstrap;
+  if (bootstrap === null) return;
+  if (ctx.pr !== bootstrap.pr || ctx.ticket !== bootstrap.issue) {
+    throw new Error('bootstrap PR identity does not match the gate refs');
+  }
+  let pullRequest: AppGatePullRequest;
+  try {
+    pullRequest = await github.pullRequest(bootstrap.pr);
+  } catch (e) {
+    throw new Error(
+      `bootstrap PR identity could not be verified: ${errMsg(e)}`,
+    );
+  }
+  const mismatch = pickupMismatch(pullRequest, bootstrap);
+  if (mismatch !== null) throw new Error(`bootstrap PR identity does not match GitHub: ${mismatch}`);
+}
+
+type GhActionHandler = (github: AppGateGitHubOperations, ctx: AppGateSideEffectCtx) => Promise<AppGateSideEffectResult>;
+
+export const GH_ACTION_HANDLERS: Readonly<Record<ActedGhAction, GhActionHandler>> = {
+  'mark-ready': async (github, ctx) => {
+    if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
+    await verifyBootstrap(github, ctx);
+    await github.markPullRequestReady(ctx.pr);
+    return { outcome: 'done' };
+  },
+  'update-issue-body': async (github, ctx) => {
+    if (ctx.ticket === null) {
+      return { outcome: 'no-target', reason: 'no issue to publish the body to' };
+    }
+    if (ctx.bodyFile === null) {
+      throw new Error('no body artifact to publish');
+    }
+    await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
+    return { outcome: 'done' };
+  },
+  'publish-pr-body': async (github, ctx) => {
+    if (ctx.pr === null) {
+      return { outcome: 'no-target', reason: 'no PR to publish the body to' };
+    }
+    if (ctx.bodyFile === null) {
+      throw new Error('no body artifact to publish');
+    }
+    await verifyBootstrap(github, ctx);
+    await github.publishPullRequestBody(
+      ctx.pr,
+      ctx.bodyFile,
+      ctx.bootstrap?.issue ?? null,
+    );
+    return { outcome: 'done' };
+  },
+};
+
 export function createAppGateGitHub(
   github: AppGateGitHubOperations,
 ): RunAppGateSideEffect {
-  const verifyBootstrap = async (ctx: AppGateSideEffectCtx): Promise<void> => {
-    const bootstrap = ctx.bootstrap;
-    if (bootstrap === null) return;
-    if (ctx.pr !== bootstrap.pr || ctx.ticket !== bootstrap.issue) {
-      throw new Error('bootstrap PR identity does not match the gate refs');
-    }
-    let pullRequest: AppGatePullRequest;
-    try {
-      pullRequest = await github.pullRequest(bootstrap.pr);
-    } catch (e) {
-      throw new Error(
-        `bootstrap PR identity could not be verified: ${errMsg(e)}`,
-      );
-    }
-    const mismatch = pickupMismatch(pullRequest, bootstrap);
-    if (mismatch !== null) throw new Error(`bootstrap PR identity does not match GitHub: ${mismatch}`);
-  };
-
   return async (action, ctx) => {
-    switch (action) {
-      case 'mark-ready':
-        if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
-        await verifyBootstrap(ctx);
-        await github.markPullRequestReady(ctx.pr);
-        return { outcome: 'done' };
-      case 'update-issue-body':
-        if (ctx.ticket === null) {
-          return { outcome: 'no-target', reason: 'no issue to publish the body to' };
-        }
-        if (ctx.bodyFile === null) {
-          throw new Error('no body artifact to publish');
-        }
-        await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
-        return { outcome: 'done' };
-      case 'publish-pr-body':
-        if (ctx.pr === null) {
-          return { outcome: 'no-target', reason: 'no PR to publish the body to' };
-        }
-        if (ctx.bodyFile === null) {
-          throw new Error('no body artifact to publish');
-        }
-        await verifyBootstrap(ctx);
-        await github.publishPullRequestBody(
-          ctx.pr,
-          ctx.bodyFile,
-          ctx.bootstrap?.issue ?? null,
-        );
-        return { outcome: 'done' };
-      default:
-        throw new Error(`unknown approve side-effect action: ${action}`);
-    }
+    if (!isOneOf(ACTED_GH_ACTIONS, action)) throw new Error(`unknown approve side-effect action: ${action}`);
+    return GH_ACTION_HANDLERS[action](github, ctx);
   };
 }
 

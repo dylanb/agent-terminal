@@ -1,6 +1,9 @@
 import { GATE_DECISION_OPTIONS, type GateDecisionOption } from '../ipc/flow';
 import type { ActedName, ClosedValue, Explanation, KeyCapability, KeyValues, PositionCapability } from './index';
 
+export const APPROVE_OPTION = 'approve' satisfies GateDecisionOption;
+export const REQUEST_CHANGES_OPTION = 'request-changes' satisfies GateDecisionOption;
+
 export const LOOP_DEF_V2_VERSION = 'v2';
 const LOOP_DEF_VERSIONS = [LOOP_DEF_V2_VERSION] as const;
 type LoopDefVersion = (typeof LOOP_DEF_VERSIONS)[number];
@@ -29,6 +32,7 @@ export type PickupLabelTarget = (typeof PICKUP_LABEL_TARGETS)[number];
 
 export const ACTED_SIDE_EFFECT_KINDS = ['gh', 'commit', 'promote'] as const;
 export type ActedSideEffectKind = (typeof ACTED_SIDE_EFFECT_KINDS)[number];
+export const PROMOTE_KIND = 'promote' satisfies ActedSideEffectKind;
 
 /** The side-effect kind the loader refuses: a program is declared once, on the top-level `exec` key (CWE-829). */
 export const EXEC_SIDE_EFFECT_KIND = 'exec';

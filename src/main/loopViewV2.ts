@@ -9,6 +9,7 @@
 
 import type { FlowAutoGateView, FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
+import { APPROVE_OPTION } from '../shared/engineCapabilities/loop';
 import { readEpicSubTicketsAtGate } from './epicPromotion';
 import { resolveLoopDefV2, type LoopDefV2Context, type LoopDefV2, type LoopDefV2Result } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
@@ -76,7 +77,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // Narrow ONLY when approve is actually on offer: a def may declare `polish` without `approve` (the operator
     // tier is a supported authoring path), and narrowing that to approve-only yields an empty, actionable gate —
     // an unrecoverable dead end. Fail toward the def's full controls, never toward zero (CLAUDE.md / CWE-20).
-    const shownOptions = inPolish && gateOptions.includes('approve') ? gateOptions.filter((o) => o === 'approve') : gateOptions;
+    const shownOptions = inPolish && gateOptions.includes(APPROVE_OPTION) ? gateOptions.filter((o) => o === APPROVE_OPTION) : gateOptions;
     // §28.5.3/§28.8.3 — the changed-test flag (a GREEN turn's or a refactor round's, recorded in its own file),
     // surfaced when it is for THIS run's step and names at least one file. Step-keyed by design, matching
     // readChangedTests (the flag never crosses a phase boundary); an empty record does not show. Read fresh each
