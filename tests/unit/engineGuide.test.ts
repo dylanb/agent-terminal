@@ -459,3 +459,16 @@ describe('the engine guide — the turn contract (#276)', () => {
     }).toEqual({ composition: true, underIt: true, notInFixed: true, subOfContract: true });
   });
 });
+
+describe('the engine guide — the turn contract’s slot places (#276)', () => {
+  it('names a slot-expanding place only in the entry for the slot it expands', () => {
+    const { fixed } = turnContractParts(GUIDE, TURN_TITLES);
+    const problems = SLOT_EXPANDING.flatMap(({ slot, ...place }) =>
+      fixed
+        .split('\n')
+        .filter((line) => namesPlace(codeSpans(line), place) && !codeSpans(line).includes(slot))
+        .map((line) => `${place.position} ${place.key}: named outside its ${slot} entry: ${line}`),
+    );
+    expect(problems).toEqual([]);
+  });
+});

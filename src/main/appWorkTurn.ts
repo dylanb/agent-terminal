@@ -6,6 +6,7 @@
 
 import type { SliceBrief } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
+export { completionMarker } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';
@@ -56,13 +57,6 @@ function insertSliceSuffix(p: string, slice: number): string {
 export function sliceArtifact(artifact: { path: string; rel: string }, slice: number): { path: string; rel: string } {
   if (!Number.isInteger(slice) || slice <= 1) return artifact;
   return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
-}
-
-/** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
- *  completion check reads back (§27.12) — present-and-marker, never a quality judgment. Anchored on the
- *  step, so it is stable across retries of the same turn and distinct between steps. */
-export function completionMarker(stepId: string): string {
-  return `<!-- agent-terminal:work-turn-complete:${stepId} -->`;
 }
 
 /** Whether the artifact is well-formed (§27.12): present AND carrying the marker. `content` is the domain

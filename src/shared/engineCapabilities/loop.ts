@@ -4,6 +4,8 @@ import type { ActedName, ClosedValue, Explanation, KeyCapability, KeyValues, Pos
 export const APPROVE_OPTION = 'approve' satisfies GateDecisionOption;
 export const REQUEST_CHANGES_OPTION = 'request-changes' satisfies GateDecisionOption;
 
+export const ISSUE_SLOT = '{issue}';
+
 export const LOOP_DEF_V2_VERSION = 'v2';
 const LOOP_DEF_VERSIONS = [LOOP_DEF_V2_VERSION] as const;
 type LoopDefVersion = (typeof LOOP_DEF_VERSIONS)[number];
@@ -266,6 +268,7 @@ const LOOP_TOP: PositionCapability = {
       required: never,
       rules: [],
       values: any,
+      slots: { kind: 'rejected' },
     },
     {
       key: 'work',
@@ -376,6 +379,7 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
         required: always,
         rules: [],
         values: any,
+        slots: { kind: 'rejected' },
       },
       {
         key: 'artifact',
@@ -454,6 +458,7 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
         required: always,
         rules: [],
         values: any,
+        slots: { kind: 'rejected' },
       },
       {
         key: 'tools',
@@ -477,6 +482,7 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
         required: always,
         rules: [],
         values: any,
+        slots: { kind: 'rejected' },
       },
     ],
   },
@@ -595,11 +601,12 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
       },
       {
         key: 'branch_template',
-        does: 'The name of the branch pickup opens, with `{issue}` replaced by the ticket number.',
+        does: `The name of the branch pickup opens, with \`${ISSUE_SLOT}\` replaced by the ticket number.`,
         when: 'Always set it.',
         required: always,
         rules: [],
         values: any,
+        slots: { kind: 'expanded', slot: ISSUE_SLOT },
       },
       {
         key: 'initial_labels',
@@ -670,6 +677,7 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
         required: always,
         rules: [],
         values: any,
+        slots: { kind: 'rejected' },
       },
       {
         key: 'sections_dir',
@@ -678,6 +686,7 @@ export const LOOP_POSITIONS: readonly PositionCapability[] = [
         required: never,
         rules: [],
         values: any,
+        slots: { kind: 'rejected' },
       },
     ],
   },

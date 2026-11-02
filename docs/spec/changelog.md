@@ -1,3 +1,7 @@
+## #276 slice 5 — the engine-capabilities guide covers the turn contract
+
+§18.1: the guide now states the turn contract — the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected — and how briefs, recipes and charters become turns.
+
 ## #276 slice 3 — the engine-capabilities guide covers loop definitions
 
 §18.1: the guide now lists every loop-definition key and accepted value, including the gate options, side-effect kinds and `gh` actions the engine acts on and the args each side-effect kind reads. The accepted flow and loop values have one shared definition that both loaders validate against and the guide is generated from.

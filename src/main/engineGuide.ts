@@ -2,7 +2,9 @@ import path from 'node:path';
 import type { Definition, EngineCapabilities, KeyCapability, KeyValues, PositionCapability } from '../shared/engineCapabilities';
 import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, TODO_TEMPLATES_SUBDIR } from './flowHome';
 import { APP_HOME_DIR_ENV } from './launchRoot';
-import { LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
+import { APP_DONE_REL_PATH, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
+import { completionMarker, composeTurnKey, TURN_DONE_FILENAME, TURN_KEY_PREFIXES, type TurnKind } from '../shared/loopTurn';
+import { LOOP_CAPABILITIES_FILENAME, LOOP_CAPABILITIES_KEYS, type LoopCapabilitiesKey } from '../shared/loopCapabilities';
 import { CLAUDE_CONFIG_DEFAULT_SUBDIR, CLAUDE_CONFIG_DIR_ENV, LOOPS_V2_SUBDIR } from './userConfig';
 import { ENGINE_GUIDE_FILE, EXAMPLE_SUBDIR } from './exampleAssets';
 
@@ -114,13 +116,52 @@ function lookupOrder(caps: EngineCapabilities): Section {
   ]);
 }
 
+/** Each list a position stands for, written as a definition path: `loop.work.recipe`, `loop.inputs[].path`. */
+function placeNames(p: PositionCapability, key: string): string[] {
+  return p.yamlPath === '' ? [`${p.definition}.${key}`] : p.yamlPath.split('/').map((segment) => `${p.definition}.${segment}.${key}`);
+}
+
+function turnContract(caps: EngineCapabilities): Section[] {
+  const tc = caps.turnContract;
+  const step = '<step>';
+  const rejecting: string[] = [];
+  const expanding: string[] = [];
+  for (const p of caps.positions) {
+    for (const { key, slots } of p.keys) {
+      if (slots?.kind === 'rejected') rejecting.push(...placeNames(p, key));
+      if (slots?.kind === 'expanded') expanding.push(...placeNames(p, key).map((place) => `- ${code(slots.slot)} in ${code(place)} — ${tc.slotExpanded}`));
+    }
+  }
+  const capabilityKeys = (Object.keys(LOOP_CAPABILITIES_KEYS) as LoopCapabilitiesKey[]).map(
+    (key) => `- ${code(key)} — ${caps.markers.required[LOOP_CAPABILITIES_KEYS[key].required ? 'always' : 'never']} ${tc.capabilitiesKeys[key]}`,
+  );
+  return [
+    chapter(caps.sectionTitles['turn-contract'], [
+      tc.intro,
+      '',
+      `- ${code(completionMarker(step))} — ${tc.marker}`,
+      `- ${code(TURN_DONE_FILENAME)} at ${code(join('<repo>', APP_DONE_REL_PATH))} — ${tc.doneFile}`,
+      ...(Object.keys(TURN_KEY_PREFIXES) as TurnKind[]).map((kind) => `- ${code(composeTurnKey(kind, step))} — ${tc.turnKeys[kind]}`),
+      '',
+      `${code(LOOP_CAPABILITIES_FILENAME)}: ${tc.capabilitiesFile}`,
+      '',
+      ...capabilityKeys,
+      '',
+      ...expanding,
+      '',
+      `${tc.slotRejected} ${rejecting.map(code).join(', ')}.`,
+    ]),
+    { level: 3, heading: caps.sectionTitles['turn-composition'], tocText: caps.sectionTitles['turn-composition'], body: [caps.turnComposition] },
+  ];
+}
+
 function sections(caps: EngineCapabilities): Section[] {
   const byDefinition = DEFINITIONS.flatMap((d) => {
     const positions = caps.positions.filter((p) => p.definition === d);
     if (positions.length === 0) return [];
     return [chapter(caps.definitionTitles[d], []), ...positions.flatMap((p) => positionSections(caps, p))];
   });
-  return [...byDefinition, whereThingsLive(caps), lookupOrder(caps)];
+  return [...byDefinition, whereThingsLive(caps), lookupOrder(caps), ...turnContract(caps)];
 }
 
 export function renderEngineGuide(capabilities: EngineCapabilities): string {

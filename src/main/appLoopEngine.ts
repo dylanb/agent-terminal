@@ -21,7 +21,7 @@ import { createTurnRunner, type HostedAgentState, type PrecomputedGate, type Tur
 import type { ArtifactBinding, LoopDefV2, LoopDefV2Result, PolishPolicy } from './loopDefV2';
 import { sectionFile, type SectionedReport } from './reportSections';
 import type { LifecycleTerminateResult } from './flowLifecycle';
-import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, completionMarker, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, checkpointCompactCommand, completionArtifact, composeAppWorkPrompt, composeGoalCommand, goalProgressLines, sliceArtifact, type ReportSectionTarget } from './appWorkTurn';
 import { goalLegEnd, type GoalProgress } from '../shared/goalProgress';
 import type { LoopCompletionPredicates } from './loopCompletionPredicates';
 import { GREEN_COMPLETING_OUTCOME, REFACTOR_COMPLETING_OUTCOME } from '../shared/phaseOutcome';
@@ -33,23 +33,19 @@ import type { ArtifactCheck } from './artifactCheck';
 import { composeConsolidatePrompt, composeVerdictRepairPrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { errMsg } from './errno';
 import { clearTurnDone } from './turnDoneFile';
-import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import { completionMarker, composeTurnKey, CONSOLIDATE_TURN_PREFIX, REVIEW_TURN_PREFIX } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
-import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
+import { APP_DONE_REL_PATH, APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
 import type { AutoGate, GateCause } from './autoGate';
 import type { AgentKind } from './agentKind';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
-const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILENAME;
 
-const WORK_TURN_PREFIX = 'work-';
-const REVIEW_TURN_PREFIX = 'review-';
-const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
 /** The route-out reason a relaunch gives a turn the persisted state left mid-flight (`working`): its PTY is
@@ -497,7 +493,7 @@ function activeTurnFor(
     repoDir,
     loopName,
     stepId,
-    turnKey: `${WORK_TURN_PREFIX}${stepId}`,
+    turnKey: composeTurnKey('work', stepId),
     recipePath: def.work.recipe,
     ...(def.brief !== undefined ? { briefPath: def.brief } : {}),
     boundaryCmd: entryBoundaryCommand(def),
@@ -1408,7 +1404,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       repoDir: ctx.repoDir,
       loopName: ctx.loopName,
       stepId: ctx.stepId,
-      turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`,
+      turnKey: composeTurnKey('review', ctx.stepId),
       boundaryCmd: preReviewBoundaryCommand(r.def),
       round,
       reviewers,
@@ -1438,7 +1434,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
-    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}), ...(feedback !== undefined ? { feedback } : {}) };
+    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: composeTurnKey('review', ctx.stepId), round }), ...(chosenRoster ? { chosenRoster } : {}), ...(feedback !== undefined ? { feedback } : {}) };
     setLiveError('turn-error', reason, round);
     persist('error', reason);
     deps.audit(ctx.repoDir, reviewRoundAuditCmd('error', round, reason), 1);
@@ -1459,7 +1455,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       repoDir: ctx.repoDir,
       loopName: ctx.loopName,
       stepId: ctx.stepId,
-      turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`,
+      turnKey: composeTurnKey('consolidate', ctx.stepId),
       boundaryCmd: preConsolidateBoundaryCommand(r.def),
       round,
       catalog: catalogPersonas(r.def),
@@ -1485,7 +1481,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the consolidator turn (def, report, or output location unresolvable)';
-    active = unresolvedConsolidateTurn({ ...ctx, turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`, round: review.round });
+    active = unresolvedConsolidateTurn({ ...ctx, turnKey: composeTurnKey('consolidate', ctx.stepId), round: review.round });
     setLiveError('turn-error', reason, review.round);
     persist('error', reason);
     deps.audit(ctx.repoDir, consolidateAuditCmd('error', review.round, reason), 1);
