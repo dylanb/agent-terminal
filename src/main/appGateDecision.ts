@@ -148,26 +148,22 @@ interface GateOptionCall {
 
 type GateOptionHandler = (call: GateOptionCall) => Promise<boolean>;
 
-/** A non-approve option acts only when the persisted gate matches the identity it names, is AT the gate (a
- *  verdict reached), and the bound def declares the option. */
 const atDeclaredGate =
   (act: (call: GateOptionCall, humanAudit: (kind: GateDecisionAuditKind, exit: number, detail?: string) => void) => boolean): GateOptionHandler =>
   async (call) => {
     const { repoDir, step, turnKey, option, deps } = call;
     const run = deps.readRunState(repoDir);
-    // §6/AC7
     if (!run || run.step !== step || run.turnKey !== turnKey) return false;
     if (run.status !== 'complete' || run.verdict === undefined) return false;
     const r = deps.resolveDef(repoDir, run.loop);
     if (!r.ok) return false;
-    // AC9
     if (!r.def.gate.some((g) => g.option === option)) return false;
     return act(call, (kind, exit, detail) => deps.audit(repoDir, gateDecisionAuditCmd(kind, option, detail, 'human'), exit));
   };
 
 export const GATE_OPTION_HANDLERS: Readonly<Record<GateDecisionOption, GateOptionHandler>> = {
   approve: async ({ repoDir, step, turnKey, deps }) => (await runAppApprove(repoDir, step, turnKey, deps, HUMAN_DECIDER)).kind === 'advanced',
-  // §27.9/§19.4 (AC4) — request-changes is not approve: a blank note fires no round, and the delivered/dropped
+  // §27.9/§19.4 — request-changes is not approve: a blank note fires no round, and the delivered/dropped
   // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
   // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
   'request-changes': atDeclaredGate(({ repoDir, step, turnKey, deps, note }, humanAudit) => {
@@ -182,7 +178,7 @@ export const GATE_OPTION_HANDLERS: Readonly<Record<GateDecisionOption, GateOptio
   }),
   // impasse is never executed here.
   impasse: atDeclaredGate(() => false),
-  // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
+  // §27.9 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
   // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
   // instruction on a drop, and a blank note fires nothing.
   redo: atDeclaredGate(({ repoDir, step, turnKey, deps, note }, humanAudit) => {
@@ -195,7 +191,7 @@ export const GATE_OPTION_HANDLERS: Readonly<Record<GateDecisionOption, GateOptio
     humanAudit('decision-dropped', 1, 'the loop was busy');
     return false;
   }),
-  // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only.
+  // §27.9 — polish stands the orchestrator down: write app-owned loop state only.
   // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
   // and the operator can retry (§27.9.1 N9b.5(d)).
   polish: atDeclaredGate(({ repoDir, step, deps }, humanAudit) => {
@@ -289,11 +285,11 @@ export const SIDE_EFFECT_HANDLERS: Readonly<Record<ActedSideEffectKind, SideEffe
         gateAudit('side-effect', 0, `commit: ${label}`);
         // §28.5.1 — record the phase-commit SHA as the next phase's frozen-tests baseline, under the branch it
         // landed on, from the value the side-effect returned (never a re-derived rev-parse). BEST-EFFORT in its OWN
-        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13/AC3) NOR be caught by
+        // try — the disjoint store's fail-loud contract must never abort the accept (§27.13) NOR be caught by
         // the commit `catch` below (that would falsely report the LANDED commit as a failed side-effect). A
         // failure is recorded distinctly + surfaced as a non-blocking notice (the accept succeeded). If NO
         // same-branch baseline is present the next phase's frozen check blocks (fail toward firing); a stale
-        // same-branch baseline from a prior phase is NOT yet refused (tracked in #123), so recovery there is a phase re-run, not
+        // same-branch baseline from a prior phase is NOT yet refused, so recovery there is a phase re-run, not
         // an automatic block.
         try {
           deps.recordBaseline(repoDir, result.branch, result.sha);
@@ -303,7 +299,7 @@ export const SIDE_EFFECT_HANDLERS: Readonly<Record<ActedSideEffectKind, SideEffe
           deps.emitNotice(`the phase commit landed but its §28.5.1 baseline could not be recorded — re-run this phase to record it before the next phase's frozen check runs: ${reason}`);
         }
       } else {
-        // §28.3 / AC3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
+        // §28.3 — surface the benign no-op: a distinct audit outcome + a live notice. The notice
         // wording must never read as a failure.
         gateAudit('side-effect-skipped', 0, 'commit: nothing to commit');
         notify(`nothing to commit for the "${stripStatusControlChars(label).slice(0, 120)}" phase — no changes were staged; the step completed`);
@@ -328,7 +324,7 @@ export const SIDE_EFFECT_HANDLERS: Readonly<Record<ActedSideEffectKind, SideEffe
       return false;
     }
   },
-  // Consumed at the gate by `epicPromotion.ts`, never run here.
+  // Promotion is consumed at the gate, never run here.
   promote: async () => true,
 };
 

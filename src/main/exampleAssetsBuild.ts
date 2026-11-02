@@ -62,7 +62,6 @@ export function writeEngineGuide(appPath: string): void {
   writeFileSync(file, renderEngineGuide(ENGINE_CAPABILITIES));
 }
 
-/** Everything the bundle carries, written only under `mainOutDir`. */
 export function placeExampleAssets(rootDir: string, mainOutDir: string): void {
   copyExampleFlows(rootDir, mainOutDir);
   copyExampleLoopsV2(rootDir, mainOutDir);
