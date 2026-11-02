@@ -1,3 +1,7 @@
+## #276 slice 3 — the engine-capabilities guide covers loop definitions
+
+§18.1: the guide now lists every loop-definition key and accepted value, including the gate options, side-effect kinds and `gh` actions the engine acts on and the args each side-effect kind reads. The accepted flow and loop values have one shared definition that both loaders validate against and the guide is generated from.
+
 ## #276 slice 1 — an installed engine-capabilities guide for flow authors
 
 §18.1: the build generates `engine-capabilities.md`, a guide for agents that author flows, from the definitions the flow loader validates against: every flow-definition key and accepted value, with what it does and when to choose it, where flows and loops live in each tier, and the §27.8 lookup order. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md` and replaces it whole on every install, the one exception to per-destination consent; the preview lists it as always replaced. §18.2: the `action` step kind is removed, because the loader accepts only `manual` and `loop`. IPC: the `examples:preview` result gains `alwaysReplaced`, and the destination list gains `engineGuide` (definitions in `src/shared/ipc.ts`).

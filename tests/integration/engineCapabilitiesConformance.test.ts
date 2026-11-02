@@ -254,6 +254,16 @@ describe('the loop loader’s open values (#276 D3)', () => {
     );
   });
 
+  it('fails a side effect without an arg exactly where the descriptor marks that arg always required', () => {
+    const { position, key, acted } = OPEN_SETS.sideEffectKind;
+    const problems = acted.flatMap((kind) =>
+      (descriptorActed(ENGINE_CAPABILITIES, position, key, kind)?.args ?? [])
+        .filter((arg) => arg.required.kind === 'always' && sideEffect({ kind }).ok)
+        .map((arg) => `${kind} ${arg.key}: marked always required, but a ${kind} side effect without it loads`),
+    );
+    expect(problems).toEqual([]);
+  });
+
   it('loads a gate option, a side-effect kind and a gh action the engine does not act on, and refuses each load-rejected kind', () => {
     const loadRejected = OPEN_SETS.sideEffectKind.loadRejected;
     expect({

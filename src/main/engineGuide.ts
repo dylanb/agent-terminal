@@ -55,7 +55,7 @@ function valueLines(caps: EngineCapabilities, values: KeyValues): string[] {
   }
 }
 
-function keySection(caps: EngineCapabilities, key: KeyCapability): Section {
+function keySection(caps: EngineCapabilities, key: KeyCapability, level: number, heading: string): Section {
   const required = caps.markers.required[key.required.kind];
   const body = [
     key.does,
@@ -66,14 +66,22 @@ function keySection(caps: EngineCapabilities, key: KeyCapability): Section {
     ...(key.rules.length > 0 ? ['', 'Rules the loader enforces:', '', ...key.rules.map((r) => `- ${r.text}`)] : []),
   ];
   const values = valueLines(caps, key.values);
-  return { level: 4, heading: code(key.key), tocText: code(key.key), body: values.length > 0 ? [...body, '', ...values] : body };
+  return { level, heading, tocText: heading, body: values.length > 0 ? [...body, '', ...values] : body };
+}
+
+function keySections(caps: EngineCapabilities, key: KeyCapability): Section[] {
+  const acted = key.values.kind === 'open' ? key.values.acted : [];
+  return [
+    keySection(caps, key, 4, code(key.key)),
+    ...acted.flatMap((a) => (a.args ?? []).map((arg) => keySection(caps, arg, 5, `${code(a.name)} ${code(arg.key)}`))),
+  ];
 }
 
 function positionSections(caps: EngineCapabilities, p: PositionCapability): Section[] {
   const id = positionId(p);
   return [
     { level: 3, heading: code(id), tocText: id.replaceAll('[]', ''), body: [caps.markers.unreadKeys[p.unreadKeys]] },
-    ...p.keys.map((k) => keySection(caps, k)),
+    ...p.keys.flatMap((k) => keySections(caps, k)),
   ];
 }
 

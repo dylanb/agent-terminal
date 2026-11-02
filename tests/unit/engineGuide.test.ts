@@ -9,6 +9,7 @@ import {
   LOOKUP_ORDER,
   LOOP_LAYOUT,
   LOOP_NAMESPACE_RUNS_ENGINE,
+  NAMED_BOUNDARIES,
   NOT_CHECKED_AT_LOAD,
   OPEN_SETS,
   POSITIONS,
@@ -258,6 +259,14 @@ describe('the engine guide — side-effect args and the work goal cap (#276)', (
       heading: heading !== undefined,
       namesCap: heading !== undefined && sectionBody(GUIDE, heading).includes(String(GOAL_CONDITION_MAX_CHARS)),
     }).toEqual({ heading: true, namesCap: true });
+  });
+});
+
+describe('the engine guide — boundary names (#276)', () => {
+  it('names under the boundary key every boundary name the engine looks up', () => {
+    const heading = keyHeading(GUIDE, 'loop.boundaries[]', 'boundary');
+    const spans = heading === undefined ? [] : codeSpans(intro(GUIDE, heading));
+    expect({ heading: heading !== undefined, missing: NAMED_BOUNDARIES.filter((n) => !spans.includes(n)) }).toEqual({ heading: true, missing: [] });
   });
 });
 

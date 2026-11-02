@@ -1,4 +1,5 @@
 import { FLOW_POSITIONS } from './flow';
+import { LOOP_POSITIONS } from './loop';
 
 export interface Explanation {
   does: string;
@@ -77,9 +78,9 @@ export interface EngineCapabilities {
 export const ENGINE_CAPABILITIES: EngineCapabilities = {
   title: 'Agent Terminal engine capabilities',
   intro:
-    'What the engine accepts in a flow definition, and where flows and loops live. Generated from the definitions the engine itself loads, so it always matches the app that installed it.',
+    'What the engine accepts in a flow definition and a loop definition, and where flows and loops live. Generated from the definitions the engine itself loads, so it always matches the app that installed it.',
   definitionTitles: { flow: 'Flow definitions', loop: 'Loop definitions' },
-  positions: [...FLOW_POSITIONS],
+  positions: [...FLOW_POSITIONS, ...LOOP_POSITIONS],
   lookupOrder: [
     { tier: 'repo-override', text: 'The repository’s loop override file, when its map names the loop.' },
     { tier: 'flow-folder-operator', text: 'The operator tier’s folder named after the running flow’s `name`.' },

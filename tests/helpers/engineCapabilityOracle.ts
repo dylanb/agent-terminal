@@ -280,6 +280,9 @@ export const SLOT_REJECTING: readonly PositionKey[] = [
   { position: 'loop.inputs[]/outputs[]', key: 'sections_dir' },
 ];
 
+/** The `boundaries[].boundary` names the engine looks up by name, besides the first boundary listed. */
+export const NAMED_BOUNDARIES = ['pre-review', 'pre-consolidate'] as const;
+
 /** Where a slot is expanded, and the slot. */
 export const SLOT_EXPANDING: readonly (PositionKey & { slot: string })[] = [
   { position: 'loop.pickup', key: 'branch_template', slot: '{issue}' },

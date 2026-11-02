@@ -20,11 +20,25 @@ import type {
   AppBootstrapLabelMutation,
   AppBootstrapWipePolicy,
 } from '../shared/appBootstrap';
+import {
+  BOUNDARY_MODES,
+  EXEC_SIDE_EFFECT_KIND,
+  FROZEN_CHECK_VALUES,
+  GOAL_CONDITION_MAX_CHARS,
+  LOOP_DEF_V2_VERSION,
+  LOOP_TOP_KEYS,
+  PICKUP_CONFLICT_POLICIES,
+  PICKUP_LABEL_ACTIONS,
+  PICKUP_LABEL_TARGETS,
+  POLISH_POLICIES,
+  WORK_COMPLETIONS,
+  isOneOf,
+  type BoundaryMode,
+  type PolishPolicy,
+  type WorkCompletion,
+} from '../shared/engineCapabilities/loop';
 
-/** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
- *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
- *  bumps it. A def declaring any other version fails to resolve (never partially parsed). */
-export const LOOP_DEF_V2_VERSION = 'v2';
+export { GOAL_CONDITION_MAX_CHARS, LOOP_DEF_V2_VERSION, POLISH_POLICIES, WORK_COMPLETIONS, type PolishPolicy, type WorkCompletion };
 
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
@@ -53,7 +67,7 @@ export interface ReviewerCatalogEntry {
 /** One actor-boundary policy (§27.7): `clear`, or `compact` carrying the message naming what survives it. */
 export interface BoundaryPolicy {
   boundary: string;
-  mode: 'clear' | 'compact';
+  mode: BoundaryMode;
   message?: string;
 }
 
@@ -72,16 +86,8 @@ export interface GateOptionDef {
   sideEffects: GateSideEffect[];
 }
 
-/** The framework-neutral phase-completion mode a loop declares (§28.4/§28.5.5) — which machine completion
- *  predicate its phase gates on: `red`/`green` gate the WORK turn (S3/S4), `refactor` gates each REVIEW-AND-FIX
- *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", so it produces no work-turn result file). A
- *  closed set recognized by exact string, single-sourced so the field type AND the parser's validation both
- *  derive from it (mirroring PHASE_OUTCOMES). */
-export const WORK_COMPLETIONS = ['red', 'green', 'refactor'] as const;
-export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
-const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
 export function isWorkCompletion(value: string): value is WorkCompletion {
-  return WORK_COMPLETION_SET.has(value);
+  return isOneOf(WORK_COMPLETIONS, value);
 }
 
 /** §28.5.5 F1 — the completion modes whose work turn produces NO result file and so are EXEMPT from the
@@ -106,10 +112,6 @@ export interface WorkRecipe {
   /** §28.5.1 */
   frozenCheck?: true;
 }
-
-/** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
- *  engine's framing around the condition must fit beside it. */
-export const GOAL_CONDITION_MAX_CHARS = 2000;
 
 /** §27.3/§27.8 */
 export type ReviewRounds = { kind: 'engine'; consolidator: string } | { kind: 'none' };
@@ -142,13 +144,8 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
-/** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
- *  full-catalog sweep. Closed set, recognized by exact string. */
-export const POLISH_POLICIES = ['fix', 'defer'] as const;
-export type PolishPolicy = (typeof POLISH_POLICIES)[number];
-
 function isPolishPolicy(value: string): value is PolishPolicy {
-  return (POLISH_POLICIES as readonly string[]).includes(value);
+  return isOneOf(POLISH_POLICIES, value);
 }
 
 /** The prescribed round-report structure (§27.5) and the polish policy its dispositions follow (§27.8). */
@@ -201,21 +198,7 @@ function flowLoopsDir(loopsRoot: string, flow: string): string | null {
   return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
 
-const ALLOWED_TOP_KEYS = new Set([
-  'version',
-  'name',
-  'work',
-  'reviewers',
-  'consolidator',
-  'boundaries',
-  'report',
-  'gate',
-  'pickup',
-  'inputs',
-  'outputs',
-  'exec',
-  'brief',
-]);
+const ALLOWED_TOP_KEYS: ReadonlySet<string> = new Set(LOOP_TOP_KEYS);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
@@ -312,8 +295,8 @@ function toBoundaries(raw: unknown): BoundaryPolicy[] {
     if (!isRecord(b)) fail('each boundary must be a mapping');
     const rec = b as Record<string, unknown>;
     const boundary = requireString(rec.boundary, 'boundary name');
-    if (rec.mode !== 'clear' && rec.mode !== 'compact') fail(`boundary ${boundary} mode must be clear or compact`);
-    const mode = rec.mode as 'clear' | 'compact';
+    const mode = rec.mode;
+    if (!isOneOf(BOUNDARY_MODES, mode)) fail(`boundary ${boundary} mode must be ${BOUNDARY_MODES.join(' or ')}`);
     if (mode === 'compact') return { boundary, mode, message: requireString(rec.message, `boundary ${boundary} compact message`) };
     return { boundary, mode };
   });
@@ -333,7 +316,7 @@ function toGate(raw: unknown): GateOptionDef[] {
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
       // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
       // tiers carry no trust distinction.
-      if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
+      if (kind === EXEC_SIDE_EFFECT_KIND) fail(`gate option ${option} side-effect must not name kind: ${EXEC_SIDE_EFFECT_KIND} (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
     });
@@ -362,9 +345,8 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
 
 function toWipePolicy(raw: unknown): WipePolicy {
   if (raw === undefined) return { mode: 'abort' };
-  if (raw === 'abort') return { mode: 'abort' };
-  if (raw === 'wipe-and-retry') return { mode: 'wipe-and-retry' };
-  fail(`pickup on_conflict must be abort or wipe-and-retry: ${String(raw)}`);
+  if (isOneOf(PICKUP_CONFLICT_POLICIES, raw)) return { mode: raw };
+  fail(`pickup on_conflict must be ${PICKUP_CONFLICT_POLICIES.join(' or ')}: ${String(raw)}`);
 }
 
 function toPickupLabels(raw: unknown): PickupLabelV2[] {
@@ -372,9 +354,10 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   if (!Array.isArray(raw)) fail('pickup initial_labels must be a list');
   return (raw as unknown[]).map((l) => {
     const rec = requireRecord(l, 'pickup initial_labels entry');
-    if (rec.action !== 'add' && rec.action !== 'remove') fail(`pickup label action must be add or remove: ${String(rec.action)}`);
-    if (rec.target !== 'issue' && rec.target !== 'pr') fail(`pickup label target must be issue or pr: ${String(rec.target)}`);
-    return { action: rec.action, target: rec.target, label: requireNonBlankString(rec.label, 'pickup label') };
+    const { action, target } = rec;
+    if (!isOneOf(PICKUP_LABEL_ACTIONS, action)) fail(`pickup label action must be ${PICKUP_LABEL_ACTIONS.join(' or ')}: ${String(action)}`);
+    if (!isOneOf(PICKUP_LABEL_TARGETS, target)) fail(`pickup label target must be ${PICKUP_LABEL_TARGETS.join(' or ')}: ${String(target)}`);
+    return { action, target, label: requireNonBlankString(rec.label, 'pickup label') };
   });
 }
 
@@ -418,7 +401,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     if (!isWorkCompletion(c)) fail(`unknown work completion: ${c}`);
     workCompletion = c;
   }
-  if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
+  if (work.frozen_check !== undefined && !isOneOf(FROZEN_CHECK_VALUES, work.frozen_check)) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
 
   let workGoal: string | undefined;

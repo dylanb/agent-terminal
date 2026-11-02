@@ -18,10 +18,7 @@ import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRe
 import { ticketPromptLines } from '../shared/currentTicket';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
-
-/** The boundary name preceding REVIEW-AND-FIX in the §27.3 chain (`WORK → boundary → REVIEW-AND-FIX`). The
- *  engine runs whatever the def declares under this name, never a hardcoded clear-or-compact choice (§27.7). */
-const PRE_REVIEW_BOUNDARY = 'pre-review';
+import { PRE_REVIEW_BOUNDARY } from '../shared/engineCapabilities/loop';
 
 /** The context boundary crossed before REVIEW-AND-FIX (§27.3/§27.7): the def's `pre-review` boundary policy,
  *  defaulting to `/clear` when the def declares none (every boundary is clear-or-compact). */
