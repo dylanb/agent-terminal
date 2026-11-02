@@ -51,9 +51,9 @@ import {
 import { ROUND_PHASE_LOOPS } from '../helpers/e2eExampleConfig';
 import { currentLockHolder, serializeLockHolder, worktreeLockFile, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
-import { LOOP_POSITIONS, type LoopPositionId } from '../helpers/engineCapabilityOracle';
-import { composedShape, positionHeading, turnContractParts } from '../helpers/guideSections';
-import { codeSpans } from '../helpers/markdownGuide';
+import { LOOP_POSITIONS, SECTIONS, type LoopPositionId } from '../helpers/engineCapabilityOracle';
+import { composedShape, headingTitled, positionHeading, turnContractParts } from '../helpers/guideSections';
+import { codeSpans, guideHeadings, guideTocLinks } from '../helpers/markdownGuide';
 import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
 
 
@@ -2575,6 +2575,38 @@ test('installing the examples writes an engine guide with the turn contract and 
     const parts = turnContractParts(guideAt(installedGuide(home)) ?? '', { contract: sectionTitles['turn-contract'], composition: sectionTitles['turn-composition'] });
     const marker = composedShape(completionMarker);
     expect({ composition: parts.composition !== undefined, marker: codeSpans(parts.fixed).some((s) => marker.test(s)) }).toEqual({ composition: true, marker: true });
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
+test('launched as `pnpm run dev` launches it, installing the examples writes the one built guide with every section linked from its contents (#276)', { tag: '@ownapp' }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-dev-cfg-'));
+  const devGuide = resolveEngineGuideFile({ packaged: false, appPath: process.cwd() });
+  try {
+    app = await electron.launch({ args: ['.'], env: installEnv(home, configDir) });
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await page.locator('[data-viewbtn="4"]').click();
+    await installExamplesBtn().click();
+    await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+    const installed = guideAt(installedGuide(home)) ?? '';
+    expect.soft({ dev: guideAt(devGuide), built: guideAt(BUILT_GUIDE) }).toEqual({ dev: installed, built: installed });
+    const linked = new Set(guideTocLinks(installed).map((l) => l.anchor));
+    const anchors = new Set(guideHeadings(installed).map((h) => h.anchor));
+    const titles = ENGINE_CAPABILITIES.sectionTitles as Readonly<Record<string, string | undefined>>;
+    const problems = [
+      ...[...linked].filter((a) => !anchors.has(a)).map((a) => `TOC entry #${a} links to no heading`),
+      ...SECTIONS.flatMap((s) => {
+        const heading = s.kind === 'position' ? positionHeading(installed, s.position) : headingTitled(installed, titles[s.kind] ?? '');
+        const what = s.kind === 'position' ? s.position : s.kind;
+        return heading === undefined ? [`${what}: no heading`] : linked.has(heading.anchor) ? [] : [`${what}: not in the contents`];
+      }),
+    ];
+    expect(problems).toEqual([]);
   } finally {
     await app.close();
     rmSync(home, { recursive: true, force: true });
