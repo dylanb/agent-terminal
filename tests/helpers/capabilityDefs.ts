@@ -1,5 +1,5 @@
 // Known-good flow and loop definitions built one position at a time, for the engine-capabilities conformance
-// tests (#276). Every key the oracle lists at a position has one sample value here, so adding a key to the
+// tests. Every key the oracle lists at a position has one sample value here, so adding a key to the
 // oracle fails typecheck until it has one, and a position's samples load together as one definition. Definitions
 // load through the real loaders from temp directories.
 

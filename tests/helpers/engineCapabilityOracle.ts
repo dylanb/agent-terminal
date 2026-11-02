@@ -1,8 +1,7 @@
-// The independent expected result for #276's engine-capabilities descriptor: what the flow loader, the loop
+// The independent expected result for the engine-capabilities descriptor: what the flow loader, the loop
 // loader and the engine's dispatch sites accept and act on, written by hand from the code as it stood when
-// the descriptor was introduced. It imports nothing from src/ (EXPECTED_RESULTS_FIXTURES in eslint.config.mjs),
-// so a descriptor or guide that drops an entry cannot also drop it from here. A deliberate capability change
-// edits this file in the same change.
+// the descriptor was introduced, so a descriptor or guide that drops an entry cannot also drop it from here. A
+// deliberate capability change edits this file in the same change.
 
 export type Definition = 'flow' | 'loop';
 export type Required = 'always' | 'never' | 'conditional';

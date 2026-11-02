@@ -1,4 +1,4 @@
-// Finds a position's, a key's or a side-effect arg's section in the generated engine guide (#276) by the oracle's
+// Finds a position's, a key's or a side-effect arg's section in the generated engine guide by the oracle's
 // ids, never by prose: a position is the heading carrying its id as a code span; a key, a heading under it
 // carrying the key; an arg, a heading under it carrying the side-effect kind and the arg.
 

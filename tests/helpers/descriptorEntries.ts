@@ -1,4 +1,4 @@
-// Looks up the engine-capabilities descriptor's entry for something the oracle names (#276), so a test takes its
+// Looks up the engine-capabilities descriptor's entry for something the oracle names, so a test takes its
 // expected set from the oracle and reads only that entry's explanation strings from the descriptor.
 
 import type { ActedName, EngineCapabilities, KeyCapability, KeyValues, PositionCapability } from '../../src/shared/engineCapabilities';

@@ -1,4 +1,4 @@
-// Reads the generated engine guide (#276) by its Markdown structure — headings, their GitHub anchors, the table
+// Reads the generated engine guide by its Markdown structure — headings, their GitHub anchors, the table
 // of contents and the body under each heading — so guide tests locate an entry structurally, never by prose.
 
 export interface GuideHeading {

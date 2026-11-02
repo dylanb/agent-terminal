@@ -2452,7 +2452,7 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   rmSync(codexHome, { recursive: true, force: true });
 });
 
-/** The guide the build placed next to the main bundle — the bytes every install must leave behind (#276). */
+/** The guide the build placed next to the main bundle — the bytes every install must leave behind. */
 const BUILT_GUIDE = resolveEngineGuideFile({ packaged: false, appPath: join(process.cwd(), 'out', 'main') });
 const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
 const installedGuide = (appHome: string): string => join(flowHomeDir(appHome), ENGINE_GUIDE_FILE);
