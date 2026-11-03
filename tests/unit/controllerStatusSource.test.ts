@@ -71,3 +71,111 @@ it('publishes the latest loop message beside the flow\'s own error, and none whe
     expect(shown?.loopMessage).toBeNull();
   } finally { source.dispose(); }
 });
+
+function stepSource(initial: { step: string; loop: string; message: ControllerLoopMessage | null; errorReason?: string }) {
+  const now = { ...initial };
+  const source = createControllerStatus({
+    current: () => {
+      const errorReason = now.loop === 'error' ? now.errorReason ?? now.message?.reason : undefined;
+      return { repoKey: '/repo', flowName: 'delivery', activity: 'active', loopMessage: now.message, view: {
+        stepName: now.step, status: 'in_progress', runStarted: 'started', loop: { status: now.loop, ...(errorReason ? { errorReason } : {}) },
+      } };
+    },
+    issueTitle: async () => null,
+  });
+  let shown: ControllerWorkStatus | undefined;
+  source.subscribe(work => { shown = work; });
+  source.refresh();
+  return { now, source, shown: () => shown };
+}
+
+const stalled: ControllerLoopMessage = { id: 'e1', kind: 'error', reason: 'stalled: no terminal activity' };
+
+it('withdraws a shown loop error once the loop leaves its error status, as the terminal does', () => {
+  const { now, source, shown } = stepSource({ step: 'groom-intent', loop: 'error', message: stalled });
+  try {
+    expect(shown()?.loopMessage).toEqual(stalled);
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage ?? null).toBeNull();
+  } finally { source.dispose(); }
+});
+
+it('withdraws a shown loop error when the flow moves to a new step, and shows the next error raised there', () => {
+  const { now, source, shown } = stepSource({ step: 'groom-intent', loop: 'error', message: stalled });
+  try {
+    expect(shown()?.loopMessage).toEqual(stalled);
+    now.step = 'groom';
+    source.refresh();
+    expect(shown()?.loopMessage ?? null).toBeNull();
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage ?? null).toBeNull();
+    now.message = { id: 'e2', kind: 'error', reason: 'the review turn failed' };
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(now.message);
+  } finally { source.dispose(); }
+});
+
+it('shows a loop error first raised as the flow enters a new step', () => {
+  const { now, source, shown } = stepSource({ step: 'groom-intent', loop: 'error', message: stalled });
+  try {
+    now.step = 'groom';
+    now.loop = 'error';
+    now.message = { id: 'e2', kind: 'error', reason: 'the groom turn failed' };
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(now.message);
+  } finally { source.dispose(); }
+});
+
+it('keeps a loop error while the flow stays on its step and the loop stays in error', () => {
+  const { source, shown } = stepSource({ step: 'impl-approve', loop: 'error', message: stalled });
+  try {
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(stalled);
+  } finally { source.dispose(); }
+});
+
+it('keeps an error raised while the loop was not in error, such as a failed push at an approve, after the step advances', () => {
+  const pushFailed: ControllerLoopMessage = { id: 'p1', kind: 'error', reason: 'could not push fix/x to the pull request' };
+  const { now, source, shown } = stepSource({ step: 'impl-approve', loop: 'awaiting-approval', message: pushFailed });
+  try {
+    now.step = 'finalize';
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(pushFailed);
+  } finally { source.dispose(); }
+});
+
+it('keeps a notice when the step advances and the loop leaves its error status', () => {
+  const notice: ControllerLoopMessage = { id: 'n1', kind: 'notice', reason: 'nothing to commit' };
+  const { now, source, shown } = stepSource({ step: 'green', loop: 'error', message: notice });
+  try {
+    now.step = 'green-approve';
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(notice);
+  } finally { source.dispose(); }
+});
+
+it('keeps a withdrawn loop error withdrawn on later refreshes', () => {
+  const { now, source, shown } = stepSource({ step: 'groom-intent', loop: 'error', message: stalled });
+  try {
+    now.loop = 'working';
+    source.refresh();
+    source.refresh();
+    now.step = 'groom';
+    source.refresh();
+    expect(shown()?.loopMessage ?? null).toBeNull();
+  } finally { source.dispose(); }
+});
+
+it('keeps an error raised while the loop is in error that is not the loop\'s own error, such as a missing input announced on Retry', () => {
+  const missingInput: ControllerLoopMessage = { id: 'w1', kind: 'error', reason: 'groom: recorded input(s) no longer available — groom-intent' };
+  const { now, source, shown } = stepSource({ step: 'groom', loop: 'error', errorReason: stalled.reason, message: missingInput });
+  try {
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage).toEqual(missingInput);
+  } finally { source.dispose(); }
+});

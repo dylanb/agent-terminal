@@ -5195,11 +5195,12 @@ test('a §27 turn that stalls on an agent question completes when the operator a
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
   expect(readIf(appRunState(repo))).toContain('stalled');
-  await expectLoopMessage('error');
+  await expect.poll(() => controllerOf(app).loopMessage()?.kind, { timeout: 15_000 }).toBe('error');
 
   await typeCommand('yes');
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  await expect.poll(() => controllerOf(app).loopMessage() ?? null, { timeout: 15_000 }).toBeNull();
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(1); // never re-injected
   expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
 
