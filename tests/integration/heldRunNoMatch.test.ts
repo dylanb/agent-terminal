@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { tryPeerLockDuring } from '../helpers/lockDevices';
-import { createFlowManager, flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { createFlowManager, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { activeFlowPointerFile, readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { runDispositionFile } from '../../src/main/runDisposition';
 import { createRunResolver } from '../../src/main/runResolver';
@@ -15,6 +15,7 @@ import { heldRunOf } from '../../src/main/runHoldRead';
 import { createFlowStateStore } from '../../src/main/flowState';
 import { MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A3 (#134) §18.7.3 / §18.7.4 AC12 / AC13 — recovering a held run onto a flow that lacks its current step ends the
 // run as a Terminate ends it, then makes the operator's choice the selection inside the same lock scope: a catalog

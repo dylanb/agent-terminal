@@ -3,8 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInstallExamplesCoordinator, exampleInstallDirs, type InstallRoots } from '../../src/main/installExamples';
-import { flowHomeDir } from '../../src/main/flowHome';
-import { FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flowHome';
 import { resolveAppHome, APP_HOME_DIR_ENV } from '../../src/main/launchRoot';
 import { ENGINE_GUIDE_FILE } from '../../src/main/exampleAssets';
 import { renderEngineGuide } from '../../src/main/engineGuide';

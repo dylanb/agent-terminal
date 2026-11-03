@@ -4,7 +4,7 @@
 // is single-sourced from the SHARED report vocabulary (roundReport.ts) so the shape the fixer is told to
 // write and the shape the completion predicate accepts derive from one definition (CLAUDE.md shared-semantics).
 
-import type { LoopDefV2, PolishPolicy, ReviewerTools } from './loopDefV2';
+import type { LoopDefV2, ReviewerTools } from './loopDefV2';
 import { boundaryCommand, flowDocumentLines, designCheckLines, sliceBriefLines } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
 import type { SliceBrief } from './appLoopState';
@@ -18,7 +18,7 @@ import { RED_CHECK_MISSING_WARNING, composeRedCheckInstruction, redCheckReportRe
 import { ticketPromptLines } from '../shared/currentTicket';
 import { codexReviewerAgentName, reviewerAgentName } from './reviewerAgents';
 import type { AgentKind } from './agentKind';
-import { PRE_REVIEW_BOUNDARY } from '../shared/engineCapabilities/loop';
+import { PRE_REVIEW_BOUNDARY, type PolishPolicy } from '../shared/engineCapabilities/loop';
 
 /** The context boundary crossed before REVIEW-AND-FIX (§27.3/§27.7): the def's `pre-review` boundary policy,
  *  defaulting to `/clear` when the def declares none (every boundary is clear-or-compact). */

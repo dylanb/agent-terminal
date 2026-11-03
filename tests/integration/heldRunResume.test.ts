@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
 import { expectsUnidentifiedHolderRemedy, tryPeerLockDuring } from '../helpers/lockDevices';
-import { createFlowManager, flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { createFlowManager, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { activeFlowPointerFile, readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { clearDisposition, readRunBinding } from '../../src/main/runDisposition';
 import { createRunResolver } from '../../src/main/runResolver';
@@ -16,6 +16,7 @@ import { listCatalog } from '../../src/main/flowCatalogList';
 import { MAX_ECHOED_LOCK_REASON_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../../src/shared/controlChars';
 import type { DispositionRead } from '../../src/main/resolveRunDefinition';
 import type { RebindChoice, RebindResult } from '../../src/shared/ipc';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A3 (#134) §18.7.3 / §18.7.4 AC12 / AC13 / AC15 — recovering a held run onto a flow that contains its current step
 // resumes it there: the step and status are unchanged, the selection is unchanged, the chosen flow is recorded as

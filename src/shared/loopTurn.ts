@@ -8,7 +8,7 @@
 /** The file a turn writes last as a robust, cross-process done-signal. */
 export const TURN_DONE_FILENAME = 'turn-done';
 
-export const WORK_TURN_PREFIX = 'work-';
+const WORK_TURN_PREFIX = 'work-';
 export const REVIEW_TURN_PREFIX = 'review-';
 export const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 export const TURN_KEY_PREFIXES = { work: WORK_TURN_PREFIX, review: REVIEW_TURN_PREFIX, consolidate: CONSOLIDATE_TURN_PREFIX } as const;

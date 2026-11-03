@@ -4,7 +4,7 @@ import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { directoryCards, type ControllerDirectoryCard } from '../../src/shared/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { statusTerminal } from '../helpers/controllerStatusFixture';
-import { type ReceivedEntry } from '../helpers/controllerHistory';
+import type { ReceivedEntry } from '../helpers/controllerHistory';
 import { bringForwardIn, cardHeaderIn, cardIn, dismissIn, historyIn, receivedNotificationIn, statusRowIn } from '../helpers/controllerCards';
 import '../helpers/rendererTokens';
 import '../../src/renderer/src/styles.css';

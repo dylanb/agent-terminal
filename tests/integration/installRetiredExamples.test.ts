@@ -9,12 +9,13 @@ import {
   previewInstallExamples,
   type InstallDestination,
 } from '../../src/main/installExamples';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { RETIRED_LOOPS } from '../../src/main/retiredExamples';
 import { RETIRED_FLOW_IDS } from '../../src/shared/retiredFlows';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir, resolveFeatureDevFlowDir } from '../../src/main/exampleAssets';
 import { SESSION_ID, type InstallDestinationId, type RetiredExample } from '../../src/shared/ipc';
 import { useBuiltBundle } from '../helpers/builtBundle';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 const builtBundle = useBuiltBundle();
 

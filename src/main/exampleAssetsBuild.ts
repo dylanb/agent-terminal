@@ -54,23 +54,19 @@ export function copyExampleCodexSkills(rootDir: string, mainOutDir: string): str
   return dest;
 }
 
-export function writeEngineGuide(appPath: string): void {
+function writeEngineGuide(appPath: string): void {
   const file = resolveEngineGuideFile({ packaged: false, appPath });
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, renderEngineGuide(ENGINE_CAPABILITIES));
 }
 
-export function placeExampleAssets(rootDir: string, mainOutDir: string): void {
+/** `pnpm run dev` launches Electron on the repository root, so its app path is `rootDir`, where the committed
+ *  example trees already sit but the generated guide does not. */
+export function placeBuildOutputs(rootDir: string, mainOutDir: string): void {
   copyExampleFlows(rootDir, mainOutDir);
   copyExampleLoopsV2(rootDir, mainOutDir);
   copyExampleCommands(rootDir, mainOutDir);
   copyExampleCodexSkills(rootDir, mainOutDir);
   writeEngineGuide(mainOutDir);
-}
-
-/** `pnpm run dev` launches Electron on the repository root, so its app path is `rootDir`, where the committed
- *  example trees already sit but the generated guide does not. */
-export function placeBuildOutputs(rootDir: string, mainOutDir: string): void {
-  placeExampleAssets(rootDir, mainOutDir);
   writeEngineGuide(rootDir);
 }

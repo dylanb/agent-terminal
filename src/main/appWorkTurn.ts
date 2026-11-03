@@ -6,7 +6,6 @@
 
 import type { SliceBrief } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
-export { completionMarker } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
 import { PHASE_RESULT_FIELDS, composePhaseResultInstruction, examplePhaseResult } from '../shared/phaseResult';

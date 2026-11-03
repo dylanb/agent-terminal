@@ -33,13 +33,11 @@ import {
   POLISH_POLICIES,
   REQUEST_CHANGES_OPTION,
   WORK_COMPLETIONS,
-  isOneOf,
   type BoundaryMode,
   type PolishPolicy,
   type WorkCompletion,
 } from '../shared/engineCapabilities/loop';
-
-export { GOAL_CONDITION_MAX_CHARS, LOOP_DEF_V2_VERSION, POLISH_POLICIES, WORK_COMPLETIONS, type PolishPolicy, type WorkCompletion };
+import { isOneOf } from '../shared/oneOf';
 
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
@@ -198,8 +196,6 @@ export interface LoopDefV2Context {
 function flowLoopsDir(loopsRoot: string, flow: string): string | null {
   return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
-
-const ALLOWED_TOP_KEYS: ReadonlySet<string> = new Set(LOOP_TOP_KEYS);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
@@ -384,7 +380,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   const rec = doc as Record<string, unknown>;
 
   for (const key of Object.keys(rec)) {
-    if (!ALLOWED_TOP_KEYS.has(key)) fail(`unknown key: ${key}`);
+    if (!isOneOf(LOOP_TOP_KEYS, key)) fail(`unknown key: ${key}`);
   }
   if (rec.version !== LOOP_DEF_V2_VERSION) fail(`unknown schema version: ${String(rec.version)} (expected ${LOOP_DEF_V2_VERSION})`);
   // `name` is resolver-assigned from the resolving path — def content cannot forge it. A declared `name` is

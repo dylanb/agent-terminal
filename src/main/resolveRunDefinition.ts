@@ -3,14 +3,14 @@
 
 import path from 'node:path';
 import {
-  FLOW_DEF_FILE,
   loadFlowDefinition,
   loadUntrustedFlowDefinition,
   loadFlowDefinitionLocalFirst,
   type FlowLoad,
 } from './flow';
-import { type StartednessSignal } from '../shared/flowStarted';
-import { type CatalogOrigin } from '../shared/ipc';
+import type { StartednessSignal } from '../shared/flowStarted';
+import type { CatalogOrigin } from '../shared/ipc';
+import { FLOW_DEF_FILE } from './flowHome';
 
 /** §18.7.2 read of the per-worktree active-flow pointer, which the resolver consults first. */
 export type PointerRead =

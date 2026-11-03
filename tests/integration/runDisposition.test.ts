@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { createFlowManager, flowHomeDir, loadFlowDefinition, FLOW_DEF_FILE } from '../../src/main/flow';
+import { createFlowManager, flowHomeDir, loadFlowDefinition } from '../../src/main/flow';
 import { worktreeStartedness } from '../../src/main/startedness';
 import {
   readDisposition,
@@ -10,6 +10,7 @@ import {
   clearDisposition,
   runDispositionFile,
 } from '../../src/main/runDisposition';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A begun NON-catalog run — these presence/lifecycle pins care only that a run began, not which source it bound;
 // AC9's source-binding round-trip is pinned separately in runDispositionBinding.test.ts.

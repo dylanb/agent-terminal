@@ -1,9 +1,11 @@
+import { isOneOf } from './oneOf';
+
 // §27.9.1 N9b.1 / N9b.6 / N9b.9.
 export const GATE_AUTHORITIES = ['human', 'auto'] as const;
 export type GateAuthority = (typeof GATE_AUTHORITIES)[number];
 
 export function isGateAuthority(v: unknown): v is GateAuthority {
-  return typeof v === 'string' && (GATE_AUTHORITIES as readonly string[]).includes(v);
+  return isOneOf(GATE_AUTHORITIES, v);
 }
 
 export const AUTO_HALT_REASONS = [
@@ -62,5 +64,5 @@ export function failedEffectNotice(state: FailedEffectState, detail: string): st
 }
 
 export function isAutoHaltReason(v: string): v is AutoHaltReason {
-  return (AUTO_HALT_REASONS as readonly string[]).includes(v);
+  return isOneOf(AUTO_HALT_REASONS, v);
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
-import { createFlowManager, flowCatalogDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { createFlowManager, flowCatalogDir } from '../../src/main/flow';
 import { createRunResolver } from '../../src/main/runResolver';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -12,6 +12,7 @@ import { auditTimestamp, parseAuditStream } from '../../src/shared/audit';
 import { createAutoGate } from '../../src/main/autoGate';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import { composeRecordFlowTransition, composeStartTransition } from '../../src/main/autoGateComposition';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // #137 — a run's identity (its flow's `name:` and its Start instant) is written into flow-state at Start and kept
 // by every later transition, so the §25 file it names can be found again for the run's whole lifetime.

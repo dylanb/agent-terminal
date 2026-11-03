@@ -6,9 +6,10 @@ import {
   type PointerRead,
   type CatalogResolution,
 } from '../../src/main/resolveRunDefinition';
-import { FLOW_DEF_FILE, type FlowLoad } from '../../src/main/flow';
+import type { FlowLoad } from '../../src/main/flow';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // §18.7.3 — the ordered definition sources: the catalog entry the active-flow pointer names, else (pointer unset)
 // a present local flow.yaml, else the global fallback. The observable

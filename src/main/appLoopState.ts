@@ -11,6 +11,7 @@ import { readDirEntries } from './dirEntries';
 import { isGitObjectId } from '../shared/appBootstrap';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { PHASE_OUTPUT_SUFFIX, phaseOutputRel } from '../shared/phaseResult';
+import { isOneOf } from '../shared/oneOf';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
  *  def parsing); this keys resume-file compatibility. A file declaring any other value fails to parse. */
@@ -221,7 +222,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   if (isPositiveWhole(state.round)) doc.round = state.round;
   // §27.6 — the consolidator's verdict, and (through the single-sourced gate, mirroring error_reason) its
   // reason ONLY under `stop for a human`. A verdict outside the closed set is never serialized.
-  if (state.verdict !== undefined && (CONSOLIDATOR_VERDICTS as readonly string[]).includes(state.verdict)) {
+  if (isOneOf(CONSOLIDATOR_VERDICTS, state.verdict)) {
     doc.verdict = state.verdict;
     if (verdictCarriesReason(state.verdict) && state.verdictReason) doc.verdict_reason = state.verdictReason;
   }
@@ -254,7 +255,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
   const { loop, step, turn_key: turnKey, status } = doc;
   if (typeof loop !== 'string' || typeof step !== 'string' || typeof turnKey !== 'string') return null;
-  if (typeof status !== 'string' || !STATUSES.includes(status as AppLoopStatus)) return null;
+  if (!isOneOf(STATUSES, status)) return null;
   const errorReason = status === 'error' && typeof doc.error_reason === 'string' ? doc.error_reason : undefined;
   // Field-local validation (CWE-20): a mis-typed or negative value is dropped, so it never surfaces as a
   // fabricated round identity to the view/dedup/resume.
@@ -262,7 +263,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   // §27.6 — the verdict is admitted only from the closed set; its reason is kept only under the
   // stop-for-a-human gate (the same gate the writer applies), so a recovered verdict never renders a
   // mismatched reason; the chosen roster is a list of strings (AC8).
-  const verdict = (CONSOLIDATOR_VERDICTS as readonly unknown[]).includes(doc.verdict) ? (doc.verdict as ConsolidatorVerdict) : undefined;
+  const verdict = isOneOf(CONSOLIDATOR_VERDICTS, doc.verdict) ? doc.verdict : undefined;
   const verdictReason =
     verdict !== undefined && verdictCarriesReason(verdict) && typeof doc.verdict_reason === 'string' ? doc.verdict_reason : undefined;
   const chosenRoster =
@@ -284,7 +285,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     loop,
     step,
     turnKey,
-    status: status as AppLoopStatus,
+    status,
     ...(errorReason !== undefined ? { errorReason } : {}),
     ...(round !== undefined ? { round } : {}),
     ...(verdict !== undefined ? { verdict } : {}),

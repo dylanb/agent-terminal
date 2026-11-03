@@ -8,8 +8,6 @@ import {
   copyExampleCommands,
   copyExampleCodexSkills,
   placeBuildOutputs,
-  placeExampleAssets,
-  writeEngineGuide,
 } from '../../src/main/exampleAssetsBuild';
 import { renderEngineGuide } from '../../src/main/engineGuide';
 import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
@@ -101,9 +99,9 @@ describe('copyExampleCommands — places the bundled commands where the unpackag
   });
 });
 
-describe('placeExampleAssets — places every bundled tree where its unpackaged resolver reads it', () => {
+describe('placeBuildOutputs — places every bundled tree where its unpackaged resolver reads it', () => {
   it('lays out the flows, loops, commands and Codex skills under the out dir', () => {
-    placeExampleAssets(root, out);
+    placeBuildOutputs(root, out);
     const loc = { packaged: false as const, appPath: out };
     expect({
       flow: readFileSync(path.join(resolveExampleFlowsDir(loc), 'feature-dev', 'todo-templates', 'a.md'), 'utf8'),
@@ -121,9 +119,9 @@ describe('placeExampleAssets — places every bundled tree where its unpackaged 
 
 const guideAt = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null);
 
-describe('writeEngineGuide — places the one generated guide where its unpackaged resolver reads it (#276)', () => {
+describe('placeBuildOutputs — places the one generated guide where its unpackaged resolver reads it', () => {
   it('writes exactly one Markdown file, the render of the descriptor, at the resolved path', () => {
-    writeEngineGuide(out);
+    placeBuildOutputs(root, out);
     const file = resolveEngineGuideFile({ packaged: false, appPath: out });
     const dir = path.dirname(file);
     expect({

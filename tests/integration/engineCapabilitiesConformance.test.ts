@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ENGINE_CAPABILITIES, type KeyCapability, type PositionCapability } from '../../src/shared/engineCapabilities';
-import { FLOW_DEF_FILE, loadFlowDefinitionFromFile } from '../../src/main/flow';
+import { loadFlowDefinitionFromFile } from '../../src/main/flow';
 import { resolveExampleFlowsDir, resolveExampleLoopsV2Dir } from '../../src/main/exampleAssets';
 import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { parseLoopCapabilities } from '../../src/shared/loopCapabilities';
@@ -46,6 +46,7 @@ import {
   descriptorPosition as descriptorPositionIn,
   positionIdOf,
 } from '../helpers/descriptorEntries';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);

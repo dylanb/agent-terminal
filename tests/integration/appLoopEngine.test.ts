@@ -29,7 +29,6 @@ import {
   writeAppLoopState,
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
-import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport } from '../../src/shared/roundReport';
 import { roundReportWithDisposition, roundReportWithStatuses } from '../helpers/roundReports';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
@@ -48,6 +47,7 @@ import {
   flushRedGate,
 } from '../helpers/appLoopEngineHarness';
 import { verdictOutput } from '../helpers/consolidatorOutputs';
+import { completionMarker } from '../../src/shared/loopTurn';
 
 // §27.3/§27.12 — the §27 work-turn engine, driven at its observable boundary with REAL fs (the run-state
 // file, the completion artifact) and its domain ports as controllable fakes (hostedAgent injectability, the

@@ -12,15 +12,14 @@ import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
-import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
-import { completionMarker } from '../../src/main/appWorkTurn';
+import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import { REVIEWER_HANDOFF_BEGIN, REVIEWER_HANDOFF_END } from '../../src/main/reviewTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import { exampleSlicePlan } from '../../src/shared/slicePlan';
 import { readBaselineCommit, recordBaselineCommit, readChangedTests, APP_LOOP_STATE_SCHEMA } from '../../src/main/appLoopState';
 import { phaseOutputRel } from '../../src/shared/phaseResult';
 import { CODEX_REVIEWER_AGENT, planReviewerAgents } from '../../src/main/reviewerAgents';
-import { flowCatalogDir, flowHomeDir, FLOW_DEF_FILE } from '../../src/main/flow';
+import { flowCatalogDir, flowHomeDir } from '../../src/main/flow';
 import { ENGINE_GUIDE_FILE, resolveEngineGuideFile } from '../../src/main/exampleAssets';
 import { writeActiveFlow, readActiveFlow } from '../../src/main/activeFlowPointer';
 import { readRunBinding, recordDisposition, runDispositionFile } from '../../src/main/runDisposition';
@@ -55,6 +54,7 @@ import { LOOP_POSITIONS, SECTIONS, type LoopPositionId } from '../helpers/engine
 import { composedShape, headingTitled, positionHeading, turnContractParts } from '../helpers/guideSections';
 import { codeSpans, guideHeadings, guideTocLinks } from '../helpers/markdownGuide';
 import { ENGINE_CAPABILITIES } from '../../src/shared/engineCapabilities';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2547,7 +2547,7 @@ test('with APP_HOME_DIR set, the engine guide is installed under that home and n
   }
 });
 
-test('installing the examples writes an engine guide with a section for every loop-definition position (#276 slice 3)', { tag: '@ownapp' }, async () => {
+test('installing the examples writes an engine guide with a section for every loop-definition position (#276)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-loop-cfg-'));
   try {
@@ -2564,7 +2564,7 @@ test('installing the examples writes an engine guide with a section for every lo
   }
 });
 
-test('installing the examples writes an engine guide with the turn contract and its turn-composition part (#276 slice 5)', { tag: '@ownapp' }, async () => {
+test('installing the examples writes an engine guide with the turn contract and its turn-composition part (#276)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-guide-turn-cfg-'));
   try {

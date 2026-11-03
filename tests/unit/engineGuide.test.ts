@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderEngineGuide } from '../../src/main/engineGuide';
 import { ENGINE_CAPABILITIES, type EngineCapabilities } from '../../src/shared/engineCapabilities';
-import { MAX_SLICES } from '../../src/main/flow';
-import { GOAL_CONDITION_MAX_CHARS } from '../../src/main/loopDefV2';
-import { completionMarker } from '../../src/main/appWorkTurn';
-import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { TURN_DONE_FILENAME, completionMarker } from '../../src/shared/loopTurn';
 import {
   CLOSED_SETS,
   CROSS_FIELD_RULES,
@@ -32,6 +29,8 @@ import {
 import { codeSpans, guideHeadings, guideTocLinks, listEntries, sectionBody, subHeadings } from '../helpers/markdownGuide';
 import { argHeading, composedShape, entryFor, headingTitled, intro, keyHeading, positionHeading, turnContractParts } from '../helpers/guideSections';
 import { descriptorArg, descriptorKey, descriptorOpenSet } from '../helpers/descriptorEntries';
+import { MAX_SLICES } from '../../src/shared/engineCapabilities/flow';
+import { GOAL_CONDITION_MAX_CHARS } from '../../src/shared/engineCapabilities/loop';
 
 const GUIDE = renderEngineGuide(ENGINE_CAPABILITIES);
 const OPEN_SET_LIST: readonly OpenSet[] = Object.values(OPEN_SETS);

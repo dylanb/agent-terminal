@@ -3,12 +3,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createWorktreeFixture } from '../helpers/worktreeFixture';
 import { createCatalogFixture } from '../helpers/catalogFixture';
-import { createFlowManager, flowCatalogDir, FLOW_DEF_FILE, type FlowInputDef } from '../../src/main/flow';
+import { createFlowManager, flowCatalogDir, type FlowInputDef } from '../../src/main/flow';
 import { createFlowEntryActions } from '../../src/main/flowEntryActions';
 import { createRunResolver } from '../../src/main/runResolver';
 import { createActiveFlowGate } from '../../src/main/activeFlowGate';
 import { createWorktreeLock, worktreeLockRoot } from '../../src/main/worktreeLock';
 import { writeActiveFlow } from '../../src/main/activeFlowPointer';
+import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 
 // A3 (#134) §18.4 / §18.7.4 AC5 — after Terminate, switching the worktree to another flow and starting it
 // resolves that flow's own step-0 inputs: nothing carried from the terminated flow's inputs survives the switch.

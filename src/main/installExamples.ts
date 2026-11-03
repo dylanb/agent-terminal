@@ -17,8 +17,8 @@ import {
   resolveEngineGuideFile,
   ENGINE_GUIDE_FILE,
 } from './exampleAssets';
-import { FLOW_DEF_FILE, flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
-import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
+import { flowCatalogDir, flowHomeDir, loadFlowDefinitionFromFile } from './flow';
+import { isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { userConfigAgentsDir, userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import { codexAgentsDir, codexLoopsV2Dir, codexSkillsDir } from './codexConfig';
@@ -38,6 +38,8 @@ import {
   type RetiredExample,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
+import { FLOW_DEF_FILE, TODO_TEMPLATES_SUBDIR } from './flowHome';
+import { isOneOf } from '../shared/oneOf';
 
 /** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
  *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
@@ -487,7 +489,7 @@ function retiredFallbackOf(destinations: ResolvedDestination[]): string | null {
   const file = destinations.find((d) => d.id === 'flow')?.files.find((f) => f.rel === FLOW_DEF_FILE);
   if (file === undefined) return null;
   const load = loadFlowDefinitionFromFile(file.real);
-  return load.ok && RETIRED_FLOW_IDS.includes(load.definition.name) ? load.definition.name : null;
+  return load.ok && isOneOf(RETIRED_FLOW_IDS, load.definition.name) ? load.definition.name : null;
 }
 
 function hash(bytes: Buffer): string {

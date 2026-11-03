@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInstallExamplesCoordinator, exampleInstallDirs } from '../../src/main/installExamples';
 import { resolveEngineGuideFile } from '../../src/main/exampleAssets';
-import { placeExampleAssets } from '../../src/main/exampleAssetsBuild';
+import { buildBundleIn } from '../helpers/builtBundle';
 import { SESSION_ID } from '../../src/shared/ipc';
-
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 let scratch: string;
 let bundle: string;
@@ -15,10 +13,9 @@ let osHome: string;
 
 beforeEach(() => {
   scratch = mkdtempSync(path.join(tmpdir(), 'engine-guide-bundle-'));
-  bundle = path.join(scratch, 'bundle');
   osHome = path.join(scratch, 'home');
   mkdirSync(osHome);
-  placeExampleAssets(REPO_ROOT, bundle);
+  bundle = buildBundleIn(scratch);
 });
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });

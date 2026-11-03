@@ -45,10 +45,6 @@ export type ActedGhAction = (typeof ACTED_GH_ACTIONS)[number];
 /** The agent caps a goal at 4000 characters, and the engine's framing around the condition must fit beside it. */
 export const GOAL_CONDITION_MAX_CHARS = 2000;
 
-export function isOneOf<V extends string | boolean>(values: readonly V[], value: unknown): value is V {
-  return (values as readonly unknown[]).includes(value);
-}
-
 function closed<V extends string | boolean>(values: readonly V[], docs: (value: V) => Explanation): KeyValues {
   return { kind: 'closed', values: values.map((value): ClosedValue => ({ value, ...docs(value) })) };
 }
