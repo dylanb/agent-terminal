@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ESLint } from 'eslint';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const SEAM_ONLY = /decides from its seam values only/;
@@ -49,5 +50,11 @@ describe('the test-proof core reaches processes, the filesystem, the network, gi
       readers: await ruleErrors("import { readFile } from 'node:fs/promises';\n", 'src/main/testProofResults.ts'),
       entry: await ruleErrors('process.exitCode = 1;\n', 'src/main/testProofMain.ts'),
     }).toEqual({ typeImport: 0, typeFromLookup: 0, shared: 0, errno: 0, adapters: 0, readers: 0, entry: 0 });
+  });
+
+  it('reaches the real core file, which lints clean under the rule', async () => {
+    expect(existsSync(resolve(root, CORE)), `${CORE} is missing, so the rule reaches no core`).toBe(true);
+    const [result] = await eslint.lintFiles([CORE]);
+    expect(result.messages.filter((m) => SEAM_ONLY.test(m.message))).toEqual([]);
   });
 });
