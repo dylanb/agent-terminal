@@ -1,0 +1,154 @@
+{
+  "numTotalTestSuites": 3,
+  "numPassedTestSuites": 2,
+  "numFailedTestSuites": 1,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 11,
+  "numPassedTests": 6,
+  "numFailedTests": 1,
+  "numPendingTests": 3,
+  "numTodoTests": 1,
+  "startTime": 0,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads one",
+          "status": "passed",
+          "title": "reads one",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads two",
+          "status": "passed",
+          "title": "reads two",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha reads three",
+          "status": "passed",
+          "title": "reads three",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "alpha"
+          ],
+          "fullName": "alpha is skipped on purpose",
+          "status": "skipped",
+          "title": "is skipped on purpose",
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 0,
+      "endTime": 1,
+      "status": "passed",
+      "message": "",
+      "name": "/repo/tests/unit/alpha.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "beta",
+            "nested"
+          ],
+          "fullName": "beta nested writes one",
+          "status": "passed",
+          "title": "writes one",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "beta",
+            "nested"
+          ],
+          "fullName": "beta nested writes two",
+          "status": "passed",
+          "title": "writes two",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "beta"
+          ],
+          "fullName": "beta writes three",
+          "status": "passed",
+          "title": "writes three",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "beta"
+          ],
+          "fullName": "beta is also skipped",
+          "status": "skipped",
+          "title": "is also skipped",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [
+            "beta"
+          ],
+          "fullName": "beta is still todo",
+          "status": "todo",
+          "title": "is still todo",
+          "failureMessages": [],
+          "meta": {}
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "is pending",
+          "status": "pending",
+          "title": "is pending",
+          "failureMessages": [],
+          "meta": {}
+        }
+      ],
+      "startTime": 0,
+      "endTime": 1,
+      "status": "passed",
+      "message": "",
+      "name": "/repo/tests/unit/beta.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "gamma"
+          ],
+          "fullName": "gamma breaks",
+          "status": "failed",
+          "title": "breaks",
+          "failureMessages": [
+            "AssertionError: expected 1 to be 2"
+          ],
+          "meta": {}
+        }
+      ],
+      "startTime": 0,
+      "endTime": 1,
+      "status": "failed",
+      "message": "",
+      "name": "/repo/tests/unit/gamma.test.ts"
+    }
+  ]
+}
