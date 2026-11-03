@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { createControllerStatus } from '../../src/main/controllerStatus';
+import { createLoopMessages } from '../../src/main/loopMessages';
 import type { ControllerLoopMessage, ControllerWorkStatus } from '../../src/shared/ipc';
 
 it.each([0, Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps known work visible when persisted ticket %s is invalid', number => {
@@ -177,5 +178,18 @@ it('keeps an error raised while the loop is in error that is not the loop\'s own
     now.loop = 'working';
     source.refresh();
     expect(shown()?.loopMessage).toEqual(missingInput);
+  } finally { source.dispose(); }
+});
+
+it('withdraws the loop\'s own error when its reason was too long to publish whole', () => {
+  const reason = `stalled: ${'x'.repeat(20 * 1024)}`;
+  const messages = createLoopMessages(() => {});
+  messages.post('error', reason);
+  const { now, source, shown } = stepSource({ step: 'groom-intent', loop: 'error', errorReason: reason, message: messages.current() });
+  try {
+    expect(shown()?.loopMessage?.kind).toBe('error');
+    now.loop = 'working';
+    source.refresh();
+    expect(shown()?.loopMessage ?? null).toBeNull();
   } finally { source.dispose(); }
 });

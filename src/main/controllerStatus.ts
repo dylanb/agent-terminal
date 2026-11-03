@@ -2,6 +2,7 @@ import type { AgentState, ControllerLoopMessage, ControllerWorkStatus, FlowState
 import { isControllerIssueNumber } from '../shared/controllerStatus';
 import { errMsg } from './errno';
 import { APP_LOOP_STATUS_ERROR } from './loopViewV2';
+import { publishedLoopReason } from './loopMessages';
 
 export interface ControllerStatusSource {
   current(): {
@@ -68,7 +69,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
       const movedOn = previousRefresh !== undefined
         && (previousRefresh.position !== position || (previousRefresh.loopStatus === APP_LOOP_STATUS_ERROR && !loopInError));
       if (movedOn && turnErrorId !== undefined) withdrawnErrorId = turnErrorId;
-      if (loopMessage?.id !== previousRefresh?.messageId) turnErrorId = loopMessage?.kind === 'error' && loopInError && loopMessage.reason === loop?.errorReason ? loopMessage.id : undefined;
+      if (loopMessage?.id !== previousRefresh?.messageId) turnErrorId = loopMessage?.kind === 'error' && loopInError && loop?.errorReason !== undefined && loopMessage.reason === publishedLoopReason(loop.errorReason) ? loopMessage.id : undefined;
       const shownMessage = loopMessage !== null && loopMessage.id === withdrawnErrorId ? null : loopMessage;
       previousRefresh = { position, loopStatus: loop?.status, messageId: loopMessage?.id };
       const known = flowName !== null && view.status !== 'error';
