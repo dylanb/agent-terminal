@@ -2,21 +2,112 @@
 
 A desktop app for running, monitoring and steering terminal coding agents such as [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://github.com/openai/codex). You run the agent in a real shell as usual. Agent Terminal watches what the agent prints, lets you turn its output into todos and send them back, and can take a GitHub ticket through a full test-driven workflow (groom, plan, RED, GREEN, refactor, finalize), stopping for your approval where it matters.
 
+## Highlights
+
+- **Watch the agent work.** It runs in a real, visible terminal. Prompts are injected into the interactive session (never `claude -p`), so you see everything and can step in at any time.
+- **Bring your own setup.** Claude Code or Codex runs in your shell, so your `CLAUDE.md`, plugins, MCP servers and global config all apply.
+- **Ticket to PR, with human gates.** `feature-dev-v3` takes a GitHub issue through groom, plan, RED, GREEN, refactor, integration and finalize. Groom, plan and implementation approval are yours, and merging is always left to a person.
+- **Reviewer sub-agent panels.** Each loop has its own reviewers, including security, taint and accessibility, plus a RED-authenticity reviewer.
+- **Provable TDD.** The RED gate checks that your new tests fail by assertion at the exact `file:line` they declared, and GREEN is checked with `git` to confirm it didn't touch the RED tests.
+- **Converging review.** A materiality floor and closed dispositions mean a round that changed nothing is clean, and a consolidator verdict decides whether to go again or stop for a human.
+- **Context hygiene.** `/clear` at loop boundaries and checkpoint `/compact` in goal loops keep long runs focused.
+- **Proof of work in the PR body.** The finalize step publishes a flow-audit report with gate decisions, timeline and review resolutions, backed by an append-only audit log.
+- **One tray for many terminals.** The controller shows a card per terminal: working, idle, needs you, or errored.
+- **Local-first and open.** State is files on disk, git operations in untrusted repos run with hooks disabled, and the code is AGPL-3.0-or-later.
+
 > **Status: experimental.** This is an early, actively developed project (v0.1). Flow and loop definition formats, settings and behaviour may change without notice. It runs on macOS and Linux; Windows is not supported.
 
 ![The Agent Terminal window: the flow rail on the left at step 13 of 15 (impl-approve) with the loop awaiting a decision, Claude Code working in the terminal in the centre under a red "Loop needs you" status bar, and the Todo overlay on the right listing review questions to send to the agent](docs/images/screenshot.png)
 
 ## Features
 
-- **A real terminal for your agent.** Your own shell and its configuration run on a real PTY, rendered with xterm.js. Running an agent here works the same as in a native terminal.
-- **A shadow screen model.** Every output byte is also fed into a headless xterm in the main process. It tracks the live screen, terminal modes, the alternate screen and *quiescence* (when the agent has gone quiet), and everything below is built on it.
-- **Monitor pane and injection.** Capture what the agent shows, turn findings into todos, and send text back into the agent's input, either inserted at the cursor or inserted and submitted. Injection honours bracketed-paste mode and strips paste-breakout sequences.
-- **Flows and loops.** A *flow* is a sequence of steps that takes a ticket from start to finish. Most steps are *loops*: the agent does the work, reviewer sub-agents review it, the agent fixes what they find, the findings are consolidated, and then a gate decides whether the step is done. A gate is either `auto` (the engine decides and falls back to you if it can't) or `human`. Progress, gates and loop rounds appear in the rail and the always-visible status bar, and every run writes an append-only audit log under `~/.agent-terminal/audit/`.
-- **Bundled flows.** Two ready-to-run flows ship with the app (see [below](#bundled-flows)), along with their loop definitions, reviewer charters, Claude Code slash commands and sub-agents, and Codex skills.
+### Terminal and agent hosting
+
+- **A real terminal for your agent.** Your own shell and its configuration run on a real PTY, rendered with xterm.js. Because the agent runs in your shell, its existing setup (`CLAUDE.md`, plugins, MCP servers, global config) applies unchanged.
+- **Claude Code or Codex.** Run `claude` or `codex` as you normally would. Engine prompts are injected into the visible interactive session with bracketed paste, never through `claude -p`, so you watch every step as it happens.
+- **A shadow screen model.** Every output byte is also fed into a headless xterm in the main process, which tracks the live screen, terminal modes and the alternate screen.
+- **Quiescence from the screen, not the bytes.** The agent reads as quiet when the *rendered* screen stops changing, so a TUI's idle repaints don't count as work.
+- **Safe injection.** Injection honours the live bracketed-paste mode, strips the `ESC[201~` paste-breakout sequence, and suppresses the echo of its own injected text so it isn't captured again. The settle delay before submit is configurable (`APP_SUBMIT_DELAY_MS`).
+- **Monitor pane.** Capture what the agent shows (command output is tracked with OSC 133 shell integration), turn findings into todos, and send text back into the agent's input: **Insert at cursor** or insert and submit.
 - **Artifacts view.** A file tree and viewer for the plans, reports and other artifacts that steps produce.
-- **Controller.** A separate tray app with one status card per terminal. It shows which agents are working or idle and which ones need you, and can bring the right window forward. See [docs/controller.md](docs/controller.md).
+
+### Flows and loops
+
+- **Flows.** A *flow* is a sequence of steps that takes a ticket from start to finish. Most steps are *loops*: the agent does the work, reviewer sub-agents review it, the agent fixes what they find, the findings are consolidated, and a gate decides whether the step is done.
+- **`feature-dev-v3`.** The full chain: `preparation` (manual), `groom-intent`, `groom`, `groom-approve`, `plan`, `plan-approve`, `infra`, `red`, `green`, `refactor` (repeating back to `red` for each slice), `integration-slice`, `impl-approve`, `finalize`. See [Bundled flows](#bundled-flows).
+- **`plan-only`.** Groom a ticket and produce a reviewed plan, then stop.
+- **Epics.** An epic-capable plan is parsed into ordered sub-tickets. At the approve gate, a confirm-first **promote** action creates them on GitHub, and the preview and the promotion read the same parse.
+- **Goal-mode work turns.** A loop step can run as an agent `/goal` session that reports progress through a validated progress file.
+- **Context hygiene.** `/clear` is sent at loop boundaries (`boundary: pre-work`), and goal loops send `/compact` as a checkpoint every `checkpoint.passes` review passes (set per loop), with an optional boundary `/compact`.
+- **Conflict hold at pickup.** If the ticket's branch or PR already exists, the run holds and offers to inspect it, delete the branch or close the PR, each confirm-first.
+- **Runs are bound to their flow.** A started run keeps the flow definition it started with. If that definition changes or vanishes, the run is held and you can rebind or terminate it.
+
+### Review and quality gates
+
+- **Reviewer sub-agent panels.** The plan-goal, infra, red, green, refactor and integration-slice loops each have their own reviewers, installed as `<loop>--<reviewer>` sub-agents.
+  - **Security** reviewers in plan, infra, green and integration-slice.
+  - **Taint** reviewers in infra, green and integration-slice.
+  - **Accessibility** reviewers in green and integration-slice.
+  - A **RED-authenticity** reviewer in red.
+- **RED authenticity.** The RED step declares each test's `intendedFailures` as `file:line`. The red-check report must show exactly those tests failing by assertion; errors, undeclared failures and tests that don't fail are refused. This proves tests fail for the intended reason.
+- **Frozen tests.** GREEN may not change the RED tests. This is a plain `git` diff check against `test_globs` (the engine never runs your tests for it), re-checked at approve.
+- **Converging review.** A *materiality floor* means reviewers' findings are fixed only if they change an observable outcome. Each finding gets one of four closed dispositions (fixed, dismissed out of scope, dismissed invalid, needs a human), so a round that changed nothing is clean and the loop converges.
+- **Consolidator verdict.** After each round a consolidator turn emits a JSON verdict (clean, another round, or stop for a human) and chooses the next reviewer roster. The agent gets a checker command built on the engine's own predicates.
+- **Crash-safe auto gates.** A relaunch halt is persisted so a crash can't silently re-approve, and failed outward side effects (push, PR) are tracked.
+
+### Human in the loop
+
+- **Gates.** A gate is `auto` (the engine decides and falls back to you if it can't or takes longer than `APP_AUTO_GATE_DECISION_MS`) or `human`. In `feature-dev-v3`, `groom-approve`, `plan-approve`, `impl-approve` and `finalize` are human gates; the rest are auto-gated. Merging is always left to a person.
+- **Gate options.** approve, request-changes, impasse, redo, polish, and **Back to RED** (with an optional slice brief).
+- **Hand back to me.** Returns an iterating loop to you at the next consolidation.
+- **Decision boundaries.** Briefs state what the agent may decide; anything outside it surfaces under **Needs your call** at the gate.
+- **Todo checklists per stage** (ticket grooming, plan review, implementation review, finalize). Todo status changes (active, in progress, done) are recorded in the audit trail.
+- **Needs-you signals.** The terminal shows a red **Loop needs you** status bar, and the controller highlights the card and tray icon. These are in-app signals, not OS notifications.
+
+### Controller
+
+A separate tray app (see [docs/controller.md](docs/controller.md)):
+
+- One status card per launch directory. A terminal's identity is fixed at launch, so a later `cd` doesn't regroup it.
+- Statuses: Working, Idle, Needs a human, Flow error, Completed, Disconnected.
+- Tray dot: amber when a human is needed, red on error.
+- **Bring forward** raises the right window. Agents sharing a directory are flagged **Duplicate directory**, with **Bring both forward**.
+- An always-on-top toggle.
 
   <img src="docs/images/controller.png" alt="The controller window showing three terminal cards: one Idle, one Needs a human · Working, and one Needs a human · Idle, with a summary of 0 errors, 1 needing a human, 1 idle and 1 working" width="480">
+
+### Proof of work and audit
+
+- **Audit log.** Every run writes an append-only YAML log per run under `~/.agent-terminal/audit/<repo>/`. Flow state lives in `<worktree>/.agent-terminal/flow-state.yaml`.
+- **Flow-audit report in the PR body.** The `finalize` loop writes a flow-audit report and publishes it into the PR body between `<!-- agent-terminal:flow-audit:start -->` and `<!-- agent-terminal:flow-audit:end -->` markers, preserving the rest of the body. It covers:
+  - scope and status
+  - execution and decisions, including human gate decisions with rationale
+  - stage timeline and elapsed time, including gate durations
+  - exceptions, blocks and checklist outcomes
+  - evidence gaps and follow-up
+  - finalize work and PR readiness
+  - review findings and resolutions by step, including Copilot's
+
+### Configuration
+
+- **Flow locations.** Flows are discovered at `~/.agent-terminal/flows/<id>/flow.yaml` (global) and `<repo>/.agent-terminal/flows/` (per repo; the repo wins a name clash).
+- **Install examples.** **Settings** then **Install examples** copies the example flows and loops into `~/.agent-terminal/`, the reviewer sub-agents and slash commands into `~/.claude/`, and the skills into `~/.codex/`. It previews first and confirms before replacing any file you've changed.
+- **`loop-capabilities.yaml`** tells the loops about your project:
+  - `test_globs`: which files are tests (also used by the frozen-tests check).
+  - `test_command`, `build_command`: guidance strings for the agent, never executed by the engine.
+  - `select_template`: optional; how to run a selected subset of tests.
+  - `red_check_command`: produces the per-test outcome report the RED gate uses.
+- **Environment variables.** See [Settings](#settings-environment-variables).
+
+### Security
+
+- Local-first: state is plain files on disk; there is no hosted service.
+- `contextIsolation` is always on, `nodeIntegration` is off, and the renderer never sees `ipcRenderer`.
+- Git operations in untrusted repos run with hooks disabled (`core.hooksPath` pointed at an empty temp dir) and `fsmonitor` off.
+- Paths derived from repo content are confined to a jail, and reads are bounded and don't follow symlinks.
+- Window navigation is guarded, and OSC 133 capture is hardened against adversarial marks.
+- A worktree lock is identity-checked by PID and start time and stored in app-owned space.
+- The app never modifies your `.gitignore`.
 
 ## Install
 
@@ -138,6 +229,7 @@ Pull requests are welcome, but the bar is high and it's enforced:
 
 - **TDD is mandatory.** Write a failing test first, watch it fail, then make it pass. Tests check observable behaviour, never implementation details.
 - **Show a clean run.** Before a PR is ready, the full suite has to pass locally: unit, integration, browser and the Podman e2e.
+- **Test proof gates merges.** Locally generated proof of those runs is posted as the `test-proof/vitest` and `test-proof/e2e` commit statuses, and filtered, dirty or mismatched runs are refused. See [docs/test-proof.md](docs/test-proof.md).
 - **One theme per PR.** Cite spec sections (e.g. §9.3) rather than re-arguing settled design.
 - **Open PRs as drafts** until they are ready for review.
 
