@@ -511,7 +511,7 @@ function repoCandidate(name: string, repoDir: string, refuseSpecialFiles: boolea
     raw = readFileSync(registry, 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
-    return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
+    return { reason: `cannot read repo loop registry: ${errMsg(e)}` };
   }
   let doc: unknown;
   try {

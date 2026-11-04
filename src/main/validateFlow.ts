@@ -36,7 +36,6 @@ interface Problem {
   text: string;
 }
 
-/** How a run of the flow resolves its loops: the context `resolveLoopDefV2` gets, before the flow's name is added. */
 type LoopScope = Omit<LoopDefV2Context, 'flow'>;
 
 type Located = { ok: true; flowFile: string; load: FlowLoad; loops: LoopScope } | { ok: false; reason: string };

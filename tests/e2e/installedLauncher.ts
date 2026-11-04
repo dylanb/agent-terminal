@@ -109,6 +109,9 @@ function killQuietly(pid: number): void {
 class InstalledRuns {
   private readonly owned = new OwnedProcesses();
   private readonly started: Pick<InstalledRun, 'pgid' | 'marker'>[] = [];
+  /** Marker entries handed out for commands the test starts some other way, such as typed into the app's own
+   *  terminal. */
+  private readonly marked: string[] = [];
   /** A group seen empty is never consulted again: its id may since belong to an unrelated process. */
   private readonly emptied = new Set<number>();
 
@@ -133,6 +136,16 @@ class InstalledRuns {
     return { ...(await pending), ...group };
   }
 
+  mark(): string {
+    const entry = `${RUN_MARKER_ENV}=${this.world.root}#marked-${this.marked.length + 1}`;
+    this.marked.push(entry);
+    return entry;
+  }
+
+  carriers(entry: string): number[] {
+    return markerCarriers(entry, this.platform).sort((a, b) => a - b);
+  }
+
   /** Every live process in `run`'s group or carrying its marker, ascending. */
   survivors(run: Pick<InstalledRun, 'pgid' | 'marker'>): number[] {
     const members = this.emptied.has(run.pgid) ? [] : groupMembers(run.pgid);
@@ -151,7 +164,14 @@ class InstalledRuns {
         return alive;
       }, { timeout: 0 }).toEqual([]);
     };
-    await settleAll([this.owned.killAll(), ...this.started.splice(0).map(reap)], 'installed runs left processes behind');
+    const reapMarked = async (entry: string): Promise<void> => {
+      await expect.poll(() => {
+        const alive = this.carriers(entry);
+        for (const pid of alive) killQuietly(pid);
+        return alive;
+      }, { timeout: 0 }).toEqual([]);
+    };
+    await settleAll([this.owned.killAll(), ...this.started.splice(0).map(reap), ...this.marked.splice(0).map(reapMarked)], 'installed runs left processes behind');
   }
 }
 
@@ -164,6 +184,11 @@ export interface InstalledLauncher {
   run(command: string, args: readonly string[], cwd: string): Promise<InstalledRun>;
   /** Every live process in `run`'s group or carrying its marker, ascending. */
   survivors(run: Pick<InstalledRun, 'pgid' | 'marker'>): number[];
+  /** A marker environment entry, `NAME=value`, for a command the test starts itself; teardown kills and confirms
+   *  gone every process that carries it. */
+  mark(): string;
+  /** Every live process carrying the marker entry `entry`, ascending. */
+  carriers(entry: string): number[];
 }
 
 /** Call once at the top of a spec, after `useValidateRuntime()`. After each test, before the world is removed, it
@@ -186,5 +211,7 @@ export function useInstalledLauncher(runtime: ValidateRuntime, platform: NodeJS.
     install: (page) => installLauncher(page, runtime.world()),
     run: (command, args, cwd) => current().run(command, args, cwd),
     survivors: (run) => current().survivors(run),
+    mark: () => current().mark(),
+    carriers: (entry) => current().carriers(entry),
   };
 }

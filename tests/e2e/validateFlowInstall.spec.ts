@@ -25,13 +25,14 @@ const EXIT_MARKER = 'validate-exit:';
 
 /** Types `command --validate-flow <operand>` into the app's own terminal, from `cwd`, the way an agent in the
  *  session runs it, and reads back what it printed and returned. The shell captures each stream to a file and
- *  echoes the exit status on a row of its own, so a long line that wraps on screen cannot change the result. */
-async function runInTerminal(page: Page, command: string, operand: string, cwd: string, outDir: string, name: string): Promise<RunResult> {
+ *  echoes the exit status on a row of its own, so a long line that wraps on screen cannot change the result. The
+ *  command runs with the `marker` environment entry, so whatever it starts can be found and reaped. */
+async function runInTerminal(page: Page, run: { command: string; marker: string }, operand: string, cwd: string, outDir: string, name: string): Promise<RunResult> {
   const [out, err] = [join(outDir, `${name}.out`), join(outDir, `${name}.err`)];
   await page.locator('[data-viewbtn="1"]').click();
   await page.locator('.xterm-screen').click();
   await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('TEXTAREA');
-  const line = `cd ${shellQuote(cwd)} && ${shellQuote(command)} ${VALIDATE_FLOW_FLAG} ${shellQuote(operand)} >${shellQuote(out)} 2>${shellQuote(err)}; echo "${EXIT_MARKER}${name}:$?"`;
+  const line = `cd ${shellQuote(cwd)} && env ${shellQuote(run.marker)} ${shellQuote(run.command)} ${VALIDATE_FLOW_FLAG} ${shellQuote(operand)} >${shellQuote(out)} 2>${shellQuote(err)}; echo "${EXIT_MARKER}${name}:$?"`;
   await page.keyboard.type(line, { delay: 5 });
   await page.keyboard.press('Enter');
   const marker = page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${EXIT_MARKER}${name}:\\d+\\s*$`) });
@@ -75,12 +76,16 @@ test.describe('the installed agent-terminal --validate-flow', { tag: '@ownapp' }
     const outDir = world.dir('terminal-runs');
     const [folder] = bundledFlowFolders(runtime.runtimeMain());
 
-    const pass = await runInTerminal(page, command, folder, world.dir('caller'), outDir, 'pass');
+    const passRun = { command, marker: launcher.mark() };
+    const pass = await runInTerminal(page, passRun, folder, world.dir('caller'), outDir, 'pass');
     expect.soft(passOutcome(pass)).toEqual(PASSED);
+    expect.soft(launcher.carriers(passRun.marker)).toEqual([]);
 
     const repo = world.dir('repo');
     const flowFile = writeFlow(flowLocations.repoCatalogEntry(repo, 'f'), { name: 'f', steps: [{ id: 'build', kind: 'loop', loop: 'missing-loop' }] });
-    const broken = await runInTerminal(page, command, join('.agent-terminal', 'flows', 'f'), repo, outDir, 'broken');
+    const brokenRun = { command, marker: launcher.mark() };
+    const broken = await runInTerminal(page, brokenRun, join('.agent-terminal', 'flows', 'f'), repo, outDir, 'broken');
+    expect.soft(launcher.carriers(brokenRun.marker)).toEqual([]);
     expect(problemOutcome(broken, realpathSync(flowFile))).toEqual(problemLine(expect.stringContaining('missing-loop')));
   });
 });

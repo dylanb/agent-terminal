@@ -67,7 +67,6 @@ export function todoTemplateResolves(baseDir: string, ref: string): boolean {
   return firstTemplate(baseDir, ref, (real) => (isReadableRegularFile(real) ? real : null)) !== null;
 }
 
-/** `ref` looked up as written, then with the extension added, inside `baseDir`: the first contained file `take` accepts. */
 function firstTemplate<T>(baseDir: string, ref: string, take: (real: string) => T | null): T | null {
   const root = path.resolve(baseDir);
   for (const name of isTodoTemplateFile(ref) ? [ref] : [ref, todoTemplateFile(ref)]) {
