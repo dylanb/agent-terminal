@@ -193,7 +193,7 @@ export interface LoopDefV2Context {
 }
 
 /** §27.8. */
-function flowLoopsDir(loopsRoot: string, flow: string): string | null {
+export function flowLoopsDir(loopsRoot: string, flow: string): string | null {
   return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
 

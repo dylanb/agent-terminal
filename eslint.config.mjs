@@ -77,6 +77,21 @@ const WIRE_FORMAT_TESTS = [
   'tests/integration/controllerWebSocket.test.ts',
   'tests/e2e/controllerWireVersion.spec.ts',
 ];
+const VALIDATE_FLOW_HARNESS_MESSAGE =
+  'Run the command through tests/e2e/validateFlowHarness.ts (installed launcher: tests/e2e/installedLauncher.ts), which gives every run a fully specified environment and owns every process it starts; wait for an observed state, never a fixed time.';
+const VALIDATE_FLOW_SPEC_RULES = {
+  'no-restricted-imports': ['error', {
+    paths: [
+      ...['child_process', 'node:child_process'].map((name) => ({ name, message: VALIDATE_FLOW_HARNESS_MESSAGE })),
+      ...['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: VALIDATE_FLOW_HARNESS_MESSAGE })),
+      ...['process', 'node:process'].map((name) => ({ name, importNames: ['env'], message: VALIDATE_FLOW_HARNESS_MESSAGE })),
+      { name: './registeredElectron', message: VALIDATE_FLOW_HARNESS_MESSAGE },
+      { name: '@playwright/test', importNames: ['_electron'], message: VALIDATE_FLOW_HARNESS_MESSAGE },
+    ],
+  }],
+  'no-restricted-properties': ['error', { object: 'process', property: 'env', message: VALIDATE_FLOW_HARNESS_MESSAGE }],
+  'no-restricted-syntax': ['error', ...[NO_SLEEP, NO_PROMISE_SLEEP].map(({ selector }) => ({ selector, message: VALIDATE_FLOW_HARNESS_MESSAGE }))],
+};
 const EXPECTED_RESULTS_FIXTURES = ['tests/helpers/controllerStatusFixture.ts', 'tests/helpers/controllerCards.ts', 'tests/helpers/engineCapabilityOracle.ts'];
 
 const ONE_OF_MESSAGE =
@@ -157,6 +172,10 @@ export default [
         paths: ['timers/promises', 'node:timers/promises'].map((name) => ({ name, importNames: ['setTimeout'], message: NO_SLEEP_MESSAGE })),
       }],
     },
+  },
+  {
+    files: ['tests/e2e/validateFlow*.spec.ts'],
+    rules: VALIDATE_FLOW_SPEC_RULES,
   },
   {
     files: ['src/main/controller*.ts'],
