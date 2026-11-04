@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { APP_COMMAND_TIMEOUT_MS, commandEnvironment, parseAppGitObjectId, runAppCommand } from './appCommand';
 import { errMsg, isErrno } from './errno';
 import { originGitHubRepository } from './githubRepository';
-import { openPullRequestsForBranch } from './pullRequestLookup';
+import { openPullRequestsForBranch, type BranchPullRequest } from './pullRequestLookup';
 import type { BranchPullRequests, OpenPullRequest, ProofWorkingTree } from './testProof';
 
 export function createProofWorkingTree(root: string): ProofWorkingTree {
@@ -51,27 +51,34 @@ export function createBranchPullRequests(root: string): BranchPullRequests {
       } catch (e) {
         return { kind: 'github-unavailable', reason: `could not list the open PRs for ${branch}: ${errMsg(e)}` };
       }
-      const sameRepository = listed.filter((pr) => !pr.crossRepository);
-      const [only] = sameRepository;
-      if (sameRepository.length === 1 && only) return { kind: 'open', number: only.number, headSha: only.headSha };
-      if (sameRepository.length > 1) return { kind: 'several', numbers: sameRepository.map((pr) => pr.number) };
-      const [fork] = listed;
-      return fork ? { kind: 'fork', number: fork.number } : { kind: 'none' };
+      return proofPullRequest(listed);
     },
   };
+}
+
+function proofPullRequest(listed: readonly BranchPullRequest[]): OpenPullRequest {
+  const sameRepository = listed.filter((pr) => !pr.crossRepository);
+  if (sameRepository.length > 1) return { kind: 'several', numbers: sameRepository.map((pr) => pr.number) };
+  const [only] = sameRepository;
+  if (only) return { kind: 'open', number: only.number, headSha: only.headSha };
+  const [fork] = listed;
+  return fork ? { kind: 'fork', number: fork.number } : { kind: 'none' };
 }
 
 function githubUnavailableReason(root: string, host: string): Promise<string | null> {
   return new Promise((resolve) => {
     const probe = ['auth', 'status', '--hostname', host, '--active'];
     execFile('gh', probe, { cwd: root, env: commandEnvironment(), timeout: APP_COMMAND_TIMEOUT_MS }, (error, _stdout, stderr) => {
-      if (error === null) resolve(null);
-      else if (isErrno(error, 'ENOENT')) resolve('gh is not installed (no gh found on PATH).');
-      else if (typeof error.code === 'number') {
+      if (error === null) {
+        resolve(null);
+      } else if (isErrno(error, 'ENOENT')) {
+        resolve('gh is not installed (no gh found on PATH).');
+      } else if (typeof error.code === 'number') {
         const said = stderr.trim() || `exit ${error.code}`;
         resolve(`gh ${probe.join(' ')} failed: ${said}. If gh is not logged in to ${host}, run gh auth login --hostname ${host}.`);
+      } else {
+        resolve(`gh auth status did not finish: ${errMsg(error)}`);
       }
-      else resolve(`gh auth status did not finish: ${errMsg(error)}`);
     });
   });
 }
