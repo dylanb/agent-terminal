@@ -289,11 +289,16 @@ describe('feedback composer — compose-with-agent vs submit-as-is (§19.4 / AC4
 describe('feedback composer — the back-to-red variant (§28.4.2)', () => {
   const backToRed = (over: Partial<{ step: string; todos: { id: string; text: string }[] }> = {}) => ({ ...open(over), purpose: 'back-to-red' as const });
 
-  it('names the reopen and the phases the brief reaches', () => {
-    createFeedbackComposer(host).render(backToRed({ step: 'green' }), vi.fn());
+  it('names the step the reopen returns to and the gate it is sent from', () => {
+    createFeedbackComposer(host).render({ ...backToRed({ step: 'integration' }), target: 'dev' }, vi.fn());
     const dialog = host.querySelector('.flow-modal')!;
-    expect(dialog.querySelector('h3')?.textContent).toContain('RED');
-    expect(dialog.textContent).toMatch(/RED, GREEN and refactor/);
+    expect(dialog.querySelector('h3')?.textContent).toContain('dev');
+    expect(dialog.querySelector('h3')?.textContent).toContain('integration');
+    expect(submitBtn().textContent).toBe('Back to dev');
+  });
+
+  it('names RED when no return step is given', () => {
+    createFeedbackComposer(host).render(backToRed({ step: 'green' }), vi.fn());
     expect(submitBtn().textContent).toBe('Back to RED');
   });
 

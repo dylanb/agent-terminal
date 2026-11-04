@@ -1,0 +1,47 @@
+version: v2
+name: simple-plan-loop-v1
+brief: prompts/brief.md
+work:
+  recipe: prompts/work.md
+  artifact: plan
+  goal: "the plan holds its intent, fit check, scrutiny flags and increments, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and plan-report.md logs every decision the planner made, every item left for the operator, and every finding it fixed or dismissed"
+  checkpoint:
+    passes: 3
+reviewers:
+  - persona: review-plan-principal
+    charter: charter/principal.md
+  - persona: review-plan-intent
+    charter: charter/intent.md
+  - persona: review-plan-test-architect
+    charter: charter/test-architect.md
+  - persona: review-plan-tracer-slicer
+    charter: charter/tracer-slicer.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+  - option: redo
+pickup:
+  initial_status: planning
+  branch_template: plan-loop/issue-{issue}
+  initial_labels:
+    - action: remove
+      target: issue
+      label: plan-loop/ready
+    - action: add
+      target: issue
+      label: plan-loop/in-progress
+    - action: add
+      target: pr
+      label: plan-loop/plan-draft
+  on_conflict: wipe-and-retry
+outputs:
+  - id: plan
+    path: plan.md
+  - id: plan-report
+    path: plan-report.md
+  - id: groom-intent
+    path: groom-intent.md
