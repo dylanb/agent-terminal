@@ -77,18 +77,19 @@ function validate(folder: string, deps: ValidateFlowDeps): Problem | null {
 
 /** The first step, in flow order, whose binding, todo template or loop a run would fail on. */
 function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Context): Problem | null {
+  const templatesDir = todoTemplatesDir(flowDir);
   for (const step of definition.steps) {
     if (step.loop !== undefined && bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) {
       return { file: flowFile, text: `step ${step.id}: ${MARKED_BINDING_REASON}` };
     }
     const templateRef = stepTemplateRef(step);
-    if (templateRef !== null && !todoTemplateResolves(todoTemplatesDir(flowDir), templateRef)) {
-      return { file: flowFile, text: `step ${step.id}: todo template ${templateRef} does not resolve in ${todoTemplatesDir(flowDir)}` };
+    if (templateRef !== null && !todoTemplateResolves(templatesDir, templateRef)) {
+      return { file: flowFile, text: `step ${step.id}: todo template ${templateRef} does not resolve in ${templatesDir}` };
     }
     if (step.loop === undefined) continue;
     const resolved = resolveLoopDefV2(step.loop, loops);
-    if (!resolved.ok) return { file: resolved.defFile ?? flowFile, text: resolved.reason };
     const defFile = resolved.defFile ?? flowFile;
+    if (!resolved.ok) return { file: defFile, text: resolved.reason };
     const missing = unreadableReference(resolved.def, path.dirname(defFile));
     if (missing !== null) return { file: defFile, text: missing };
   }
@@ -152,8 +153,8 @@ function isAppHome(anchor: string, appHome: string): boolean {
   return real !== null && real === resolveOwnedDirJail(appHome);
 }
 
-/** A global flow sits in no repository, so no override registry is read and its own folder anchors the
- *  resolver's artifact paths. */
+/** No repository override registry applies to a global flow, even when A is a repository, so none is read and
+ *  the flow's own folder anchors the resolver's artifact paths. */
 const globalScope = (folder: string, tiers: LoopDefV2Tiers): LoopScope => ({ tiers, repoDir: folder, skipRepoOverrides: true });
 
 function locateFlowHome(root: string, loops: LoopScope): Located {

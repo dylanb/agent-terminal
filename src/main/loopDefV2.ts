@@ -183,9 +183,9 @@ export interface LoopDefV2 {
 
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
- *  label), or a human-readable reason surfaced in the UI (AC 6). */
-/** `defFile` is the real path of the definition file resolution reached: always set on success, and on a
- *  failure only when that file was read or its read failed for a reason other than absence. */
+ *  label), or a human-readable reason surfaced in the UI (AC 6). `defFile` is the real path of the definition
+ *  file resolution reached: always set on success, and on a failure only when that file was read or its read
+ *  failed for a reason other than absence. */
 export type LoopDefV2Result =
   | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile?: string }
   | { ok: false; reason: string; defFile?: string };
@@ -195,7 +195,8 @@ export interface LoopDefV2Context {
   repoDir: string;
   /** The running flow's name: its own loop folder in the operator tier is consulted before the shared one. */
   flow?: string;
-  /** Set for a flow outside any repository: `repoDir`'s override registry is then never read. */
+  /** Set when no repository override registry applies to the flow (a global or bundled flow): `repoDir`'s
+   *  registry is then never read. */
   skipRepoOverrides?: true;
   /** Set to refuse a registry or definition that is a named pipe or a device instead of reading it. */
   refuseSpecialFiles?: true;
