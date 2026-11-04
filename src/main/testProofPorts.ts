@@ -16,19 +16,18 @@ const REPORT_DIR = ['.agent-terminal', 'test-proof'] as const;
 const VITEST_REPORT = 'vitest.json';
 const E2E_REPORT = 'report.json';
 const E2E_ENVIRONMENT = 'environment.json';
-const SUITE_OUTPUTS: Record<ProofSuite, readonly string[]> = { vitest: [VITEST_REPORT], e2e: [E2E_REPORT, E2E_ENVIRONMENT] };
 const COMMENTS_PER_PAGE = 50;
 
 type Prepared = { ok: true; dir: string } | { ok: false; reason: string };
 
-function prepareReportDir(root: string, suite: ProofSuite): Prepared {
+function prepareReportDir(root: string, outputs: readonly string[]): Prepared {
   const dir = resolveJail(root, ...REPORT_DIR);
   if (dir === null) return { ok: false, reason: `the repository root ${root} cannot be resolved` };
   const confined = confinedRealPathResult(dir, dir);
   if (!confined.ok) return { ok: false, reason: `the report dir ${dir} ${confined.cause === 'escapes' ? 'leads outside the repository' : 'cannot be resolved'}` };
   try {
     mkdirSync(dir, { recursive: true });
-    for (const output of SUITE_OUTPUTS[suite]) {
+    for (const output of outputs) {
       const earlier = confinedRealPath(dir, join(dir, output));
       if (earlier === null) return { ok: false, reason: `the earlier ${output} in ${dir} cannot be removed safely` };
       rmSync(earlier, { force: true });
@@ -51,46 +50,51 @@ function runInherited(file: string, args: readonly string[], cwd: string, enviro
 
 const STARTED_NOTHING = 1;
 
-export function createProofSuites(root: string): ProofSuites {
-  const runSuite = async (suite: ProofSuite, read: (dir: string) => ReportRead<SuiteResult>, start: (dir: string) => Promise<Exit>): Promise<SuiteRun> => {
-    const prepared = prepareReportDir(root, suite);
-    if (!prepared.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: prepared.reason };
-    const exit = await start(prepared.dir);
-    if (!exit.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: exit.reason };
-    const result = read(prepared.dir);
-    return result.kind === 'read' ? { kind: 'ran', exitCode: exit.code, result: result.value } : { kind: 'unreadable', exitCode: exit.code, reason: result.reason };
-  };
+interface SuiteAdapter {
+  outputs: readonly string[];
+  start(root: string, dir: string): Promise<Exit>;
+  read(root: string, dir: string): ReportRead<SuiteResult>;
+}
 
-  return {
-    run(suite) {
-      if (suite === 'vitest') {
-        return runSuite(
-          suite,
-          (dir) => {
-            const counts = readVitestReport(dir, VITEST_REPORT);
-            if (counts.kind === 'unreadable') return counts;
-            const jail = resolveJail(root, 'node_modules');
-            const electron = jail === null ? null : readPackageVersion(join(jail, 'electron'), 'package.json');
-            if (electron === null || electron.kind === 'unreadable') {
-              return { kind: 'unreadable', reason: `the installed Electron version cannot be read${electron === null ? '' : `: ${electron.reason}`}` };
-            }
-            return { kind: 'read', value: { ...counts.value, environment: { node: process.version, electron: electron.value } } };
-          },
-          (dir) =>
-            runInherited('pnpm', ['test', '--reporter=default', '--reporter=json', `--outputFile.json=${join(dir, VITEST_REPORT)}`, '--retry=0'], root, {}),
-        );
+const SUITE_ADAPTERS: Record<ProofSuite, SuiteAdapter> = {
+  vitest: {
+    outputs: [VITEST_REPORT],
+    start: (root, dir) =>
+      runInherited('pnpm', ['test', '--reporter=default', '--reporter=json', `--outputFile.json=${join(dir, VITEST_REPORT)}`, '--retry=0'], root, {}),
+    read(root, dir) {
+      const counts = readVitestReport(dir, VITEST_REPORT);
+      if (counts.kind === 'unreadable') return counts;
+      const jail = resolveJail(root, 'node_modules');
+      const electron = jail === null ? null : readPackageVersion(join(jail, 'electron'), 'package.json');
+      if (electron === null || electron.kind === 'unreadable') {
+        return { kind: 'unreadable', reason: `the installed Electron version cannot be read${electron === null ? '' : `: ${electron.reason}`}` };
       }
-      return runSuite(
-        suite,
-        (dir) => {
-          const counts = readPlaywrightReport(dir, E2E_REPORT);
-          if (counts.kind === 'unreadable') return counts;
-          const environment = readE2eEnvironment(dir, E2E_ENVIRONMENT);
-          if (environment.kind === 'unreadable') return environment;
-          return { kind: 'read', value: { ...counts.value, environment: environment.value } };
-        },
-        () => runInherited(join(root, 'scripts', 'e2e-podman.sh'), [], root, { E2E_IO_DIR: '', E2E_REPORT_DIR: join(...REPORT_DIR) }),
-      );
+      return { kind: 'read', value: { ...counts.value, environment: { node: process.version, electron: electron.value } } };
+    },
+  },
+  e2e: {
+    outputs: [E2E_REPORT, E2E_ENVIRONMENT],
+    start: (root) => runInherited(join(root, 'scripts', 'e2e-podman.sh'), [], root, { E2E_IO_DIR: '', E2E_REPORT_DIR: join(...REPORT_DIR) }),
+    read(_root, dir) {
+      const counts = readPlaywrightReport(dir, E2E_REPORT);
+      if (counts.kind === 'unreadable') return counts;
+      const environment = readE2eEnvironment(dir, E2E_ENVIRONMENT);
+      if (environment.kind === 'unreadable') return environment;
+      return { kind: 'read', value: { ...counts.value, environment: environment.value } };
+    },
+  },
+};
+
+export function createProofSuites(root: string): ProofSuites {
+  return {
+    async run(suite): Promise<SuiteRun> {
+      const adapter = SUITE_ADAPTERS[suite];
+      const prepared = prepareReportDir(root, adapter.outputs);
+      if (!prepared.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: prepared.reason };
+      const exit = await adapter.start(root, prepared.dir);
+      if (!exit.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: exit.reason };
+      const result = adapter.read(root, prepared.dir);
+      return result.kind === 'read' ? { kind: 'ran', exitCode: exit.code, result: result.value } : { kind: 'unreadable', exitCode: exit.code, reason: result.reason };
     },
   };
 }

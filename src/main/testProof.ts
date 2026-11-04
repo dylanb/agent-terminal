@@ -90,12 +90,16 @@ async function checkPreconditions(ports: TestProofPorts): Promise<Checked> {
   return { kind: 'ready', branch, pr: pr.number, head };
 }
 
-function suiteFailure(suite: ProofSuite, run: SuiteRun): string | null {
+type SuiteVerdict = { passed: true; result: SuiteResult } | { passed: false; cause: string };
+
+function suiteVerdict(suite: ProofSuite, run: SuiteRun): SuiteVerdict {
   if (run.kind === 'unreadable') {
-    return `${suite} did not pass: its results are unreadable (${run.reason}); it exited ${run.exitCode}.`;
+    return { passed: false, cause: `${suite} did not pass: its results are unreadable (${run.reason}); it exited ${run.exitCode}.` };
   }
-  if (run.exitCode === 0 && run.result.failed === 0) return null;
-  return `${suite} did not pass: it exited ${run.exitCode} with ${run.result.failed} failed.`;
+  if (run.exitCode !== 0 || run.result.failed !== 0) {
+    return { passed: false, cause: `${suite} did not pass: it exited ${run.exitCode} with ${run.result.failed} failed.` };
+  }
+  return { passed: true, result: run.result };
 }
 
 export function statusDescription(result: SuiteResult): string {
@@ -152,11 +156,10 @@ export async function runTestProof(args: readonly string[], ports: TestProofPort
   const results = {} as Record<ProofSuite, SuiteResult>;
   for (const suite of SUITES) {
     ports.report(`test:proof: running ${suite} on ${before.head} for PR #${before.pr}.`);
-    const run = await ports.suites.run(suite);
-    const failure = suiteFailure(suite, run);
-    if (failure !== null || run.kind !== 'ran') return refuse(failure ?? `${suite} did not pass.`);
-    results[suite] = run.result;
-    ports.report(`test:proof: ${suite} passed (${statusDescription(run.result)}).`);
+    const verdict = suiteVerdict(suite, await ports.suites.run(suite));
+    if (!verdict.passed) return refuse(verdict.cause);
+    results[suite] = verdict.result;
+    ports.report(`test:proof: ${suite} passed (${statusDescription(verdict.result)}).`);
   }
 
   const after = await checkPreconditions(ports);
@@ -165,15 +168,15 @@ export async function runTestProof(args: readonly string[], ports: TestProofPort
     return refuse(`HEAD moved during the run: it is now ${after.head}, but the suites tested ${before.head}.`);
   }
 
-  const publishes: [string, () => Promise<void>][] = [
-    ...SUITES.map((suite): [string, () => Promise<void>] => [
-      `the ${TEST_PROOF_CHECKS[suite]} status`,
-      () => ports.publisher.status(before.head, TEST_PROOF_CHECKS[suite], statusDescription(results[suite])),
-    ]),
-    [`the summary comment on PR #${before.pr}`, () => ports.publisher.summary(before.pr, summaryBody(before.head, results))],
+  const publishes: { target: string; publish: () => Promise<void> }[] = [
+    ...SUITES.map((suite) => ({
+      target: `the ${TEST_PROOF_CHECKS[suite]} status`,
+      publish: () => ports.publisher.status(before.head, TEST_PROOF_CHECKS[suite], statusDescription(results[suite])),
+    })),
+    { target: `the summary comment on PR #${before.pr}`, publish: () => ports.publisher.summary(before.pr, summaryBody(before.head, results)) },
   ];
   let complete = true;
-  for (const [target, publish] of publishes) {
+  for (const { target, publish } of publishes) {
     try {
       await publish();
       ports.report(`test:proof: published ${target}.`);
