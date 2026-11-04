@@ -127,8 +127,8 @@ again, its new section replaces its old one. Under the heading:
 
 - `### Needs your call` — each item outside the decision boundary: what it is, the options, what each costs
   and gains, and your recommendation. `None.` when there is none.
-- `### Increments` — for each increment: its `RED:` and `GREEN:` commit, the tests the RED added and how each
-  failed, and whether it was verification-only or split.
+- `### Increments` — for each increment: its `RED:` and `GREEN:` commit, the tests the RED added or edited and
+  how each failed, and whether it was verification-only or split.
 - `### Decisions` — one numbered entry per decision: the question, the options you weighed, what you chose,
   and why. Lead with the one with the most impact on the user.
 - `### Scope reduction` — each change you reverted as outside the ticket's scope, and why. `None.` when there

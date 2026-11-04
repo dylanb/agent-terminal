@@ -24,7 +24,7 @@ agent's own outcome classification (§28.5.2c) bounded.
 
 In this step RED and GREEN run in one session, so the working tree you review is already GREEN. Grade each
 increment's RED at its `RED:` commit: check the commit out in a scratch worktree, never this one, run the tests it
-added there, each in the environment the repository's conventions prescribe for its type, and see them fail.
+added or edited there, each in the environment the repository's conventions prescribe for its type, and see them fail.
 A `RED:` commit that holds production code, or whose tests pass there without being recorded as verification-only,
 is a finding; so is an increment with a `GREEN:` commit and no `RED:` commit before it.
 
@@ -41,7 +41,7 @@ it records where each test actually failed, and the engine already holds it agai
 failures, so spend your attention on whether each declared check is the right one for its acceptance criterion.
 
 A verification-only RED records an increment whose behavior an earlier increment already built: every test it added
-passes. Grade it as strictly as a failing RED. Confirm the tests cover the increment's acceptance criteria, that the
+or edited passes. Grade it as strictly as a failing RED. Confirm the tests cover the increment's acceptance criteria, that the
 behavior they pass against already exists in the code (not in this change), and that the test evidence shows
 each check failing by assertion at that check when its behavior was broken in a scratch copy of the
 repository. A check with no such run, or one that still passed with its behavior broken, is a finding. A
@@ -49,6 +49,6 @@ verification-only RED for an increment that is not already built is a finding: i
 
 A RED counts only if it came from a run of the test in the environment the repository's own conventions
 prescribe for that test type: ensure every test needed to prove the in-scope change has actually been run —
-each new RED test, whatever its type (unit, integration, end-to-end, or any other the repository has) — and
+each new or edited RED test, whatever its type (unit, integration, end-to-end, or any other the repository has) — and
 that its failure is the assertion, not a harness or environment that could not run it. A RED observed only
 in an environment the repository's conventions do not accept is not evidence.

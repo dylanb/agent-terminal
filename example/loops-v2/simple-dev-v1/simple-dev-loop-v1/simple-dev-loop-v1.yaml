@@ -4,7 +4,7 @@ brief: prompts/brief.md
 work:
   recipe: prompts/work.md
   artifact: commits
-  goal: "every increment of the plan has a `RED:` commit whose new tests fail by assertion followed by a `GREEN:` commit, the tests and the build pass, every change to a line of a RED test is logged under `### RED test changes`, no change outside the ticket's scope remains, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and this step's report section file holds its decisions, review history and test evidence"
+  goal: "every increment of the plan has a `RED:` commit whose new and edited tests fail by assertion followed by a `GREEN:` commit, the tests and the build pass, every change to a line of a RED test is logged under `### RED test changes`, no change outside the ticket's scope remains, no review pass is left to run, because the latest pass's fixes, or the work itself when no pass ran, changed nothing but this step's report and its recorded test evidence (an edit to the plan, the ticket, code or tests is a change), and this step's report section file holds its decisions, review history and test evidence"
   checkpoint:
     passes: 3
 reviewers:
