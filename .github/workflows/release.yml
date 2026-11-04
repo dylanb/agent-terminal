@@ -4,7 +4,7 @@
 # Three entry points:
 #   - workflow_dispatch(version): opens a "Release vX.Y.Z" PR that bumps package.json. Nothing is built.
 #   - push to main that changes package.json's version (the bump PR merging): tags the merge commit, builds.
-#   - push of a v* tag: checks the tag matches package.json at that commit, builds.
+#   - push of a v* tag on a commit in main: checks the tag matches package.json at that commit, builds.
 # Tags and PR branches pushed with GITHUB_TOKEN start no workflow run, so the main-push path builds in its
 # own run instead of relying on the tag it pushes.
 name: release
@@ -24,9 +24,16 @@ on:
 permissions:
   contents: read
 
+# Keyed per commit: GitHub keeps one pending run per group, so a shared group would let a later
+# package.json merge cancel a queued release run.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
+
+env:
+  # Written by `bump` and read back by `resolve`; a version one accepts and the other rejects strands main
+  # on an unreleasable version.
+  RELEASE_VERSION_RE: '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
 jobs:
   bump:
@@ -48,7 +55,7 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          if ! [[ "$VERSION" =~ $RELEASE_VERSION_RE ]]; then
             echo "::error::'$VERSION' is not a version like 1.2.3 or 1.2.3-beta.1 (no leading v)."
             exit 1
           fi
@@ -103,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - id: r
         env:
@@ -111,8 +118,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          sha=$(git rev-parse HEAD)
           version=$(node -p "require('./package.json').version")
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          if ! [[ "$version" =~ $RELEASE_VERSION_RE ]]; then
             echo "::error::package.json version '$version' is not a release version."
             exit 1
           fi
@@ -123,6 +131,11 @@ jobs:
               echo "::error::Tag $REF_NAME does not match package.json version $version at that commit (expected $tag)."
               exit 1
             fi
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$sha" FETCH_HEAD; then
+              echo "::error::Tag $REF_NAME points at $sha, which is not on main. Only merged commits are released."
+              exit 1
+            fi
           else
             previous=$(git show HEAD^:package.json | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0, 'utf8')).version)")
             if [ "$previous" = "$version" ]; then
@@ -130,13 +143,15 @@ jobs:
               echo "release=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
-              echo "::notice::Tag $tag already exists, so its own tag-push run releases it."
-              echo "release=false" >> "$GITHUB_OUTPUT"
-              exit 0
+            # The last line is the dereferenced commit when the tag is annotated.
+            tagged=$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | tail -n 1 | cut -f 1)
+            if [ -z "$tagged" ]; then
+              git tag "$tag" "$sha"
+              git push origin "refs/tags/$tag"
+            elif [ "$tagged" != "$sha" ]; then
+              echo "::error::Tag $tag already exists on $tagged, not on this merge commit $sha. Delete the tag and re-run this run, or release $tagged by hand if it is on main."
+              exit 1
             fi
-            git tag "$tag" "$GITHUB_SHA"
-            git push origin "refs/tags/$tag"
           fi
 
           prerelease=false
@@ -219,15 +234,24 @@ jobs:
           PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
         run: |
           set -euo pipefail
-          ls -l assets
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" assets/* --clobber
+          # The artifact keeps the controller's files under controller/, so collect files, not top-level entries.
+          mapfile -t files < <(find assets -type f | sort)
+          printf '%s\n' "${files[@]}"
+
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
+          if [ "$draft" = true ]; then
+            gh release upload "$TAG" "${files[@]}" --clobber
             exit 0
           fi
+          if [ "$draft" = false ]; then
+            echo "::error::Release $TAG is already published; refusing to replace its assets."
+            exit 1
+          fi
+
           notes=$(cat <<'EOF'
-          **macOS:** the app is ad-hoc signed, not notarized. On first launch macOS blocks it; open **System Settings → Privacy & Security** and choose **Open Anyway** (or run `xattr -dr com.apple.quarantine "/Applications/agent-terminal.app"`).
+          **macOS:** the apps are ad-hoc signed, not notarized. On first launch macOS blocks each one; open **System Settings → Privacy & Security** and choose **Open Anyway** (or run `xattr -dr com.apple.quarantine "/Applications/agent-terminal.app" "/Applications/agent-terminal-controller.app"`, naming the apps you installed).
           EOF
           )
           args=(--draft --verify-tag --title "$TAG" --generate-notes --notes "$notes")
           [ "$PRERELEASE" = true ] && args+=(--prerelease)
-          gh release create "$TAG" "${args[@]}" assets/*
+          gh release create "$TAG" "${args[@]}" "${files[@]}"

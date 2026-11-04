@@ -11,8 +11,8 @@ The workflow runs no tests. A release builds from a commit on `main`, which merg
 
 1. **Actions → release → Run workflow**, and enter the version without the `v` (`0.2.0`, or `0.2.0-beta.1`).
    This opens a draft PR `Release v0.2.0` from the branch `release/v0.2.0`, which bumps `package.json`.
-2. Check out that branch, run `pnpm run test:proof`, and mark the PR ready. A PR opened by the workflow starts no
-   other workflow, so the proof is the only check it gets, the same as any PR.
+2. Check out that branch, run `pnpm run test:proof`, and mark the PR ready. Opening the PR with `GITHUB_TOKEN`
+   starts no workflow. Marking it ready runs `lint`, as on any PR, and the test proof is its required check.
 3. Squash-merge it. The push to `main` changes `package.json`'s version, so the workflow tags the merge commit
    `v0.2.0`, builds, and creates the draft release.
 4. Review the draft on the Releases page, edit the notes if needed, and press **Publish**.
@@ -24,20 +24,23 @@ same way.
 
 ### Tagging by hand
 
-Pushing a `v*` tag also builds a draft release, from the tagged commit. Use it for a commit whose version was never
-released, such as one merged before this workflow existed:
+Pushing a `v*` tag also builds a draft release, from the tagged commit, which must be on `main`. Use it for a
+commit whose version was never released, such as one merged before this workflow existed:
 
 ```sh
 git tag v0.1.0 <sha> && git push origin v0.1.0
 ```
 
-The run fails unless the tag is `v` plus `package.json`'s version at that commit. If you push the tag before the
-bump PR merges, the merge's run sees the existing tag and leaves the release to the tag's own run.
+The run fails unless the tag is `v` plus `package.json`'s version at that commit. Do not tag a bump PR's commit
+before it merges: that commit is not on `main`, so the tag's run fails, and the merge's run fails too because the
+tag already points elsewhere. Delete the tag (`git push origin :refs/tags/v0.2.0`) and re-run the merge's run.
 
 ## Re-running
 
-Re-run the failed jobs of the run from the Actions page. When the draft release already exists, the release job
-replaces its assets instead of creating a second release. The `release/vX.Y.Z` branch and the tag both block a
+Re-run the run from the Actions page, either all jobs or only the failed ones. A tag that the run already pushed
+for the same commit does not stop it. When the draft release already exists, the release job replaces its assets
+instead of creating a second release. Once the release is published, a re-run fails rather than replace the assets
+users have downloaded. The `release/vX.Y.Z` branch and the tag both block a
 second dispatch of the same version. Delete them to start over.
 
 ## One-time repository setting
