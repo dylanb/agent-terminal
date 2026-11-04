@@ -25,17 +25,18 @@ writing is done by sub-agents, so the code and test files they read never fill y
 
 ## For each increment, in the plan's order
 
-1. **RED.** Brief a sub-agent to write the failing tests for the increment, asserting observable behavior and
-   never the implementation, under the brief's **A RED must fail at its own check**. It must not touch production
-   code.
-2. **Check the RED.** Run the increment's new tests, each in the environment the repository's conventions
-   prescribe for its type, and every other test. Valid only when every new test fails by an assertion at the check
-   it exists for, or all pass for a verification-only increment shown failing in a scratch copy, and every other
-   test passes. A compile, import or collection error, a test that fails before its own check, or no test
-   selected is not a RED: send the sub-agent's work back with what is wrong, or fix it yourself, and check again.
+1. **RED.** Brief a sub-agent to write the failing tests for the increment, and to make the plan's edits to or
+   deletions of existing tests for it, asserting observable behavior and never the implementation, under the
+   brief's **A RED must fail at its own check**. It must not touch production code.
+2. **Check the RED.** Run the increment's new and edited tests, each in the environment the repository's
+   conventions prescribe for its type, and every other test. Valid only when every new or edited test fails by an
+   assertion at the check it exists for, or all pass for a verification-only increment shown failing in a scratch
+   copy, and every test the RED left untouched passes. A compile, import or collection error, a test that fails
+   before its own check, or no test selected is not a RED: send the sub-agent's work back with what is wrong, or
+   fix it yourself, and check again.
    Ask the brief's two questions of each test before you go on.
-3. **Commit the RED** as `RED: <increment title>`, holding only the tests, following the repository's commit
-   conventions. Record the failing run under `### Increments`.
+3. **Commit the RED** as `RED: <increment title>`, holding only the test changes, following the repository's
+   commit conventions. Record the failing run under `### Increments`.
 4. **GREEN.** Brief a fresh sub-agent to make the smallest change that makes the increment's tests pass, under
    the brief's **Make it work, then make it readable**. It changes a line of a committed RED test only when that
    test is wrong, and reports each such change with why. Any test it adds for a branch or failure path its design
