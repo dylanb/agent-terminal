@@ -71,7 +71,7 @@ that tell the cases apart, add the boundary case and the opposite direction. A c
 means the test pins one way of building it: check the behaviour its acceptance criterion names, not a DOM shape,
 an update strategy or the moment a measurement lands.
 
-When every test an increment adds already passes, its behavior was built by an earlier increment: do not weaken a
+When every test an increment adds or edits already passes, its behavior was built by an earlier increment: do not weaken a
 test or break production code to make one fail. Show instead, in a scratch copy of the repository and never this
 working tree, that each check fails by assertion when the behavior it guards is broken, record that under
 `### Test evidence`, and commit the tests as `RED:` noting the increment as verification-only.

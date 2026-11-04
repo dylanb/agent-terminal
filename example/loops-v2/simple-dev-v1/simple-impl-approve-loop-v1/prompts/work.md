@@ -8,8 +8,9 @@ operator in this terminal, with these parts in this order:
 
 1. `## Needs your call` — every item from each step's `### Needs your call` in the report, each with its
    options and the recommendation, the step it came from first. Say plainly when there is none.
-2. `## RED test changes` — every test file whose lines changed after the `RED:` commit that added them. Find
-   them from the branch itself: for each `RED:` commit, diff the test files it added against the branch head.
+2. `## RED test changes` — every test file whose lines changed after the `RED:` commit that added or edited
+   them. Find them from the branch itself: for each `RED:` commit, diff the test files it added or edited against
+   the branch head.
    Give each the reason a step logged under `### RED test changes` in the report, in one or two lines. Mark a
    change no step explained **Unexplained** and say what the diff shows changed. Say plainly when there is none.
 3. `## What was built` — the MVP in one paragraph, then each acceptance criterion with where it is implemented
