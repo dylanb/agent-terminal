@@ -116,6 +116,7 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           sha=$(git rev-parse HEAD)
@@ -137,7 +138,10 @@ jobs:
               exit 1
             fi
           else
-            previous=$(git show HEAD^:package.json | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0, 'utf8')).version)")
+            # Against the push's starting commit, not HEAD^: a multi-commit push may bump an earlier commit.
+            base=$BEFORE
+            [[ "$base" =~ ^0+$ ]] && base=HEAD^
+            previous=$(git show "$base:package.json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0, 'utf8')).version)")
             if [ "$previous" = "$version" ]; then
               echo "::notice::package.json changed but its version is still $version; nothing to release."
               echo "release=false" >> "$GITHUB_OUTPUT"
@@ -238,7 +242,15 @@ jobs:
           mapfile -t files < <(find assets -type f | sort)
           printf '%s\n' "${files[@]}"
 
-          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>view.err); then
+            :
+          elif grep -q 'release not found' view.err; then
+            draft=
+          else
+            cat view.err
+            echo "::error::Could not check whether release $TAG exists; re-run this job."
+            exit 1
+          fi
           if [ "$draft" = true ]; then
             gh release upload "$TAG" "${files[@]}" --clobber
             exit 0
