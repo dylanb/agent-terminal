@@ -24,9 +24,16 @@ describe('pnpm run test:proof', () => {
   it(
     'refuses an argument, naming it as the cause',
     () => {
-      const run = spawnSync('pnpm', ['run', 'test:proof', 'unexpected-arg'], { cwd: ROOT, encoding: 'utf8' });
-      expect.soft(run.status).not.toBe(0);
-      expect.soft(run.stderr).toContain('unexpected-arg');
+      const bin = mkdtempSync(join(tmpdir(), 'test-proof-arg-gh-'));
+      try {
+        installTestProofGh(bin, { loggedIn: false });
+        const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+        const run = spawnSync('pnpm', ['run', 'test:proof', 'unexpected-arg'], { cwd: ROOT, encoding: 'utf8', env });
+        expect.soft(run.status).not.toBe(0);
+        expect.soft(run.stderr).toContain('unexpected-arg');
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
     },
     COMMAND_TIMEOUT_MS,
   );
