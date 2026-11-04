@@ -1,7 +1,3 @@
-// §23.5 — `agent-terminal --validate-flow <dir>`: the flow folder is located in its tier and loaded through the
-// app's own catalog resolver and flow loaders, its loops are resolved the way a run in that tier resolves them,
-// and the first problem found is printed on one line. It only reads.
-
 import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
 import { flowCatalogDir, flowDefinitionFile, flowHomeDir, loadFlowDefinition, loadUntrustedFlowDefinition, stepTemplateRef, type FlowDefinition, type FlowLoad } from './flow';
@@ -35,7 +31,6 @@ export interface ValidateFlowResult {
   stderr: string;
 }
 
-/** The file a problem is about, and what is wrong with it. */
 interface Problem {
   file: string;
   text: string;
@@ -44,7 +39,6 @@ interface Problem {
 /** How a run of the flow resolves its loops: the context `resolveLoopDefV2` gets, before the flow's name is added. */
 type LoopScope = Omit<LoopDefV2Context, 'flow'>;
 
-/** A located flow folder: the file its flow loader read, that loader's result, and its tier's loop scope. */
 type Located = { ok: true; flowFile: string; load: FlowLoad; loops: LoopScope } | { ok: false; reason: string };
 
 const oneLine = (file: string, text: string): string => `${stripDisplayControlChars(file)}: ${stripDisplayControlChars(text)}\n`;
@@ -75,7 +69,6 @@ function validate(folder: string, deps: ValidateFlowDeps): Problem | null {
   return stepProblem(located.load.definition, located.load.flowDir, located.flowFile, { ...located.loops, flow: located.load.definition.name, refuseSpecialFiles: true });
 }
 
-/** The first step, in flow order, whose binding, todo template or loop a run would fail on. */
 function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: string, loops: LoopDefV2Context): Problem | null {
   const templatesDir = todoTemplatesDir(flowDir);
   for (const step of definition.steps) {
@@ -88,10 +81,9 @@ function stepProblem(definition: FlowDefinition, flowDir: string, flowFile: stri
     }
     if (step.loop === undefined) continue;
     const resolved = resolveLoopDefV2(step.loop, loops);
-    const defFile = resolved.defFile ?? flowFile;
-    if (!resolved.ok) return { file: defFile, text: resolved.reason };
-    const missing = unreadableReference(resolved.def, path.dirname(defFile));
-    if (missing !== null) return { file: defFile, text: missing };
+    if (!resolved.ok) return { file: resolved.defFile ?? flowFile, text: resolved.reason };
+    const missing = unreadableReference(resolved.def, path.dirname(resolved.defFile));
+    if (missing !== null) return { file: resolved.defFile, text: missing };
   }
   return null;
 }

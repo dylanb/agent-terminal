@@ -14,7 +14,7 @@ import {
 } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import { isSpecialFile } from './regularFile';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
@@ -184,10 +184,10 @@ export interface LoopDefV2 {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). `defFile` is the real path of the definition
- *  file resolution reached: always set on success, and on a failure only when that file was read or its read
- *  failed for a reason other than absence. */
+ *  file resolution reached; on a failure it is set only when that file was read or its read failed for a reason
+ *  other than absence. */
 export type LoopDefV2Result =
-  | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile?: string }
+  | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile: string }
   | { ok: false; reason: string; defFile?: string };
 
 export interface LoopDefV2Context {
@@ -582,13 +582,12 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       body = readFileSync(defFile, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}`, defFile };
+      return { ok: false, reason: `cannot read def ${name}: ${errMsg(e)}`, defFile };
     }
     try {
       return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, defFile };
     } catch (e) {
-      if (e instanceof DefError) return { ok: false, reason: e.message, defFile };
-      return { ok: false, reason: e instanceof Error ? e.message : String(e), defFile };
+      return { ok: false, reason: errMsg(e), defFile };
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;

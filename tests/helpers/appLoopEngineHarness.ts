@@ -115,7 +115,7 @@ export class AppLoopEngineHarness {
   };
 
   /** A resolved §27 def result rooted at the test repo's own temp dir. */
-  resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: this.repo, defDir: join(this.repo, def.name) });
+  resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: this.repo, defDir: join(this.repo, def.name), defFile: join(this.repo, def.name, 'loop.yaml') });
 
   /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
    *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */

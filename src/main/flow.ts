@@ -70,7 +70,6 @@ export interface FlowStepDef {
   repeat?: { backTo: string; countInput: string };
 }
 
-/** The todo template `step` is bound to, or null when it is bound to none; an empty `todo_template` binds none. */
 export function stepTemplateRef(step: FlowStepDef): string | null {
   return step.todoTemplate ? step.todoTemplate : null;
 }

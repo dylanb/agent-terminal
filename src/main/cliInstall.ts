@@ -51,7 +51,7 @@ export interface RuntimeInfo {
   shell: string;
   currentPath: string;
   invocation: LaunchInvocation;
-  /** The checker runtime script of this build, which the installed `--validate-flow` runs (§23.5). */
+  /** The checker runtime script of this build, which the installed `--validate-flow` runs. */
   checkerScript: string;
 }
 

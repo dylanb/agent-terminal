@@ -85,7 +85,7 @@ function validateFlowBranch(invocation: LaunchInvocation, checkerScript: string)
  * The POSIX shell launch shim (§23.4 / #25). An optional caller-supplied path crosses the OS boundary
  * as one verbatim directory operand, never shell-interpolated (CWE-78). A relative path resolves
  * against the invoking shell's cwd, not the launched process's; the instance starts detached so the
- * shell returns immediately. `--validate-flow` instead runs `checkerScript` in the foreground (§23.5).
+ * shell returns immediately. `--validate-flow` instead runs `checkerScript` in the foreground.
  */
 export function generateShim(invocation: LaunchInvocation, checkerScript: string): string {
   const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
