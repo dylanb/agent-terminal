@@ -33,6 +33,8 @@
     "test:e2e": "pnpm run build && playwright test",
     "test:proof": "vite build --config vite.testProof.config.ts --logLevel error && node out/test-proof/testProof.cjs",
     "package": "pnpm run gen-icon && pnpm run build && electron-builder && electron-builder --config electron-builder.controller.yml",
+    "sync:status": "node scripts/sync.mjs status",
+    "sync:record": "node scripts/sync.mjs record",
     "prepare": "husky"
   },
   "license": "AGPL-3.0-or-later",
