@@ -401,6 +401,7 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
+  const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
   const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
@@ -525,7 +526,9 @@ export function createFlowMachine(
     const loopName = mostRecentLoopStep.loop;
     if (loopName === undefined) return withRefs;
     const appLoop = readAppLoopView?.(loopName);
-    return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
+    if (!appLoop) return withRefs;
+    const offersReopen = returnStep !== null && (appLoop.gateOptions ?? []).includes('back-to-red');
+    return { ...withRefs, loop: offersReopen ? { ...appLoop, reopenStep: returnStep } : appLoop };
   };
 
   const persist = (): void => {
@@ -569,7 +572,7 @@ export function createFlowMachine(
       const repeatStep = steps.find((s) => s.repeat);
       return repeatStep ? (repeatCounts[repeatStep.id] ?? 1) : 1;
     },
-    sliceStartStep: () => steps.find((s) => s.repeat)?.repeat?.backTo ?? null,
+    sliceStartStep: () => returnStep,
     start: (at) => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -635,8 +638,7 @@ export function createFlowMachine(
       // Guard, don't throw: a stale click after the flow moved is inert, and the target is never ahead of
       // the current step (a reopen is backward-or-self, never a skip).
       if (status !== 'in_progress') return view();
-      const backTo = steps.find((s) => s.repeat)?.repeat?.backTo;
-      const target = backTo ? names.indexOf(backTo) : -1;
+      const target = returnStep !== null ? names.indexOf(returnStep) : -1;
       if (target < 0 || target > index) return view();
       index = target;
       persist();

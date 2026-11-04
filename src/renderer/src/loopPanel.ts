@@ -21,11 +21,17 @@ import { createPressGroup, onPress, type PressGroup } from './pressable';
  *  (the verbose `request-changes` reads as `changes` in the compact options row). The option is
  *  repo-authored, so it is stripped of display-unsafe bytes and trimmed before the comparison: a bidi
  *  override then neither defeats the abbreviation nor reaches the label derived from the result (CWE-117). */
-function gateOptionLabel(option: string): string {
+function gateOptionLabel(option: string, reopenTarget: string): string {
   const cleaned = stripDisplayControlChars(option).trim();
   if (cleaned === 'request-changes') return 'changes';
-  if (cleaned === 'back-to-red') return 'Back to RED'; // §28.4.2 — a readable label, not the raw kebab option
+  if (cleaned === 'back-to-red') return `Back to ${reopenTarget}`;
   return cleaned;
+}
+
+/** The step name a back-to-red control names: the flow's return step, display-stripped (it is repo-authored, CWE-117). */
+function reopenTargetOf(loop: FlowLoopView): string {
+  const named = loop.reopenStep !== undefined ? stripDisplayControlChars(loop.reopenStep).trim() : '';
+  return named.length > 0 ? named : 'RED';
 }
 
 /** The §24.2.3 T7 services the panel needs: resolve a ref's detail (best-effort; null → bare number)
@@ -47,9 +53,9 @@ export interface LoopPanelDeps {
    *  carries the instruction back on the decision. Injected by the composition root; absent → the §27 redo
    *  button does not render (an instruction-less dispatch is dropped, WCAG 4.1.2). */
   composeRedo?(step: string, turnKey: string): void;
-  /** §28.4.2 — open the back-to-RED composer at the gate; its submit carries the optional slice brief. Absent →
-   *  Back to RED dispatches straight to appGateDecision with no brief. */
-  composeBackToRed?(step: string, turnKey: string): void;
+  /** §28.4.2 — open the back-to-RED composer at the gate; its submit carries the optional slice brief. `target`
+   *  is the step the control is labelled with. Absent → the control dispatches straight to appGateDecision. */
+  composeBackToRed?(step: string, turnKey: string, target: string): void;
   /** §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), carrying the
    *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
    *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
@@ -116,7 +122,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate !== undefined] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.reopenStep ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null, loop.changedTests?.join(',') ?? null, loop.epic ? JSON.stringify(loop.epic.subTickets) : null, loop.autoGate !== undefined] : null,
   ]);
 }
 
@@ -536,7 +542,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // whenever the view carries gateOptions (a §27 run-less def OR the §27 terminal consolidator gate once
       // a verdict is reached); the actionable decision buttons render below (loopGateActionable + appTurn).
       if (loop.gateOptions && loop.gateOptions.length > 0)
-        ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
+        ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map((o) => gateOptionLabel(o, reopenTargetOf(loop))).join(' · ')));
 
       body.append(ldl);
 
@@ -631,7 +637,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           // space-bearing option would inject extra class tokens — affordance spoofing at the gate (§16.3).
           btn.className = option === 'approve' ? 'pill app gate-approve' : 'pill gate-option';
           btn.dataset.gateOption = option; // the RAW option — the click dispatch carries persisted identity (§6)
-          const visible = gateOptionLabel(option);
+          const visible = gateOptionLabel(option, reopenTargetOf(loop));
           btn.textContent = visible;
           // The accessible name is derived from the STRIPPED visible label, never the raw option, so a bidi
           // override reaches neither and the name still contains the visible text (WCAG 2.5.3 label-in-name).
@@ -650,7 +656,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
               return;
             }
             if (option === 'back-to-red' && deps.composeBackToRed) {
-              deps.composeBackToRed(appTurn.step, appTurn.turnKey);
+              deps.composeBackToRed(appTurn.step, appTurn.turnKey, reopenTargetOf(loop));
               return;
             }
             return deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
