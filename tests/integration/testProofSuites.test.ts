@@ -11,7 +11,7 @@ const SEEDED = { E2E_GREP: 'smoke', E2E_IO_DIR: '.agent-terminal/red-check-seede
 const VALUED = /^--(reporter|outputFile(\.json)?|retry|allowOnly)$/;
 const INLINE = /^--(reporter|outputFile(\.json)?|retry|allowOnly)=./;
 
-/** argv elements after `test` that are neither the reporter, output-file or retry flags nor their values. */
+/** argv elements after `test` that are neither the reporter, output-file, retry or allowOnly flags nor their values. */
 function unexpectedArgs(argv: readonly string[]): string[] {
   const rest: string[] = [];
   for (let i = 1; i < argv.length; i++) {

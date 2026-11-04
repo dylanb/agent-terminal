@@ -42,12 +42,15 @@ if [ -n "${E2E_REPORT_DIR:-}" ]; then
   report=(-e "E2E_REPORT_DIR=$E2E_REPORT_DIR" -e "E2E_IMAGE_ID=$run_image")
 fi
 
+rm -f "$iidfile"
+trap - EXIT
+tty=()
+[ -t 0 ] && tty=(-it)
+# exec, so a signal sent to this script reaches podman, which proxies it to the container.
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
-tty=()
-[ -t 0 ] && tty=(-it)
-podman run --rm ${tty[@]+"${tty[@]}"} \
+exec podman run --rm ${tty[@]+"${tty[@]}"} \
   --cap-add=SYS_ADMIN \
   --security-opt label=disable \
   --shm-size=1g \

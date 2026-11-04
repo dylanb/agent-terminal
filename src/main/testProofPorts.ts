@@ -40,11 +40,21 @@ function prepareReportDir(root: string, outputs: readonly string[]): Prepared {
 
 type Exit = { ok: true; code: number } | { ok: false; reason: string };
 
+const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
 function runInherited(file: string, args: readonly string[], cwd: string, environment: Record<string, string>): Promise<Exit> {
   return new Promise((resolve) => {
     const child = spawn(file, args, { cwd, env: commandEnvironment(environment), stdio: 'inherit' });
-    child.on('error', (e) => resolve({ ok: false, reason: `${file} could not start: ${errMsg(e)}` }));
-    child.on('close', (code, signal) => resolve(code === null ? { ok: false, reason: `${file} was killed by ${signal ?? 'a signal'}` } : { ok: true, code }));
+    const forward = (signal: NodeJS.Signals): void => {
+      child.kill(signal);
+    };
+    for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
+    const settle = (exit: Exit): void => {
+      for (const signal of FORWARDED_SIGNALS) process.off(signal, forward);
+      resolve(exit);
+    };
+    child.on('error', (e) => settle({ ok: false, reason: `${file} could not start: ${errMsg(e)}` }));
+    child.on('close', (code, signal) => settle(code === null ? { ok: false, reason: `${file} was killed by ${signal ?? 'a signal'}` } : { ok: true, code }));
   });
 }
 

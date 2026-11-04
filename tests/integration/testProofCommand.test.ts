@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
@@ -75,6 +76,53 @@ describe('the built test:proof entry', () => {
         `test-proof/vitest success ${repo.head}`,
       ]);
       expect.soft(state.comments['7'] ?? []).toHaveLength(1);
+    },
+    COMMAND_TIMEOUT_MS,
+  );
+
+  it(
+    'takes the running suite down with it when the entry alone is sent SIGTERM, and publishes nothing',
+    async () => {
+      const bin = join(scratch, 'bin');
+      const repo = makeProofRepo(git, { bin, stateDir: join(scratch, 'state'), branch: 'feature/proof', electronVersion: '38.7.1' });
+      const gh = installTestProofGh(bin, { pullRequests: [{ number: 7, headRefName: repo.branch, headRefOid: repo.head, isCrossRepository: false }] });
+      const pidFile = join(scratch, 'suite.pid');
+      writeFileSync(
+        join(bin, 'pnpm'),
+        `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetInterval(() => {}, 1 << 30);\n`,
+        { mode: 0o755 },
+      );
+      const PATH = `${bin}:${hermeticPath(join(scratch, 'tools'), ['node', 'git'])}`;
+      const entry = spawn(process.execPath, [bundle], { cwd: repo.dir, env: { ...process.env, PATH }, stdio: 'ignore' });
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => entry.on('close', (code, signal) => resolve({ code, signal })));
+      let suitePid = 0;
+      try {
+        while (!existsSync(pidFile)) await delay(50);
+        suitePid = Number(readFileSync(pidFile, 'utf8'));
+        entry.kill('SIGTERM');
+        const { code, signal } = await exited;
+        const suiteAlive = (() => {
+          try {
+            process.kill(suitePid, 0);
+            return true;
+          } catch {
+            return false;
+          }
+        })();
+        expect.soft(suiteAlive, 'the suite outlived the proof').toBe(false);
+        expect.soft({ code, signal }).toEqual({ code: 1, signal: null });
+        expect.soft(gh.read().statuses).toEqual([]);
+        expect.soft(gh.read().comments['7'] ?? []).toEqual([]);
+      } finally {
+        if (suitePid > 0) {
+          try {
+            process.kill(suitePid, 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
+        entry.kill('SIGKILL');
+      }
     },
     COMMAND_TIMEOUT_MS,
   );
