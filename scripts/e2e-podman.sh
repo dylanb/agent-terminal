@@ -28,13 +28,17 @@ if [ "${mem_mib:-0}" -lt 8192 ]; then
   echo "  Fix once: podman machine stop && podman machine set --memory 8192 --cpus 6 && podman machine start" >&2
 fi
 
-podman build -t "$IMAGE" -f e2e/Containerfile .
+# Every checkout builds under the same tag, so another checkout's build can retag it at any moment. A report run
+# runs, and records, the ID this build wrote, never whatever the tag names afterwards.
+iidfile="$(mktemp)"
+trap 'rm -f "$iidfile"' EXIT
+podman build --iidfile "$iidfile" -t "$IMAGE" -f e2e/Containerfile .
 
-# A report run names the image by the ID just built, so the recorded ID is the image the container ran from.
 run_image="$IMAGE"
 report=()
 if [ -n "${E2E_REPORT_DIR:-}" ]; then
-  run_image="$(podman image inspect --format '{{.Id}}' "$IMAGE")"
+  run_image="$(cat "$iidfile")"
+  run_image="${run_image#sha256:}"
   report=(-e "E2E_REPORT_DIR=$E2E_REPORT_DIR" -e "E2E_IMAGE_ID=$run_image")
 fi
 

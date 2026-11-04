@@ -30,7 +30,8 @@ it also writes into that dir:
 - `report.json`: Playwright's JSON report of the run;
 - `environment.json`: a JSON object with exactly the keys `node` (the container's `node --version`), `electron`
   (the installed `electron` package version) and `image` (the ID of the image the container ran from, which
-  `scripts/e2e-podman.sh` reads with `podman image inspect` after building it and runs by).
+  `scripts/e2e-podman.sh` takes from its own `podman build --iidfile` and runs by, so another checkout retagging
+  `agent-terminal-e2e` mid-run cannot swap it).
 
 The dir must already exist; the command creates it and removes both files before each run, so a run that writes
 neither is never read as an earlier run's result. A missing file or key makes the proof refuse.
