@@ -31,6 +31,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm run build && playwright test",
+    "test:proof": "vite build --config vite.testProof.config.ts --logLevel error && node out/test-proof/testProof.cjs",
     "package": "pnpm run gen-icon && pnpm run build && electron-builder && electron-builder --config electron-builder.controller.yml",
     "prepare": "husky"
   },
