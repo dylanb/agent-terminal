@@ -177,7 +177,18 @@ describe('shim --controller (§23.5)', () => {
     mkdirSync(mainDir, { recursive: true });
     writeFileSync(join(mainDir, 'index.js'), '');
     writeFileSync(join(mainDir, 'controller.js'), '');
-    shimFor({ execPath: electron, appArgs: [join(mainDir, 'index.js')] });
+    shimFor({ execPath: electron, appArgs: [join(mainDir, 'index.js')], mainDir });
+    expect(await runShim(['--controller'])).toBe(`electron:${join(mainDir, 'controller.js')}`);
+  });
+
+  it('launches the dev controller when electron-vite dev started Electron on the app root', async () => {
+    const electron = join(work, 'electron');
+    recorderAt(electron, 'electron');
+    const appRoot = join(work, 'clone');
+    const mainDir = join(appRoot, 'out', 'main');
+    mkdirSync(mainDir, { recursive: true });
+    writeFileSync(join(mainDir, 'controller.js'), '');
+    shimFor({ execPath: electron, appArgs: [appRoot], mainDir });
     expect(await runShim(['--controller'])).toBe(`electron:${join(mainDir, 'controller.js')}`);
   });
 

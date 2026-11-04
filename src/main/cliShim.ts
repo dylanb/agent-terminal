@@ -9,6 +9,10 @@ import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 export interface LaunchInvocation {
   execPath: string;
   appArgs: string[];
+  /** Dev only: the directory the running main bundle loads from. Electron's argv names the app root
+   *  (`.` under electron-vite dev), not the bundle, so the controller entry beside the bundle is
+   *  located from here rather than derived from `appArgs`. */
+  mainDir?: string;
 }
 
 /** The installed command's filename. */
@@ -24,9 +28,8 @@ const MAC_BUNDLE_BINARY = /^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/;
 /** Where the controller of the same build as `invocation` may be: installed beside the terminal
  *  (/Applications, /opt), then in the controller package's build output beside the terminal's. */
 export function controllerInvocations(invocation: LaunchInvocation): LaunchInvocation[] {
-  const [mainScript] = invocation.appArgs;
-  if (mainScript) {
-    return [{ execPath: invocation.execPath, appArgs: [path.join(path.dirname(mainScript), DEV_CONTROLLER_ENTRY)] }];
+  if (invocation.mainDir) {
+    return [{ execPath: invocation.execPath, appArgs: [path.join(invocation.mainDir, DEV_CONTROLLER_ENTRY)] }];
   }
   const mac = MAC_BUNDLE_BINARY.exec(invocation.execPath);
   const hostDir = mac ? mac[1] : path.dirname(invocation.execPath);
@@ -64,9 +67,10 @@ export function resolveLaunchInvocation(
   isDevBuild: boolean,
   mainScript: string | undefined,
   cwd: string,
+  mainDir: string,
 ): LaunchInvocation {
-  const appArgs = isDevBuild && mainScript ? [path.resolve(cwd, mainScript)] : [];
-  return { execPath, appArgs };
+  if (!isDevBuild || !mainScript) return { execPath, appArgs: [] };
+  return { execPath, appArgs: [path.resolve(cwd, mainScript)], mainDir };
 }
 
 /**

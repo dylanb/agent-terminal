@@ -1,3 +1,9 @@
+## A source checkout runs: `pnpm run dev` and `agent-terminal --controller`
+
+Package metadata: Electron 42 no longer downloads its binary at install time, and electron-vite 5 reads `node_modules/electron/path.txt` without triggering the lazy download, so `pnpm run dev` on a fresh clone failed with "Electron uninstall" (and the §24.2.3 T4 ad-hoc sign skipped, finding no bundle). `postinstall` now runs `install-electron` first.
+
+§23.5: under `electron-vite dev` Electron starts on the app root (`.`), not the main script, so a launcher installed from a dev build looked for `controller.js` beside the clone (`<parent>/controller.js`) and `--controller` always failed. The dev launch invocation now carries the running main bundle's directory, and the controller is found there. No IPC contract change.
+
 ## #283 — PRs merge on a local test proof, not on CI test runs
 
 §27.13: plan approval still flips the PR non-draft, but no longer to trigger CI, since GitHub Actions runs no vitest or e2e on an open PR (the suites run only on the push to `main` a merge creates). N13a now names the `test-proof/vitest` and `test-proof/e2e` statuses from `pnpm run test:proof` (`docs/test-proof.md`) as the checks a reviewer pulls, and drops the recorded override that justified going non-draft mid-impl to run CI.
