@@ -45,7 +45,9 @@ const FORWARDED_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGH
 function runInherited(file: string, args: readonly string[], cwd: string, environment: Record<string, string>): Promise<Exit> {
   return new Promise((resolve) => {
     const child = spawn(file, args, { cwd, env: commandEnvironment(environment), stdio: 'inherit' });
+    let interrupted: NodeJS.Signals | null = null;
     const forward = (signal: NodeJS.Signals): void => {
+      interrupted = signal;
       child.kill(signal);
     };
     for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
@@ -54,7 +56,10 @@ function runInherited(file: string, args: readonly string[], cwd: string, enviro
       resolve(exit);
     };
     child.on('error', (e) => settle({ ok: false, reason: `${file} could not start: ${errMsg(e)}` }));
-    child.on('close', (code, signal) => settle(code === null ? { ok: false, reason: `${file} was killed by ${signal ?? 'a signal'}` } : { ok: true, code }));
+    child.on('close', (code, signal) => {
+      if (interrupted !== null) settle({ ok: false, reason: `the proof was interrupted by ${interrupted} while ${file} ran` });
+      else settle(code === null ? { ok: false, reason: `${file} was killed by ${signal ?? 'a signal'}` } : { ok: true, code });
+    });
   });
 }
 

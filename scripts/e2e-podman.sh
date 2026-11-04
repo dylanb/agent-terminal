@@ -46,11 +46,12 @@ rm -f "$iidfile"
 trap - EXIT
 tty=()
 [ -t 0 ] && tty=(-it)
-# exec, so a signal sent to this script reaches podman, which proxies it to the container.
+# exec + --init: a signal sent to this script reaches podman, which proxies it to the container's init; the
+# entrypoint as PID 1 would ignore SIGTERM and SIGHUP, which it sets no handler for.
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
-exec podman run --rm ${tty[@]+"${tty[@]}"} \
+exec podman run --rm --init ${tty[@]+"${tty[@]}"} \
   --cap-add=SYS_ADMIN \
   --security-opt label=disable \
   --shm-size=1g \
