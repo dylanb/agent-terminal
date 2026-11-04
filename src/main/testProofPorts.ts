@@ -49,7 +49,8 @@ function runInherited(file: string, args: readonly string[], cwd: string, enviro
     let interrupted: NodeJS.Signals | null = null;
     const forward = (signal: NodeJS.Signals): void => {
       interrupted = signal;
-      child.kill(signal);
+      // The e2e entrypoint's bash waits out its foreground child on SIGINT; only SIGTERM stops the container.
+      child.kill('SIGTERM');
     };
     for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
     const settle = (exit: Exit): void => {
