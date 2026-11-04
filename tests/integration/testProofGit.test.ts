@@ -56,3 +56,10 @@ describe('the proof working-tree adapter (real git)', () => {
     expect.soft(await tree.head()).toBe(head);
   });
 });
+
+describe('the proof working-tree adapter with an untracked directory', () => {
+  it('reads an untracked directory as one dirty entry, however many files it holds', async () => {
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) git.writeRepoFile(repo, `stray/${name}`, 'loose\n');
+    expect(await createProofWorkingTree(repo).dirtyPaths()).toHaveLength(1);
+  });
+});

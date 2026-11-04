@@ -5,6 +5,7 @@ import {
   type GitHubRepositoryIdentity,
 } from './githubRepository';
 import { isRecord } from './yamlRecord';
+import { isGitObjectId } from '../shared/appBootstrap';
 
 export interface PullRequest {
   number: number;
@@ -64,6 +65,39 @@ export function createRealPullRequestLookup(repoDir: string): PullRequestLookup 
         .map((entry) => entry.number);
     },
   };
+}
+
+export interface BranchPullRequest {
+  number: number;
+  headSha: string;
+  crossRepository: boolean;
+}
+
+/** Every open pull request whose head is `branch`, fork-headed ones included. */
+export async function openPullRequestsForBranch(repoDir: string, branch: string): Promise<BranchPullRequest[]> {
+  const identity = await createGitHubRepositorySource(repoDir).resolve();
+  const listed = await runAppCommand(
+    'gh',
+    ['pr', 'list', '--repo', identity.selector, '--head', branch, '--state', 'open', '--limit', '1000', '--json', 'number,url,headRefOid,isCrossRepository'],
+    repoDir,
+  );
+  const raw = parseJson(listed, 'invalid GitHub pull request list');
+  if (!Array.isArray(raw)) throw new Error('invalid GitHub pull request list');
+  return raw.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      !Number.isSafeInteger(entry.number) ||
+      (entry.number as number) <= 0 ||
+      typeof entry.url !== 'string' ||
+      !matchesGitHubRepositoryUrl(entry.url, identity, 'pull', entry.number as number) ||
+      typeof entry.headRefOid !== 'string' ||
+      !isGitObjectId(entry.headRefOid) ||
+      typeof entry.isCrossRepository !== 'boolean'
+    ) {
+      throw new Error('invalid GitHub pull request list');
+    }
+    return { number: entry.number as number, headSha: entry.headRefOid, crossRepository: entry.isCrossRepository };
+  });
 }
 
 function parseJson(text: string, invalid: string): unknown {

@@ -141,9 +141,10 @@ function originConfigReader(repoDir: string): OriginConfigReader {
   );
 }
 
-export async function resolveGitHubRepository(
+/** The GitHub repository `origin` names, read from git config alone, without asking GitHub. */
+export async function originGitHubRepository(
   repoDir: string,
-): Promise<ResolvedGitHubRepository> {
+): Promise<Omit<ResolvedGitHubRepository, 'defaultBranch'>> {
   const reader = originConfigReader(repoDir);
   const fetchUrls = await originUrls(reader, 'fetch');
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
@@ -159,6 +160,13 @@ export async function resolveGitHubRepository(
   ) {
     throw new Error('origin repository targets do not match');
   }
+  return { ...expected, fetchUrl: (fetchUrls[0] ?? '').trim(), pushUrl: (pushUrls[0] ?? '').trim() };
+}
+
+export async function resolveGitHubRepository(
+  repoDir: string,
+): Promise<ResolvedGitHubRepository> {
+  const expected = await originGitHubRepository(repoDir);
   const viewedRepository = await runAppCommand(
     'gh',
     [
@@ -198,7 +206,5 @@ export async function resolveGitHubRepository(
   return {
     ...expected,
     defaultBranch: raw.defaultBranchRef.name,
-    fetchUrl: (fetchUrls[0] ?? '').trim(),
-    pushUrl: (pushUrls[0] ?? '').trim(),
   };
 }

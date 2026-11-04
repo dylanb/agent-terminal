@@ -8,7 +8,8 @@ export interface StandInPullRequest {
   number: number;
   headRefName: string;
   headRefOid: string;
-  isCrossRepository: boolean;
+  isCrossRepository?: boolean;
+  url?: string;
 }
 
 export interface StandInComment {
@@ -26,6 +27,9 @@ export interface StandInStatus {
 
 export interface TestProofGhState {
   loggedIn: boolean;
+  otherAccountBroken: boolean;
+  authStatusError: string;
+  authStatusKilled: boolean;
   login: string;
   pullRequests: StandInPullRequest[];
   comments: Record<string, StandInComment[]>;
@@ -109,8 +113,13 @@ const asComment = (c) => ({ id: c.id, user: { login: c.login }, body: c.body });
 
 try {
 
-if (args[0] === 'auth' && args[1] === 'status' && args.length === 2) {
+if (args[0] === 'auth' && args[1] === 'status') {
+  const scoped = args.length === 5 && args[2] === '--hostname' && args[3] === 'github.com' && args[4] === '--active';
+  if (!scoped && args.length !== 2) unexpected();
+  if (state.authStatusKilled) { save(); fs.unlinkSync(lock); process.kill(process.pid, 'SIGKILL'); }
+  if (state.authStatusError) fail(1, state.authStatusError);
   if (!state.loggedIn) fail(1, 'You are not logged into any GitHub hosts. To log in, run: gh auth login');
+  if (!scoped && state.otherAccountBroken) fail(1, 'github.com\n  X Failed to log in to github.com account stale-account\n');
   out('github.com\n  Logged in to github.com account ' + state.login + '\n');
 }
 if (!state.loggedIn) fail(4, 'To get started with GitHub CLI, please run:  gh auth login');
@@ -128,11 +137,11 @@ if (args[0] === 'pr' && args[1] === 'list') {
     .filter((pr) => pr.headRefName === o.values['--head'])
     .slice(0, limit)
     .map((pr) => {
-      const full = { ...pr, url: 'https://github.com/' + REPO + '/pull/' + pr.number };
+      const full = { url: 'https://github.com/' + REPO + '/pull/' + pr.number, ...pr };
       const projected = {};
       for (const f of fields) {
-        if (!(f in full)) unexpected();
-        projected[f] = full[f];
+        if (!['number', 'headRefName', 'headRefOid', 'isCrossRepository', 'url'].includes(f)) unexpected();
+        if (f in full) projected[f] = full[f];
       }
       return projected;
     });
@@ -194,10 +203,14 @@ unexpected();
  * Installs a stand-in `gh` at `bin/gh` serving GitHub repository `fixture/project` (origin
  * `TEST_PROOF_GH_ORIGIN`). It answers only these operations, and exits 97 naming any other call:
  *
- * - `gh auth status` — exit 0 when `loggedIn`, else exit 1; every other call also fails while logged out.
+ * - `gh auth status [--hostname github.com --active]` — exit 0 when `loggedIn`, else exit 1; the unscoped form
+ *   also exits 1 when `otherAccountBroken` (a second account with a stale token), and both forms exit 1 printing
+ *   `authStatusError` when it is set; with `authStatusKilled` it ends itself by SIGKILL. Every other call fails
+ *   while logged out.
  * - `gh repo view github.com/fixture/project --json …` — the shape `resolveGitHubRepository` reads.
  * - `gh pr list --repo github.com/fixture/project --head <branch> --state open [--limit n] --json <fields>` —
- *   `pullRequests` on that branch, projected onto the requested fields (`url` is derived from `number`).
+ *   `pullRequests` on that branch, projected onto the requested fields (`url` is derived from `number` unless the
+ *   entry gives one; a field an entry leaves out is left out of its answer).
  * - `gh api user` — `{ login }`.
  * - `gh api repos/fixture/project/statuses/<sha> -f state=… -f context=… -f description=…` — records a status;
  *   fails for a context in `failStatusFor`, and for a description over GitHub's 140-character limit.
@@ -219,6 +232,9 @@ export function installTestProofGh(bin: string, initial: Partial<TestProofGhStat
   const write = (state: TestProofGhState) => writeFileSync(stateFile, JSON.stringify(state));
   write({
     loggedIn: true,
+    otherAccountBroken: false,
+    authStatusError: '',
+    authStatusKilled: false,
     login: 'proof-author',
     pullRequests: [],
     comments: {},
