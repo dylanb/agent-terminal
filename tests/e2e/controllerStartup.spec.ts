@@ -77,14 +77,19 @@ test('a launcher installed from a dev build started on the app root launches the
     const fakeBin = join(h.fixture.root, 'recording-bin');
     const recorded = join(h.fixture.root, 'nohup-args');
     mkdirSync(fakeBin, { recursive: true });
-    writeFileSync(join(fakeBin, 'nohup'), `#!/bin/sh\nprintf '%s\\n' "$@" > "${recorded}"\n`, { mode: 0o755 });
+    writeFileSync(
+      join(fakeBin, 'nohup'),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${recorded}.tmp" && mv "${recorded}.tmp" "${recorded}"\n`,
+      { mode: 0o755 },
+    );
     const run = spawnSync(launcher, ['--controller'], {
       env: { ...h.fixture.env, HOME: home, PATH: `${fakeBin}:${h.fixture.env.PATH}` },
       encoding: 'utf8',
     });
     expect(run.stderr).toBe('');
-    await expect.poll(() => existsSync(recorded)).toBe(true);
-    expect(readFileSync(recorded, 'utf8').trimEnd().split('\n')).toEqual([electron, resolve('out/main/controller.js')]);
+    await expect
+      .poll(() => (existsSync(recorded) ? readFileSync(recorded, 'utf8').trimEnd().split('\n') : []))
+      .toEqual([electron, resolve('out/main/controller.js')]);
   } finally { await h.dispose(); }
 });
 
