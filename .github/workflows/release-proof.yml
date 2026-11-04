@@ -1,0 +1,69 @@
+# Temporary: proves release.yml's build job and asset collection on PR #289; removed before merge.
+name: release-proof (temporary, PR 289)
+'on':
+  push:
+    branches:
+      - ci/release-workflow
+    paths:
+      - .github/workflows/release-proof.yml
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            builder_flags: '--mac --arm64 -c.mac.identity=-'
+          - os: ubuntu-latest
+            builder_flags: '--linux --x64'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run gen-icon
+      - run: pnpm run build
+      - run: pnpm exec electron-builder ${{ matrix.builder_flags }} --publish never
+      - run: pnpm exec electron-builder --config electron-builder.controller.yml ${{ matrix.builder_flags }} --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ runner.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/controller/*.dmg
+            dist/controller/*.zip
+            dist/controller/*.AppImage
+            dist/controller/*.deb
+  check:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+      - name: Collect release files (as the release job does)
+        run: |-
+          set -euo pipefail
+          mapfile -t files < <(find assets -type f | sort)
+          printf "%s\n" "${files[@]}"
+          for ext in dmg zip AppImage deb; do
+            n=$(printf "%s\n" "${files[@]}" | grep -c "\.$ext$" || true)
+            echo "$ext: $n"; [ "$n" -eq 2 ] || { echo "::error::expected 2 .$ext files (both apps), got $n"; exit 1; }
+          done
+          for f in "${files[@]}"; do [ -f "$f" ] || exit 1; done
