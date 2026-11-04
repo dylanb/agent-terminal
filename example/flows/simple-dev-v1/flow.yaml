@@ -31,8 +31,8 @@ steps:
     loop: simple-integration-slice-loop-v1
     loop_namespace: app
     todo_template: impl-loop-review
-  # The plan never writes an `## Impl-slices` block, so `slices` stays 1 and this repeat never loops the flow back.
-  # It exists to name `dev` as the step every back-to-red gate control returns to.
+  # This repeat exists only to name `dev` as the step every back-to-red gate control returns to. Its count input is
+  # one nothing writes, so it stays 1 and the flow never loops back, whatever an approved plan's text holds.
   - id: impl-approve
     kind: loop
     gate_authority: human
@@ -40,7 +40,7 @@ steps:
     loop_namespace: app
     repeat:
       back_to: dev
-      count_input: slices
+      count_input: never-repeats
   - id: finalize
     kind: loop
     gate_authority: human

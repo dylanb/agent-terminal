@@ -37,6 +37,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportProblems, unloadedReviewers } from '../shared/roundReport';
 import { consolidatorOutputProblems, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
+import { sliceBriefReader, type SliceBriefDelivery } from './sliceBriefReader';
 import { baselineForBranch, clearGoalSessionFiles, phaseOutputFile, clearInterrupt, goalNotesRel, goalProgressFile, goalProgressRel, goalRefactorResultFile, goalRefactorResultRel, newGoalSession, goalPromptRel, readAppLoopState, readArmedInterrupt, writeGoalPrompt, type AppLoopRunState, type PhaseBaseline, type SliceBrief } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import type { GitBranchRead } from './gitBranch';
@@ -1005,13 +1006,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
-  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn, or the turn at the back-to-red return step, carries. */
-  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBrief } | Record<string, never> => {
+  /** §28.4.2 — the brief a turn carries, with how its loop reads it. */
+  const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBriefDelivery } | Record<string, never> => {
     const r = deps.resolveDef(turn.repoDir, turn.loopName);
     if (!r.ok) return {};
-    if (r.def.work.completion === undefined && turn.stepId !== deps.reopenStep(turn.repoDir)) return {};
+    const reader = sliceBriefReader(r.def.work.completion, turn.stepId, deps.reopenStep(turn.repoDir));
+    if (reader === null) return {};
     const brief = deps.sliceBrief(turn.repoDir);
-    return brief !== null ? { sliceBrief: brief } : {};
+    return brief !== null ? { sliceBrief: { brief, reader } } : {};
   };
 
   const reportCheck = (turn: Extract<ActiveAppTurn, { phase: 'review' }>): Extract<ArtifactCheck, { kind: 'report' }> => ({

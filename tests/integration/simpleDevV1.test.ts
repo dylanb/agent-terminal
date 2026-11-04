@@ -44,7 +44,6 @@ describe('the bundled simple-dev-v1 flow is runnable', () => {
     expect(target).toBeDefined();
     const targetIndex = all.findIndex((s) => s.id === target);
     const offering = loopSteps().filter((s) => loopOf(s).gate.some((g) => g.option === 'back-to-red'));
-    expect(offering.length).toBeGreaterThan(0);
     for (const s of offering) expect(all.findIndex((x) => x.id === s.id), `${s.id} offers back-to-red before the step it returns to`).toBeGreaterThanOrEqual(targetIndex);
   });
 

@@ -940,6 +940,23 @@ describe('docked loop panel — the sweep split', () => {
     expect(name).toContain('request'); // …which is still the unabbreviated form (label-in-name)
   });
 
+  it('strips a bidi override planted in the return step from the back-to-red label, its accessible name and the composer target (CWE-117)', () => {
+    const composeBackToRed = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: `dev${BIDI}`, appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
+    expect(btn.textContent).toBe('Back to dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
+    btn.click();
+    expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
+  });
+
+  it('names the back-to-red control after RED when the return step is nothing but control characters', () => {
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed: vi.fn() });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: BIDI, appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    expect(host.querySelector('[data-gate-option="back-to-red"]')?.textContent).toBe('Back to RED');
+  });
+
   it('strips a bidi override from the step in the arm-interrupt aria-label, but dispatches the RAW step identity (§6, CWE-117)', () => {
     const armInterrupt = vi.fn();
     const step = `plan${BIDI}`;

@@ -165,7 +165,11 @@ describe('§28.4.2 — the back-to-RED slice brief reaches the TDD phase turns',
     h.reopenStepResult = STEP;
     engine.enter(h.repo, 'dev-loop', STEP, 'chain-advance');
     engine.onInjectable();
-    expect(h.injected[h.injected.length - 1]).toContain(BRIEF.text);
+    const workPrompt = h.injected[h.injected.length - 1];
+    expect(workPrompt).toContain(BRIEF.text);
+    // It does the whole redo, so it is told the work came back to its step, not that it is one phase of a slice.
+    expect(workPrompt).toContain(`back to the ${STEP} step from the ${BRIEF.fromStep} gate`);
+    expect(workPrompt).not.toMatch(/impl-slice 1/i);
   });
 
   it('a loop that is neither a TDD phase nor at the return step never sees the brief', () => {

@@ -1383,7 +1383,7 @@ async function createWindow(): Promise<void> {
       // Fail-closed to false.
       [CH.flowAppRedo]: (_e, m) =>
         isValidFlowAppRedo(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
-      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at RED so the
+      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at its return step so the
       // composer holds open on a failed reopen and never loses the brief. Fail-closed to false.
       [CH.flowAppBackToRed]: (_e, m) =>
         isValidFlowAppBackToRed(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,

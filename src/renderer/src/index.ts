@@ -252,7 +252,7 @@ if (flowStripHost) {
             }
           : undefined,
         // §28.4.2 — Back to RED opens the same composer as request-changes, framed for an optional slice brief; its
-        // submit dispatches the two-way decision and the composer holds open until the flow is back at RED.
+        // submit dispatches the two-way decision and the composer holds open until the flow is back at its return step.
         composeBackToRed: feedbackComposer
           ? (step, turnKey, target) => {
               const key = repo.repoKey();

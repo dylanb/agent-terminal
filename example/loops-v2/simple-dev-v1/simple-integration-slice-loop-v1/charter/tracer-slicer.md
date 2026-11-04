@@ -15,34 +15,20 @@ Standards to apply: tracer bullets (The Pragmatic Programmer), the walking skele
 slicing (Cockburn), and vertical story-splitting patterns — plus the repository's own slicing rules (for
 example `TRACER-BULLET.md`).
 
-Grade the slice breakdown against the tracer-bullet rule: each slice must be Thin-but-complete — a
-vertical that runs main → ipc → preload → renderer → visible UI and does the smallest real end-to-end thing
-with real backing, fireable from an existing UI control and proven RED-first by an `_electron` e2e — never a
-horizontal layer (main-only, or UI-only) that cannot be exercised on its own. Confirm the plan ends with an
-integration slice that wires the end-to-end path, and that each slice's commit boundary is a working
-increment. Reject any slice that defers its own observable behavior to a later one. A slice may carry several ACs and
-need not be the smallest possible increment: slice count and size are the planner’s call, never a finding, so
-long as each slice is complete and testable end to end.
+This flow, `simple-dev-v1`, built the whole ticket in one test-driven development loop: the approved plan's
+`## Increments` block lists its `### Increment` entries, and the branch carries a `RED:` and a `GREEN:` commit
+for each. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change as
+built against it.
 
-Reject a slice whose RED cannot reach one of its tests' own checks until production code that another of its
-tests drives exists — a check behind a flag the launcher does not yet accept, or behind a service the slice has
-yet to build. That is two increments planned as one: the chain runs one RED per impl-slice, so that RED can never
-see the dependent check fail, and the fix is to split the slice into dependency-ordered impl-slices. A plan that
-describes RED/GREEN increments inside one impl-slice is the same finding. This is a finding even though slice
-count and size are otherwise the planner’s call.
+Grade the change against the tracer-bullet rule (for example `TRACER-BULLET.md`): the end-to-end path is wired,
+a vertical that does the smallest real thing with real backing, reachable from the running app and proven by a
+test at the layer its behavior is observable from. Reject an increment that left its own observable behavior to
+a later one or to nothing, and a horizontal layer nothing exercises. Increment count and size are the planner's
+call, never a finding.
 
-Also grade the plan's **machine-readable** structure, since the engine sources the impl-slice×N loop count
-from it (§28.4.1). A single-ticket plan MUST carry a `## Impl-slices` block whose `### Impl-slice N — <title>`
-entries each state an `Acceptance criteria:` line and use DISTINCT indices — one entry per RED/GREEN slice,
-the final integration slice excluded (it runs once after the loop, not as an entry). Reject a plan that
-describes its slices only in prose: without a well-formed block the count silently defaults to 1 and the chain
-runs a single slice regardless of the breakdown. The **epic** plan is the exception — it carries a
-`## Sub-tickets` block instead (§28.7) and no `## Impl-slices`; for an epic, grade that partition, not the
-impl-slice block.
-
-Check where the plan puts each test edit. An edit to or deletion of an existing test that a slice needs belongs
-in that slice's RED step, so the edited test is seen failing before the code it covers: a later step changes a
-RED test only to correct one it finds wrong (§28.5.1). Any such edit scheduled in a GREEN or refactor step is a finding.
+Check where each test edit landed. An edit to or deletion of an existing test that an increment needed belongs
+in that increment's `RED:` commit, so the edited test was seen failing before the code it covers: a `GREEN:`
+commit changes a RED test only to correct one it found wrong. Any other edit in a `GREEN:` commit is a finding.
 
 Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
 two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a
