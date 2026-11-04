@@ -174,6 +174,8 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.
    *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
+  /** The step a `back-to-red` decision at this gate returns the flow to; present only when the gate offers it. */
+  reopenStep?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
    *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef

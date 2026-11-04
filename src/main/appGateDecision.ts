@@ -63,6 +63,8 @@ export interface AppGateDecisionDeps {
   recordSliceBrief(repoDir: string, fromStep: string, text: string): void;
   /** §28.4.2 — drop the slice brief: on a failed reopen (rollback) and when the slice ends (refactor approve). */
   clearSliceBrief(repoDir: string): void;
+  /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
+  reopenStep(repoDir: string): string | null;
   /** §28.7 — classify an approve at the epic gate. The caller fires the §25 preview audit IFF the outcome is
    *  `preview-raised`; a `blocked` or `preview-raised` outcome holds the gate (neither accepted nor advanced). */
   maybeBeginEpicPromotion(repoDir: string, def: LoopDefV2, step: string, turnKey: string, decider?: GateDecider): EpicGateOutcome;
@@ -446,9 +448,11 @@ export async function runAppApprove(repoDir: string, step: string, turnKey: stri
   } catch (e) {
     gateAudit('source-slices-failed', 1, e instanceof Error ? e.message : String(e));
   }
-  // §28.4.2 — refactor is the slice's last phase: approving it ends the slice, so its back-to-RED brief goes.
-  // Best-effort after the accept persisted; a residual brief is keyed to this slice and never reaches another.
-  if (r.def.work.completion === 'refactor') {
+  // §28.4.2 — the brief goes when its last reader is approved: refactor, or a return step that is the only loop
+  // reading it because it is no TDD phase. Best-effort after the accept persisted.
+  const lastBriefReader =
+    r.def.work.completion === 'refactor' || (r.def.work.completion === undefined && step === deps.reopenStep(repoDir));
+  if (lastBriefReader) {
     try {
       deps.clearSliceBrief(repoDir);
     } catch (e) {

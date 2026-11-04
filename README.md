@@ -37,6 +37,7 @@ Its implemented as a desktop app for running, monitoring and steering terminal c
 
 - **Flows.** A *flow* is a sequence of steps that takes a ticket from start to finish. Most steps are *loops*: the agent does the work, reviewer sub-agents review it, the agent fixes what they find, the findings are consolidated, and a gate decides whether the step is done.
 - **`feature-dev-v3`.** The full chain: `preparation` (manual), `groom-intent`, `groom`, `groom-approve`, `plan`, `plan-approve`, `infra`, `red`, `green`, `refactor` (repeating back to `red` for each slice), `integration-slice`, `impl-approve`, `finalize`. See [Bundled flows](#bundled-flows).
+- **`simple-dev-v1`.** The light path for a ticket that would be one `feature-dev-v3` slice: `preparation` (manual), `plan` (picks up the ticket and writes its intent), `plan-approve` (warns when the ticket is better suited to `feature-dev-v3` and flags new complexity that would go under-reviewed), `dev` (one test-driven loop with a `RED:` and a `GREEN:` commit per increment, written by Sonnet sub-agents), `integration-slice`, `impl-approve` and `finalize`. Back to dev on the `dev`, `integration-slice` and `impl-approve` gates returns the run to `dev`.
 - **`plan-only`.** Groom a ticket and produce a reviewed plan, then stop.
 - **Epics.** An epic-capable plan is parsed into ordered sub-tickets. At the approve gate, a confirm-first **promote** action creates them on GitHub, and the preview and the promotion read the same parse.
 - **Goal-mode work turns.** A loop step can run as an agent `/goal` session that reports progress through a validated progress file.
@@ -168,6 +169,7 @@ This builds the terminal into `dist/` and the controller (`electron-builder.cont
 | Flow | What it does |
 |---|---|
 | `feature-dev-v3` | The full test-driven chain: groom the ticket → human approval → plan → human approval → build test infrastructure → RED / GREEN / refactor for each planned slice → integration slice → human approval → finalize the PR for a human to merge. Epics fan out into sub-tickets. Each phase ends in a `git commit`. Described in [spec §28](docs/spec/28-the-full-tdd-development-process-a-chain-of-loops.md). |
+| `simple-dev-v1` | A lighter chain for a ticket that fits one `feature-dev-v3` slice: plan → human approval (with a too-big warning) → one TDD development loop → integration slice → human approval → finalize. |
 | `plan-only` | Groom a ticket and produce a reviewed implementation plan, then stop. |
 
 The definitions live in [`example/flows/`](example/flows) and [`example/loops-v2/`](example/loops-v2). You can write your own flows as `flow.yaml` files in `~/.agent-terminal/flows/` (global) or `<repo>/.agent-terminal/flows/` (per repo; a repo entry wins when names clash). See [spec §18](docs/spec/18-flow-definitions-flow-yaml.md) and [§27](docs/spec/27-in-terminal-loop-engine-the-live-design.md).

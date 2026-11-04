@@ -525,7 +525,10 @@ export function createFlowMachine(
     const loopName = mostRecentLoopStep.loop;
     if (loopName === undefined) return withRefs;
     const appLoop = readAppLoopView?.(loopName);
-    return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
+    if (!appLoop) return withRefs;
+    const reopenStep = steps.find((s) => s.repeat)?.repeat?.backTo;
+    const offersReopen = reopenStep !== undefined && (appLoop.gateOptions ?? []).includes('back-to-red');
+    return { ...withRefs, loop: offersReopen ? { ...appLoop, reopenStep } : appLoop };
   };
 
   const persist = (): void => {

@@ -524,6 +524,7 @@ async function createWindow(): Promise<void> {
       return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
     },
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };
@@ -1167,6 +1168,7 @@ async function createWindow(): Promise<void> {
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
     recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
     clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     emitError: (reason) => loopMessages.post('error', reason),
     emitNotice: (reason) => loopMessages.post('notice', reason),

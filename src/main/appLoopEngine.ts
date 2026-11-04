@@ -187,6 +187,8 @@ export interface AppLoopEngineDeps {
   workRefs(repoDir: string): { ticket: number | null; pr: number | null };
   /** §28.4.2 — the operator's back-to-RED brief for the repo's CURRENT slice, or null when none is in force. */
   sliceBrief(repoDir: string): SliceBrief | null;
+  /** §28.4.2 — the step a back-to-red decision returns the repo's flow to, or null when its flow names none. */
+  reopenStep(repoDir: string): string | null;
   /** §28.4 D1 */
   currentSlice(repoDir: string): number;
   /** §27.12 — the command line the agent runs to put a report or verdict through the loop's own format check. */
@@ -1003,10 +1005,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     changedTestsToRecord = null;
   };
 
-  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn carries; other loops never see one. */
+  /** §28.4.2 — the brief a RED/GREEN/refactor phase turn, or the turn at the back-to-red return step, carries. */
   const briefFor = (turn: ActiveAppTurn): { sliceBrief: SliceBrief } | Record<string, never> => {
     const r = deps.resolveDef(turn.repoDir, turn.loopName);
-    if (!r.ok || r.def.work.completion === undefined) return {};
+    if (!r.ok) return {};
+    if (r.def.work.completion === undefined && turn.stepId !== deps.reopenStep(turn.repoDir)) return {};
     const brief = deps.sliceBrief(turn.repoDir);
     return brief !== null ? { sliceBrief: brief } : {};
   };

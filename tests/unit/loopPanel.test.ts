@@ -326,8 +326,20 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeBackToRed });
     panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], appTurn: { step: 'green', turnKey: 'consolidate-green' } }), 'green');
     host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!.click();
-    expect(composeBackToRed).toHaveBeenCalledWith('green', 'consolidate-green');
+    expect(composeBackToRed).toHaveBeenCalledWith('green', 'consolidate-green', 'RED');
     expect(appGateDecision).not.toHaveBeenCalled();
+  });
+
+  it('names the back-to-red control after the step it returns to, and hands that step to the composer', () => {
+    const composeBackToRed = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: vi.fn(), composeBackToRed });
+    panel.render(appGate({ gateOptions: ['approve', 'back-to-red'], reopenStep: 'dev', appTurn: { step: 'integration', turnKey: 'k' } }), 'integration');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="back-to-red"]')!;
+    expect(btn.textContent).toBe('Back to dev');
+    expect(btn.getAttribute('aria-label')).toBe('Back to dev');
+    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · Back to dev');
+    btn.click();
+    expect(composeBackToRed).toHaveBeenCalledWith('integration', 'k', 'dev');
   });
 
   it('renders NO §27 request-changes button when no composer is wired — it is a composer-only affordance (WCAG 4.1.2)', () => {

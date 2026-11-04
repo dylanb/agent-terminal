@@ -7478,7 +7478,7 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
-  await expect(backToRed).toHaveText('Back to RED'); // the readable label
+  await expect(backToRed).toHaveText('Back to red'); // named after the flow's return step
   await backToRed.click();
   // The composer opens; submitting it empty is a plain reopen (the brief is optional).
   const composer = page.locator('#feedback-composer-host .flow-modal');

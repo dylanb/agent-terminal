@@ -1,0 +1,49 @@
+# A lighter feature-dev for a ticket that fits one feature-dev-v3 impl-slice: plan, one TDD goal loop, then
+# feature-dev-v3's integration gate and finalize.
+name: simple-dev-v1
+steps:
+  - id: preparation
+    kind: manual
+  - id: plan
+    kind: loop
+    gate_authority: auto
+    loop: simple-plan-loop-v1
+    loop_namespace: app
+    todo_template: plan-loop-review
+    inputs:
+      - name: ticket
+        type: github-ticket
+        required: true
+  - id: plan-approve
+    kind: loop
+    gate_authority: human
+    loop: simple-plan-approve-loop-v1
+    loop_namespace: app
+  - id: dev
+    kind: loop
+    gate_authority: auto
+    loop: simple-dev-loop-v1
+    loop_namespace: app
+    todo_template: impl-loop-review
+  - id: integration-slice
+    kind: loop
+    gate_authority: auto
+    loop: simple-integration-slice-loop-v1
+    loop_namespace: app
+    todo_template: impl-loop-review
+  # The plan never writes an `## Impl-slices` block, so `slices` stays 1 and this repeat never loops the flow back.
+  # It exists to name `dev` as the step every back-to-red gate control returns to.
+  - id: impl-approve
+    kind: loop
+    gate_authority: human
+    loop: simple-impl-approve-loop-v1
+    loop_namespace: app
+    repeat:
+      back_to: dev
+      count_input: slices
+  - id: finalize
+    kind: loop
+    gate_authority: human
+    loop: simple-finalize-loop-v1
+    loop_namespace: app
+    todo_template: finalize

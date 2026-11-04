@@ -158,6 +158,26 @@ describe('§28.4.2 — the back-to-RED slice brief reaches the TDD phase turns',
     expect(h.injected[h.injected.length - 1]).not.toContain(BRIEF.text);
   });
 
+  it('the loop at the step back-to-red returns to sees the brief even when it is not a TDD phase', () => {
+    h.defResult = resolved(commitDef());
+    const engine = makeEngine();
+    h.sliceBriefResult = BRIEF;
+    h.reopenStepResult = STEP;
+    engine.enter(h.repo, 'dev-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(h.injected[h.injected.length - 1]).toContain(BRIEF.text);
+  });
+
+  it('a loop that is neither a TDD phase nor at the return step never sees the brief', () => {
+    h.defResult = resolved(commitDef());
+    const engine = makeEngine();
+    h.sliceBriefResult = BRIEF;
+    h.reopenStepResult = 'some-earlier-step';
+    engine.enter(h.repo, 'integration-loop', STEP, 'chain-advance');
+    engine.onInjectable();
+    expect(h.injected[h.injected.length - 1]).not.toContain(BRIEF.text);
+  });
+
   it('no brief, no redo block', () => {
     h.defResult = resolved(redDef());
     const engine = makeEngine();
