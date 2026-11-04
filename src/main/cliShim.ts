@@ -4,15 +4,22 @@ import path from 'node:path';
 import { shellQuote } from '../shared/shellQuote';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 
-/** The launch invocation a generated shim execs to start a fresh, independent instance: the app
- *  binary plus the args needed to load this build (none when packaged, the main script in dev). */
-export interface LaunchInvocation {
+/** The launch invocation a generated shim execs to start a fresh, independent instance of this build. */
+export type LaunchInvocation =
+  | { kind: 'packaged'; execPath: string }
+  | {
+      kind: 'development';
+      execPath: string;
+      /** The absolute path Electron was started on. Under electron-vite dev it is the app root, not the
+       *  main bundle, so the controller entry is never derived from it. */
+      startPath: string;
+      /** The directory the running main bundle loads from. */
+      mainDir: string;
+    };
+
+interface ShimCommand {
   execPath: string;
-  appArgs: string[];
-  /** Dev only: the directory the running main bundle loads from. Electron's argv names the app root
-   *  (`.` under electron-vite dev), not the bundle, so the controller entry beside the bundle is
-   *  located from here rather than derived from `appArgs`. */
-  mainDir?: string;
+  args: string[];
 }
 
 /** The installed command's filename. */
@@ -27,9 +34,9 @@ const MAC_BUNDLE_BINARY = /^(.*)\/[^/]+\.app\/Contents\/MacOS\/[^/]+$/;
 
 /** Where the controller of the same build as `invocation` may be: installed beside the terminal
  *  (/Applications, /opt), then in the controller package's build output beside the terminal's. */
-export function controllerInvocations(invocation: LaunchInvocation): LaunchInvocation[] {
-  if (invocation.mainDir) {
-    return [{ execPath: invocation.execPath, appArgs: [path.join(invocation.mainDir, DEV_CONTROLLER_ENTRY)] }];
+export function controllerInvocations(invocation: LaunchInvocation): ShimCommand[] {
+  if (invocation.kind === 'development') {
+    return [{ execPath: invocation.execPath, args: [path.join(invocation.mainDir, DEV_CONTROLLER_ENTRY)] }];
   }
   const mac = MAC_BUNDLE_BINARY.exec(invocation.execPath);
   const hostDir = mac ? mac[1] : path.dirname(invocation.execPath);
@@ -39,17 +46,17 @@ export function controllerInvocations(invocation: LaunchInvocation): LaunchInvoc
       : path.join(dir, CONTROLLER_PRODUCT_NAME);
   const installed = mac ? hostDir : path.join(path.dirname(hostDir), CONTROLLER_PRODUCT_NAME);
   const built = path.join(path.dirname(hostDir), CONTROLLER_OUTPUT_SUBDIR, path.basename(hostDir));
-  return [installed, built].map((dir) => ({ execPath: binaryIn(dir), appArgs: [] }));
+  return [installed, built].map((dir) => ({ execPath: binaryIn(dir), args: [] }));
 }
 
 function controllerBranch(invocation: LaunchInvocation): string[] {
   const candidates = controllerInvocations(invocation);
-  const launches = candidates.map(({ execPath, appArgs }) => {
-    const present = [`[ -x ${shellQuote(execPath)} ]`, ...appArgs.map((a) => `[ -f ${shellQuote(a)} ]`)];
-    const cmd = [execPath, ...appArgs].map(shellQuote).join(' ');
+  const launches = candidates.map(({ execPath, args }) => {
+    const present = [`[ -x ${shellQuote(execPath)} ]`, ...args.map((a) => `[ -f ${shellQuote(a)} ]`)];
+    const cmd = [execPath, ...args].map(shellQuote).join(' ');
     return `  if ${present.join(' && ')}; then nohup ${cmd} >/dev/null 2>&1 & exit 0; fi`;
   });
-  const looked = candidates.map((c) => c.appArgs[0] ?? c.execPath).join(', ');
+  const looked = candidates.map((c) => c.args[0] ?? c.execPath).join(', ');
   return [
     `if [ "$#" -ge 1 ] && [ "$1" = ${CONTROLLER_FLAG} ]; then`,
     ...launches,
@@ -59,18 +66,18 @@ function controllerBranch(invocation: LaunchInvocation): string[] {
   ];
 }
 
-/** How to launch a fresh instance of this build: a packaged build execs its app binary with no extra
- *  args; a dev build (Electron loading a main script) execs Electron with that script, absolutized
- *  against `cwd` so the generated shim launches the same build from anywhere. */
+/** How to launch a fresh instance of this build: a packaged build execs its app binary; a dev build
+ *  execs Electron on the path it was started on, absolutized against `cwd` so the generated shim
+ *  launches the same build from anywhere. */
 export function resolveLaunchInvocation(
   execPath: string,
   isDevBuild: boolean,
-  mainScript: string | undefined,
+  startPath: string | undefined,
   cwd: string,
   mainDir: string,
 ): LaunchInvocation {
-  if (!isDevBuild || !mainScript) return { execPath, appArgs: [] };
-  return { execPath, appArgs: [path.resolve(cwd, mainScript)], mainDir };
+  if (!isDevBuild || !startPath) return { kind: 'packaged', execPath };
+  return { kind: 'development', execPath, startPath: path.resolve(cwd, startPath), mainDir };
 }
 
 /**
@@ -80,7 +87,8 @@ export function resolveLaunchInvocation(
  * shell returns immediately.
  */
 export function generateShim(invocation: LaunchInvocation): string {
-  const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
+  const appArgs = invocation.kind === 'development' ? [invocation.startPath] : [];
+  const cmd = [invocation.execPath, ...appArgs].map(shellQuote).join(' ');
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
