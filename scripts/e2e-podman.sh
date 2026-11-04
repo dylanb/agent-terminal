@@ -7,6 +7,10 @@
 #   E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
 #                                           # red-check run (§28.5.2): the tests in <dir>/select.txt,
 #                                           # JSON report to <dir>/report.json (see e2e/entrypoint.sh)
+#   E2E_REPORT_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
+#                                           # full run that also writes <dir>/report.json (Playwright JSON)
+#                                           # and <dir>/environment.json; `pnpm run test:proof` reads both
+#                                           # (docs/e2e-podman.md)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,6 +30,14 @@ fi
 
 podman build -t "$IMAGE" -f e2e/Containerfile .
 
+# A report run names the image by the ID just built, so the recorded ID is the image the container ran from.
+run_image="$IMAGE"
+report=()
+if [ -n "${E2E_REPORT_DIR:-}" ]; then
+  run_image="$(podman image inspect --format '{{.Id}}' "$IMAGE")"
+  report=(-e "E2E_REPORT_DIR=$E2E_REPORT_DIR" -e "E2E_IMAGE_ID=$run_image")
+fi
+
 # --shm-size: Chromium crashes on the 64 MiB default /dev/shm.
 # --cap-add=SYS_ADMIN + label=disable: let Chromium's sandbox run under rootless Podman.
 # node_modules volume keeps the Linux build out of the macOS tree and caches it between runs.
@@ -41,4 +53,5 @@ podman run --rm ${tty[@]+"${tty[@]}"} \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \
   -e "E2E_IO_DIR=${E2E_IO_DIR:-}" \
-  "$IMAGE"
+  ${report[@]+"${report[@]}"} \
+  "$run_image"

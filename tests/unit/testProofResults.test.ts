@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readE2eEnvironment, readPlaywrightReport, readVitestReport } from '../../src/main/testProofResults';
@@ -43,6 +43,24 @@ describe('readVitestReport', () => {
     ['a missing report file', 'absent-vitest.json'],
   ])('reads %s as unreadable', (_what, file) => {
     expect(readVitestReport(FIXTURES, file).kind).toBe('unreadable');
+  });
+});
+
+describe('readVitestReport with a test status it does not know', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'test-proof-vitest-status-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads the report as unreadable rather than dropping that test', () => {
+    const report = JSON.parse(readFileSync(join(FIXTURES, 'vitest-pass.json'), 'utf8')) as { testResults: { assertionResults: { status: string }[] }[] };
+    const [first] = report.testResults[0]?.assertionResults ?? [];
+    if (first) first.status = 'running';
+    writeFileSync(join(dir, 'vitest.json'), JSON.stringify(report));
+    expect(readVitestReport(dir, 'vitest.json').kind).toBe('unreadable');
   });
 });
 
@@ -111,6 +129,23 @@ describe('readE2eEnvironment', () => {
     });
   });
 
+  describe('with a key left empty', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'test-proof-environment-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it.each(['node', 'electron', 'image'])('reads an environment file with an empty %s as unreadable', (key) => {
+      const environment = JSON.parse(readFileSync(join(FIXTURES, 'environment.json'), 'utf8')) as Record<string, unknown>;
+      environment[key] = '';
+      writeFileSync(join(dir, 'environment.json'), JSON.stringify(environment));
+      expect(readE2eEnvironment(dir, 'environment.json').kind).toBe('unreadable');
+    });
+  });
+
   it('reads the container Node, the installed Electron and the image ID', () => {
     expect(readE2eEnvironment(FIXTURES, 'environment.json')).toEqual({
       kind: 'read',
@@ -124,5 +159,24 @@ describe('readE2eEnvironment', () => {
     ['a missing environment file', 'absent-environment.json'],
   ])('reads %s as unreadable', (_what, file) => {
     expect(readE2eEnvironment(FIXTURES, file).kind).toBe('unreadable');
+  });
+});
+
+describe('readPlaywrightReport with a report that links outside its dir', () => {
+  let scratch: string;
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'test-proof-link-'));
+  });
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('reads it as unreadable', () => {
+    const dir = join(scratch, 'reports');
+    mkdirSync(dir);
+    const outside = join(scratch, 'outside-report.json');
+    copyFileSync(join(FIXTURES, 'playwright-pass.json'), outside);
+    symlinkSync(outside, join(dir, 'report.json'));
+    expect(readPlaywrightReport(dir, 'report.json').kind).toBe('unreadable');
   });
 });

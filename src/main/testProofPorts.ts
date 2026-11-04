@@ -1,31 +1,144 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { APP_COMMAND_TIMEOUT_MS, commandEnvironment, parseAppGitObjectId, runAppCommand } from './appCommand';
+import { confinedRealPath, confinedRealPathResult, resolveJail } from './confinedPath';
 import { errMsg, isErrno } from './errno';
-import { originGitHubRepository } from './githubRepository';
+import { createGitHubRepositorySource, originGitHubRepository } from './githubRepository';
 import { openPullRequestsForBranch, type BranchPullRequest } from './pullRequestLookup';
-import type { BranchPullRequests, OpenPullRequest, ProofPublisher, ProofSuites, ProofWorkingTree } from './testProof';
-import type { SuiteCounts } from './testProofResults';
+import type { BranchPullRequests, OpenPullRequest, ProofPublisher, ProofSuite, ProofSuites, ProofWorkingTree, SuiteResult, SuiteRun } from './testProof';
+import { readE2eEnvironment, readPackageVersion, readPlaywrightReport, readVitestReport, type ReportRead } from './testProofResults';
+import { isRecord } from './yamlRecord';
 
 export const TEST_PROOF_COMMENT_MARKER = '<!-- agent-terminal:test-proof-summary -->';
 
-export function proofReportDir(root: string): string {
-  return join(root, '.agent-terminal', 'test-proof');
+const REPORT_DIR = ['.agent-terminal', 'test-proof'] as const;
+const VITEST_REPORT = 'vitest.json';
+const E2E_REPORT = 'report.json';
+const E2E_ENVIRONMENT = 'environment.json';
+const SUITE_OUTPUTS: Record<ProofSuite, readonly string[]> = { vitest: [VITEST_REPORT], e2e: [E2E_REPORT, E2E_ENVIRONMENT] };
+const COMMENTS_PER_PAGE = 50;
+
+type Prepared = { ok: true; dir: string } | { ok: false; reason: string };
+
+function prepareReportDir(root: string, suite: ProofSuite): Prepared {
+  const dir = resolveJail(root, ...REPORT_DIR);
+  if (dir === null) return { ok: false, reason: `the repository root ${root} cannot be resolved` };
+  const confined = confinedRealPathResult(dir, dir);
+  if (!confined.ok) return { ok: false, reason: `the report dir ${dir} ${confined.cause === 'escapes' ? 'leads outside the repository' : 'cannot be resolved'}` };
+  try {
+    mkdirSync(dir, { recursive: true });
+    for (const output of SUITE_OUTPUTS[suite]) {
+      const earlier = confinedRealPath(dir, join(dir, output));
+      if (earlier === null) return { ok: false, reason: `the earlier ${output} in ${dir} cannot be removed safely` };
+      rmSync(earlier, { force: true });
+    }
+  } catch (e) {
+    return { ok: false, reason: `the report dir ${dir} could not be prepared: ${errMsg(e)}` };
+  }
+  return { ok: true, dir };
 }
 
-export function createProofSuites(_root: string): ProofSuites {
-  const none: SuiteCounts = { passed: 0, failed: 0, skipped: 0, flaky: 0, skippedTests: [], flakyTests: [] };
+type Exit = { ok: true; code: number } | { ok: false; reason: string };
+
+function runInherited(file: string, args: readonly string[], cwd: string, environment: Record<string, string>): Promise<Exit> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { cwd, env: commandEnvironment(environment), stdio: 'inherit' });
+    child.on('error', (e) => resolve({ ok: false, reason: `${file} could not start: ${errMsg(e)}` }));
+    child.on('close', (code, signal) => resolve(code === null ? { ok: false, reason: `${file} was killed by ${signal ?? 'a signal'}` } : { ok: true, code }));
+  });
+}
+
+const STARTED_NOTHING = 1;
+
+export function createProofSuites(root: string): ProofSuites {
+  const runSuite = async (suite: ProofSuite, read: (dir: string) => ReportRead<SuiteResult>, start: (dir: string) => Promise<Exit>): Promise<SuiteRun> => {
+    const prepared = prepareReportDir(root, suite);
+    if (!prepared.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: prepared.reason };
+    const exit = await start(prepared.dir);
+    if (!exit.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: exit.reason };
+    const result = read(prepared.dir);
+    return result.kind === 'read' ? { kind: 'ran', exitCode: exit.code, result: result.value } : { kind: 'unreadable', exitCode: exit.code, reason: result.reason };
+  };
+
   return {
-    async run() {
-      return { kind: 'ran', exitCode: 0, result: { ...none, environment: { node: '', electron: '' } } };
+    run(suite) {
+      if (suite === 'vitest') {
+        return runSuite(
+          suite,
+          (dir) => {
+            const counts = readVitestReport(dir, VITEST_REPORT);
+            if (counts.kind === 'unreadable') return counts;
+            const jail = resolveJail(root, 'node_modules');
+            const electron = jail === null ? null : readPackageVersion(join(jail, 'electron'), 'package.json');
+            if (electron === null || electron.kind === 'unreadable') {
+              return { kind: 'unreadable', reason: `the installed Electron version cannot be read${electron === null ? '' : `: ${electron.reason}`}` };
+            }
+            return { kind: 'read', value: { ...counts.value, environment: { node: process.version, electron: electron.value } } };
+          },
+          (dir) =>
+            runInherited('pnpm', ['test', '--reporter=default', '--reporter=json', `--outputFile.json=${join(dir, VITEST_REPORT)}`, '--retry=0'], root, {}),
+        );
+      }
+      return runSuite(
+        suite,
+        (dir) => {
+          const counts = readPlaywrightReport(dir, E2E_REPORT);
+          if (counts.kind === 'unreadable') return counts;
+          const environment = readE2eEnvironment(dir, E2E_ENVIRONMENT);
+          if (environment.kind === 'unreadable') return environment;
+          return { kind: 'read', value: { ...counts.value, environment: environment.value } };
+        },
+        () => runInherited(join(root, 'scripts', 'e2e-podman.sh'), [], root, { E2E_IO_DIR: '', E2E_REPORT_DIR: join(...REPORT_DIR) }),
+      );
     },
   };
 }
 
-export function createProofPublisher(_root: string): ProofPublisher {
+export function createProofPublisher(root: string): ProofPublisher {
+  const repositories = createGitHubRepositorySource(root);
+  const api = async (args: string[]): Promise<string> => {
+    const repository = await repositories.resolve();
+    const host = repository.selector.split('/')[0] ?? '';
+    return runAppCommand('gh', ['api', '--hostname', host, ...args], root);
+  };
+  const route = async (path: string): Promise<string> => {
+    const { owner, name } = await repositories.resolve();
+    return `repos/${owner}/${name}/${path}`;
+  };
+
+  const earlierSummary = async (pr: number, login: string): Promise<number | null> => {
+    for (let page = 1; ; page++) {
+      const listed: unknown = JSON.parse(await api([`${await route(`issues/${pr}/comments`)}?per_page=${COMMENTS_PER_PAGE}&page=${page}`]));
+      if (!Array.isArray(listed)) throw new Error(`the comments on PR #${pr} are not a list`);
+      for (const comment of listed) {
+        if (
+          isRecord(comment) &&
+          Number.isSafeInteger(comment.id) &&
+          isRecord(comment.user) &&
+          comment.user.login === login &&
+          typeof comment.body === 'string' &&
+          comment.body.startsWith(TEST_PROOF_COMMENT_MARKER)
+        ) {
+          return comment.id as number;
+        }
+      }
+      if (listed.length < COMMENTS_PER_PAGE) return null;
+    }
+  };
+
   return {
-    async status() {},
-    async summary() {},
+    async status(sha, context, description) {
+      await api([await route(`statuses/${sha}`), '-f', 'state=success', '-f', `context=${context}`, '-f', `description=${description}`]);
+    },
+    async summary(pr, body) {
+      const user: unknown = JSON.parse(await api(['user']));
+      if (!isRecord(user) || typeof user.login !== 'string') throw new Error('gh api user did not name the logged-in user');
+      const marked = `${TEST_PROOF_COMMENT_MARKER}\n${body}`;
+      const earlier = await earlierSummary(pr, user.login);
+      if (earlier === null) await api([await route(`issues/${pr}/comments`), '-f', `body=${marked}`]);
+      else await api(['-X', 'PATCH', await route(`issues/comments/${earlier}`), '-f', `body=${marked}`]);
+    },
   };
 }
 

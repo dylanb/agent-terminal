@@ -243,6 +243,31 @@ describe('runTestProof publishes the proof when both suites pass on the PR head'
       expect.soft(body).toContain(value);
     }
   });
+
+  it.each([
+    ['vitest', 'e2e', VITEST, E2E],
+    ['e2e', 'vitest', E2E, VITEST],
+  ] as const)('credits the %s counts, environment and test names to that suite in the summary', async (suite, otherSuite, own, other) => {
+    const { published } = await prove([]);
+    const lines = (published.summaries[0]?.body ?? '').split('\n');
+    const namesOwn = (line: string) => new RegExp(`\\b${suite}\\b`).test(line);
+    const namesOther = (line: string) => new RegExp(`\\b${otherSuite}\\b`).test(line);
+    const row = lines.filter((line) => namesOwn(line) && !namesOther(line) && line.includes(own.environment.node));
+    expect(row, lines.join('\n')).toHaveLength(1);
+    const ownRow = row[0] ?? '';
+    for (const n of [own.passed, own.skipped, own.flaky]) expect.soft(ownRow, `count ${n}`).toMatch(new RegExp(`\\b${n}\\b`));
+    expect.soft(ownRow).toContain(own.environment.electron);
+    if (own.environment.image !== undefined) expect.soft(ownRow).toContain(own.environment.image);
+    for (const n of [other.passed, other.skipped, other.flaky]) expect.soft(ownRow, `other count ${n}`).not.toMatch(new RegExp(`\\b${n}\\b`));
+    expect.soft(ownRow).not.toContain(other.environment.node);
+    expect.soft(ownRow).not.toContain(other.environment.electron);
+    for (const name of [...own.skippedTests, ...own.flakyTests]) {
+      const at = lines.findIndex((line) => line.includes(name));
+      const label = lines.slice(0, at).reverse().find((line) => namesOwn(line) || namesOther(line)) ?? '';
+      expect.soft(at, name).toBeGreaterThan(-1);
+      expect.soft(namesOwn(label) && !namesOther(label), `${name} is listed under ${label}`).toBe(true);
+    }
+  });
 });
 
 describe('runTestProof re-checks the tree and both heads after the suites pass', () => {
@@ -273,6 +298,45 @@ describe('runTestProof re-checks the tree and both heads after the suites pass',
   });
 });
 
+describe('runTestProof refuses when HEAD and the PR head both move during the run', () => {
+  it('refuses, publishing nothing, when a push mid-run moves HEAD and the PR head to the same new commit', async () => {
+    const w = world({
+      whileRunning: {
+        e2e: (live) => {
+          live.head = MOVED;
+          live.pr = { kind: 'open', number: 7, headSha: MOVED };
+        },
+      },
+    });
+    const { exitCode, output, published } = await prove([], w);
+    expect.soft(exitCode).not.toBe(0);
+    expect.soft(output).toContain(MOVED);
+    expectNothingPublished(published);
+  });
+});
+
+describe('runTestProof writes each test name into the summary as one intact code span', () => {
+  const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** A CommonMark code span holding exactly `content`: a fence longer than every backtick run in it, with optional one-space padding. */
+  const codeSpanOf = (content: string, fenceAtLeast: number) =>
+    new RegExp(`(?<!\`)(\`{${fenceAtLeast},})( ?)${content}\\2\\1(?!\`)`);
+
+  it('fences a name holding backtick runs with a longer run, so it renders as written', async () => {
+    const name = 'epic plan › keeps a ``## `` heading inside a `code` span';
+    const w = world({ runs: { vitest: ran({ ...VITEST, skippedTests: [name] }), e2e: ran(E2E) } });
+    const { published } = await prove([], w);
+    const body = published.summaries[0]?.body ?? '';
+    expect(body).toMatch(codeSpanOf(escapeRegExp(name), 3));
+  });
+
+  it('keeps a name holding a line break on one line', async () => {
+    const w = world({ runs: { vitest: ran(VITEST), e2e: ran({ ...E2E, flakyTests: ['first line\nsecond line'] }) } });
+    const { published } = await prove([], w);
+    const body = published.summaries[0]?.body ?? '';
+    expect(body).toMatch(codeSpanOf('first line[ \\t]+second line', 1));
+  });
+});
+
 /** A failure wording; a zero count ("0 failed", "failed: 0") is not one. */
 const SUITE_FAILURE = /(?<!\b0\s*)\bfail(?!\w*\W{0,3}0\b)|did not pass|unreadable|non-zero|exit(ed)?( with)?( code)? [1-9]|refus/i;
 
@@ -300,6 +364,18 @@ describe('runTestProof refuses, publishing nothing, when a suite does not pass',
       expectNothingPublished(published);
     },
   );
+});
+
+describe('runTestProof stops before e2e when vitest does not pass', () => {
+  it.each([
+    ['reports failed tests', ran({ ...VITEST, failed: 2 }, 1)],
+    ['exits non-zero with an all-pass report', ran(VITEST, 1)],
+    ['leaves no readable report', { kind: 'unreadable', exitCode: 0, reason: 'vitest.json is missing' } as SuiteRun],
+  ])('never runs e2e when vitest %s', async (_what, vitest) => {
+    const { exitCode, suitesRun } = await prove([], world({ runs: { vitest, e2e: ran(E2E) } }));
+    expect.soft(exitCode).not.toBe(0);
+    expect.soft(suitesRun).toEqual(['vitest']);
+  });
 });
 
 describe('runTestProof attempts all three publishes and reports each outcome', () => {

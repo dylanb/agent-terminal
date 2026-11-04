@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProofSuites } from '../../src/main/testProofPorts';
@@ -131,5 +131,68 @@ describe('the proof suites adapter runs both suites unnarrowed', () => {
     expect.soft(runOf('e2e')).toHaveLength(1);
     expect.soft(run?.argv).toEqual([]);
     expect.soft([null, ''], 'E2E_IO_DIR is unset or empty').toContain(run?.env.E2E_IO_DIR);
+  });
+});
+
+describe('the proof suites adapter never follows a link out of the repository', () => {
+  it('refuses a report dir reached through a link out of the repository, creating and running nothing there', async () => {
+    const outside = join(scratch, 'outside');
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, '.agent-terminal'));
+    const run = await createProofSuites(root).run('vitest');
+    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(runOf('vitest')).toHaveLength(0);
+    expect.soft(existsSync(join(outside, 'test-proof'))).toBe(false);
+  });
+
+  it('refuses an earlier report that is a link to a file outside the repository, leaving that file alone', async () => {
+    await createProofSuites(root).run('vitest');
+    const outside = join(scratch, 'outside-vitest.json');
+    copyFileSync(join(FIXTURES, 'vitest-pass.json'), outside);
+    const dir = join(root, '.agent-terminal', 'test-proof');
+    rmSync(join(dir, 'vitest.json'), { force: true });
+    symlinkSync(outside, join(dir, 'vitest.json'));
+    const run = await createProofSuites(root).run('vitest');
+    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(existsSync(outside)).toBe(true);
+  });
+});
+
+describe('the proof suites adapter refuses a suite that did not run to its own exit', () => {
+  it('reads a suite whose command cannot start as unreadable, naming the command', async () => {
+    process.env.PATH = hermeticPath(join(scratch, 'bare'), ['node']);
+    const run = await createProofSuites(root).run('vitest');
+    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(run.kind === 'unreadable' ? run.reason : '').toMatch(/pnpm/);
+  });
+
+  it('reads a suite killed by a signal after writing passing reports as unreadable, naming the signal', async () => {
+    writeFileSync(
+      join(root, 'scripts', 'e2e-podman.sh'),
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = path.resolve(__dirname, '..', process.env.E2E_REPORT_DIR);
+fs.copyFileSync(${JSON.stringify(join(FIXTURES, 'playwright-pass.json'))}, path.join(dir, 'report.json'));
+fs.copyFileSync(${JSON.stringify(join(FIXTURES, 'environment.json'))}, path.join(dir, 'environment.json'));
+process.kill(process.pid, 'SIGKILL');
+`,
+      { mode: 0o755 },
+    );
+    const run = await createProofSuites(root).run('e2e');
+    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(run.kind === 'unreadable' ? run.reason : '').toMatch(/SIGKILL/);
+  });
+});
+
+describe('the proof suites adapter refuses a vitest run whose Electron version cannot be read', () => {
+  it.each([
+    ['is missing', () => rmSync(join(root, 'node_modules', 'electron', 'package.json'))],
+    ['has no version', () => writeFileSync(join(root, 'node_modules', 'electron', 'package.json'), JSON.stringify({ name: 'electron' }))],
+  ])('reads vitest as unreadable when the installed Electron package.json %s', async (_what, breakIt) => {
+    breakIt();
+    const run = await createProofSuites(root).run('vitest');
+    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(run.kind === 'unreadable' ? run.reason : '').toMatch(/electron/i);
   });
 });
