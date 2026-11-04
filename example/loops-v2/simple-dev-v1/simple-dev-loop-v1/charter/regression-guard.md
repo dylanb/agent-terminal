@@ -23,8 +23,9 @@ behavior, not the implementation, and was seen failing before the code it covers
 removed a line of a test RED wrote, it logs the change under `### RED test changes`. For each change to a RED
 test, judge whether it corrects a wrong test or weakens a right one, and confirm every acceptance criterion the
 test checked is still checked by some test. Diff the test files each `RED:` commit added or edited against the
-branch head: a changed test file that `### RED test changes` does not explain is a finding. The diff proves which
-files changed; you judge why.
+branch head: a line that commit wrote and a later commit changed or removed, that `### RED test changes` does not
+explain, is a finding. Lines a later commit only added are not. The diff proves which lines changed; you judge
+why.
 
 A green is vacuous too when it was never run:
 ensure every test needed to prove the in-scope change has actually been run and observed passing — the
