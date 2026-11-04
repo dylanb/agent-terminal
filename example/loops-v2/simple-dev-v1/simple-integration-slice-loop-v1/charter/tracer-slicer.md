@@ -16,8 +16,8 @@ slicing (Cockburn), and vertical story-splitting patterns — plus the repositor
 example `TRACER-BULLET.md`).
 
 This flow, `simple-dev-v1`, built the whole ticket in one test-driven development loop: the approved plan's
-`## Increments` block lists its `### Increment` entries, and the branch carries a `RED:` and a `GREEN:` commit
-for each. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change as
+`## Increments` block lists its `### Increment` entries, and the branch carries their `RED:` and `GREEN:` commits
+as the impl-report's `### Increments` section records them. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change as
 built against it.
 
 Grade the change against the tracer-bullet rule (for example `TRACER-BULLET.md`): the end-to-end path is wired,
@@ -28,7 +28,8 @@ call, never a finding.
 
 Check where each test edit landed. An edit to or deletion of an existing test that an increment needed belongs
 in that increment's `RED:` commit, so the edited test was seen failing before the code it covers: a `GREEN:`
-commit changes a RED test only to correct one it found wrong. Any other edit in a `GREEN:` commit is a finding.
+commit changes a RED test only to correct one it found wrong. Any other edit to or deletion of an existing test in a
+`GREEN:` commit is a finding.
 
 Raise a finding only where acting on it changes an observable outcome — correctness, safety, a contract
 two surfaces read, or whether the next reader can follow the artifact. An equal-quality rewording, a

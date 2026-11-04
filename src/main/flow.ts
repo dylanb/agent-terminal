@@ -401,7 +401,6 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // §28.4.2 — where a back-to-red decision returns the flow: the label, the brief's routing and the jump all read it.
   const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.

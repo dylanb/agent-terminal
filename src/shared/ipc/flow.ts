@@ -583,8 +583,9 @@ export interface FlowAppRedoMsg {
 }
 
 /** flow:appBackToRed request (§28.4.2): the operator's back-to-red decision for `repoKey`, carrying the
- *  `step`+`turnKey` identity it acts on (§6) and the `brief` the turns that read it are handed (empty = a plain reopen). Two-way like appRedo: the reply is whether the flow is back at its return
- *  step, so the composer holds open and keeps the brief when the reopen does not land. */
+ *  `step`+`turnKey` identity it acts on (§6) and the `brief` the turns that read it are handed (empty = a plain
+ *  reopen). Two-way like appRedo: the reply is whether the flow is back at its return step, so the composer holds
+ *  open and keeps the brief when the reopen does not land. */
 export interface FlowAppBackToRedMsg {
   sessionId: SessionId;
   repoKey: string;
