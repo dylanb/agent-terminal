@@ -2,6 +2,10 @@
 
 §27.13: plan approval still flips the PR non-draft, but no longer to trigger CI, since GitHub Actions runs no vitest or e2e on an open PR (the suites run only on the push to `main` a merge creates). N13a now names the `test-proof/vitest` and `test-proof/e2e` statuses from `pnpm run test:proof` (`docs/test-proof.md`) as the checks a reviewer pulls, and drops the recorded override that justified going non-draft mid-impl to run CI.
 
+## A loop error clears when the loop recovers or moves on
+
+§23.6: a loop error stayed on the controller card until someone pressed **Dismiss**, even after the loop had recovered on its own. A stalled turn that resumed and chained into the next step still showed **Loop error** while the terminal showed it working. Now a loop error that is the loop's own error, the one its panel shows (a stalled or failed turn, or an Accept the loop's gate refused), is withdrawn when the flow moves to a new step, or when the loop leaves its error status, as the panel's own error is. Any other loop error (a failed gate side effect, push or save, or an input announced missing on Retry) and every notice keep their lifetime: they stay until dismissed or replaced, so a failed push at an approve is not lost when the gate advances.
+
 ## #221 slice 5 — Clear survives unchanged recovery
 
 - 2026-10-29: §23.6 reconciliation: notification frames use minor 2, preserving minor 1 for loop-message status/dismissal. History and Clear compose the shared pressed-control guard while retaining stale-Clear checks.

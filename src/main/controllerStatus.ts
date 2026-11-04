@@ -1,6 +1,8 @@
 import type { AgentState, ControllerLoopMessage, ControllerWorkStatus, FlowStateView } from '../shared/ipc';
 import { isControllerIssueNumber } from '../shared/controllerStatus';
 import { errMsg } from './errno';
+import { APP_LOOP_STATUS_ERROR } from './loopViewV2';
+import { publishedLoopReason } from './loopMessages';
 
 export interface ControllerStatusSource {
   current(): {
@@ -38,6 +40,9 @@ export function createControllerStatus(source: ControllerStatusSource): {
   let alive = true;
   let occurrence: { repoKey: string; number: number | undefined; title: Extract<ControllerWorkStatus['ticket'], { availability: 'known' }>['title'] } | undefined;
   let previous = '';
+  let previousRefresh: { position: string; loopStatus: string | undefined; messageId: string | undefined } | undefined;
+  let turnErrorId: string | undefined;
+  let withdrawnErrorId: string | undefined;
   const publish = () => {
     const serialized = JSON.stringify(work);
     if (serialized === previous) return;
@@ -59,6 +64,14 @@ export function createControllerStatus(source: ControllerStatusSource): {
       const loop = view.loop;
       const reasons = [loop?.errorReason, loop?.verdictReason, ...(loop?.autoGate?.haltReasons.map(halt => halt.detail ?? halt.reason) ?? []), loop?.autoGate?.failedEffect?.detail].filter((reason): reason is string => Boolean(reason));
       const error = view.error ?? loop?.errorReason;
+      const position = JSON.stringify([repoKey, view.stepName]);
+      const loopInError = loop?.status === APP_LOOP_STATUS_ERROR;
+      const movedOn = previousRefresh !== undefined
+        && (previousRefresh.position !== position || (previousRefresh.loopStatus === APP_LOOP_STATUS_ERROR && !loopInError));
+      if (movedOn && turnErrorId !== undefined) withdrawnErrorId = turnErrorId;
+      if (loopMessage?.id !== previousRefresh?.messageId) turnErrorId = loopMessage?.kind === 'error' && loopInError && loop?.errorReason !== undefined && loopMessage.reason === publishedLoopReason(loop.errorReason) ? loopMessage.id : undefined;
+      const shownMessage = loopMessage !== null && loopMessage.id === withdrawnErrorId ? null : loopMessage;
+      previousRefresh = { position, loopStatus: loop?.status, messageId: loopMessage?.id };
       const known = flowName !== null && view.status !== 'error';
       work = {
         flow: known ? {
@@ -69,7 +82,7 @@ export function createControllerStatus(source: ControllerStatusSource): {
         activity,
         attention: loop?.humanNeeded ? { status: loop.status, reasons: [...new Set(reasons)] } : null,
         error: error ? { reason: error } : null,
-        loopMessage,
+        loopMessage: shownMessage,
       };
       publish();
       if (fetchTitle && number !== undefined) {

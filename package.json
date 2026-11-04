@@ -1,8 +1,15 @@
 {
   "name": "agent-terminal",
   "version": "0.1.0",
-  "description": "Foundation for a coding-agent management application: bash in a PTY, xterm.js UI, shadow screen model, monitor pane",
-  "homepage": "https://github.com/dylanb",
+  "description": "Desktop app for running, monitoring and steering terminal coding agents (Claude Code, Codex): PTY shell, xterm.js, shadow screen model, monitor pane and a test-driven flow/loop engine",
+  "homepage": "https://github.com/dylanb/agent-terminal#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dylanb/agent-terminal.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dylanb/agent-terminal/issues"
+  },
   "author": {
     "name": "Dylan Barrell",
     "email": "dylan@barrell.com"
@@ -28,7 +35,7 @@
     "package": "pnpm run gen-icon && pnpm run build && electron-builder && electron-builder --config electron-builder.controller.yml",
     "prepare": "husky"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/language": "^6.12.3",
