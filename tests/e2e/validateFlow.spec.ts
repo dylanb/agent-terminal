@@ -186,6 +186,17 @@ test.describe('agent-terminal --validate-flow', { tag: '@ownapp' }, () => {
       const result = await runtime.validate([folder], { cwd: repo });
       expect(problemOutcome(result, folderPrefixes(repo, folder))).toEqual(problemLine(expect.stringContaining(FLOW_DEF_FILE)));
     });
+
+    test('a flow.yaml that cannot be read (a symbolic-link loop) carries the errno reason', async () => {
+      const { repo, entry } = catalog();
+      const folder = entry('looped-def');
+      mkdirSync(folder);
+      const defFile = join(folder, FLOW_DEF_FILE);
+      symlinkSync(FLOW_DEF_FILE, defFile);
+      const result = await runtime.validate([folder], { cwd: repo });
+      expect(problemOutcome(result, folderPrefixes(repo, folder)))
+        .toEqual(problemLine(expect.stringContaining(errnoDescription(() => statSync(defFile)))));
+    });
   });
 
   test.describe('a folder outside the tiers, or one the catalog refuses, is refused naming it', () => {
