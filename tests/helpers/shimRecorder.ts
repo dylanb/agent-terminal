@@ -3,7 +3,7 @@
 // test's chosen text to both streams and exits with the test's chosen status, so the test can see that the
 // launcher passed all three back.
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { shellQuote } from '../../src/shared/shellQuote';
 
@@ -17,7 +17,8 @@ export interface ForegroundRecording {
 export interface ForegroundRecorder {
   /** The executable to hand the launcher as its app binary. */
   binary: string;
-  read(): ForegroundRecording;
+  /** What the binary recorded; null until it has finished recording, or when it never ran. */
+  read(): ForegroundRecording | null;
 }
 
 export function writeForegroundRecorder(
@@ -34,7 +35,8 @@ export function writeForegroundRecorder(
     `: > ${shellQuote(argvFile)}`,
     `for a in "$@"; do printf '%s\\0' "$a" >> ${shellQuote(argvFile)}; done`,
     `pwd -P > ${shellQuote(cwdFile)}`,
-    `if [ "\${ELECTRON_RUN_AS_NODE+set}" = set ]; then printf 'set:%s' "$ELECTRON_RUN_AS_NODE"; else printf unset; fi > ${shellQuote(envFile)}`,
+    `if [ "\${ELECTRON_RUN_AS_NODE+set}" = set ]; then printf 'set:%s' "$ELECTRON_RUN_AS_NODE"; else printf unset; fi > ${shellQuote(`${envFile}.tmp`)}`,
+    `mv ${shellQuote(`${envFile}.tmp`)} ${shellQuote(envFile)}`,
     `printf '%s' ${shellQuote(output.stdout)}`,
     `printf '%s' ${shellQuote(output.stderr)} >&2`,
     `exit ${output.exitCode}`,
@@ -44,6 +46,7 @@ export function writeForegroundRecorder(
   return {
     binary,
     read() {
+      if (!existsSync(envFile)) return null;
       const env = readFileSync(envFile, 'utf8');
       return {
         argv: readFileSync(argvFile, 'utf8').split('\0').slice(0, -1),

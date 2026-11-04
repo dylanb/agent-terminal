@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileS
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { generateShim, type LaunchInvocation } from '../../src/main/cliShim';
+import { writeForegroundRecorder } from '../helpers/shimRecorder';
 
 // Process-level behavior of the generated shim (§23.4 / #25): run the REAL generated script through
 // /bin/sh and observe what it forwards across the OS boundary, with a recorder standing in for the app
@@ -16,13 +17,21 @@ let shimPath: string;
 let fixtureCwd: string;
 let realCwd: string;
 
+/** The checker runtime script each generated shim is given; its directory has a space, so a shim that splices it
+ *  into shell text unquoted runs the wrong file. */
+const CHECKER_SCRIPT = '/opt/agent terminal/out/main/artifactCheck.js';
+
+/** The shim generator with the checker runtime as its second input. The build type-checks this file, so the
+ *  RED states the new input's type here rather than fail the build that its e2e needs. */
+const generateShimWithChecker = generateShim as (invocation: LaunchInvocation, checkerScript: string) => string;
+
 /** A stand-in "app binary" that records the APP_LAUNCH_DIR it was launched with, then exits. */
 function recorderShim(extra = ''): void {
   const recorder = join(work, 'recorder.sh');
   writeFileSync(recorder, `#!/bin/sh\n${extra}printf '%s' "$APP_LAUNCH_DIR" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
   chmodSync(recorder, 0o755);
   shimPath = join(work, 'agent-terminal');
-  writeFileSync(shimPath, generateShim({ execPath: recorder, appArgs: [] }));
+  writeFileSync(shimPath, generateShimWithChecker({ execPath: recorder, appArgs: [] }, CHECKER_SCRIPT));
   chmodSync(shimPath, 0o755);
 }
 
@@ -132,7 +141,7 @@ describe('shim --controller (§23.5)', () => {
 
   function shimFor(invocation: LaunchInvocation): void {
     shimPath = join(work, 'agent-terminal');
-    writeFileSync(shimPath, generateShim(invocation));
+    writeFileSync(shimPath, generateShimWithChecker(invocation, CHECKER_SCRIPT));
     chmodSync(shimPath, 0o755);
   }
 
@@ -220,5 +229,33 @@ describe('shim --controller (§23.5)', () => {
     mkdirSync(join(fixtureCwd, '--controller'));
     recorderShim();
     expect(resolve(await runShim(['./--controller']))).toBe(join(realCwd, '--controller'));
+  });
+});
+
+describe('shim --validate-flow (§23.5)', () => {
+  const builds: [string, (binary: string) => LaunchInvocation][] = [
+    ['packaged', (binary) => ({ execPath: binary, appArgs: [] })],
+    ['dev', (binary) => ({ execPath: binary, appArgs: [join(work, 'out', 'main', 'index.js')] })],
+  ];
+
+  it.each(builds)('%s build: runs the checker runtime in the foreground, in plain-Node mode, with every operand verbatim', (_, invocationOf) => {
+    const recorder = writeForegroundRecorder(join(work, 'binary'), { stdout: 'checked\n', stderr: 'a diagnostic\n', exitCode: 3 });
+    shimPath = join(work, 'agent-terminal');
+    writeFileSync(shimPath, generateShimWithChecker(invocationOf(recorder.binary), CHECKER_SCRIPT));
+    chmodSync(shimPath, 0o755);
+    const operands = ['my flows; touch evil-marker', '$(touch pwned)', `it's "quoted" \`touch ticked\``];
+
+    const run = spawnSync(shimPath, ['--validate-flow', ...operands], { cwd: fixtureCwd, encoding: 'utf8' });
+
+    expect.soft({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 3, stdout: 'checked\n', stderr: 'a diagnostic\n' });
+    expect.soft(recorder.read()).toEqual({ argv: [CHECKER_SCRIPT, '--validate-flow', ...operands], cwd: realCwd, runAsNode: '1' });
+    expect.soft(['evil-marker', 'pwned', 'ticked'].filter((f) => existsSync(join(fixtureCwd, f)) || existsSync(join(work, f)))).toEqual([]);
+  });
+
+  it('still launches a directory named --validate-flow when it is spelled as a path or follows another operand', async () => {
+    mkdirSync(join(fixtureCwd, '--validate-flow'));
+    recorderShim();
+    expect(resolve(await runShim(['./--validate-flow']))).toBe(join(realCwd, '--validate-flow'));
+    expect(await runShim(['sub', '--validate-flow'])).toBe(join(realCwd, 'sub'));
   });
 });

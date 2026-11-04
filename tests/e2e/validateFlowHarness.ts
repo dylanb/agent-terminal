@@ -174,35 +174,52 @@ export function bundledFlowFolders(runtimeMain: string): string[] {
   ];
 }
 
-function onlyLine(result: RunResult): string {
-  expect(result.stdout, `exactly one line on standard output; stderr was: ${result.stderr}`).toMatch(/^[^\r\n]+\n?$/);
-  return result.stdout.replace(/\n$/, '');
+const ONE_LINE = /^[^\r\n]+\n?$/;
+
+/** What a run printed and returned, for a failure diff. */
+export function runText(result: RunResult): string {
+  return `exit ${String(result.status)}${result.signal === null ? '' : ` (${result.signal})`}; stdout: ${JSON.stringify(result.stdout)}; stderr: ${JSON.stringify(result.stderr)}`;
 }
 
-/** A pass: exit 0 and exactly one `OK: ` line. Returns the line. */
-export function expectPass(result: RunResult): string {
-  expect(result.status, `a pass exits 0; stdout was: ${result.stdout}; stderr was: ${result.stderr}`).toBe(0);
-  const line = onlyLine(result);
-  expect(line.startsWith('OK: '), `a pass line starts "OK: ": ${line}`).toBe(true);
-  return line;
+/** A pass, reduced to the CLI contract's facts for one `toEqual(PASSED)` in the spec, so the failure is reported
+ *  at the spec's own line, as an assertion, and its diff names every fact that is wrong. `output` is the whole run,
+ *  for the diff only: every expectation accepts any text there. */
+export function passOutcome(result: RunResult): { status: number | null; oneLine: boolean; okLine: boolean; output: string } {
+  const oneLine = ONE_LINE.test(result.stdout);
+  return { status: result.status, oneLine, okLine: oneLine && result.stdout.startsWith('OK: '), output: runText(result) };
 }
 
-/** A problem: exit 1 and exactly one `<path>: <problem>` line whose path is one of `paths`. Returns the problem
- *  text after the prefix. */
-export function expectProblem(result: RunResult, paths: string | readonly string[]): string {
-  expect(result.status, `a problem exits 1; stdout was: ${result.stdout}; stderr was: ${result.stderr}`).toBe(1);
-  const line = onlyLine(result);
+export const PASSED = { status: 0, oneLine: true, okLine: true, output: expect.any(String) };
+
+/** A problem, reduced to the CLI contract's facts: the exit status, whether standard output is exactly one line,
+ *  whether it starts with one of `paths` then ": ", and the problem text after that prefix (the whole output when
+ *  no prefix matched). */
+export function problemOutcome(
+  result: RunResult,
+  paths: string | readonly string[],
+): { status: number | null; oneLine: boolean; prefixed: boolean; problem: string; output: string } {
+  const line = result.stdout.replace(/\n$/, '');
   const prefix = [paths].flat().map((p) => `${p}: `).find((p) => line.startsWith(p));
-  expect(prefix, `the line starts with one of ${JSON.stringify([paths].flat())} then ": ": ${line}`).toBeDefined();
-  return line.slice(prefix?.length ?? 0);
+  return {
+    status: result.status,
+    oneLine: ONE_LINE.test(result.stdout),
+    prefixed: prefix !== undefined,
+    problem: prefix === undefined ? line : line.slice(prefix.length),
+    output: runText(result),
+  };
 }
 
-/** A usage error: exit 2, nothing on standard output, a message on standard error. */
-export function expectUsage(result: RunResult): void {
-  expect(result.status, `a usage error exits 2; stdout was: ${result.stdout}`).toBe(2);
-  expect(result.stdout).toBe('');
-  expect(result.stderr.trim()).not.toBe('');
+/** The expected `problemOutcome`: exit 1, one prefixed line, and a problem text that `problem` matches. */
+export function problemLine(problem: unknown = expect.any(String)): { status: 1; oneLine: true; prefixed: true; problem: unknown; output: unknown } {
+  return { status: 1, oneLine: true, prefixed: true, problem, output: expect.any(String) };
 }
+
+/** A usage error, reduced to the CLI contract's facts. */
+export function usageOutcome(result: RunResult): { status: number | null; stdout: string; stderrWritten: boolean; output: string } {
+  return { status: result.status, stdout: result.stdout, stderrWritten: result.stderr.trim() !== '', output: runText(result) };
+}
+
+export const USAGE = { status: 2, stdout: '', stderrWritten: true, output: expect.any(String) };
 
 /** The two absolute spellings a refusal of folder `operand` may print: resolved lexically against `cwd`, or
  *  with its parent's links resolved and its own name kept. */
