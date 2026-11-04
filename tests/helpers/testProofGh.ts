@@ -110,6 +110,8 @@ function pages(items, query) {
 }
 
 const asComment = (c) => ({ id: c.id, user: { login: c.login }, body: c.body });
+const MARKER_JQ = '.[] | {id, login: .user.login, marked: (.body | startswith("<!-- agent-terminal:test-proof-summary -->"))}';
+const markerLines = (items) => items.map((c) => JSON.stringify({ id: c.id, login: c.user.login, marked: c.body.startsWith('<!-- agent-terminal:test-proof-summary -->') }) + '\n').join('');
 
 try {
 
@@ -149,7 +151,9 @@ if (args[0] === 'pr' && args[1] === 'list') {
 }
 
 if (args[0] === 'api') {
-  const o = options(args.slice(1), ['--method', '-X', '--hostname'], ['--paginate', '--slurp']);
+  const o = options(args.slice(1), ['--method', '-X', '--hostname', '--jq'], ['--paginate', '--slurp']);
+  const jq = o.values['--jq'];
+  if (jq !== undefined && jq !== MARKER_JQ) unexpected();
   if (o.positional.length !== 1) unexpected();
   if (o.values['--hostname'] !== undefined && o.values['--hostname'] !== 'github.com') unexpected();
   const method = (o.values['--method'] ?? o.values['-X'] ?? (Object.keys(o.fields).length ? 'POST' : 'GET')).toUpperCase();
@@ -168,8 +172,13 @@ if (args[0] === 'api') {
   if ((m = /^repos\/fixture\/project\/issues\/(\d+)\/comments$/.exec(route))) {
     const list = state.comments[m[1]] ?? [];
     if (method === 'GET') {
-      if (!o.flags.has('--paginate')) out(pageOf(list.map(asComment), url.searchParams));
+      if (jq !== undefined && o.flags.has('--slurp')) unexpected();
+      if (!o.flags.has('--paginate')) {
+        const page = pageOf(list.map(asComment), url.searchParams);
+        out(jq === undefined ? page : markerLines(page));
+      }
       const all = pages(list.map(asComment), url.searchParams);
+      if (jq !== undefined) out(all.map(markerLines).join(''));
       out(o.flags.has('--slurp') ? JSON.stringify(all) : all.map((p) => JSON.stringify(p)).join(''));
     }
     if (method === 'POST') {
@@ -216,7 +225,9 @@ unexpected();
  *   fails for a context in `failStatusFor`, and for a description over GitHub's 140-character limit.
  * - `gh api repos/fixture/project/issues/<n>/comments` — lists `{ id, user: { login }, body }`, one page of
  *   `TEST_PROOF_GH_PAGE_SIZE` (or `?per_page=`, capped at GitHub's 100) unless `--paginate`; `--paginate` prints each page's array
- *   back to back as real `gh` does, and `--paginate --slurp` prints one array of pages. `--jq` is not modelled.
+ *   back to back as real `gh` does, and `--paginate --slurp` prints one array of pages. The one `--jq` filter
+ *   modelled projects each comment to a line `{"id","login","marked"}`, `marked` meaning the body starts with the
+ *   summary marker; any other filter, or `--jq` with `--slurp`, exits 97.
  * - The same path with `-f body=…` — creates a comment authored by `login`.
  * - `gh api -X PATCH repos/fixture/project/issues/comments/<id> -f body=…` — edits it, refused for another
  *   login's comment. Both writes fail while `failCommentWrite` is set.

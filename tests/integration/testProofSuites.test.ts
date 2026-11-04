@@ -54,7 +54,7 @@ describe('the proof suites adapter runs each suite and reads its result', () => 
     expect(run).toEqual({
       kind: 'ran',
       exitCode: 0,
-      result: expect.objectContaining({ passed: 6, failed: 0, skipped: 4, flaky: 0, environment: { node: process.version, electron: ELECTRON } }),
+      result: expect.objectContaining({ passed: 6, failed: 0, skipped: 4, flaky: 0, environment: { runsIn: 'host', node: process.version, electron: ELECTRON } }),
     });
   });
 
@@ -75,7 +75,7 @@ describe('the proof suites adapter runs each suite and reads its result', () => 
         failed: 0,
         skipped: 3,
         flaky: 2,
-        environment: { node: 'v22.11.0', electron: '39.2.4', image: 'sha256:5d1f0c7e9a3b2468ace0f13579bdf02468ace13579bdf02468ace13579bdf0' },
+        environment: { runsIn: 'container', node: 'v22.11.0', electron: '39.2.4', image: 'sha256:5d1f0c7e9a3b2468ace0f13579bdf02468ace13579bdf02468ace13579bdf0' },
       }),
     });
   });

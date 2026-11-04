@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ import {
   type TestProofGh,
 } from '../helpers/testProofGh';
 import { createBranchPullRequests, createProofPublisher, TEST_PROOF_COMMENT_MARKER } from '../../src/main/testProofPorts';
+import type { ProofPublisher } from '../../src/main/testProof';
 
 const BRANCH = 'feature/proof';
 const SHA_A = 'a'.repeat(40);
@@ -166,7 +167,11 @@ describe('the proof PR-lookup adapter when gh cannot check the login', () => {
 });
 
 describe('the proof publisher (stand-in gh)', () => {
-  it.each(['test-proof/vitest', 'test-proof/e2e'])('posts a success status for %s on the given SHA with the given description', async (context) => {
+  it('takes only the two proof check names as a status name', () => {
+    expectTypeOf<ProofPublisher['status']>().parameter(1).toEqualTypeOf<'test-proof/vitest' | 'test-proof/e2e'>();
+  });
+
+  it.each(['test-proof/vitest', 'test-proof/e2e'] as const)('posts a success status for %s on the given SHA with the given description', async (context) => {
     const gh = withGh({});
     const description = `5412 passed, 26 skipped, 13 flaky (${context})`;
     await createProofPublisher(repo).status(SHA_B, context, description);
@@ -197,6 +202,15 @@ describe('the proof publisher (stand-in gh)', () => {
     await createProofPublisher(repo).summary(12, 'second proof of bbbb');
     const summaries = (gh.read().comments['12'] ?? []).filter((c) => c.login === 'proof-author');
     expect(summaries.map((c) => c.body.includes('second proof of bbbb'))).toEqual([true]);
+  });
+
+  it('leaves a comment by the proving login that quotes the marker mid-body alone, and posts its own summary', async () => {
+    const quoting: StandInComment = { id: 97, login: 'proof-author', body: `the summary starts with ${TEST_PROOF_COMMENT_MARKER}, see below` };
+    const gh = withGh({ comments: { '12': [quoting] } });
+    await createProofPublisher(repo).summary(12, 'first proof of aaaa');
+    const comments = gh.read().comments['12'] ?? [];
+    expect.soft(comments.find((c) => c.id === quoting.id)).toEqual(quoting);
+    expect.soft(comments.filter((c) => c.body.includes('first proof of aaaa'))).toHaveLength(1);
   });
 
   it('rejects the status promise when GitHub refuses the status', async () => {

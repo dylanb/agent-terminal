@@ -16,9 +16,8 @@ const REPORT_DIR = ['.agent-terminal', 'test-proof'] as const;
 const VITEST_REPORT = 'vitest.json';
 const E2E_REPORT = 'report.json';
 const E2E_ENVIRONMENT = 'environment.json';
-// A page must fit execFile's default 1 MiB maxBuffer with every body at GitHub's 65,536-character limit in
-// 4-byte UTF-8 characters.
-const COMMENTS_PER_PAGE = 3;
+// Listing whole bodies overflows runAppCommand's 1 MiB output buffer on a PR with long comments.
+const SUMMARY_LOOKUP_JQ = `.[] | {id, login: .user.login, marked: (.body | startswith(${JSON.stringify(TEST_PROOF_COMMENT_MARKER)}))}`;
 
 type Prepared = { ok: true; dir: string } | { ok: false; reason: string };
 
@@ -85,7 +84,7 @@ const SUITE_ADAPTERS: Record<ProofSuite, SuiteAdapter> = {
       if (electron === null || electron.kind === 'unreadable') {
         return { kind: 'unreadable', reason: `the installed Electron version cannot be read${electron === null ? '' : `: ${electron.reason}`}` };
       }
-      return { kind: 'read', value: { ...counts.value, environment: { node: process.version, electron: electron.value } } };
+      return { kind: 'read', value: { ...counts.value, environment: { runsIn: 'host', node: process.version, electron: electron.value } } };
     },
   },
   e2e: {
@@ -96,7 +95,7 @@ const SUITE_ADAPTERS: Record<ProofSuite, SuiteAdapter> = {
       if (counts.kind === 'unreadable') return counts;
       const environment = readE2eEnvironment(dir, E2E_ENVIRONMENT);
       if (environment.kind === 'unreadable') return environment;
-      return { kind: 'read', value: { ...counts.value, environment: environment.value } };
+      return { kind: 'read', value: { ...counts.value, environment: { runsIn: 'container', ...environment.value } } };
     },
   },
 };
@@ -127,28 +126,21 @@ export function createProofPublisher(root: string): ProofPublisher {
   };
 
   const earlierSummary = async (pr: number, login: string): Promise<number | null> => {
-    for (let page = 1; ; page++) {
-      const listed: unknown = JSON.parse(await api([`${await route(`issues/${pr}/comments`)}?per_page=${COMMENTS_PER_PAGE}&page=${page}`]));
-      if (!Array.isArray(listed)) throw new Error(`the comments on PR #${pr} are not a list`);
-      for (const comment of listed) {
-        if (
-          isRecord(comment) &&
-          Number.isSafeInteger(comment.id) &&
-          isRecord(comment.user) &&
-          comment.user.login === login &&
-          typeof comment.body === 'string' &&
-          comment.body.startsWith(TEST_PROOF_COMMENT_MARKER)
-        ) {
-          return comment.id as number;
-        }
+    const listed = await api(['--paginate', '--jq', SUMMARY_LOOKUP_JQ, `${await route(`issues/${pr}/comments`)}?per_page=100`]);
+    for (const line of listed.split('\n')) {
+      if (line === '') continue;
+      const comment: unknown = JSON.parse(line);
+      if (!isRecord(comment) || !Number.isSafeInteger(comment.id) || typeof comment.login !== 'string' || typeof comment.marked !== 'boolean') {
+        throw new Error(`a comment on PR #${pr} could not be read`);
       }
-      if (listed.length < COMMENTS_PER_PAGE) return null;
+      if (comment.login === login && comment.marked) return comment.id as number;
     }
+    return null;
   };
 
   return {
-    async status(sha, context, description) {
-      await api([await route(`statuses/${sha}`), '-f', 'state=success', '-f', `context=${context}`, '-f', `description=${description}`]);
+    async status(sha, check, description) {
+      await api([await route(`statuses/${sha}`), '-f', 'state=success', '-f', `context=${check}`, '-f', `description=${description}`]);
     },
     async summary(pr, body) {
       const user: unknown = JSON.parse(await api(['user']));

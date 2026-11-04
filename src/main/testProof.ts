@@ -21,6 +21,12 @@ export const TEST_PROOF_CHECKS = { vitest: 'test-proof/vitest', e2e: 'test-proof
 
 export type ProofSuite = keyof typeof TEST_PROOF_CHECKS;
 
+export type ProofCheck = (typeof TEST_PROOF_CHECKS)[ProofSuite];
+
+export type SuiteEnvironment =
+  | { runsIn: 'host'; node: string; electron: string }
+  | { runsIn: 'container'; node: string; electron: string; image: string };
+
 export interface SuiteResult {
   passed: number;
   failed: number;
@@ -28,7 +34,7 @@ export interface SuiteResult {
   flaky: number;
   skippedTests: string[];
   flakyTests: string[];
-  environment: { node: string; electron: string; image?: string };
+  environment: SuiteEnvironment;
 }
 
 export type SuiteRun =
@@ -41,7 +47,7 @@ export interface ProofSuites {
 }
 
 export interface ProofPublisher {
-  status(sha: string, context: string, description: string): Promise<void>;
+  status(sha: string, check: ProofCheck, description: string): Promise<void>;
   summary(pr: number, body: string): Promise<void>;
 }
 
@@ -131,7 +137,7 @@ export function summaryBody(sha: string, results: Record<ProofSuite, SuiteResult
     ...SUITES.map((suite) => {
       const r = results[suite];
       const env = r.environment;
-      return `| ${suite} | ${r.passed} | ${r.failed} | ${r.skipped} | ${r.flaky} | ${codeSpan(env.node)} | ${codeSpan(env.electron)} | ${env.image === undefined ? '—' : codeSpan(env.image)} |`;
+      return `| ${suite} | ${r.passed} | ${r.failed} | ${r.skipped} | ${r.flaky} | ${codeSpan(env.node)} | ${codeSpan(env.electron)} | ${env.runsIn === 'container' ? codeSpan(env.image) : '—'} |`;
     }),
   ];
   for (const suite of SUITES) {

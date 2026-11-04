@@ -24,7 +24,7 @@ const VITEST: SuiteResult = {
     'controller protocol › rejects a frame from a peer that negotiated an older version',
   ],
   flakyTests: ['quiescence detector › settles after the configured quiet window on a loaded host'],
-  environment: { node: 'v24.3.0', electron: '39.2.4' },
+  environment: { runsIn: 'host', node: 'v24.3.0', electron: '39.2.4' },
 };
 
 const E2E: SuiteResult = {
@@ -40,7 +40,7 @@ const E2E: SuiteResult = {
     'app.spec.ts › terminal › resizes the PTY after the pane is dragged to a narrower width',
     'loop.spec.ts › shows the review history after a checkpoint and a restart of the app',
   ],
-  environment: { node: 'v22.11.0', electron: '39.2.5', image: 'sha256:9f8e7d6cfeedbeefcafebabefacade0ddba11c0ffee0ddf00dfab1edeadbea7' },
+  environment: { runsIn: 'container', node: 'v22.11.0', electron: '39.2.5', image: 'sha256:9f8e7d6cfeedbeefcafebabefacade0ddba11c0ffee0ddf00dfab1edeadbea7' },
 };
 
 const ran = (result: SuiteResult, exitCode = 0): SuiteRun => ({ kind: 'ran', exitCode, result });
@@ -239,7 +239,7 @@ describe('runTestProof publishes the proof when both suites pass on the PR head'
     for (const name of [...VITEST.skippedTests, ...VITEST.flakyTests, ...E2E.skippedTests, ...E2E.flakyTests]) {
       expect.soft(body).toContain(name);
     }
-    for (const value of [VITEST.environment.node, VITEST.environment.electron, E2E.environment.node, E2E.environment.electron, E2E.environment.image ?? '']) {
+    for (const value of [VITEST.environment.node, VITEST.environment.electron, E2E.environment.node, E2E.environment.electron, E2E.environment.runsIn === 'container' ? E2E.environment.image : '']) {
       expect.soft(body).toContain(value);
     }
   });
@@ -257,7 +257,7 @@ describe('runTestProof publishes the proof when both suites pass on the PR head'
     const ownRow = row[0] ?? '';
     for (const n of [own.passed, own.skipped, own.flaky]) expect.soft(ownRow, `count ${n}`).toMatch(new RegExp(`\\b${n}\\b`));
     expect.soft(ownRow).toContain(own.environment.electron);
-    if (own.environment.image !== undefined) expect.soft(ownRow).toContain(own.environment.image);
+    if (own.environment.runsIn === 'container') expect.soft(ownRow).toContain(own.environment.image);
     for (const n of [other.passed, other.skipped, other.flaky]) expect.soft(ownRow, `other count ${n}`).not.toMatch(new RegExp(`\\b${n}\\b`));
     expect.soft(ownRow).not.toContain(other.environment.node);
     expect.soft(ownRow).not.toContain(other.environment.electron);
