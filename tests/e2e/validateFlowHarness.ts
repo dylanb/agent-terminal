@@ -102,6 +102,9 @@ export interface ValidateRuntime {
   validate(operands: readonly string[], options: { cwd: string }): Promise<RunResult>;
   /** Runs the checker runtime with `args` exactly, for argv the launcher would never produce. */
   runRaw(args: readonly string[], options: { cwd: string }): Promise<RunResult>;
+  /** Runs `--validate-flow` then `operands` from `cwd`, which is removed after the run enters it and before the
+   *  runtime starts, so the runtime inherits a working directory that no longer exists. */
+  validateFromRemovedCwd(operands: readonly string[], options: { cwd: string }): Promise<RunResult>;
   /** Registers work that must finish after each test, before its world is removed. */
   onTeardown(work: () => Promise<void>): void;
 }
@@ -151,10 +154,18 @@ export function useValidateRuntime(): ValidateRuntime {
       env: { ...runEnv(world()), ELECTRON_RUN_AS_NODE: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     }));
+  const validateFromRemovedCwd = (operands: readonly string[], { cwd }: { cwd: string }): Promise<RunResult> =>
+    owned.run(spawn('/bin/sh', ['-c', 'cd "$1" && rmdir "$1" && shift && exec "$@"', 'sh', cwd,
+      requirePackage('electron') as string, resolveArtifactCheckScript(runtimeMain()), VALIDATE_FLOW_FLAG, ...operands], {
+      cwd: world().root,
+      env: { ...runEnv(world()), ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }));
   return {
     runtimeMain,
     world,
     runRaw,
+    validateFromRemovedCwd,
     onTeardown: (work) => { teardowns.push(work); },
     validate: (operands, options) => runRaw([VALIDATE_FLOW_FLAG, ...operands], options),
   };

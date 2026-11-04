@@ -1,3 +1,7 @@
+## #277 slice 1 — `agent-terminal --validate-flow <dir>` checks a flow folder
+
+§23.5: the launcher gains `--validate-flow <dir>`, recognised only as the exact first argument, like `--controller`. It runs this build's checker runtime in the foreground, in plain-Node mode, opening no instance. It locates the folder in its tier from its location and loads it with the app's own catalog resolver and flow loader. It prints one `OK: ` line and exits 0, or one `<file>: <problem>` line for the first problem and exits 1, or a usage message on standard error and exits 2. It never writes. The trust-boundary and `APP_LAUNCH_DIR` wording is scoped to the directory launch. §18.6 and §21.2 now state where a run resolves a todo template: a file name, with or without `.md`, in the flow's own `todo-templates/`; the repository-relative path form and the global template folder they described do not exist. No IPC change.
+
 ## #276 slice 5 — the engine-capabilities guide covers the turn contract
 
 §18.1: the guide now states the turn contract — the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected — and how briefs, recipes and charters become turns.

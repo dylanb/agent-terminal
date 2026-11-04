@@ -25,7 +25,7 @@ export function catalogTierJail(roots: CatalogRoots, tier: CatalogTier): string 
     : resolveOwnedDirJail(flowCatalogDir(roots.globalRoot));
 }
 
-type TierProbe =
+export type TierProbe =
   | { kind: 'entry'; flowDir: string }
   | { kind: 'absent' }
   | { kind: 'refused'; cause: PathRefusal };
@@ -34,7 +34,7 @@ type TierProbe =
  *  that does not exist) is `absent` — the caller falls through to the next tier; a jail that will not resolve,
  *  or a path escaping/unresolvable under it, is `refused` — an unreadable tier is never treated as empty (the
  *  precedence-inversion guard, §18.7.6). */
-function probeTier(jail: string | null, id: string, defFile: string): TierProbe {
+export function probeTier(jail: string | null, id: string, defFile: string): TierProbe {
   if (jail === null) return { kind: 'refused', cause: 'unresolvable' };
   const res = confinedRealPathResult(jail, defFile);
   if (!res.ok) return { kind: 'refused', cause: res.cause };

@@ -15,6 +15,7 @@ export interface LaunchInvocation {
 export const CLI_COMMAND_NAME = 'agent-terminal';
 
 export const CONTROLLER_FLAG = '--controller';
+export const VALIDATE_FLOW_FLAG = '--validate-flow';
 export const CONTROLLER_PRODUCT_NAME = 'agent-terminal-controller';
 export const CONTROLLER_OUTPUT_SUBDIR = 'controller';
 
@@ -69,17 +70,29 @@ export function resolveLaunchInvocation(
   return { execPath, appArgs };
 }
 
+// A dev build's main script is deliberately left out: in plain-Node mode the checker script is the program.
+function validateFlowBranch(invocation: LaunchInvocation, checkerScript: string): string[] {
+  return [
+    `if [ "$#" -ge 1 ] && [ "$1" = ${shellQuote(VALIDATE_FLOW_FLAG)} ]; then`,
+    '  ELECTRON_RUN_AS_NODE=1',
+    '  export ELECTRON_RUN_AS_NODE',
+    `  exec ${shellQuote(invocation.execPath)} ${shellQuote(checkerScript)} "$@"`,
+    'fi',
+  ];
+}
+
 /**
  * The POSIX shell launch shim (§23.4 / #25). An optional caller-supplied path crosses the OS boundary
  * as one verbatim directory operand, never shell-interpolated (CWE-78). A relative path resolves
  * against the invoking shell's cwd, not the launched process's; the instance starts detached so the
- * shell returns immediately.
+ * shell returns immediately. `--validate-flow` instead runs `checkerScript` in the foreground (§23.5).
  */
-export function generateShim(invocation: LaunchInvocation): string {
+export function generateShim(invocation: LaunchInvocation, checkerScript: string): string {
   const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',
+    ...validateFlowBranch(invocation, checkerScript),
     ...controllerBranch(invocation),
     'CWD=$(pwd)',
     'if [ "$#" -ge 1 ]; then',

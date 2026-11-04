@@ -9,7 +9,7 @@ import { loadUntrustedFlowDefinition } from '../../src/main/flow';
 import { resolveCatalogEntry, type CatalogRoots } from '../../src/main/flowCatalog';
 import { listCatalog } from '../../src/main/flowCatalogList';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
-import { catalogRefusalReason, type CatalogTier } from '../../src/main/resolveRunDefinition';
+import { catalogRefusalReason, UNSAFE_NAME_REASON, type CatalogTier } from '../../src/main/resolveRunDefinition';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
 import { flowLocations, writeFlow, writeFlowYamlText, writeLoopDef, type FlowSpec } from '../helpers/flowFixtures';
 import {
@@ -230,6 +230,18 @@ test.describe('agent-terminal --validate-flow', { tag: '@ownapp' }, () => {
       expect(passOutcome(result)).toEqual(PASSED);
     });
 
+    test('a global catalog entry reached through a linked <A>/.agent-terminal passes, as the app reads it', async () => {
+      const world = runtime.world();
+      symlinkSync(world.dir('dotfiles'), flowLocations.globalFallback(world.appHome));
+      const folder = flowLocations.globalCatalogEntry(world.appHome, 'hand-flow');
+      writeFlow(folder, MANUAL_FLOW);
+      if (!resolveCatalogEntry({ worktreeDir: world.dir('no-repo'), globalRoot: world.appHome }, 'hand-flow', 'global').ok) {
+        throw new Error('fixture: the app does not resolve the linked global entry');
+      }
+      const result = await runtime.validate([folder], { cwd: world.root });
+      expect(passOutcome(result)).toEqual(PASSED);
+    });
+
     test('the global fallback <A>/.agent-terminal/ passes', async () => {
       const world = runtime.world();
       const folder = flowLocations.globalFallback(world.appHome);
@@ -255,6 +267,15 @@ test.describe('agent-terminal --validate-flow', { tag: '@ownapp' }, () => {
       mkdirSync(flowLocations.bundledLoops(tree), { recursive: true });
       const result = await runtime.validate([flowLocations.bundledEntry(tree, 'sample')], { cwd: tree });
       expect(passOutcome(result)).toEqual(PASSED);
+    });
+
+    test('a source tree\'s example flow whose name is not a valid flow id carries the unsafe-name reason', async () => {
+      const tree = runtime.world().dir('tree');
+      const folder = flowLocations.bundledEntry(tree, 'f'.repeat(MAX_CATALOG_ID_LENGTH + 1));
+      writeFlow(folder, MANUAL_FLOW);
+      mkdirSync(flowLocations.bundledLoops(tree), { recursive: true });
+      const result = await runtime.validate([folder], { cwd: tree });
+      expect(problemOutcome(result, folderPrefixes(tree, folder))).toEqual(problemLine(expect.stringContaining(UNSAFE_NAME_REASON)));
     });
 
     test('a source tree\'s example flow whose loops tree links out of the tree is refused', async () => {
@@ -290,6 +311,28 @@ test.describe('agent-terminal --validate-flow', { tag: '@ownapp' }, () => {
     expect.soft(passOutcome(fromGood)).toEqual(PASSED);
     const fromBad = await runtime.validate([relative], { cwd: bad });
     expect.soft(problemOutcome(fromBad, realpathSync(badFile))).toEqual(problemLine(expect.stringContaining(loaderReason(badFile))));
+  });
+
+  test('a removed working directory still validates an absolute folder, and refuses a relative one on one line', async () => {
+    const world = runtime.world();
+    const folder = flowLocations.repoCatalogEntry(world.dir('repo'), 'f');
+    writeFlow(folder, MANUAL_FLOW);
+    const absolute = await runtime.validateFromRemovedCwd([folder], { cwd: world.dir('gone-one') });
+    expect.soft(passOutcome(absolute)).toEqual(PASSED);
+    const relative = await runtime.validateFromRemovedCwd(['f'], { cwd: world.dir('gone-two') });
+    expect.soft(problemOutcome(relative, 'f')).toEqual(problemLine());
+  });
+
+  test('a line break in the folder\'s path still gives one line, on a pass and on a refusal', async () => {
+    const world = runtime.world();
+    const passing = flowLocations.repoCatalogEntry(world.dir('repo\nOK: forged'), 'f');
+    writeFlow(passing, MANUAL_FLOW);
+    const pass = await runtime.validate([passing], { cwd: world.root });
+    expect.soft(passOutcome(pass)).toEqual(PASSED);
+    const stray = join(world.dir('elsewhere\nOK: forged'), 'stray');
+    writeFlow(stray, MANUAL_FLOW);
+    const { status, oneLine } = problemOutcome(await runtime.validate([stray], { cwd: world.root }), stray);
+    expect.soft({ status, oneLine }).toEqual({ status: 1, oneLine: true });
   });
 
   test('a repository path with spaces and shell metacharacters validates as one operand and runs nothing', async () => {

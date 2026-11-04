@@ -21,11 +21,7 @@ const binOf = (home: string): string => join(home, '.agent-terminal', 'bin');
 const cmdOf = (home: string): string => join(binOf(home), CLI_COMMAND_NAME);
 const isExecutable = (p: string): boolean => (statSync(p).mode & 0o111) !== 0;
 
-/** The installer's input with the checker runtime script. The build type-checks this file, so the RED states the
- *  new field's type here rather than fail the build that its e2e needs. */
-type RuntimeInput = RuntimeInfo & { checkerScript: string };
-
-const runtime = (over: Partial<RuntimeInput> = {}): RuntimeInput => ({
+const runtime = (over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   home: root,
   shell: '/bin/sh',
   currentPath: '/usr/bin',

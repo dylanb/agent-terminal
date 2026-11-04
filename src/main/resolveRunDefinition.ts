@@ -26,7 +26,7 @@ export type CatalogResolution =
   | { ok: true; tier: CatalogTier; flowDir: string }
   | { ok: false; cause: 'unknown' | 'escapes' | 'unresolvable' };
 
-type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
+export type CatalogRefusalCause = Extract<CatalogResolution, { ok: false }>['cause'];
 
 /** §18.7.3 — the run-scoped source binding a begun run resolves instead of the live pointer. A validated closed
  *  disposition (its field-local validation is the read boundary's): a catalog run carries the tier it was bound
@@ -116,10 +116,14 @@ const CATALOG_REFUSAL_DETAIL: Record<CatalogRefusalCause, string> = {
   unresolvable: 'could not be read',
 };
 
-/** §18.7.6 */
-export function catalogRefusalReason(cause: Exclude<CatalogRefusalCause, 'unknown'>): string {
-  return CATALOG_REFUSAL_DETAIL[cause];
+/** §18.7.6 — every caller saw the entry on disk first, so one the resolver then finds absent reads as
+ *  unreadable, never "not found". */
+export function catalogRefusalReason(cause: CatalogRefusalCause): string {
+  return CATALOG_REFUSAL_DETAIL[cause === 'unknown' ? 'unresolvable' : cause];
 }
+
+/** §18.7.6 */
+export const UNSAFE_NAME_REASON = 'is not a valid flow id';
 
 function catalogRefusal(id: string, cause: CatalogRefusalCause): string {
   return `Selected flow "${id}" ${CATALOG_REFUSAL_DETAIL[cause]}; pick another flow or use the default.`;

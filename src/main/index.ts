@@ -209,6 +209,7 @@ async function createWindow(): Promise<void> {
     if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
     return startupReady;
   });
+  const checkerScript = resolveArtifactCheckScript(__dirname);
   ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
     handleCliInstall(m, () => ({
       home: os.homedir(),
@@ -220,6 +221,7 @@ async function createWindow(): Promise<void> {
         process.argv[1],
         process.cwd(),
       ),
+      checkerScript,
     })));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
@@ -484,7 +486,7 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
     artifactCheckCommand: (check) =>
-      artifactCheckCommand({ execPath: process.execPath, script: resolveArtifactCheckScript(__dirname) }, check),
+      artifactCheckCommand({ execPath: process.execPath, script: checkerScript }, check),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
     // §28.5.3/§28.8.3 — the GREEN engine ports: record the changed-test flag (the disjoint changed-tests.yaml

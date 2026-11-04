@@ -21,17 +21,13 @@ let realCwd: string;
  *  into shell text unquoted runs the wrong file. */
 const CHECKER_SCRIPT = '/opt/agent terminal/out/main/artifactCheck.js';
 
-/** The shim generator with the checker runtime as its second input. The build type-checks this file, so the
- *  RED states the new input's type here rather than fail the build that its e2e needs. */
-const generateShimWithChecker = generateShim as (invocation: LaunchInvocation, checkerScript: string) => string;
-
 /** A stand-in "app binary" that records the APP_LAUNCH_DIR it was launched with, then exits. */
 function recorderShim(extra = ''): void {
   const recorder = join(work, 'recorder.sh');
   writeFileSync(recorder, `#!/bin/sh\n${extra}printf '%s' "$APP_LAUNCH_DIR" > "${recOut}.tmp" && mv "${recOut}.tmp" "${recOut}"\n`);
   chmodSync(recorder, 0o755);
   shimPath = join(work, 'agent-terminal');
-  writeFileSync(shimPath, generateShimWithChecker({ execPath: recorder, appArgs: [] }, CHECKER_SCRIPT));
+  writeFileSync(shimPath, generateShim({ execPath: recorder, appArgs: [] }, CHECKER_SCRIPT));
   chmodSync(shimPath, 0o755);
 }
 
@@ -141,7 +137,7 @@ describe('shim --controller (§23.5)', () => {
 
   function shimFor(invocation: LaunchInvocation): void {
     shimPath = join(work, 'agent-terminal');
-    writeFileSync(shimPath, generateShimWithChecker(invocation, CHECKER_SCRIPT));
+    writeFileSync(shimPath, generateShim(invocation, CHECKER_SCRIPT));
     chmodSync(shimPath, 0o755);
   }
 
@@ -241,7 +237,7 @@ describe('shim --validate-flow (§23.5)', () => {
   it.each(builds)('%s build: runs the checker runtime in the foreground, in plain-Node mode, with every operand verbatim', (_, invocationOf) => {
     const recorder = writeForegroundRecorder(join(work, 'binary'), { stdout: 'checked\n', stderr: 'a diagnostic\n', exitCode: 3 });
     shimPath = join(work, 'agent-terminal');
-    writeFileSync(shimPath, generateShimWithChecker(invocationOf(recorder.binary), CHECKER_SCRIPT));
+    writeFileSync(shimPath, generateShim(invocationOf(recorder.binary), CHECKER_SCRIPT));
     chmodSync(shimPath, 0o755);
     const operands = ['my flows; touch evil-marker', '$(touch pwned)', `it's "quoted" \`touch ticked\``];
 
