@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { APP_COMMAND_TIMEOUT_MS, commandEnvironment, parseAppGitObjectId, runAppCommand } from './appCommand';
 import { confinedRealPath, confinedRealPathResult, resolveJail } from './confinedPath';
 import { errMsg, isErrno } from './errno';
-import { createGitHubRepositorySource, originGitHubRepository } from './githubRepository';
+import { createGitHubRepositorySource, originGitHubRepository, repositoryHost } from './githubRepository';
 import { openPullRequestsForBranch, type BranchPullRequest } from './pullRequestLookup';
 import type { BranchPullRequests, OpenPullRequest, ProofPublisher, ProofSuite, ProofSuites, ProofWorkingTree, SuiteResult, SuiteRun } from './testProof';
 import { readE2eEnvironment, readPackageVersion, readPlaywrightReport, readVitestReport, type ReportRead } from './testProofResults';
@@ -48,8 +48,6 @@ function runInherited(file: string, args: readonly string[], cwd: string, enviro
   });
 }
 
-const STARTED_NOTHING = 1;
-
 interface SuiteAdapter {
   outputs: readonly string[];
   start(root: string, dir: string): Promise<Exit>;
@@ -60,7 +58,7 @@ const SUITE_ADAPTERS: Record<ProofSuite, SuiteAdapter> = {
   vitest: {
     outputs: [VITEST_REPORT],
     start: (root, dir) =>
-      runInherited('pnpm', ['test', '--reporter=default', '--reporter=json', `--outputFile.json=${join(dir, VITEST_REPORT)}`, '--retry=0'], root, {}),
+      runInherited('pnpm', ['test', '--reporter=default', '--reporter=json', `--outputFile.json=${join(dir, VITEST_REPORT)}`, '--retry=0', '--allowOnly=false'], root, {}),
     read(root, dir) {
       const counts = readVitestReport(dir, VITEST_REPORT);
       if (counts.kind === 'unreadable') return counts;
@@ -90,9 +88,9 @@ export function createProofSuites(root: string): ProofSuites {
     async run(suite): Promise<SuiteRun> {
       const adapter = SUITE_ADAPTERS[suite];
       const prepared = prepareReportDir(root, adapter.outputs);
-      if (!prepared.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: prepared.reason };
+      if (!prepared.ok) return { kind: 'no-exit', reason: prepared.reason };
       const exit = await adapter.start(root, prepared.dir);
-      if (!exit.ok) return { kind: 'unreadable', exitCode: STARTED_NOTHING, reason: exit.reason };
+      if (!exit.ok) return { kind: 'no-exit', reason: exit.reason };
       const result = adapter.read(root, prepared.dir);
       return result.kind === 'read' ? { kind: 'ran', exitCode: exit.code, result: result.value } : { kind: 'unreadable', exitCode: exit.code, reason: result.reason };
     },
@@ -103,8 +101,7 @@ export function createProofPublisher(root: string): ProofPublisher {
   const repositories = createGitHubRepositorySource(root);
   const api = async (args: string[]): Promise<string> => {
     const repository = await repositories.resolve();
-    const host = repository.selector.split('/')[0] ?? '';
-    return runAppCommand('gh', ['api', '--hostname', host, ...args], root);
+    return runAppCommand('gh', ['api', '--hostname', repositoryHost(repository), ...args], root);
   };
   const route = async (path: string): Promise<string> => {
     const { owner, name } = await repositories.resolve();
@@ -180,7 +177,7 @@ export function createBranchPullRequests(root: string): BranchPullRequests {
     async openFor(branch): Promise<OpenPullRequest> {
       let host;
       try {
-        host = (await originGitHubRepository(root)).selector.split('/')[0] ?? '';
+        host = repositoryHost(await originGitHubRepository(root));
       } catch (e) {
         return { kind: 'github-unavailable', reason: `could not read the GitHub repository for ${branch} from origin: ${errMsg(e)}` };
       }

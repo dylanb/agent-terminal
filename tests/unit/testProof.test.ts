@@ -366,6 +366,19 @@ describe('runTestProof refuses, publishing nothing, when a suite does not pass',
   );
 });
 
+describe('runTestProof refuses a suite that never reached its own exit without claiming an exit code', () => {
+  it.each(['vitest', 'e2e'] as const)('names %s and the reason, and states no exit code it never had', async (suite) => {
+    const reason = `${suite === 'vitest' ? 'pnpm' : 'scripts/e2e-podman.sh'} could not start: spawn ENOENT`;
+    const run: SuiteRun = { kind: 'no-exit', reason };
+    const w = world({ runs: { vitest: ran(VITEST), e2e: ran(E2E), [suite]: run } });
+    const { exitCode, lines, output, published } = await prove([], w);
+    expect.soft(exitCode).not.toBe(0);
+    expect.soft(lines.some((line) => new RegExp(`\\b${suite}\\b`).test(line) && line.includes(reason)), output).toBe(true);
+    expect.soft(output).not.toMatch(/exit(ed)?( with)?( code)? -?\d/i);
+    expectNothingPublished(published);
+  });
+});
+
 describe('runTestProof stops before e2e when vitest does not pass', () => {
   it.each([
     ['reports failed tests', ran({ ...VITEST, failed: 2 }, 1)],

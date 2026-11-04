@@ -77,21 +77,20 @@ export function readVitestReport(dir: string, file: string): ReportRead<SuiteCou
     const counts: SuiteCounts = { passed: 0, failed: 0, skipped: 0, flaky: 0, skippedTests: [], flakyTests: [] };
     for (const entry of list(record(raw, 'report').testResults, 'testResults')) {
       const testFile = record(entry, 'test file');
-      let fileFailed = text(testFile.status, 'test file status') === 'failed';
+      const fileStatus = text(testFile.status, 'test file status');
+      const failedBefore = counts.failed;
       for (const assertion of list(testFile.assertionResults, 'assertionResults')) {
         const test = record(assertion, 'test');
         const status = text(test.status, 'test status');
         const name = [...list(test.ancestorTitles, 'ancestorTitles').map((t) => text(t, 'ancestor title')), text(test.title, 'test title')].join(' › ');
         if (status === 'passed') counts.passed++;
-        else if (status === 'failed') {
-          counts.failed++;
-          fileFailed = false;
-        } else if (VITEST_SKIPPED.has(status)) {
+        else if (status === 'failed') counts.failed++;
+        else if (VITEST_SKIPPED.has(status)) {
           counts.skipped++;
           counts.skippedTests.push(name);
         } else throw new Malformed(`has a test with the unknown status ${JSON.stringify(status)}`);
       }
-      if (fileFailed) counts.failed++;
+      if (fileStatus === 'failed' && counts.failed === failedBefore) counts.failed++;
     }
     return counts;
   });

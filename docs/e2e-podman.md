@@ -24,8 +24,8 @@ E2E_REPORT_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
 
 `pnpm run test:proof` sets `E2E_REPORT_DIR` to `.agent-terminal/test-proof`, a git-ignored
 dir inside the bind-mounted checkout, and reads what the run leaves there through `src/main/testProofResults.ts`.
-With it set, the run is the same full, unfiltered run, with the same live `list` output and the same retries, and
-it also writes into that dir:
+With it set, the run is the same full, unfiltered run, with the same live `list` output and the same retries, except
+that a focused (`test.only`) test fails it, and it also writes into that dir:
 
 - `report.json`: Playwright's JSON report of the run;
 - `environment.json`: a JSON object with exactly the keys `node` (the container's `node --version`), `electron`

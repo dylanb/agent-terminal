@@ -8,8 +8,8 @@ import { FIXTURES, installSuiteStandIns, writeElectronPackage, type SuiteStandIn
 
 const ELECTRON = '38.7.1';
 const SEEDED = { E2E_GREP: 'smoke', E2E_IO_DIR: '.agent-terminal/red-check-seeded' };
-const VALUED = /^--(reporter|outputFile(\.json)?|retry)$/;
-const INLINE = /^--(reporter|outputFile(\.json)?|retry)=./;
+const VALUED = /^--(reporter|outputFile(\.json)?|retry|allowOnly)$/;
+const INLINE = /^--(reporter|outputFile(\.json)?|retry|allowOnly)=./;
 
 /** argv elements after `test` that are neither the reporter, output-file or retry flags nor their values. */
 function unexpectedArgs(argv: readonly string[]): string[] {
@@ -61,7 +61,7 @@ describe('the proof suites adapter runs each suite and reads its result', () => 
   it('returns a failing vitest run with its exit code and failed count', async () => {
     suites.set({ vitest: { exitCode: 1, report: join(FIXTURES, 'vitest-fail.json') } });
     const run = await createProofSuites(root).run('vitest');
-    expect.soft(run.exitCode).toBe(1);
+    expect.soft(run.kind === 'no-exit' ? undefined : run.exitCode).toBe(1);
     expect.soft(run.kind === 'ran' ? run.result.failed : undefined).toBe(1);
   });
 
@@ -83,7 +83,7 @@ describe('the proof suites adapter runs each suite and reads its result', () => 
   it('returns a failing e2e run with its exit code and failed count', async () => {
     suites.set({ e2e: { exitCode: 3, report: join(FIXTURES, 'playwright-fail.json'), environment: join(FIXTURES, 'environment.json') } });
     const run = await createProofSuites(root).run('e2e');
-    expect.soft(run.exitCode).toBe(3);
+    expect.soft(run.kind === 'no-exit' ? undefined : run.exitCode).toBe(3);
     expect.soft(run.kind === 'ran' ? run.result.failed : undefined).toBe(1);
   });
 
@@ -123,6 +123,7 @@ describe('the proof suites adapter runs both suites unnarrowed', () => {
     expect.soft(argv[0]).toBe('test');
     expect.soft(unexpectedArgs(argv), JSON.stringify(argv)).toEqual([]);
     expect.soft(argv.some((a, i) => a === '--retry=0' || (a === '--retry' && argv[i + 1] === '0')), JSON.stringify(argv)).toBe(true);
+    expect.soft(argv.some((a, i) => a === '--allowOnly=false' || (a === '--allowOnly' && argv[i + 1] === 'false')), 'a focused test fails the run').toBe(true);
   });
 
   it('runs the e2e harness with no argument and an empty E2E_IO_DIR, whatever the environment holds', async () => {
@@ -140,7 +141,7 @@ describe('the proof suites adapter never follows a link out of the repository', 
     mkdirSync(outside);
     symlinkSync(outside, join(root, '.agent-terminal'));
     const run = await createProofSuites(root).run('vitest');
-    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(run.kind).toBe('no-exit');
     expect.soft(runOf('vitest')).toHaveLength(0);
     expect.soft(existsSync(join(outside, 'test-proof'))).toBe(false);
   });
@@ -153,20 +154,20 @@ describe('the proof suites adapter never follows a link out of the repository', 
     rmSync(join(dir, 'vitest.json'), { force: true });
     symlinkSync(outside, join(dir, 'vitest.json'));
     const run = await createProofSuites(root).run('vitest');
-    expect.soft(run.kind).toBe('unreadable');
+    expect.soft(run.kind).toBe('no-exit');
     expect.soft(existsSync(outside)).toBe(true);
   });
 });
 
 describe('the proof suites adapter refuses a suite that did not run to its own exit', () => {
-  it('reads a suite whose command cannot start as unreadable, naming the command', async () => {
+  it('reads a suite whose command cannot start as never reaching its exit, naming the command', async () => {
     process.env.PATH = hermeticPath(join(scratch, 'bare'), ['node']);
     const run = await createProofSuites(root).run('vitest');
-    expect.soft(run.kind).toBe('unreadable');
-    expect.soft(run.kind === 'unreadable' ? run.reason : '').toMatch(/pnpm/);
+    expect.soft(run.kind).toBe('no-exit');
+    expect.soft(run.kind === 'no-exit' ? run.reason : '').toMatch(/pnpm/);
   });
 
-  it('reads a suite killed by a signal after writing passing reports as unreadable, naming the signal', async () => {
+  it('reads a suite killed by a signal after writing passing reports as never reaching its exit, naming the signal', async () => {
     writeFileSync(
       join(root, 'scripts', 'e2e-podman.sh'),
       `#!/usr/bin/env node
@@ -180,8 +181,8 @@ process.kill(process.pid, 'SIGKILL');
       { mode: 0o755 },
     );
     const run = await createProofSuites(root).run('e2e');
-    expect.soft(run.kind).toBe('unreadable');
-    expect.soft(run.kind === 'unreadable' ? run.reason : '').toMatch(/SIGKILL/);
+    expect.soft(run.kind).toBe('no-exit');
+    expect.soft(run.kind === 'no-exit' ? run.reason : '').toMatch(/SIGKILL/);
   });
 });
 

@@ -33,7 +33,8 @@ export interface SuiteResult {
 
 export type SuiteRun =
   | { kind: 'ran'; exitCode: number; result: SuiteResult }
-  | { kind: 'unreadable'; exitCode: number; reason: string };
+  | { kind: 'unreadable'; exitCode: number; reason: string }
+  | { kind: 'no-exit'; reason: string };
 
 export interface ProofSuites {
   run(suite: ProofSuite): Promise<SuiteRun>;
@@ -93,6 +94,9 @@ async function checkPreconditions(ports: TestProofPorts): Promise<Checked> {
 type SuiteVerdict = { passed: true; result: SuiteResult } | { passed: false; cause: string };
 
 function suiteVerdict(suite: ProofSuite, run: SuiteRun): SuiteVerdict {
+  if (run.kind === 'no-exit') {
+    return { passed: false, cause: `${suite} did not pass: it never reached its own exit (${run.reason}).` };
+  }
   if (run.kind === 'unreadable') {
     return { passed: false, cause: `${suite} did not pass: its results are unreadable (${run.reason}); it exited ${run.exitCode}.` };
   }
@@ -106,7 +110,7 @@ export function statusDescription(result: SuiteResult): string {
   return `${result.passed} passed, ${result.skipped} skipped, ${result.flaky} flaky`;
 }
 
-/** An inline code span that holds `text` whatever backticks it contains (CommonMark §6.1). */
+/** CommonMark §6.1 */
 function codeSpan(text: string): string {
   const longestRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
   const fence = '`'.repeat(longestRun + 1);

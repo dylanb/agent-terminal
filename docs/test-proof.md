@@ -45,6 +45,8 @@ from them.
 
 - **Any argument.** A proof is always the full run of both suites, so nothing may filter, shard or select one of
   them. A partial run's tally would read as the whole suite's.
+- **A focused test** (`it.only`, `test.only`, `describe.only`). It would narrow a suite the same way, so both suites
+  run with focused tests forbidden and fail if one is committed. The command then refuses that suite.
 - **Not on a branch (detached `HEAD`).** The proof is for a PR, found by the branch's name.
 - **A dirty working tree**: an uncommitted change, staged or not, or an untracked file that git does not ignore.
   The e2e harness bind-mounts the working tree rather than a checkout of the commit, and vitest runs on the working

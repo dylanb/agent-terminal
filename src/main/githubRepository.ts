@@ -96,6 +96,10 @@ function repositoryFromRemote(
   };
 }
 
+export function repositoryHost(repository: Pick<GitHubRepositoryIdentity, 'selector'>): string {
+  return repository.selector.split('/')[0] ?? '';
+}
+
 export function validGitHubRepositorySelector(value: string): boolean {
   const parts = value.split('/');
   return (
@@ -123,7 +127,7 @@ export function matchesGitHubRepositoryUrl(
       parsed.port === '' &&
       parsed.search === '' &&
       parsed.hash === '' &&
-      parsed.hostname.toLowerCase() === repository.selector.split('/')[0] &&
+      parsed.hostname.toLowerCase() === repositoryHost(repository) &&
       parts.length === 4 &&
       (parts[0] ?? '').toLowerCase() === repository.owner &&
       (parts[1] ?? '').toLowerCase() === repository.name &&
@@ -141,7 +145,6 @@ function originConfigReader(repoDir: string): OriginConfigReader {
   );
 }
 
-/** The GitHub repository `origin` names, read from git config alone, without asking GitHub. */
 export async function originGitHubRepository(
   repoDir: string,
 ): Promise<Omit<ResolvedGitHubRepository, 'defaultBranch'>> {

@@ -73,7 +73,6 @@ export interface BranchPullRequest {
   crossRepository: boolean;
 }
 
-/** Every open pull request whose head is `branch`, fork-headed ones included. */
 export async function openPullRequestsForBranch(repoDir: string, branch: string): Promise<BranchPullRequest[]> {
   const identity = await createGitHubRepositorySource(repoDir).resolve();
   const listed = await runAppCommand(
