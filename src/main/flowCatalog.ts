@@ -25,7 +25,7 @@ export function catalogTierJail(roots: CatalogRoots, tier: CatalogTier): string 
     : resolveOwnedDirJail(flowCatalogDir(roots.globalRoot));
 }
 
-export type TierProbe =
+type TierProbe =
   | { kind: 'entry'; flowDir: string }
   | { kind: 'absent' }
   | { kind: 'refused'; cause: PathRefusal };

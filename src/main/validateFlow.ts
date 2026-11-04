@@ -81,8 +81,8 @@ function folderRefusal(folder: string): string | null {
   return null;
 }
 
-/** The path segments `dir` adds below `anchor`, for a jail that leaves them unresolved. */
-const segmentsBelow = (anchor: string, dir: string): string[] => path.relative(anchor, dir).split(path.sep);
+/** The jail at `dir` with only `anchor` resolved: the segments below it stay unresolved, so a linked one cannot become the jail. */
+const jailBelow = (anchor: string, dir: string): string | null => resolveJail(anchor, ...path.relative(anchor, dir).split(path.sep));
 
 /** The tier comes from where the folder sits; only its anchor (the repository, A or the bundle root) is
  *  resolved, so the app's own resolvers judge every segment below it, links included (CWE-59). */
@@ -119,12 +119,12 @@ function locateCatalogEntry(anchor: string, id: string, appHome: string): Locate
 function locateBundledEntry(root: string, id: string): Located {
   const bundle = { packaged: false, appPath: root } as const;
   const flowsDir = resolveExampleFlowsDir(bundle);
-  const probe = probeTier(resolveJail(root, ...segmentsBelow(root, flowsDir)), id, path.join(flowsDir, id, FLOW_DEF_FILE));
+  const probe = probeTier(jailBelow(root, flowsDir), id, path.join(flowsDir, id, FLOW_DEF_FILE));
   if (probe.kind !== 'entry') {
     return { ok: false, reason: `this bundled flow ${catalogRefusalReason(probe.kind === 'refused' ? probe.cause : 'unknown')}` };
   }
   const loopsDir = resolveExampleLoopsV2Dir(bundle);
-  const loopsJail = resolveJail(root, ...segmentsBelow(root, loopsDir));
+  const loopsJail = jailBelow(root, loopsDir);
   if (loopsJail === null || realpathBounded(loopsJail) !== loopsJail || !isDirectory(loopsJail)) {
     return { ok: false, reason: `its bundle has no loop tree inside it at ${loopsDir}` };
   }
