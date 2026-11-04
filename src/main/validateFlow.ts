@@ -74,7 +74,7 @@ function folderRefusal(folder: string): string | null {
     return `cannot be opened: ${errMsg(e)}`;
   }
   try {
-    statSync(path.join(folder, FLOW_DEF_FILE));
+    if (!statSync(path.join(folder, FLOW_DEF_FILE)).isFile()) return `its ${FLOW_DEF_FILE} is not a regular file`;
   } catch (e) {
     return isErrno(e, 'ENOENT') ? `holds no ${FLOW_DEF_FILE}` : `cannot open its ${FLOW_DEF_FILE}: ${errMsg(e)}`;
   }

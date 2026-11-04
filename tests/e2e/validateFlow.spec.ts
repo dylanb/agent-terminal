@@ -11,7 +11,7 @@ import { listCatalog } from '../../src/main/flowCatalogList';
 import { FLOW_DEF_FILE } from '../../src/main/flowHome';
 import { catalogRefusalReason, UNSAFE_NAME_REASON, type CatalogTier } from '../../src/main/resolveRunDefinition';
 import { MAX_CATALOG_ID_LENGTH } from '../../src/shared/pathSegment';
-import { flowLocations, writeFlow, writeFlowYamlText, writeLoopDef, type FlowSpec } from '../helpers/flowFixtures';
+import { flowLocations, writeFifo, writeFlow, writeFlowYamlText, writeLoopDef, type FlowSpec } from '../helpers/flowFixtures';
 import {
   bundledFlowFolders,
   errnoDescription,
@@ -196,6 +196,14 @@ test.describe('agent-terminal --validate-flow', { tag: '@ownapp' }, () => {
       const result = await runtime.validate([folder], { cwd: repo });
       expect(problemOutcome(result, folderPrefixes(repo, folder)))
         .toEqual(problemLine(expect.stringContaining(errnoDescription(() => statSync(defFile)))));
+    });
+
+    test('a flow.yaml that is a named pipe is refused naming the folder, instead of blocking on its read', async () => {
+      const repo = runtime.world().dir('repo');
+      const folder = flowLocations.repoLocal(repo);
+      writeFifo(join(folder, FLOW_DEF_FILE));
+      const result = await runtime.validate([folder], { cwd: repo });
+      expect(problemOutcome(result, folderPrefixes(repo, folder))).toEqual(problemLine(expect.stringContaining(FLOW_DEF_FILE)));
     });
   });
 

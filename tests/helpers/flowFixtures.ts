@@ -2,6 +2,7 @@
 // the files they reference, and a repository loop registry. Every destination comes from the resolver the app
 // reads it through, and every value comes from the test, never from a shipped flow or loop.
 
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import yaml from 'js-yaml';
@@ -144,4 +145,10 @@ export function writeLoopRegistry(repo: string, loops: Readonly<Record<string, s
   const file = join(repo, LOOP_OVERRIDE_FILE);
   writeFileSync(file, yaml.dump({ [LOOP_OVERRIDE_MAP_KEY]: loops }));
   return file;
+}
+
+/** A named pipe at `file`, which blocks whoever opens it for reading until a writer appears. */
+export function writeFifo(file: string): void {
+  mkdirSync(dirname(file), { recursive: true });
+  execFileSync('mkfifo', [file]);
 }
