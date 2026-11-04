@@ -15,6 +15,7 @@ import {
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
+import { isSpecialFile } from './regularFile';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
@@ -183,13 +184,21 @@ export interface LoopDefV2 {
 /** Resolution result: the parsed def plus the tier root it resolved from (read by the composition root and
  *  by AC 5's entry-seam migration trigger — a structural fact about where resolution stopped, not a trust
  *  label), or a human-readable reason surfaced in the UI (AC 6). */
-export type LoopDefV2Result = { ok: true; def: LoopDefV2; tierRoot: string; defDir: string } | { ok: false; reason: string };
+/** `defFile` is the real path of the definition file resolution reached: always set on success, and on a
+ *  failure only when that file was read or its read failed for a reason other than absence. */
+export type LoopDefV2Result =
+  | { ok: true; def: LoopDefV2; tierRoot: string; defDir: string; defFile?: string }
+  | { ok: false; reason: string; defFile?: string };
 
 export interface LoopDefV2Context {
   tiers: LoopDefV2Tiers;
   repoDir: string;
   /** The running flow's name: its own loop folder in the operator tier is consulted before the shared one. */
   flow?: string;
+  /** Set for a flow outside any repository: `repoDir`'s override registry is then never read. */
+  skipRepoOverrides?: true;
+  /** Set to refuse a registry or definition that is a named pipe or a device instead of reading it. */
+  refuseSpecialFiles?: true;
 }
 
 /** §27.8. */
@@ -493,10 +502,12 @@ interface DefCandidate {
   jail: string;
 }
 
-function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
+function repoCandidate(name: string, repoDir: string, refuseSpecialFiles: boolean): DefCandidate | { reason: string } | null {
+  const registry = path.join(repoDir, LOOP_OVERRIDE_FILE);
+  if (refuseSpecialFiles && isSpecialFile(registry)) return { reason: `cannot read repo loop registry: ${LOOP_OVERRIDE_FILE} is not a regular file` };
   let raw: string;
   try {
-    raw = readFileSync(path.join(repoDir, LOOP_OVERRIDE_FILE), 'utf8');
+    raw = readFileSync(registry, 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
     return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
@@ -526,7 +537,7 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
 export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
   const candidates: DefCandidate[] = [];
-  const repo = repoCandidate(name, ctx.repoDir);
+  const repo = ctx.skipRepoOverrides ? null : repoCandidate(name, ctx.repoDir, ctx.refuseSpecialFiles === true);
   if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
   if (repo) candidates.push(repo);
   // The operator and app-bundled tier roots are ground the app derives itself and either may be absent (the
@@ -563,18 +574,20 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
             : `def ${name} in the ${tierName} tier is unresolvable`,
       };
     }
+    const defFile = confinedDefPath.path;
+    if (ctx.refuseSpecialFiles && isSpecialFile(defFile)) return { ok: false, reason: `cannot read def ${name}: it is not a regular file`, defFile };
     let body: string;
     try {
-      body = readFileSync(confinedDefPath.path, 'utf8');
+      body = readFileSync(defFile, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
-      return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };
+      return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}`, defFile };
     }
     try {
-      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir };
+      return { ok: true, def: parse(body, tierRoot, defDir, name, ctx.repoDir), tierRoot, defDir, defFile };
     } catch (e) {
-      if (e instanceof DefError) return { ok: false, reason: e.message };
-      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      if (e instanceof DefError) return { ok: false, reason: e.message, defFile };
+      return { ok: false, reason: e instanceof Error ? e.message : String(e), defFile };
     }
   }
   const bareReason = `no §27 def named ${name} in any tier`;

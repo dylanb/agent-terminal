@@ -6,6 +6,7 @@ import { runFinalizeAccess } from './finalizeAccess';
 import { errMsg } from './errno';
 import { VALIDATE_FLOW_FLAG } from './cliShim';
 import { resolveAppHome } from './launchRoot';
+import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { runValidateFlow } from './validateFlow';
 
 const args = process.argv.slice(2);
@@ -20,6 +21,7 @@ if (args[0] === 'audit-evidence' || args[0] === 'publish-flow-audit') {
   const { exitCode, stdout, stderr } = runValidateFlow(args.slice(1), {
     cwd: () => process.cwd(),
     appHome: resolveAppHome(process.env, os.homedir()),
+    loopTiers: resolveAppLoopDefTiers({ packaged: false, appPath: __dirname }),
   });
   process.stdout.write(stdout);
   process.stderr.write(stderr);

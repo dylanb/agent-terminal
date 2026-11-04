@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
 import { TODO_TEMPLATES_SUBDIR } from './flowHome';
+import { isReadableRegularFile } from './regularFile';
 
 /** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
  *  by the reader that lists them and the installer that seeds them — two copies would let the installer
@@ -51,17 +52,30 @@ function resolveContained(root: string, candidate: string): string | null {
  * escaping path (never throws).
  */
 export function loadTodoTemplateFile(baseDir: string, ref: string): string | null {
-  const root = path.resolve(baseDir);
-  const read = (candidate: string): string | null => {
-    const real = resolveContained(root, candidate);
-    if (real === null) return null;
+  const read = (real: string): string | null => {
     try {
       return readFileSync(real, 'utf8');
     } catch {
       return null;
     }
   };
-  return read(ref) ?? (isTodoTemplateFile(ref) ? null : read(todoTemplateFile(ref)));
+  return firstTemplate(baseDir, ref, read);
+}
+
+/** Whether `loadTodoTemplateFile` finds `ref`, decided without opening any file, so a named pipe cannot block it. */
+export function todoTemplateResolves(baseDir: string, ref: string): boolean {
+  return firstTemplate(baseDir, ref, (real) => (isReadableRegularFile(real) ? real : null)) !== null;
+}
+
+/** `ref` looked up as written, then with the extension added, inside `baseDir`: the first contained file `take` accepts. */
+function firstTemplate<T>(baseDir: string, ref: string, take: (real: string) => T | null): T | null {
+  const root = path.resolve(baseDir);
+  for (const name of isTodoTemplateFile(ref) ? [ref] : [ref, todoTemplateFile(ref)]) {
+    const real = resolveContained(root, name);
+    const taken = real === null ? null : take(real);
+    if (taken !== null) return taken;
+  }
+  return null;
 }
 
 function humanize(ref: string): string {

@@ -70,6 +70,11 @@ export interface FlowStepDef {
   repeat?: { backTo: string; countInput: string };
 }
 
+/** The todo template a run seeds for `step`, or null when it seeds none; an empty `todo_template` seeds none. */
+export function stepTemplateRef(step: FlowStepDef): string | null {
+  return step.todoTemplate ? step.todoTemplate : null;
+}
+
 export interface FlowDefinition {
   name: string;
   steps: FlowStepDef[];
@@ -472,13 +477,14 @@ export function createFlowMachine(
 
   const view = (): MachineView => {
     const step = current();
+    const templateRef = stepTemplateRef(step);
     const base: MachineView = {
       stepName: step.id,
       steps: names,
       position: index + 1,
       total: steps.length,
       status,
-      ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+      ...(templateRef !== null ? { templateRef } : {}),
       ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).
