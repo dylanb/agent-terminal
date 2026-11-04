@@ -19,7 +19,10 @@ pnpm test           # vitest, both projects: `node` (tests/unit + tests/integrat
 ./scripts/e2e-podman.sh        # playwright _electron e2e in Podman/Xvfb — the canonical local e2e run (real PTY/display)
 ./scripts/e2e-podman.sh "<-g>" # filter to matching tests
 pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS a bare subprocess launch can't focus, so prefer the Podman harness above
+pnpm run test:proof # full vitest + Podman e2e on the clean, pushed PR head, then publishes the test-proof/* statuses a merge into main requires
 ```
+
+**Run `pnpm run test:proof` on the PR's final head commit, before the PR is marked ready for review — or, for a PR that is already ready (an agent loop flips its PR at plan approval, §27.13), before it merges.** GitHub Actions runs no tests on an open PR; the suites run there only after a merge into `main`. → [docs/test-proof.md](docs/test-proof.md)
 
 **Always run the e2e locally via the Podman harness (`docs/e2e-podman.md`) before claiming a change done — do not defer e2e to CI.**
 

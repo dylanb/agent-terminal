@@ -1,3 +1,7 @@
+## #283 — PRs merge on a local test proof, not on CI test runs
+
+§27.13: plan approval still flips the PR non-draft, but no longer to trigger CI, since GitHub Actions runs no vitest or e2e on an open PR (the suites run only on the push to `main` a merge creates). N13a now names the `test-proof/vitest` and `test-proof/e2e` statuses from `pnpm run test:proof` (`docs/test-proof.md`) as the checks a reviewer pulls, and drops the recorded override that justified going non-draft mid-impl to run CI.
+
 ## #221 slice 5 — Clear survives unchanged recovery
 
 - 2026-10-29: §23.6 reconciliation: notification frames use minor 2, preserving minor 1 for loop-message status/dismissal. History and Clear compose the shared pressed-control guard while retaining stale-Clear checks.
