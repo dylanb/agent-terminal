@@ -41,6 +41,12 @@ describe('the proof working-tree adapter (real git)', () => {
     expect(await createProofWorkingTree(repo).dirtyPaths()).not.toEqual([]);
   });
 
+  it('reads an untracked file as dirty when the repository is configured to hide untracked files', async () => {
+    git.git(repo, ['config', 'status.showUntrackedFiles', 'no']);
+    git.writeRepoFile(repo, 'untracked.txt', 'loose\n');
+    expect(await createProofWorkingTree(repo).dirtyPaths()).not.toEqual([]);
+  });
+
   it('reads a git-ignored file as clean, beside an untracked file that is dirty', async () => {
     git.writeRepoFile(repo, 'ignored/report.json', '{}\n');
     git.writeRepoFile(repo, 'untracked.txt', 'loose\n');
