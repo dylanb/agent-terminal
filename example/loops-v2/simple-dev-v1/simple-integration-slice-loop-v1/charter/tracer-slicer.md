@@ -17,8 +17,9 @@ example `TRACER-BULLET.md`).
 
 This flow, `simple-dev-v1`, built the whole ticket in one test-driven development loop: the approved plan's
 `## Increments` block lists its `### Increment` entries, and the branch carries their `RED:` and `GREEN:` commits
-as the impl-report's `### Increments` section records them. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change as
-built against it.
+as the impl-report's `### Increments` section records them; a verification-only increment has a `RED:` commit and
+no `GREEN:`. There are no impl-slices. The plan is approved, so never ask for it to be edited; grade the change
+as built against it.
 
 Grade the change against the tracer-bullet rule (for example `TRACER-BULLET.md`): the end-to-end path is wired,
 a vertical that does the smallest real thing with real backing, reachable from the running app and proven by a

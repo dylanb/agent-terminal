@@ -74,7 +74,8 @@ an update strategy or the moment a measurement lands.
 When every test an increment adds or edits already passes, its behavior was built by an earlier increment: do not weaken a
 test or break production code to make one fail. Show instead, in a scratch copy of the repository and never this
 working tree, that each check fails by assertion when the behavior it guards is broken, record that under
-`### Test evidence`, and commit the tests as `RED:` noting the increment as verification-only.
+`### Test evidence`, and commit the tests as `RED:` noting the increment as verification-only. It has no production
+change to make, so it has no `GREEN:` commit.
 
 ## A hidden increment
 

@@ -36,7 +36,8 @@ writing is done by sub-agents, so the code and test files they read never fill y
    fix it yourself, and check again.
    Ask the brief's two questions of each test before you go on.
 3. **Commit the RED** as `RED: <increment title>`, holding only the test changes, following the repository's
-   commit conventions. Record the failing run under `### Increments`.
+   commit conventions. Record the failing run under `### Increments`. A verification-only increment has no
+   production change to make: it ends here, with no `GREEN:` commit, and you go on to the next increment.
 4. **GREEN.** Brief a fresh sub-agent to make the smallest change that makes the increment's tests pass, under
    the brief's **Make it work, then make it readable**. It changes a line of a committed RED test only when that
    test is wrong, and reports each such change with why. Any test it adds for a branch or failure path its design
