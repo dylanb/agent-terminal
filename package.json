@@ -1,6 +1,6 @@
 {
   "name": "agent-terminal",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Desktop app for running, monitoring and steering terminal coding agents (Claude Code, Codex): PTY shell, xterm.js, shadow screen model, monitor pane and a test-driven flow/loop engine",
   "homepage": "https://github.com/dylanb/agent-terminal#readme",
   "repository": {
