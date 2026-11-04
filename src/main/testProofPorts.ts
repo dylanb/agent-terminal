@@ -16,8 +16,9 @@ const REPORT_DIR = ['.agent-terminal', 'test-proof'] as const;
 const VITEST_REPORT = 'vitest.json';
 const E2E_REPORT = 'report.json';
 const E2E_ENVIRONMENT = 'environment.json';
-// A page must fit execFile's default 1 MiB maxBuffer with every body at GitHub's 65,536-character limit.
-const COMMENTS_PER_PAGE = 5;
+// A page must fit execFile's default 1 MiB maxBuffer with every body at GitHub's 65,536-character limit in
+// 4-byte UTF-8 characters.
+const COMMENTS_PER_PAGE = 3;
 
 type Prepared = { ok: true; dir: string } | { ok: false; reason: string };
 

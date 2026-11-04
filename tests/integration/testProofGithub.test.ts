@@ -190,8 +190,8 @@ describe('the proof publisher (stand-in gh)', () => {
     expect.soft(comments.filter((c) => c.login === 'reviewer')).toEqual(others);
   });
 
-  it('edits the summary it posted before when the comments ahead of it are as long as GitHub allows', async () => {
-    const long: StandInComment[] = Array.from({ length: 20 }, (_, i) => ({ id: 200 + i, login: 'reviewer', body: 'x'.repeat(GITHUB_MAX_COMMENT_CHARS) }));
+  it('edits the summary it posted before when the comments ahead of it are as long as GitHub allows, in 4-byte characters', async () => {
+    const long: StandInComment[] = Array.from({ length: 20 }, (_, i) => ({ id: 200 + i, login: 'reviewer', body: '\u{1F600}'.repeat(GITHUB_MAX_COMMENT_CHARS) }));
     const gh = withGh({ comments: { '12': long } });
     await createProofPublisher(repo).summary(12, 'first proof of aaaa');
     await createProofPublisher(repo).summary(12, 'second proof of bbbb');
