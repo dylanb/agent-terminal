@@ -22,9 +22,9 @@ setup, hook, mock or skip it adds may change what another test checks. Confirm t
 behavior, not the implementation, and was seen failing before the code it covers. When GREEN changed or
 removed a line of a test RED wrote, it logs the change under `### RED test changes`. For each change to a RED
 test, judge whether it corrects a wrong test or weakens a right one, and confirm every acceptance criterion the
-test checked is still checked by some test. Read the machine's changed-test flag (§28.5.3): a changed test file
-the flag lists that `### RED test changes` does not explain is a finding. The machine proves which files
-changed; you judge why.
+test checked is still checked by some test. Diff the test files each `RED:` commit added or edited against the
+branch head: a changed test file that `### RED test changes` does not explain is a finding. The diff proves which
+files changed; you judge why.
 
 A green is vacuous too when it was never run:
 ensure every test needed to prove the in-scope change has actually been run and observed passing — the

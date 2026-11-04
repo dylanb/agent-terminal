@@ -33,5 +33,6 @@ that no run exercised. Run what is missing yourself when you can; report the res
 
 When the step changed or removed a line of a test RED wrote, judge each change it logged under `### RED test
 changes`. For each change to a RED test, judge whether it corrects a wrong test or weakens a right one, and
-confirm every acceptance criterion the test checked is still checked by some test. A changed RED test file the
-machine's changed-test flag lists that `### RED test changes` does not explain is a finding.
+confirm every acceptance criterion the test checked is still checked by some test. Diff the test files each
+`RED:` commit added or edited against the branch head: a changed RED test file that `### RED test changes` does not
+explain is a finding.
