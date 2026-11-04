@@ -1,6 +1,6 @@
 import { errMsg } from './errno';
 import { runTestProof } from './testProof';
-import { createBranchPullRequests, createProofWorkingTree } from './testProofPorts';
+import { createBranchPullRequests, createProofPublisher, createProofSuites, createProofWorkingTree } from './testProofPorts';
 
 const root = process.cwd();
 const report = (line: string): void => {
@@ -9,6 +9,8 @@ const report = (line: string): void => {
 runTestProof(process.argv.slice(2), {
   workingTree: createProofWorkingTree(root),
   pullRequests: createBranchPullRequests(root),
+  suites: createProofSuites(root),
+  publisher: createProofPublisher(root),
   report,
 }).then(
   (code) => {

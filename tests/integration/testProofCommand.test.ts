@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
+import { hermeticPath, installTestProofGh } from '../helpers/testProofGh';
+import { makeProofRepo } from '../helpers/testProofSuites';
 
 const ROOT = join(__dirname, '..', '..');
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -32,6 +35,46 @@ describe('pnpm run test:proof', () => {
       } finally {
         rmSync(outside, { recursive: true, force: true });
       }
+    },
+    COMMAND_TIMEOUT_MS,
+  );
+});
+
+describe('the built test:proof entry', () => {
+  const bundle = join(ROOT, 'out', 'test-proof', 'testProof.cjs');
+  let git: GitRepoFixture;
+  let scratch: string;
+
+  beforeAll(() => {
+    const build = spawnSync('pnpm', ['exec', 'vite', 'build', '--config', 'vite.testProof.config.ts', '--logLevel', 'error'], { cwd: ROOT, encoding: 'utf8' });
+    expect(build.status, build.stderr).toBe(0);
+  }, COMMAND_TIMEOUT_MS);
+
+  beforeEach(() => {
+    git = createGitRepoFixture();
+    scratch = mkdtempSync(join(tmpdir(), 'test-proof-entry-'));
+  });
+
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true });
+    git.cleanup();
+  });
+
+  it(
+    'proves a fixture repo end to end: both literal-context statuses on HEAD and one summary comment',
+    () => {
+      const bin = join(scratch, 'bin');
+      const repo = makeProofRepo(git, { bin, stateDir: join(scratch, 'state'), branch: 'feature/proof', electronVersion: '38.7.1' });
+      const gh = installTestProofGh(bin, { pullRequests: [{ number: 7, headRefName: repo.branch, headRefOid: repo.head, isCrossRepository: false }] });
+      const PATH = `${bin}:${hermeticPath(join(scratch, 'tools'), ['node', 'git'])}`;
+      const run = spawnSync(process.execPath, [bundle], { cwd: repo.dir, encoding: 'utf8', env: { ...process.env, PATH } });
+      expect.soft(run.status, run.stderr).toBe(0);
+      const state = gh.read();
+      expect.soft(state.statuses.map((s) => `${s.context} ${s.state} ${s.sha}`).sort()).toEqual([
+        `test-proof/e2e success ${repo.head}`,
+        `test-proof/vitest success ${repo.head}`,
+      ]);
+      expect.soft(state.comments['7'] ?? []).toHaveLength(1);
     },
     COMMAND_TIMEOUT_MS,
   );

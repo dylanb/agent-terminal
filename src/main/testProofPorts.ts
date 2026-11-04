@@ -1,9 +1,33 @@
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { APP_COMMAND_TIMEOUT_MS, commandEnvironment, parseAppGitObjectId, runAppCommand } from './appCommand';
 import { errMsg, isErrno } from './errno';
 import { originGitHubRepository } from './githubRepository';
 import { openPullRequestsForBranch, type BranchPullRequest } from './pullRequestLookup';
-import type { BranchPullRequests, OpenPullRequest, ProofWorkingTree } from './testProof';
+import type { BranchPullRequests, OpenPullRequest, ProofPublisher, ProofSuites, ProofWorkingTree } from './testProof';
+import type { SuiteCounts } from './testProofResults';
+
+export const TEST_PROOF_COMMENT_MARKER = '<!-- agent-terminal:test-proof-summary -->';
+
+export function proofReportDir(root: string): string {
+  return join(root, '.agent-terminal', 'test-proof');
+}
+
+export function createProofSuites(_root: string): ProofSuites {
+  const none: SuiteCounts = { passed: 0, failed: 0, skipped: 0, flaky: 0, skippedTests: [], flakyTests: [] };
+  return {
+    async run() {
+      return { kind: 'ran', exitCode: 0, result: { ...none, environment: { node: '', electron: '' } } };
+    },
+  };
+}
+
+export function createProofPublisher(_root: string): ProofPublisher {
+  return {
+    async status() {},
+    async summary() {},
+  };
+}
 
 export function createProofWorkingTree(root: string): ProofWorkingTree {
   return {

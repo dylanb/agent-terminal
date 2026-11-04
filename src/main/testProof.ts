@@ -15,9 +15,36 @@ export interface BranchPullRequests {
   openFor(branch: string): Promise<OpenPullRequest>;
 }
 
+export type ProofSuite = 'vitest' | 'e2e';
+
+export interface SuiteResult {
+  passed: number;
+  failed: number;
+  skipped: number;
+  flaky: number;
+  skippedTests: string[];
+  flakyTests: string[];
+  environment: { node: string; electron: string; image?: string };
+}
+
+export type SuiteRun =
+  | { kind: 'ran'; exitCode: number; result: SuiteResult }
+  | { kind: 'unreadable'; exitCode: number; reason: string };
+
+export interface ProofSuites {
+  run(suite: ProofSuite): Promise<SuiteRun>;
+}
+
+export interface ProofPublisher {
+  status(sha: string, context: string, description: string): Promise<void>;
+  summary(pr: number, body: string): Promise<void>;
+}
+
 export interface TestProofPorts {
   workingTree: ProofWorkingTree;
   pullRequests: BranchPullRequests;
+  suites: ProofSuites;
+  publisher: ProofPublisher;
   report(line: string): void;
 }
 

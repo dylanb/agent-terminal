@@ -7,15 +7,18 @@ import {
   hermeticPath,
   installTestProofGh,
   TEST_PROOF_GH_ORIGIN,
+  type StandInComment,
   type StandInPullRequest,
+  type TestProofGh,
 } from '../helpers/testProofGh';
-import { createBranchPullRequests } from '../../src/main/testProofPorts';
+import { createBranchPullRequests, createProofPublisher, TEST_PROOF_COMMENT_MARKER } from '../../src/main/testProofPorts';
 
 const BRANCH = 'feature/proof';
 const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const SHA_C = 'c'.repeat(40);
 const originalPath = process.env.PATH;
+const GITHUB_MAX_PER_PAGE = 100;
 const MISSING = /not found|not installed|missing|absent|could not (start|run)/i;
 const LOGGED_OUT = /log(ged)?[ -]?in|auth/i;
 
@@ -31,10 +34,11 @@ const pr = (number: number, headRefOid: string, isCrossRepository = false): Stan
   isCrossRepository,
 });
 
-function withGh(initial: Parameters<typeof installTestProofGh>[1]): void {
+function withGh(initial: Parameters<typeof installTestProofGh>[1]): TestProofGh {
   const bin = join(scratch, 'gh-bin');
-  installTestProofGh(bin, initial);
+  const gh = installTestProofGh(bin, initial);
   process.env.PATH = `${bin}:${tools}`;
+  return gh;
 }
 
 beforeEach(() => {
@@ -157,5 +161,48 @@ describe('the proof PR-lookup adapter when gh cannot check the login', () => {
     const reason = found.kind === 'github-unavailable' ? found.reason : '';
     expect.soft(reason).not.toBe('');
     expect.soft(reason).not.toMatch(/not logged in|auth login/i);
+  });
+});
+
+describe('the proof publisher (stand-in gh)', () => {
+  it.each(['test-proof/vitest', 'test-proof/e2e'])('posts a success status for %s on the given SHA with the given description', async (context) => {
+    const gh = withGh({});
+    const description = `5412 passed, 26 skipped, 13 flaky (${context})`;
+    await createProofPublisher(repo).status(SHA_B, context, description);
+    expect(gh.read().statuses).toEqual([{ sha: SHA_B, state: 'success', context, description }]);
+  });
+
+  it('edits the summary it posted before, found past the largest page GitHub serves, and leaves a marked comment by another login alone', async () => {
+    const others: StandInComment[] = Array.from({ length: GITHUB_MAX_PER_PAGE + 5 }, (_, i) => ({ id: 100 + i, login: 'reviewer', body: `review note ${i}` }));
+    const foreign: StandInComment = { id: 99, login: 'another-prover', body: `${TEST_PROOF_COMMENT_MARKER}\nsomeone else's proof` };
+    const note: StandInComment = { id: 98, login: 'proof-author', body: 'a hand-written note by the same login' };
+    const gh = withGh({ comments: { '12': [foreign, note, ...others] } });
+    await createProofPublisher(repo).summary(12, 'first proof of aaaa');
+    await createProofPublisher(repo).summary(12, 'second proof of bbbb');
+    const comments = gh.read().comments['12'] ?? [];
+    const summaries = comments.filter((c) => c.login === 'proof-author' && c.id !== note.id);
+    expect.soft(summaries).toHaveLength(1);
+    expect.soft(summaries[0]?.body ?? '').toContain('second proof of bbbb');
+    expect.soft(summaries[0]?.body ?? '').not.toContain('first proof of aaaa');
+    expect.soft(comments.find((c) => c.id === note.id)).toEqual(note);
+    expect.soft(comments.find((c) => c.id === foreign.id)).toEqual(foreign);
+    expect.soft(comments.filter((c) => c.login === 'reviewer')).toEqual(others);
+  });
+
+  it('rejects the status promise when GitHub refuses the status', async () => {
+    withGh({ failStatusFor: ['test-proof/e2e'] });
+    await expect(createProofPublisher(repo).status(SHA_A, 'test-proof/e2e', '391 passed')).rejects.toThrow();
+  });
+
+  it('rejects the summary promise when GitHub refuses to create the comment', async () => {
+    withGh({ failCommentWrite: true });
+    await expect(createProofPublisher(repo).summary(12, 'first proof')).rejects.toThrow();
+  });
+
+  it('rejects the summary promise when GitHub refuses to edit the earlier comment', async () => {
+    const gh = withGh({});
+    await createProofPublisher(repo).summary(12, 'first proof');
+    gh.set({ failCommentWrite: true });
+    await expect(createProofPublisher(repo).summary(12, 'second proof')).rejects.toThrow();
   });
 });
