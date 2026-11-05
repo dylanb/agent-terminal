@@ -1,18 +1,22 @@
-import type { SetupStatusReply } from '../shared/ipc';
-import type { SetupConditionEntry } from '../shared/setupCheck';
+import type { SetupDismissReply, SetupStatusReply } from '../shared/ipc';
+import type { SetupConditionEntry, SetupDismissal } from '../shared/setupCheck';
 import type { IgnoreAnswer } from './gitIgnoreCheck';
 import type { ExamplesCurrency } from './installExamples';
 import type { LoopCapabilitiesLoad } from './loopCapabilities';
+import type { SetupDismissals } from './setupDismissals';
 
 export interface SetupCheckDeps {
   examplesCurrent(): ExamplesCurrency;
   isGitRepository(dir: string): boolean;
   agentTerminalIgnored(repoDir: string): Promise<IgnoreAnswer>;
   loadCapabilities(repoDir: string): LoopCapabilitiesLoad;
+  appVersion: string;
+  dismissals: SetupDismissals;
 }
 
 export interface SetupCheck {
   status(repoKey: string): Promise<SetupStatusReply>;
+  dismiss(dismissal: SetupDismissal): SetupDismissReply;
 }
 
 const IGNORE_ENTRY: Record<IgnoreAnswer, SetupConditionEntry | null> = {
@@ -37,7 +41,7 @@ export function createSetupCheck(deps: SetupCheckDeps): SetupCheck {
     async status(repoKey) {
       const examples = examplesEntry(() => deps.examplesCurrent());
       if (!deps.isGitRepository(repoKey)) {
-        return { ok: true, repoKey, isRepository: false, entries: examples ? [examples] : [] };
+        return { ok: true, repoKey, isRepository: false, appVersion: deps.appVersion, entries: examples ? [examples] : [] };
       }
       const ignore = await deps.agentTerminalIgnored(repoKey).catch((): IgnoreAnswer => 'unknown');
       const capabilities = deps.loadCapabilities(repoKey);
@@ -46,8 +50,9 @@ export function createSetupCheck(deps: SetupCheckDeps): SetupCheck {
       const ignoreEntry = IGNORE_ENTRY[ignore];
       if (ignoreEntry) entries.push(ignoreEntry);
       if (!capabilities.ok) entries.push({ condition: 'capabilities', failure: capabilities.cause });
-      return { ok: true, repoKey, isRepository: true, entries };
+      return { ok: true, repoKey, isRepository: true, appVersion: deps.appVersion, entries };
     },
+    dismiss: () => ({ ok: true }),
   };
 }
 

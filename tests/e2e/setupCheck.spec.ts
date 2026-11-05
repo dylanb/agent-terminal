@@ -8,6 +8,7 @@ import { shellQuote } from '../../src/shared/shellQuote';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { writeRepoConditions, type RepoConditionsFixture } from '../helpers/setupRepoConditions';
+import { snapshotTree } from '../helpers/treeSnapshot';
 import { createWorktreeFixture, type WorktreeFixture } from '../helpers/worktreeFixture';
 import { electron } from './registeredElectron';
 import { createSetupCheckMachine, failingCheckIgnoreGit, type SetupCheckMachine } from './setupCheckEnv';
@@ -367,4 +368,127 @@ test('after Install/update examples, focus rests on the Settings view\'s Install
   await expect(installView(page).getByRole('status')).toContainText('Installed examples');
 
   await expect(installView(page).getByRole('button', { name: /^Install examples/ })).toBeFocused();
+});
+
+const FOR_REPO = "Don't show again for this repo";
+const UNTIL_UPDATE = "Don't show again until the app updates";
+
+/** Runs `cd` into `dir` in the terminal through the app's own input path, which reaches the shell whether or
+ *  not a dialog holds focus, and waits until the shell has run it. */
+async function shellCd(page: Page, dir: string, marker: string): Promise<void> {
+  await page.evaluate((line) => window.term.input(line), `cd ${shellQuote(dir)} && printf '%s-%s\\n' at ${marker}\r`);
+  await expect(page.locator('.xterm-rows')).toContainText(`at-${marker}`);
+}
+
+/** The repository each recorded dialog named, among `repos`, in the order the dialogs appeared. */
+const namedAmong = (seen: () => Promise<string[]>, repos: string[]) => async (): Promise<string[]> =>
+  (await seen()).map((text) => repos.find((repo) => text.includes(repo)) ?? text);
+
+/** The text of the control that has focus inside `popup`, or null when focus is not on one of its buttons. */
+const focusedControlIn = (popup: Locator): Promise<string | null> =>
+  popup.evaluate((el) => {
+    const active = document.activeElement;
+    return active instanceof HTMLButtonElement && el.contains(active) ? (active.textContent ?? '').trim() : null;
+  });
+
+test("Don't show again for this repo silences it after a restart, and another failing repository still lists (AC13)", { tag: '@ownapp' }, async () => {
+  const dismissed = repoIn({ ignored: false, capabilities: 'absent' });
+  const other = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  let page = await launchIn(dismissed);
+  const popup = popupFor(page, dismissed);
+  await expect(entriesOf(popup)).toHaveCount(2);
+
+  await popup.getByRole('button', { name: FOR_REPO }).click();
+  await expect.soft(popup).toBeHidden();
+  await app?.close();
+  page = await launchIn(dismissed);
+  const seen = await recordDialogs(page);
+  await shellCd(page, other, 'other');
+
+  await expect.poll(namedAmong(seen, [dismissed, other])).toEqual([other]);
+  await expect.soft(entriesOf(popupFor(page, other))).toHaveCount(2);
+});
+
+test("Don't show again until the app updates silences the examples entry after a same-version restart (AC14)", { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  const probe = repoIn({ ignored: false, capabilities: 'absent' });
+  let page = await launchIn(passing);
+  const popup = popupFor(page, passing);
+  await expect(entriesOf(popup)).toHaveCount(1);
+  const running = await app!.evaluate(({ app: electronApp }) => electronApp.getVersion());
+  const reply = await page.evaluate((repoKey) => window.setup.status(repoKey), passing);
+  expect.soft(reply).toMatchObject({ ok: true, appVersion: running });
+
+  await popup.getByRole('button', { name: UNTIL_UPDATE }).click();
+  await expect.soft(popup).toBeHidden();
+  await app?.close();
+  page = await launchIn(passing);
+  const seen = await recordDialogs(page);
+  await shellCd(page, probe, 'probe');
+
+  await expect.poll(namedAmong(seen, [passing, probe])).toEqual([probe]);
+  await expect.soft(entriesOf(popupFor(page, probe))).toHaveCount(2);
+});
+
+const MIXED_DISMISSALS: Array<{ press: string; kept: string[]; gone: string[] }> = [
+  { press: FOR_REPO, kept: [INSTALL, UNTIL_UPDATE, 'Close'], gone: [FOR_REPO] },
+  { press: UNTIL_UPDATE, kept: [FOR_REPO, 'Close'], gone: [INSTALL, UNTIL_UPDATE] },
+];
+
+for (const { press, kept, gone } of MIXED_DISMISSALS) {
+  test(`in a popup listing both kinds, ${press} leaves the other kind listed with its controls, and focus on one of them (AC14)`, { tag: '@ownapp' }, async () => {
+    const repo = repoIn({ ignored: true, capabilities: 'absent' });
+    const page = await launchIn(repo);
+    const popup = popupFor(page, repo);
+    await expect(entriesOf(popup)).toHaveCount(2);
+    const soft = expect.configure({ soft: true });
+
+    await popup.getByRole('button', { name: press }).click();
+
+    await soft(entriesOf(popup)).toHaveCount(1);
+    for (const name of kept) await soft(popup.getByRole('button', { name, exact: true })).toBeVisible();
+    for (const name of gone) await soft(popup.getByRole('button', { name, exact: true })).toHaveCount(0);
+    await soft.poll(async () => kept.includes((await focusedControlIn(popup)) ?? '')).toBe(true);
+  });
+}
+
+const TREE_DISMISSALS: Array<{ press: string; left: number }> = [
+  { press: FOR_REPO, left: 1 },
+  { press: UNTIL_UPDATE, left: 2 },
+];
+
+for (const { press, left } of TREE_DISMISSALS) {
+  test(`${press} leaves the repository's working tree byte-for-byte unchanged (AC15)`, { tag: '@ownapp' }, async () => {
+    const repo = repoIn({ ignored: false, capabilities: 'absent' });
+    git.writeRepoFile(repo, 'src/app.txt', 'tracked content\n');
+    const page = await launchIn(repo);
+    const popup = popupFor(page, repo);
+    await expect(entriesOf(popup)).toHaveCount(3);
+    const before = snapshotTree(repo);
+
+    await popup.getByRole('button', { name: press }).click();
+    await expect.soft(entriesOf(popup)).toHaveCount(left);
+
+    expect(snapshotTree(repo)).toEqual(before);
+  });
+}
+
+test("with the examples installed, a popup listing only repository entries offers no Don't show again until the app updates (AC12)", { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect(entriesOf(popup)).toHaveCount(2);
+
+  await expect(popup.getByRole('button', { name: UNTIL_UPDATE })).toHaveCount(0);
+});
+
+test("a popup listing only the examples entry offers no Don't show again for this repo (AC12)", { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: true, capabilities: 'valid' });
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect(entriesOf(popup)).toHaveCount(1);
+
+  await expect(popup.getByRole('button', { name: FOR_REPO })).toHaveCount(0);
 });

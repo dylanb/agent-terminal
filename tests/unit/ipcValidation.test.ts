@@ -14,6 +14,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupDismiss,
   isValidSetupStatus,
   isValidFlowGithubRef,
   isValidFlowAppRouteOut,
@@ -196,6 +197,36 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
       relativeRepoKey: isValidSetupStatus({ sessionId: sid, repoKey: 'relative' }),
       notAnObject: isValidSetupStatus('/repo'),
     }).toEqual({ noSession: false, otherSession: false, noRepoKey: false, numberRepoKey: false, relativeRepoKey: false, notAnObject: false });
+  });
+
+  it('accepts a setup:dismiss of either kind on the live session, and rejects a malformed one', () => {
+    expect.soft({
+      repo: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      examples: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples', appVersion: '1.2.3' } }),
+    }).toEqual({ repo: true, examples: true });
+    expect({
+      noSession: isValidSetupDismiss({ dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      otherSession: isValidSetupDismiss({ sessionId: 'other', dismissal: { kind: 'repo', repoKey: '/repo' } }),
+      noDismissal: isValidSetupDismiss({ sessionId: sid }),
+      numberRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: 7 } }),
+      noRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo' } }),
+      relativeRepoKey: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'repo', repoKey: 'relative' } }),
+      unknownKind: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'forever', repoKey: '/repo' } }),
+      examplesNoVersion: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples' } }),
+      examplesNumberVersion: isValidSetupDismiss({ sessionId: sid, dismissal: { kind: 'examples', appVersion: 3 } }),
+      notAnObject: isValidSetupDismiss('/repo'),
+    }).toEqual({
+      noSession: false,
+      otherSession: false,
+      noDismissal: false,
+      numberRepoKey: false,
+      noRepoKey: false,
+      relativeRepoKey: false,
+      unknownKind: false,
+      examplesNoVersion: false,
+      examplesNumberVersion: false,
+      notAnObject: false,
+    });
   });
 
   it('accepts a flow:clearActiveFlow for a safe repoKey on the live session (§18.7.2/§18.7.4)', () => {

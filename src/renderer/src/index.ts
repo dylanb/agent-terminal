@@ -355,6 +355,7 @@ const setupCheckHost = document.getElementById('setup-check-host');
 if (setupCheckHost) {
   const setupCheck = createSetupCheckDialog(setupCheckHost, {
     status: (repoKey) => window.setup.status(repoKey),
+    dismiss: (dismissal) => window.setup.dismiss(dismissal),
     openInstallExamples: () => {
       shell.setView('4');
       installExamples.open();

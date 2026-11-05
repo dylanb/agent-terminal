@@ -1,9 +1,10 @@
-import type { SetupStatusReply } from '../../shared/ipc';
-import type { SetupConditionEntry } from '../../shared/setupCheck';
+import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
+import type { SetupConditionEntry, SetupDismissal } from '../../shared/setupCheck';
 import { createModalShell } from './modalShell';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
+  dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
   /** Opens the Settings view's install-examples flow. */
   openInstallExamples(): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
@@ -119,6 +120,14 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
           deps.openInstallExamples();
         });
         foot.append(install);
+      }
+      for (const label of ["Don't show again for this repo", "Don't show again until the app updates"]) {
+        const dismissal = doc.createElement('button');
+        dismissal.type = 'button';
+        dismissal.className = 'pill';
+        dismissal.textContent = label;
+        presses.bind(dismissal, () => {});
+        foot.append(dismissal);
       }
       foot.append(close);
       card.append(title, body, foot);

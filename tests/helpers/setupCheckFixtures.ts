@@ -1,5 +1,5 @@
-import type { SetupStatusReply } from '../../src/shared/ipc';
-import type { SetupConditionEntry } from '../../src/shared/setupCheck';
+import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 
 /** Repository keys no two of which share a path segment, so a dialog naming one cannot be read as naming
@@ -21,10 +21,14 @@ export const ENTRY = {
   examplesUnchecked: { condition: 'examples', failure: 'unchecked' },
 } as const satisfies Record<string, SetupConditionEntry>;
 
+/** The app version every scripted status reply names. */
+export const APP_VERSION = '7.3.1-fixture';
+
 export const repoStatus = (repoKey: string, entries: SetupConditionEntry[]): SetupStatusReply => ({
   ok: true,
   repoKey,
   isRepository: true,
+  appVersion: APP_VERSION,
   entries,
 });
 
@@ -33,15 +37,18 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
   ok: true,
   repoKey: dir,
   isRepository: false,
+  appVersion: APP_VERSION,
   entries,
 });
 
 type Scripted = SetupStatusReply | { reject: string };
+type ScriptedDismiss = SetupDismissReply | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
  *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
- *  recorded with what `whenInstallOpens` reports at that moment. */
+ *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
+ *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -51,6 +58,8 @@ export function fakeSetupDeps() {
   let landing: HTMLElement | null = null;
   const installOpens: unknown[] = [];
   let atInstallOpen: () => unknown = () => null;
+  const dismissals: SetupDismissal[] = [];
+  const dismissReplies: ScriptedDismiss[] = [];
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       const held = holds.get(repoKey);
@@ -61,6 +70,12 @@ export function fakeSetupDeps() {
       const next = scripts.get(repoKey)?.shift();
       for (const resolve of deliveries.get(repoKey)?.splice(0) ?? []) queueMicrotask(resolve);
       if (next === undefined) return { ok: false, reason: `no status scripted for ${repoKey}` };
+      if ('reject' in next) throw new Error(next.reject);
+      return next;
+    },
+    dismiss: async (dismissal) => {
+      dismissals.push(dismissal);
+      const next = dismissReplies.shift() ?? { ok: true };
       if ('reject' in next) throw new Error(next.reject);
       return next;
     },
@@ -92,6 +107,12 @@ export function fakeSetupDeps() {
       holds.set(repoKey, new Promise<void>((resolve) => (release = resolve)));
       return release;
     },
+    /** Queue the replies the next `dismiss` calls get, in order. */
+    answerDismiss(...replies: ScriptedDismiss[]): void {
+      dismissReplies.push(...replies);
+    },
+    /** Every dismissal the dialog asked to record, in order. */
+    dismissals: (): SetupDismissal[] => [...dismissals],
     /** What each `openInstallExamples` call records about the moment it was made. */
     whenInstallOpens(probe: () => unknown): void {
       atInstallOpen = probe;

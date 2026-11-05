@@ -11,6 +11,7 @@ import {
   type CliInstallResult,
   type ExamplesApi,
   type SetupApi,
+  type SetupDismissReply,
   type SetupStatusReply,
   type InstallExamplesPreview,
   type InstallExamplesResult,
@@ -236,6 +237,7 @@ export const examplesApi: ExamplesApi = {
 
 export const setupApi: SetupApi = {
   status: (repoKey) => ipcRenderer.invoke(CH.setupStatus, { sessionId: SESSION_ID, repoKey }) as Promise<SetupStatusReply>,
+  dismiss: (dismissal) => ipcRenderer.invoke(CH.setupDismiss, { sessionId: SESSION_ID, dismissal }) as Promise<SetupDismissReply>,
 };
 
 if (process.argv.includes(CONTROLLER_WINDOW_ARGUMENT)) {

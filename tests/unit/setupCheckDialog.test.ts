@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/renderer/src/setupCheckDialog';
-import { ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
+import { APP_VERSION, ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
+import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import { recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
 
 // The setup-check popup lists each condition the checked repository fails, in plain words, one message per
@@ -570,5 +571,170 @@ describe('a startup check that failed is still the startup check', () => {
     void dialog.check(REPO.charlie);
 
     await vi.waitFor(() => expect(seen()[0]).toBe(REPO.charlie));
+  });
+});
+
+const FOR_REPO = "Don't show again for this repo";
+const UNTIL_UPDATE = "Don't show again until the app updates";
+
+/** The message the dialog shows for each of `entries` alone, read from a dialog of its own, so a test can tell
+ *  which entries remain without pinning their wording. */
+async function messagesOf(entries: SetupConditionEntry[]): Promise<string[]> {
+  const messages: string[] = [];
+  for (const entry of entries) {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [entry]));
+    const host = document.body.appendChild(document.createElement('div'));
+    const dialog = createSetupCheckDialog(host, fake.deps);
+    const screen = setupCheckScreen(host);
+    void dialog.check(REPO.charlie);
+    await shownFor(screen, REPO.charlie);
+    messages.push(...screen.entries());
+    dialog.dispose();
+    host.remove();
+  }
+  return messages;
+}
+
+const sorted = (values: string[]): string[] => [...values].sort();
+
+/** The name of the dialog control that has focus, or null when focus is on none of them. */
+const focusedControl = (screen: ReturnType<typeof setupCheckScreen>): string | null =>
+  screen.controls().find((name) => screen.control(name) === document.activeElement) ?? null;
+
+describe('the dismissal controls are offered only for the entries they silence (AC12)', () => {
+  const RULES: Array<{ control: string; own: SetupConditionEntry[]; otherOnly: SetupConditionEntry[] }> = [
+    { control: FOR_REPO, own: [ENTRY.notIgnored, ENTRY.examplesStale], otherOnly: [ENTRY.examplesStale] },
+    { control: UNTIL_UPDATE, own: [ENTRY.absent, ENTRY.examplesStale], otherOnly: [ENTRY.absent, ENTRY.notIgnored] },
+  ];
+
+  for (const { control, own, otherOnly } of RULES) {
+    it(`shows ${control} when an entry it silences is listed`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, own));
+      const { dialog, screen } = mountDialog(fake);
+
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      expect(screen.hasControl(control)).toBe(true);
+    });
+
+    it(`hides ${control} when only entries it does not silence are listed`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, otherOnly));
+      const { dialog, screen } = mountDialog(fake);
+
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      expect(screen.hasControl(control)).toBe(false);
+    });
+  }
+});
+
+describe('a dismissal press removes what it silences and keeps the other kind (AC13, AC14)', () => {
+  const MIXED: SetupConditionEntry[] = [ENTRY.notIgnored, ENTRY.absent, ENTRY.examplesStale];
+  const CASES: Array<{ control: string; dismissal: SetupDismissal; remaining: SetupConditionEntry[]; controls: string[] }> = [
+    {
+      control: FOR_REPO,
+      dismissal: { kind: 'repo', repoKey: REPO.alpha },
+      remaining: [ENTRY.examplesStale],
+      controls: [INSTALL, UNTIL_UPDATE, 'Close'],
+    },
+    {
+      control: UNTIL_UPDATE,
+      dismissal: { kind: 'examples', appVersion: APP_VERSION },
+      remaining: [ENTRY.notIgnored, ENTRY.absent],
+      controls: [FOR_REPO, 'Close'],
+    },
+  ];
+
+  for (const { control, dismissal, remaining, controls } of CASES) {
+    it(`${control} records its dismissal for the popup's ${dismissal.kind === 'repo' ? 'repository' : 'app version'}, and leaves the other kind listed with its controls and focus on one of them`, async () => {
+      const expected = await messagesOf(remaining);
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, MIXED));
+      const { dialog, screen } = mountDialog(fake);
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      screen.control(control).focus();
+      screen.control(control).click();
+
+      await vi.waitFor(() =>
+        expect({
+          recorded: fake.dismissals(),
+          entries: sorted(screen.entries()),
+          controls: sorted(screen.controls()),
+          focusOnRemainingControl: controls.includes(focusedControl(screen) ?? ''),
+        }).toEqual({ recorded: [dismissal], entries: sorted(expected), controls: sorted(controls), focusOnRemainingControl: true }),
+      );
+    });
+  }
+});
+
+describe('a dismissal that could not be saved', () => {
+  const FAILURES: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answerDismiss']>[0]; reason: string | null }> = [
+    { how: 'answers ok: false', reply: { ok: false, reason: 'scripted dismissal write failure' }, reason: 'scripted dismissal write failure' },
+    { how: 'is rejected', reply: { reject: 'scripted dismissal invoke rejection' }, reason: null },
+  ];
+
+  for (const { how, reply, reason } of FAILURES) {
+    it(`keeps every entry and the control to retry, and says why in the dialog's alert, when its save ${how}`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
+      fake.answerDismiss(reply);
+      const { dialog, screen } = mountDialog(fake);
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+      const before = screen.entries();
+
+      screen.control(FOR_REPO).click();
+
+      await vi.waitFor(() => {
+        const alert = screen.alert();
+        expect({
+          asked: fake.dismissals().length,
+          entries: screen.entries(),
+          retryable: screen.hasControl(FOR_REPO),
+          alerted: reason === null ? alert !== null : (alert ?? '').includes(reason),
+        }).toEqual({ asked: 1, entries: before, retryable: true, alerted: true });
+      });
+    });
+  }
+});
+
+describe('the last dismissal closes the popup as an accept', () => {
+  it('with focus back where the operator was', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent]));
+    const { dialog, screen } = mountDialog(fake);
+    const opener = focusedOpener();
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(FOR_REPO).click();
+
+    await vi.waitFor(() =>
+      expect({ open: screen.isOpen(), focusOnOpener: document.activeElement === opener }).toEqual({
+        open: false,
+        focusOnOpener: true,
+      }),
+    );
+  });
+
+  it('so a queued check raises its popup (AC11)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.examplesStale]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(UNTIL_UPDATE).click();
+
+    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
   });
 });
