@@ -63,7 +63,9 @@ podman machine start
   every e2e launch's isolated home would trip it. So both launch paths (`tests/e2e/registeredElectron.ts` and
   `tests/e2e/controllerHarness.ts`) start the app with `APP_SETUP_CHECK=off` unless the test's own `env` sets
   `APP_SETUP_CHECK`. A test that exercises the check passes `APP_SETUP_CHECK: 'on'` in its launch `env`, as
-  `tests/e2e/setupCheck.spec.ts` does through `createSetupCheckMachine()`.
+  `tests/e2e/setupCheck.spec.ts` does through `createSetupCheckMachine()`. A case that restarts the app
+  passes the same home folder and config dirs to every launch, so state the first launch wrote is still
+  there after the restart.
 
 ## Coverage caveat
 

@@ -175,6 +175,20 @@ describe('the popup is a modal dialog (AC11)', () => {
     });
   });
 
+  it('dispose() settles the check whose popup was open', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const { dialog, screen } = mountDialog(fake);
+    let settled = false;
+    void dialog.check(REPO.alpha).then(() => (settled = true));
+    await shownFor(screen, REPO.alpha);
+
+    dialog.dispose();
+    await nextTask();
+
+    expect(settled).toBe(true);
+  });
+
   const PLACEMENTS: Array<{ placement: string; mount: () => HTMLElement }> = [
     { placement: 'a host directly under <body>', mount: () => document.body.appendChild(document.createElement('div')) },
     {
@@ -248,6 +262,62 @@ describe('another app dialog is open', () => {
     await vi.waitFor(() =>
       expect({ whileBlocked, afterItClosed: openFor(screen) }).toEqual({ whileBlocked: false, afterItClosed: REPO.alpha }),
     );
+  });
+});
+
+describe('another app dialog replaced by a third one', () => {
+  it('opens no setup dialog until the last of them has closed', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    const { dialog, screen } = mountDialog(fake);
+    fake.otherDialog.open();
+    const answered = fake.answered(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    await answered;
+
+    fake.otherDialog.replace();
+    await nextTask();
+    const whileReplaced = screen.isOpen();
+    fake.otherDialog.close();
+
+    await vi.waitFor(() =>
+      expect({ whileReplaced, afterItClosed: openFor(screen) }).toEqual({ whileReplaced: false, afterItClosed: REPO.alpha }),
+    );
+  });
+});
+
+describe('a dialog disposed while it waits for another app dialog', () => {
+  it('settles its pending check without the other dialog closing', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    const { dialog } = mountDialog(fake);
+    fake.otherDialog.open();
+    const answered = fake.answered(REPO.alpha);
+    let settled = false;
+    void dialog.check(REPO.alpha).then(() => (settled = true));
+    await answered;
+
+    dialog.dispose();
+    await nextTask();
+
+    expect(settled).toBe(true);
+  });
+
+  it('opens nothing once the other dialog closes', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    const { host, dialog } = mountDialog(fake);
+    const seen = recordSetupDialogs(host);
+    fake.otherDialog.open();
+    const answered = fake.answered(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    await answered;
+
+    dialog.dispose();
+    fake.otherDialog.close();
+    await nextTask();
+
+    expect(seen()).toEqual([]);
   });
 });
 

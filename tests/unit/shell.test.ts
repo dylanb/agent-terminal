@@ -703,6 +703,69 @@ describe('shell modal predicate and close signal', () => {
     await vi.waitFor(() => expect(fired).toEqual(['closed']));
   });
 
+  it('onModalClosed fires for a dialog that was open when it subscribed and closed before any later change', async () => {
+    const modal = realModal();
+    let fired = 0;
+    modal.open();
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+
+    modal.close();
+
+    await vi.waitFor(() => expect(fired).toBe(1));
+  });
+
+  it('onModalClosed still fires for a listener that subscribed after every earlier one unsubscribed', async () => {
+    const modal = realModal();
+    shell.onModalClosed(() => {})();
+    let fired = 0;
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+    modal.open();
+    await flush();
+
+    modal.close();
+
+    await vi.waitFor(() => expect(fired).toBe(1));
+  });
+
+  it('onModalClosed fires once per close, and never for a page change while no dialog is open', async () => {
+    const modal = realModal();
+    let fired = 0;
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+    document.body.appendChild(document.createElement('p'));
+    await flush();
+    const beforeAnyDialog = fired;
+    modal.open();
+    await flush();
+    modal.close();
+    await flush();
+    document.body.appendChild(document.createElement('p'));
+    await flush();
+
+    expect({ beforeAnyDialog, afterClose: fired }).toEqual({ beforeAnyDialog: 0, afterClose: 1 });
+  });
+
+  it('a disposed shell calls no onModalClosed listener on a later close', async () => {
+    const modal = realModal();
+    let fired = 0;
+    shell.onModalClosed(() => {
+      fired += 1;
+    });
+    modal.open();
+    await flush();
+
+    shell.dispose();
+    modal.close();
+    await flush();
+
+    expect(fired).toBe(0);
+  });
+
   it('a listener that unsubscribed is not called on a later close, while one still subscribed is', async () => {
     const modal = realModal();
     let removedCalled = false;

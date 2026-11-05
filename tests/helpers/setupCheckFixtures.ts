@@ -89,6 +89,10 @@ export function fakeSetupDeps() {
         blocking = false;
         for (const cb of [...closedListeners]) cb();
       },
+      /** Closes the open dialog with another opening in its place, so a close is signalled while one stays open. */
+      replace(): void {
+        for (const cb of [...closedListeners]) cb();
+      },
     },
   };
 }

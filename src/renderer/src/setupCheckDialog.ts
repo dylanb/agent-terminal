@@ -41,10 +41,35 @@ function entryMessage(entry: SetupConditionEntry): string {
 }
 
 export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialogDeps): SetupCheckDialog {
-  const shell = createModalShell(host, 'setup-check-title');
+  let closed: (() => void) | null = null;
+  const settle = (): void => {
+    const done = closed;
+    closed = null;
+    done?.();
+  };
+  const shell = createModalShell(host, 'setup-check-title', settle, { onFocusLost: () => deps.onFocusLost() });
+  const checked = new Set<string>();
+  let queue: Promise<void> = Promise.resolve();
+  let disposed = false;
+  let stopWaiting: (() => void) | null = null;
 
-  function show(repoKey: string, entries: SetupConditionEntry[]): void {
-    shell.render(({ doc, titleId }) => {
+  async function otherDialogsClosed(): Promise<void> {
+    while (!disposed && deps.blockingDialogOpen()) {
+      await new Promise<void>((resolve) => {
+        const off = deps.onBlockingDialogClosed(() => stop());
+        const stop = (): void => {
+          off();
+          stopWaiting = null;
+          resolve();
+        };
+        stopWaiting = stop;
+      });
+    }
+  }
+
+  function show(repoKey: string, entries: SetupConditionEntry[]): Promise<void> {
+    const shown = new Promise<void>((resolve) => (closed = resolve));
+    shell.render(({ doc, titleId, close: dismiss, presses }) => {
       const card = doc.createElement('div');
       card.className = 'card';
       const title = doc.createElement('h3');
@@ -71,20 +96,36 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
       close.type = 'button';
       close.className = 'pill';
       close.textContent = 'Close';
+      presses.bind(close, dismiss);
       foot.append(close);
       card.append(title, body, foot);
       return { card, initialFocus: null, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
     });
+    return shown;
+  }
+
+  async function evaluate(repoKey: string): Promise<void> {
+    if (disposed || checked.has(repoKey)) return;
+    const reply = await deps.status(repoKey).catch(() => null);
+    if (reply?.ok !== true) return;
+    checked.add(repoKey);
+    if (reply.entries.length === 0) return;
+    await otherDialogsClosed();
+    if (disposed) return;
+    await show(reply.repoKey, reply.entries);
   }
 
   return {
-    async check(repoKey) {
-      const reply = await deps.status(repoKey).catch(() => null);
-      if (reply?.ok !== true || reply.entries.length === 0) return;
-      show(reply.repoKey, reply.entries);
+    check(repoKey) {
+      const run = queue.then(() => evaluate(repoKey));
+      queue = run.catch(() => {});
+      return run;
     },
     dispose() {
+      disposed = true;
+      stopWaiting?.();
       shell.dispose();
+      settle();
     },
   };
 }

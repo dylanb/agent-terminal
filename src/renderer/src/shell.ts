@@ -70,6 +70,30 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
    *  hide chrome out from under an open dialog and wedge focus behind the scrim (WCAG 2.4.3, 2.1.1). */
   const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
 
+  // A modal-shell dialog closes by removing its nodes, never by clearing `aria-modal`, so the watcher reads
+  // the predicate after every subtree change rather than watching the attribute.
+  const modalClosedListeners = new Set<() => void>();
+  let modalWatcher: MutationObserver | null = null;
+  let modalWasOpen = false;
+  function watchModals(): void {
+    // A subscriber that saw a dialog open must hear it close, even when it closes before the watcher's next run.
+    modalWasOpen ||= modalIsOpen();
+    const Observer = doc.defaultView?.MutationObserver;
+    if (modalWatcher || !Observer) return;
+    modalWatcher = new Observer(() => {
+      const open = modalIsOpen();
+      const closed = modalWasOpen && !open;
+      modalWasOpen = open;
+      if (closed) for (const cb of [...modalClosedListeners]) cb();
+    });
+    modalWatcher.observe(doc.documentElement, { childList: true, subtree: true });
+  }
+  function unwatchModals(): void {
+    modalWatcher?.disconnect();
+    modalWatcher = null;
+    modalWasOpen = false;
+  }
+
   function setView(v: ViewId): void {
     if (modalIsOpen()) return;
     if (fullscreen && v !== '2') setViewerFullscreen(false); // leaving the viewer restores hidden chrome (§20.2)
@@ -280,9 +304,18 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     getTheme: () => theme,
     setViewerFullscreen,
     isViewerFullscreen: () => fullscreen,
-    modalIsOpen: () => false,
-    onModalClosed: () => () => {},
+    modalIsOpen,
+    onModalClosed(cb) {
+      modalClosedListeners.add(cb);
+      watchModals();
+      return () => {
+        modalClosedListeners.delete(cb);
+        if (modalClosedListeners.size === 0) unwatchModals();
+      };
+    },
     dispose() {
+      unwatchModals();
+      modalClosedListeners.clear();
       unbindNav();
       doc.removeEventListener('keydown', onKeyDown, true);
       win?.removeEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
