@@ -6,7 +6,7 @@ import { startControllerTransport } from '../../src/main/controllerTransport';
 import { registerControllerTerminal } from '../../src/main/controllerClient';
 import { createLoopNotifier } from '../../src/main/loopNotifier';
 import type { FlowStateView } from '../../src/shared/ipc';
-import { notificationEntries } from '../helpers/controllerHistory';
+import { notificationEntries, timelineOf } from '../helpers/controllerHistory';
 import { workStatus } from '../helpers/controllerStatusFixture';
 
 it('real source/client recovery keeps a continuing cleared per-step stop empty and permits a new identically worded stop', async () => {
@@ -42,9 +42,14 @@ it('real source/client recovery keeps a continuing cleared per-step stop empty a
     expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     source.observe('/work', view(true, 'error')); await flush();
     expect.soft(notificationEntries(registry.terminals()[0])).toEqual([]);
-    await disconnect(); await connect();
+    await disconnect();
+    const beforeReconnect = timelineOf(registry.terminals()[0]);
+    await connect();
     expect.soft(notificationEntries(registry.terminals()[0])).toEqual([]);
     expect.soft(registry.terminals()[0].work?.attention?.reasons).toEqual(['Current gate']);
+    const afterReconnect = timelineOf(registry.terminals()[0]);
+    expect.soft({ added: afterReconnect.slice(0, afterReconnect.length - beforeReconnect.length).map(entry => entry.kind), kept: afterReconnect.slice(afterReconnect.length - beforeReconnect.length) })
+      .toEqual({ added: ['status', 'status'], kept: beforeReconnect });
     expect(registry.clearHistory(registry.terminals()[0].clearHistoryTarget!)).toBe('cleared');
     source.observe('/work', view(false)); source.observe('/work', view(true)); await flush();
     expect.soft(notificationEntries(registry.terminals()[0])).toMatchObject([{ message: 'complete · iter 1', count: 1 }]);
