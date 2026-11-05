@@ -311,7 +311,7 @@ jobs:
           )
           if [ "$BRANCH" = true ]; then
             notes="**Test build of the branch \`$REF_NAME\` at \`$SHA\`. Not a release.**"$'\n\n'"$notes"
-            args=(--prerelease --verify-tag --title "$TAG" --notes "$notes")
+            args=(--prerelease --latest=false --verify-tag --title "$TAG" --notes "$notes")
           else
             args=(--draft --verify-tag --title "$TAG" --generate-notes --notes "$notes")
             [ "$PRERELEASE" = true ] && args+=(--prerelease)
