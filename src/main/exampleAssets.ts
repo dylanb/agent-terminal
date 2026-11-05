@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { BundleLocation } from './bundleLocation';
 import { FLOWS_CATALOG_SUBDIR } from './flowHome';
 import { LOOPS_V2_SUBDIR } from './userConfig';
+import { layoutRoot } from './layoutRoot';
 
 export const EXAMPLE_SUBDIR = 'example';
 
@@ -16,6 +17,10 @@ function bundleRoot(loc: BundleLocation): string {
  *  (CLAUDE.md writer↔reader rule). */
 export function resolveExampleFlowsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), EXAMPLE_SUBDIR, FLOWS_CATALOG_SUBDIR);
+}
+
+export function exampleFlowsBundleRoot(dir: string): string | null {
+  return layoutRoot((appPath) => resolveExampleFlowsDir({ packaged: false, appPath }), dir);
 }
 
 /** §18.1. The global-fallback `flow` destination seeds from this same path as the catalog's `feature-dev-v3`

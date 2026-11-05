@@ -1,6 +1,7 @@
 import { controllerOf, electron } from './registeredElectron';
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { stopApp } from './stopApp';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -70,8 +71,8 @@ let page: Page;
 const cleanup: string[] = [];
 const gitFixtures: GitRepoFixture[] = [];
 
-test.afterEach(async () => {
-  await app?.close();
+test.afterEach(async ({}, testInfo) => {
+  await stopApp(app, testInfo);
   app = undefined;
   for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
   for (const fixture of gitFixtures.splice(0)) fixture.cleanup();

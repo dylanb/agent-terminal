@@ -21,6 +21,7 @@ interface InstallTarget {
   reconcileProfiles?: string[];
   currentPath: string;
   invocation: LaunchInvocation;
+  checkerScript: string;
 }
 
 interface ShellProfileSpec {
@@ -50,6 +51,8 @@ export interface RuntimeInfo {
   shell: string;
   currentPath: string;
   invocation: LaunchInvocation;
+  /** The checker runtime script of this build, which the installed `--validate-flow` runs. */
+  checkerScript: string;
 }
 
 function resolveProfiles(home: string, shell: string, existing: string[]): string[] {
@@ -68,6 +71,7 @@ function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): Inst
     reconcileProfiles: existingProfiles,
     currentPath: info.currentPath,
     invocation: info.invocation,
+    checkerScript: info.checkerScript,
   };
 }
 
@@ -184,6 +188,7 @@ export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
       reconcileProfiles: existingProfiles,
       currentPath: runtime.currentPath,
       invocation: runtime.invocation,
+      checkerScript: runtime.checkerScript,
     });
     if (result.ok) return result;
   }
@@ -201,7 +206,7 @@ function performInstall(target: InstallTarget): CliInstallResult {
       fs.chmodSync(path.dirname(target.binDir), 0o700);
       fs.chmodSync(target.binDir, 0o700);
     }
-    fs.writeFileSync(cmd, generateShim(target.invocation));
+    fs.writeFileSync(cmd, generateShim(target.invocation, target.checkerScript));
     fs.chmodSync(cmd, 0o755);
   } catch (e) {
     return { ok: false, error: `Could not write the launcher to ${target.binDir}: ${errMsg(e)}` };

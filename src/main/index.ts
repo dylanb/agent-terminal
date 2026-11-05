@@ -2,7 +2,6 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron';
 import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -138,8 +137,9 @@ import { createTrustedPickups, runPickupRel } from './trustedPickups';
 import { inProgressRunIdentity } from './gateRunState';
 import { awaitingPickupConfirm, createRunPickupConfirmations, reachedPickupStep, PICKUP_CONFIRM_FIRST, RESTART_KEEPS_PICKUP, type HeldPickupRun } from './runPickupConfirm';
 import { createRealPullRequestLookup } from './pullRequestLookup';
-import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
-import type { LoopDefV2Context, PickupContractV2 } from './loopDefV2';
+import { APP_LOOP_DIR_SEGMENTS, readLoopArtifact } from './appLoopPaths';
+import { MAX_LOOP_RECIPE_BYTES, type LoopDefV2Context, type PickupContractV2 } from './loopDefV2';
+import { readBoundedNoFollow } from './boundedRead';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { createRealAppGateCommit } from './appGateCommit';
 import { createRealAppGatePush } from './appGatePush';
@@ -209,6 +209,7 @@ async function createWindow(): Promise<void> {
     if (event.sender !== win.webContents || message?.sessionId !== SESSION_ID) throw new Error('Invalid startup request');
     return startupReady;
   });
+  const checkerScript = resolveArtifactCheckScript(__dirname);
   ipcMain.handle(CH.cliInstall, (_e, m): CliInstallResult =>
     handleCliInstall(m, () => ({
       home: os.homedir(),
@@ -220,6 +221,7 @@ async function createWindow(): Promise<void> {
         process.argv[1],
         process.cwd(),
       ),
+      checkerScript,
     })));
   let refreshControllerStatus = (): void => {};
   const loopMessages = createLoopMessages(() => refreshControllerStatus());
@@ -484,7 +486,7 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: true }),
     // §27.12 — the agent runs the bundled checker with this same app binary in plain-Node mode.
     artifactCheckCommand: (check) =>
-      artifactCheckCommand({ execPath: process.execPath, script: resolveArtifactCheckScript(__dirname) }, check),
+      artifactCheckCommand({ execPath: process.execPath, script: checkerScript }, check),
     // §28.5.3 — the machine completion predicates the RED/GREEN gate consults.
     completionPredicates: createLoopCompletionPredicates(),
     // §28.5.3/§28.8.3 — the GREEN engine ports: record the changed-test flag (the disjoint changed-tests.yaml
@@ -549,19 +551,10 @@ async function createWindow(): Promise<void> {
     noteSettle: () => shadow.noteSettle(),
     resolveDef: (repoDir, name) => observedResolveDef(repoDir, name),
     readRecipe: (absPath) => {
-      try {
-        return readFileSync(absPath, 'utf8');
-      } catch {
-        return null;
-      }
+      const read = readBoundedNoFollow(absPath, MAX_LOOP_RECIPE_BYTES);
+      return read.ok ? read.text : null;
     },
-    readArtifact: (absPath) => {
-      try {
-        return readFileSync(absPath, 'utf8');
-      } catch {
-        return null;
-      }
-    },
+    readArtifact: readLoopArtifact,
     inputState: probeChainedInput,
     assembleReport: assembleFlowReport,
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
@@ -1154,12 +1147,7 @@ async function createWindow(): Promise<void> {
     sourceSliceCount: (repoDir, def) => {
       const planBinding = def.outputs.find((o) => o.id === 'plan');
       if (planBinding === undefined) return;
-      let planText = '';
-      try {
-        planText = readFileSync(planBinding.path, 'utf8');
-      } catch {
-        planText = '';
-      }
+      const planText = readLoopArtifact(planBinding.path) ?? '';
       const count = sliceCountToSource(planText, flow.currentSlice(repoDir));
       if (count !== null) flow.resolveInputs(repoDir, { slices: String(count) });
     },

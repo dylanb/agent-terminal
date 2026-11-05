@@ -7,6 +7,6 @@
 
 ### 21.2 Todo templates (D12/D38)
 
-- Templates are plain **markdown lists** (global ones in `~/.config/agent-terminal/todo-templates/`, or files a step references, §18.6): each top-level list item becomes one active todo, and headings/prose are ignored so a template can carry a title and instructions. They reuse the flat todo model (§16.3) — no new on-disk schema.
+- Templates are plain **markdown lists**, kept in the flow's own `todo-templates/` folder, where a step's `todo_template:` reference resolves (§18.6): each top-level list item becomes one active todo, and headings/prose are ignored so a template can carry a title and instructions. They reuse the flat todo model (§16.3) — no new on-disk schema.
 
 ---

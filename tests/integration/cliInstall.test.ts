@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { installCliShim, handleCliInstall, type RuntimeInfo } from '../../src/ma
 import { resolveShellPath } from '../../src/main/pty';
 import { CLI_COMMAND_NAME, type LaunchInvocation } from '../../src/main/cliShim';
 import { SESSION_ID, type CliInstallResult } from '../../src/shared/ipc';
+import { writeForegroundRecorder } from '../helpers/shimRecorder';
 
 // Installer behavior (§23.4 / #25): drive the real installer through its only public seam — RuntimeInfo,
 // the running build's launch facts — with real fs. Assert the OBSERVABLE outcomes the ACs name:
@@ -25,6 +26,7 @@ const runtime = (over: Partial<RuntimeInfo> = {}): RuntimeInfo => ({
   shell: '/bin/sh',
   currentPath: '/usr/bin',
   invocation: inv('/app/x'),
+  checkerScript: '/app/out/main/artifactCheck.js',
   ...over,
 });
 
@@ -453,5 +455,18 @@ describe('installCliShim error path (no partial-success state)', () => {
     mkdirSync(join(home, '.profile')); // a directory where a profile file is expected → writes fail
     const res = installCliShim(runtime({ home, shell: '/bin/sh' }));
     expect(asErr(res).error).toBeTruthy();
+  });
+});
+
+describe('installCliShim hands the installed command the build\'s checker runtime (§23.5)', () => {
+  it('runs the given checker script for --validate-flow', () => {
+    const recorder = writeForegroundRecorder(join(root, 'app'), { stdout: '', stderr: '', exitCode: 0 });
+    const checkerScript = join(root, 'build one', 'artifactCheck.js');
+    const result = installCliShim(runtime({ invocation: inv(recorder.binary), checkerScript }));
+    if (!result.ok) throw new Error(`fixture: the install failed: ${result.error}`);
+
+    spawnSync(result.path, ['--validate-flow', 'flows'], { cwd: root, encoding: 'utf8' });
+
+    expect(recorder.read()?.argv).toEqual([checkerScript, '--validate-flow', 'flows']);
   });
 });

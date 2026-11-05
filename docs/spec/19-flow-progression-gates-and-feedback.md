@@ -3,6 +3,17 @@
 ### 19.1 Flow-state & loop progress (D1/D33)
 
 - `flow-state.yaml` records the current step, per-step status, and gate state. The bound loop engine supplies **loop progress** (iteration, latest verdict; §27.2) for the status strip (§22.3).
+- **Reading repository files.** Every file the app reads from a working tree is read through one descriptor opened without blocking: the app's own `.agent-terminal/` state, loop artifacts, and the flow and loop files a repository supplies. A named pipe, a device or any other non-regular file is refused, never read, as is a file that is not valid UTF-8 or that is larger than its limit:
+  - 4 KiB: the turn-done file;
+  - 64 KiB: the repository's `.agent-loop.yaml`;
+  - 256 KiB: `flow.yaml`, a loop definition, a recipe, a brief, a reviewer charter, a todo template;
+  - 512 KiB: a file the artifact viewer opens (§20);
+  - 1 MiB: a loop-area state file, `todos.json`, a report section and the assembled report;
+  - 2 MiB: the epic plan read at its approve gate;
+  - 8 MiB: the RED check report;
+  - 16 MiB: any other loop artifact, a phase's captured run included, and the monitor's events file.
+
+  A refused file takes the path an unreadable one takes: a reason where the reader reports one, otherwise nothing is used (a missing done signal, an empty todo list, a template named after its file).
 - **VCS:** the app **does not** modify `.gitignore` — for `flow-state.yaml`, the audit pointer, or any app-owned `.agent-terminal/` file (matching the todoStore, §16.3). Whether to ignore or commit `.agent-terminal/` (so progression travels with a branch) is the user's choice; the production system never edits the user's VCS config.
 
 ### 19.2 Advance is user-driven, with a not-ready warning (D31)

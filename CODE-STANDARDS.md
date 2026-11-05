@@ -158,6 +158,26 @@ lexical escape (CWE-22), a symlink the caller would follow out (CWE-59), and a l
 the read (CWE-367). It lives in `src/main/`, not `src/shared/`, because it needs `node:fs` and `src/shared/`
 must stay renderer-importable.
 
+## Reading repo-derived files — `src/main/boundedRead.ts`, never a plain read
+
+A file whose path is derived from repo content is read with `readBoundedNoFollow(file, MAX_…_BYTES)`, never
+with `readFileSync` or a `stat` check followed by a read. Confinement (above) decides *which* file is read;
+this decides *how*, and both apply. A plain read of repository content fails three ways:
+- **A named pipe blocks the main process** until something writes to it (CWE-400). The app's own state and
+  every terminal hang with it.
+- **A check, then a read, is a race** (CWE-367). A file that `stat` saw as regular can be swapped for a pipe
+  before the read opens it. `readBoundedNoFollow` opens one descriptor without blocking and checks *that
+  descriptor*, so there is nothing to swap.
+- **An unbounded read takes whatever size it is given** (CWE-400). Each caller names its own limit as an
+  exported `MAX_…_BYTES` constant sized to what the file legitimately holds, and the spec's list of limits
+  (§19.1, "Reading repository files") gains its line. A file past it is refused, never read in part.
+
+Map the result's `cause` with an exhaustive `switch` (`satisfies never`). `absent` is the only cause that may
+mean "there is none"; `over-cap` and `unreadable` are refusals the user is told about, or, for a best-effort
+reader, a file it skips. The read never follows a link at the leaf. Where a link at a fixed name is a
+legitimate setup (a repository's `.agent-loop.yaml` kept elsewhere), read it with `readBoundedResolved`,
+which resolves the real path first and reads that, so only the leaf the link names is opened.
+
 ## Errno narrowing and error messages — `src/main/errno.ts`, never inline
 
 A caught value raises two questions — "which errno?" and "what do I tell the user?" — both answered by one
@@ -465,6 +485,13 @@ Close only the exact resources owned by the run, never all Terminal/Electron win
 processes or the operator's sessions. Verify that no owned windows or processes remain before reporting
 completion. If a launch mechanism cannot provide ownership and cleanup, use one that can; do not rely
 on the operator to clean up or change their global Terminal preferences to hide the problem.
+
+**An e2e teardown force-stops a failed test's app.** A test that fails may leave its app wedged, with a
+spinning main process or a crashed renderer. A graceful `close()` on such an app never returns, so the worker
+dies at its teardown timeout: an error that belongs to no test, which `retries` cannot absorb. An `afterEach`
+that owns an Electron app stops it through `tests/e2e/stopApp.ts`. That helper closes a passing test's app
+gracefully, kills a failed test's app and waits until the process has exited, and leaves an app that already
+closed alone.
 
 ## One theme per PR
 

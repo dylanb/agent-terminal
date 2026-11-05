@@ -2,10 +2,11 @@
 // with the PR its pickup opened and never with one an earlier run left.
 
 import path from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
-import { APP_LOOP_STATE_SCHEMA, isNonBlank, isPositiveInt, loopAreaFile, type AppLoopBootstrap } from './appLoopState';
+import { APP_LOOP_STATE_SCHEMA, isNonBlank, isPositiveInt, loopAreaFile, MAX_LOOP_AREA_FILE_BYTES, type AppLoopBootstrap } from './appLoopState';
+import { readBoundedNoFollow } from './boundedRead';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { sameRun, type RunIdentity } from './gateRunState';
 import { isRecord } from './yamlRecord';
@@ -113,9 +114,11 @@ function writeRunPickup(repoDir: string, run: RunIdentity, pickup: AppLoopBootst
 function readRunPickup(repoDir: string): { run: RunIdentity; pickup: AppLoopBootstrap } | null {
   const file = loopAreaFile(repoDir, RUN_PICKUP_FILE);
   if (file === null) return null;
+  const read = readBoundedNoFollow(file, MAX_LOOP_AREA_FILE_BYTES);
+  if (!read.ok) return null;
   let doc: unknown;
   try {
-    doc = yaml.load(readFileSync(file, 'utf8'));
+    doc = yaml.load(read.text);
   } catch {
     return null;
   }

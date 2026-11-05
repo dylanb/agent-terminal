@@ -3,7 +3,7 @@ import { catalogTierJail, resolveCatalogEntry, type CatalogRoots } from './flowC
 import { readDirEntries, type DirEntry } from './dirEntries';
 import { confinedRealPathResult, resolveJail } from './confinedPath';
 import { readActiveFlow } from './activeFlowPointer';
-import { catalogRefusalReason } from './resolveRunDefinition';
+import { catalogRefusalReason, UNSAFE_NAME_REASON } from './resolveRunDefinition';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { errMsg } from './errno';
 import { displaySafeEcho, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -79,8 +79,6 @@ function scanTier(roots: CatalogRoots, tier: CatalogOrigin): TierScan {
   return scan;
 }
 
-const UNSAFE_NAME_REASON = 'is not a valid flow id';
-
 // Quoted so no label can equal a safe id, which the picker keys its rows by (flowPicker.ts `Row.key`).
 const unsafeNameLabel = (name: string): string => `"${displaySafeEcho(name, MAX_CATALOG_ID_LENGTH)}"`;
 
@@ -97,7 +95,7 @@ export function listCatalog(
     const verdict = resolveCatalogEntry(roots, id);
     if (verdict.ok) return { available: true, id, origin: verdict.tier };
     const origin = members.find((m) => m.id === id)!.tier;
-    const reason = catalogRefusalReason(verdict.cause === 'unknown' ? 'unresolvable' : verdict.cause);
+    const reason = catalogRefusalReason(verdict.cause);
     return { available: false, label: id, origin, reason };
   });
   const unsafeNames = new Set<string>();

@@ -5,11 +5,11 @@
 // validated to the MonitorEvent shape before it can seed the store and replay into the monitor
 // pane; a missing/corrupt/foreign file degrades to an empty list (never a throw).
 
-import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BufferType, Cell, MonitorEvent, MonitorEventSource, MonitorEventType, SelectionRange } from '../shared/ipc';
 import { isInjectableEventType } from '../shared/injectableEvents';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
+import { readBoundedNoFollow } from './boundedRead';
 import type { MonitorEventPersistence } from './eventStore';
 import { isRecord } from './yamlRecord';
 
@@ -79,12 +79,9 @@ export function createMonitorEventsFile(
     load() {
       try {
         if (!isRealContainer(dir)) return [];
-        // lstat (not stat) so a symlink is rejected by isFile() instead of being followed: a symlink
-        // to a special file (/dev/zero, a FIFO) reports size 0, slips a stat-based size cap, then
-        // hangs/OOMs the synchronous read. Only a regular file under the cap is read (CWE-59/CWE-400).
-        const st = lstatSync(file);
-        if (!st.isFile() || st.size > MAX_EVENTS_FILE_BYTES) return [];
-        const raw = JSON.parse(readFileSync(file, 'utf8'));
+        const read = readBoundedNoFollow(file, MAX_EVENTS_FILE_BYTES);
+        if (!read.ok) return [];
+        const raw = JSON.parse(read.text);
         if (!Array.isArray(raw)) return [];
         return raw.filter(isMonitorEvent).filter((e) => !isInjectableEventType(e.type));
       } catch {

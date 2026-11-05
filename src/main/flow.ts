@@ -3,7 +3,7 @@
 // definition is read from <worktree>/.agent-terminal/flow.yaml (§18.1); a missing/malformed file
 // is not a crash but an inert `error` state the strip renders (§22.3).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
@@ -17,8 +17,9 @@ import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
 import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowHomeDir } from './flowHome';
-import { errMsg, isErrno } from './errno';
-import { readBoundedNoFollow } from './boundedRead';
+import { errMsg } from './errno';
+import { layoutRoot } from './layoutRoot';
+import { readBoundedNoFollow, readBoundedResolved, type BoundedRead } from './boundedRead';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
 import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../shared/runHold';
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
@@ -70,6 +71,10 @@ export interface FlowStepDef {
   repeat?: { backTo: string; countInput: string };
 }
 
+export function stepTemplateRef(step: FlowStepDef): string | null {
+  return step.todoTemplate ? step.todoTemplate : null;
+}
+
 export interface FlowDefinition {
   name: string;
   steps: FlowStepDef[];
@@ -110,6 +115,10 @@ export function flowCatalogDir(root: string): string {
   return path.join(flowHomeDir(root), FLOWS_CATALOG_SUBDIR);
 }
 
+export function flowCatalogRoot(dir: string): string | null {
+  return layoutRoot(flowCatalogDir, dir);
+}
+
 /** A catalog entry's definition file `<root>/.agent-terminal/flows/<id>/flow.yaml` — the one location the
  *  A1 install seeds and A2's §18.7.6 resolver probes, so the write target and the read source derive from the
  *  same resolver and cannot drift (CLAUDE.md writer↔reader rule). `id` is a raw path segment; the caller gates
@@ -140,17 +149,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
  *  (above) and A2's catalog-entry resolver (§18.7.6) both call, so the §18.1 shape has one validator. `relLabel`
  *  keeps the home loader's `.agent-terminal/flow.yaml`-relative read-error wording. */
 export function loadFlowDefinitionFromFile(file: string, relLabel: string = file): FlowLoad {
-  let raw: string;
-  try {
-    raw = readFileSync(file, 'utf8');
-  } catch (e) {
-    // AC 4 reason-accuracy: ENOENT is genuinely "no flow.yaml"; any other errno (EISDIR from a directory
-    // planted at the path, EACCES on a shared machine, ENOTDIR/ELOOP from a bad symlink) names what actually
-    // failed rather than reporting the flow absent while it sits on disk. Both questions answered through errno.ts.
-    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${relLabel}` };
-    return { ok: false, error: `cannot read ${relLabel}: ${errMsg(e)}` };
-  }
-  return parseFlowDefinition(raw, file);
+  return flowLoadOf(readBoundedResolved(file, MAX_FLOW_DEFINITION_BYTES), file, relLabel);
 }
 
 export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
@@ -158,17 +157,20 @@ export const MAX_FLOW_DEFINITION_BYTES = 256 * 1024;
 /** §18.7.6 (CWE-59/400) — a catalog entry's flow.yaml is repo-controlled ground: read it bounded and without
  *  following a symlink, so a planted FIFO, link or oversized file refuses rather than blocks or redirects. */
 export function loadUntrustedFlowDefinition(file: string): FlowLoad {
-  const read = readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES);
+  return flowLoadOf(readBoundedNoFollow(file, MAX_FLOW_DEFINITION_BYTES), file, file);
+}
+
+function flowLoadOf(read: BoundedRead, file: string, label: string): FlowLoad {
   if (read.ok) return parseFlowDefinition(read.text, file);
   switch (read.cause) {
     case 'absent':
-      return { ok: false, error: `no flow.yaml found at ${file}` };
+      return { ok: false, error: `no flow.yaml found at ${label}` };
     case 'over-cap':
       return { ok: false, error: `flow.yaml is larger than ${MAX_FLOW_DEFINITION_BYTES} bytes` };
     case 'unreadable':
       return {
         ok: false,
-        error: `cannot read ${file}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
+        error: `cannot read ${label}: ${read.error === undefined ? 'not a regular file' : errMsg(read.error)}`,
       };
     default:
       return read.cause satisfies never;
@@ -473,13 +475,14 @@ export function createFlowMachine(
 
   const view = (): MachineView => {
     const step = current();
+    const templateRef = stepTemplateRef(step);
     const base: MachineView = {
       stepName: step.id,
       steps: names,
       position: index + 1,
       total: steps.length,
       status,
-      ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+      ...(templateRef !== null ? { templateRef } : {}),
       ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).

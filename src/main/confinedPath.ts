@@ -47,6 +47,10 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
   }
 }
 
+export function resolveJailBelow(anchorDir: string, dir: string): string | null {
+  return resolveJail(anchorDir, ...path.relative(anchorDir, dir).split(path.sep));
+}
+
 /** A jail in the USER'S OWN SPACE that the app derives itself (`$HOME`, `CLAUDE_CONFIG_DIR`, …) and which
  *  may not exist yet: resolved through symlinks INCLUDING its own final segment, with any not-yet-created
  *  tail appended. Null when the path cannot be reduced to a symlink-free real path. Confinement still holds
