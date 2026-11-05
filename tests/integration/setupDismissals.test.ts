@@ -13,6 +13,7 @@ import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { createGitUserHome, type GitUserHome } from '../helpers/gitUserHome';
 import { writeRepoConditions, type RepoConditionsFixture } from '../helpers/setupRepoConditions';
 import { snapshotTree } from '../helpers/treeSnapshot';
+import { symlinkSync } from 'node:fs';
 
 // The setup-check dismissals the operator records, kept in one app-owned file under the app-state home, read
 // back by every later store over that home, as a restarted app reads them.
@@ -217,5 +218,47 @@ describe("recording a dismissal leaves the repository's working tree byte-for-by
         }).toEqual({ reply: { ok: true }, recorded: byKey([dismissal]), treeUnchanged: before, gitignorePresent: ignored });
       });
     }
+  }
+});
+
+describe("an app-state folder the operator made a symbolic link to a real folder", () => {
+  it('records a dismissal through the link, and a later store over the same home reads it back', () => {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'setup-dismissals-linked-')));
+    scratch.push(elsewhere);
+    const stateDir = dirname(setupDismissalsFile(appHome));
+    rmSync(stateDir, { recursive: true, force: true });
+    symlinkSync(elsewhere, stateDir);
+    const dismissal: SetupDismissal = { kind: 'repo', repoKey: '/work/linked-home' };
+
+    const reply = createSetupDismissals(appHome).record(dismissal);
+
+    expect({ reply, readBack: byKey(createSetupDismissals(appHome).recorded()) }).toEqual({
+      reply: { ok: true },
+      readBack: byKey([dismissal]),
+    });
+  });
+});
+
+describe('a dismissal file of the right shape holding a value of the wrong type reads as no dismissals', () => {
+  const WRONG_FIELD: Array<{ what: string; contents: string }> = [
+    { what: 'a repository list holding a value that is not a repository key', contents: '{"repos": ["/work/a", 42], "examplesVersion": null}\n' },
+    { what: 'an examples version that is not a string', contents: '{"repos": [], "examplesVersion": 3}\n' },
+  ];
+
+  for (const { what, contents } of WRONG_FIELD) {
+    it(`holding ${what}: the next dismissal is the only one recorded`, () => {
+      const file = setupDismissalsFile(appHome);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, contents);
+      const before = byKey(createSetupDismissals(appHome).recorded());
+
+      const reply = createSetupDismissals(appHome).record({ kind: 'repo', repoKey: '/work/clean' });
+
+      expect({ before, reply, after: byKey(createSetupDismissals(appHome).recorded()) }).toEqual({
+        before: [],
+        reply: { ok: true },
+        after: ['repo:/work/clean'],
+      });
+    });
   }
 });

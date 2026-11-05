@@ -42,6 +42,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowSetActiveFlow,
   isValidFlowClearActiveFlow,
+  isValidSetupDismiss,
   isValidSetupStatus,
   isValidFlowListCatalog,
   isValidFlowRebindHeldRun,
@@ -169,7 +170,7 @@ import {
   composeRunInProgressAt,
   composeStartTransition,
 } from './autoGateComposition';
-import type { CliInstallResult, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
+import type { CliInstallResult, SetupDismissReply, SetupStatusReply, StartupIncompatibleMsg } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
@@ -348,12 +349,12 @@ async function createWindow(): Promise<void> {
     isGitRepository,
     agentTerminalIgnored,
     loadCapabilities: loadLoopCapabilities,
-    appVersion: '',
+    appVersion: app.getVersion(),
     dismissals: createSetupDismissals(flowGlobalDir),
   });
   const setupStatus: (repoKey: string) => Promise<SetupStatusReply> = setupCheckEnabled(process.env)
     ? (repoKey) => setupCheck.status(repoKey)
-    : async (repoKey) => ({ ok: true, repoKey, isRepository: isGitRepository(repoKey), appVersion: '', entries: [] });
+    : async (repoKey) => ({ ok: true, repoKey, isRepository: isGitRepository(repoKey), appVersion: app.getVersion(), entries: [] });
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -1605,6 +1606,10 @@ async function createWindow(): Promise<void> {
         isValidSetupStatus(m) && knownRepoKeys.has(m.repoKey)
           ? setupStatus(m.repoKey)
           : Promise.resolve({ ok: false, reason: 'invalid setup:status request' }),
+      [CH.setupDismiss]: (_e, m): SetupDismissReply =>
+        isValidSetupDismiss(m) && (m.dismissal.kind !== 'repo' || knownRepoKeys.has(m.dismissal.repoKey))
+          ? setupCheck.dismiss(m.dismissal)
+          : { ok: false, reason: 'invalid setup:dismiss request' },
     },
   );
 

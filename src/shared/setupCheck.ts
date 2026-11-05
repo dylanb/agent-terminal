@@ -8,6 +8,6 @@ export type SetupCondition = SetupConditionEntry['condition'];
 export type SetupDismissal = { kind: 'repo'; repoKey: string } | { kind: 'examples'; appVersion: string };
 
 /** The conditions a recorded dismissal stops the setup check listing. */
-export function silencedBy(_dismissal: SetupDismissal): SetupCondition[] {
-  return [];
+export function silencedBy(dismissal: SetupDismissal): SetupCondition[] {
+  return dismissal.kind === 'repo' ? ['ignore', 'capabilities'] : ['examples'];
 }

@@ -492,3 +492,18 @@ test("a popup listing only the examples entry offers no Don't show again for thi
 
   await expect(popup.getByRole('button', { name: FOR_REPO })).toHaveCount(0);
 });
+
+test("a repository dismissal for a repository the app has not entered is refused, and that repository's popup still opens on entry", { tag: '@ownapp' }, async () => {
+  const start = repoIn({ ignored: true, capabilities: 'valid' });
+  const probe = repoIn({ ignored: false, capabilities: 'absent' });
+  await installExamplesThroughApp();
+  const page = await launchIn(start);
+  const seen = await recordDialogs(page);
+
+  const refused = await page.evaluate((repoKey) => window.setup.dismiss({ kind: 'repo', repoKey }), probe);
+  await shellCd(page, probe, 'probe');
+
+  expect.soft(refused).toMatchObject({ ok: false });
+  await expect.poll(namedAmong(seen, [start, probe])).toEqual([probe]);
+  await expect(entriesOf(popupFor(page, probe))).toHaveCount(2);
+});

@@ -1,5 +1,5 @@
 import type { SetupDismissReply, SetupStatusReply } from '../shared/ipc';
-import type { SetupConditionEntry, SetupDismissal } from '../shared/setupCheck';
+import { silencedBy, type SetupCondition, type SetupConditionEntry, type SetupDismissal } from '../shared/setupCheck';
 import type { IgnoreAnswer } from './gitIgnoreCheck';
 import type { ExamplesCurrency } from './installExamples';
 import type { LoopCapabilitiesLoad } from './loopCapabilities';
@@ -36,24 +36,35 @@ function examplesEntry(examplesCurrent: () => ExamplesCurrency): SetupConditionE
   return currency.current ? null : { condition: 'examples', failure: 'stale' };
 }
 
+function silencedConditions(dismissals: SetupDismissal[], repoKey: string, appVersion: string): Set<SetupCondition> {
+  const applies = (d: SetupDismissal): boolean => (d.kind === 'repo' ? d.repoKey === repoKey : d.appVersion === appVersion);
+  return new Set(dismissals.filter(applies).flatMap(silencedBy));
+}
+
 export function createSetupCheck(deps: SetupCheckDeps): SetupCheck {
   return {
     async status(repoKey) {
-      const examples = examplesEntry(() => deps.examplesCurrent());
-      if (!deps.isGitRepository(repoKey)) {
-        return { ok: true, repoKey, isRepository: false, appVersion: deps.appVersion, entries: examples ? [examples] : [] };
-      }
-      const ignore = await deps.agentTerminalIgnored(repoKey).catch((): IgnoreAnswer => 'unknown');
-      const capabilities = deps.loadCapabilities(repoKey);
-      const entries: SetupConditionEntry[] = [];
-      if (examples) entries.push(examples);
-      const ignoreEntry = IGNORE_ENTRY[ignore];
-      if (ignoreEntry) entries.push(ignoreEntry);
-      if (!capabilities.ok) entries.push({ condition: 'capabilities', failure: capabilities.cause });
-      return { ok: true, repoKey, isRepository: true, appVersion: deps.appVersion, entries };
+      const reply = await unfilteredStatus(deps, repoKey);
+      const silenced = silencedConditions(deps.dismissals.recorded(), repoKey, deps.appVersion);
+      return { ...reply, entries: reply.entries.filter((entry) => !silenced.has(entry.condition)) };
     },
-    dismiss: () => ({ ok: true }),
+    dismiss: (dismissal) => deps.dismissals.record(dismissal),
   };
+}
+
+async function unfilteredStatus(deps: SetupCheckDeps, repoKey: string): Promise<Extract<SetupStatusReply, { ok: true }>> {
+  const examples = examplesEntry(() => deps.examplesCurrent());
+  if (!deps.isGitRepository(repoKey)) {
+    return { ok: true, repoKey, isRepository: false, appVersion: deps.appVersion, entries: examples ? [examples] : [] };
+  }
+  const ignore = await deps.agentTerminalIgnored(repoKey).catch((): IgnoreAnswer => 'unknown');
+  const capabilities = deps.loadCapabilities(repoKey);
+  const entries: SetupConditionEntry[] = [];
+  if (examples) entries.push(examples);
+  const ignoreEntry = IGNORE_ENTRY[ignore];
+  if (ignoreEntry) entries.push(ignoreEntry);
+  if (!capabilities.ok) entries.push({ condition: 'capabilities', failure: capabilities.cause });
+  return { ok: true, repoKey, isRepository: true, appVersion: deps.appVersion, entries };
 }
 
 /** The check runs unless `APP_SETUP_CHECK` is exactly `off`, the e2e suite's switch for specs that do not test it. */

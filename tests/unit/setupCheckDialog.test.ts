@@ -738,3 +738,27 @@ describe('the last dismissal closes the popup as an accept', () => {
     await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
   });
 });
+
+describe('a dismissal still being saved when the dialog is disposed', () => {
+  it('draws nothing in the host once its save answers', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.examplesStale]));
+    let answer: (reply: { ok: true }) => void = () => {};
+    const saved = new Promise<{ ok: true }>((resolve) => (answer = resolve));
+    fake.deps.dismiss = () => saved;
+    const { host, dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(FOR_REPO).click();
+    dialog.dispose();
+    answer({ ok: true });
+    await saved;
+    await Promise.resolve();
+
+    expect({ open: screen.isOpen(), focusInHost: host.contains(document.activeElement) }).toEqual({
+      open: false,
+      focusInHost: false,
+    });
+  });
+});

@@ -1,5 +1,5 @@
 import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
-import type { SetupConditionEntry, SetupDismissal } from '../../shared/setupCheck';
+import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
 import { createModalShell } from './modalShell';
 
 export interface SetupCheckDialogDeps {
@@ -79,60 +79,83 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
   }
 
   function show(reply: Extract<SetupStatusReply, { ok: true }>): Promise<void> {
-    const { repoKey, isRepository, entries } = reply;
+    const { repoKey, isRepository, appVersion } = reply;
     const shown = new Promise<void>((resolve) => (closed = resolve));
-    shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
-      const card = doc.createElement('div');
-      card.className = 'card';
-      const title = doc.createElement('h3');
-      title.className = 'serif';
-      title.id = titleId;
-      title.textContent = isRepository ? 'This repository is not set up for agent loops' : 'Agent loops are not fully set up';
-      const body = doc.createElement('div');
-      const intro = doc.createElement('p');
-      intro.className = 'ph';
-      intro.id = `${titleId}-intro`;
-      intro.textContent = isRepository ? `${repoKey} fails these checks:` : 'This machine fails these checks:';
-      const list = doc.createElement('ul');
-      list.className = 'cd-resources';
-      list.id = `${titleId}-entries`;
-      for (const entry of entries) {
-        const item = doc.createElement('li');
-        item.textContent = entryMessage(entry);
-        list.append(item);
-      }
-      body.append(intro, list);
-      const foot = doc.createElement('div');
-      foot.className = 'mfoot';
-      const close = doc.createElement('button');
-      close.type = 'button';
-      close.className = 'pill';
-      close.textContent = 'Close';
-      presses.bind(close, dismiss);
-      if (entries.some((entry) => entry.condition === 'examples')) {
-        const install = doc.createElement('button');
-        install.type = 'button';
-        install.className = 'pill';
-        install.textContent = 'Install/update examples';
-        presses.bind(install, () => {
-          confirm();
-          settle();
-          deps.openInstallExamples();
-        });
-        foot.append(install);
-      }
-      for (const label of ["Don't show again for this repo", "Don't show again until the app updates"]) {
-        const dismissal = doc.createElement('button');
-        dismissal.type = 'button';
-        dismissal.className = 'pill';
-        dismissal.textContent = label;
-        presses.bind(dismissal, () => {});
-        foot.append(dismissal);
-      }
-      foot.append(close);
-      card.append(title, body, foot);
-      return { card, initialFocus: null, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
-    });
+    const render = (entries: SetupConditionEntry[], focusFirstAction: boolean): void =>
+      shell.render(({ doc, titleId, close: dismiss, confirm, presses }) => {
+        const card = doc.createElement('div');
+        card.className = 'card';
+        const title = doc.createElement('h3');
+        title.className = 'serif';
+        title.id = titleId;
+        title.textContent = isRepository ? 'This repository is not set up for agent loops' : 'Agent loops are not fully set up';
+        const body = doc.createElement('div');
+        const intro = doc.createElement('p');
+        intro.className = 'ph';
+        intro.id = `${titleId}-intro`;
+        intro.textContent = isRepository ? `${repoKey} fails these checks:` : 'This machine fails these checks:';
+        const list = doc.createElement('ul');
+        list.className = 'cd-resources';
+        list.id = `${titleId}-entries`;
+        for (const entry of entries) {
+          const item = doc.createElement('li');
+          item.textContent = entryMessage(entry);
+          list.append(item);
+        }
+        const error = doc.createElement('p');
+        error.className = 'ph';
+        error.setAttribute('role', 'alert');
+        body.append(intro, list, error);
+        const foot = doc.createElement('div');
+        foot.className = 'mfoot';
+        const button = (label: string, action: () => unknown): HTMLButtonElement => {
+          const control = doc.createElement('button');
+          control.type = 'button';
+          control.className = 'pill';
+          control.textContent = label;
+          presses.bind(control, action);
+          foot.append(control);
+          return control;
+        };
+        const lists = (dismissal: SetupDismissal): boolean =>
+          entries.some((entry) => silencedBy(dismissal).includes(entry.condition));
+        const dismissWith = (dismissal: SetupDismissal) => (): Promise<void> =>
+          deps.dismiss(dismissal).then(
+            (saved) => {
+              if (disposed) return;
+              if (!saved.ok) {
+                error.textContent = saved.reason;
+                return;
+              }
+              const remaining = entries.filter((entry) => !silencedBy(dismissal).includes(entry.condition));
+              if (remaining.length > 0) return render(remaining, true);
+              confirm();
+              settle();
+            },
+            (e: unknown) => {
+              error.textContent = `The dismissal could not be saved: ${e instanceof Error ? e.message : String(e)}`;
+            },
+          );
+        const actions: HTMLButtonElement[] = [];
+        if (entries.some((entry) => entry.condition === 'examples')) {
+          actions.push(
+            button('Install/update examples', () => {
+              confirm();
+              settle();
+              deps.openInstallExamples();
+            }),
+          );
+        }
+        const forRepo: SetupDismissal = { kind: 'repo', repoKey };
+        if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
+        const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
+        if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
+        button('Close', dismiss);
+        card.append(title, body, foot);
+        const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;
+        return { card, initialFocus, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
+      });
+    render(reply.entries, false);
     return shown;
   }
 
