@@ -4,6 +4,12 @@ import { createModalShell } from './modalShell';
 
 export interface SetupCheckDialogDeps {
   status(repoKey: string): Promise<SetupStatusReply>;
+  /** Lands focus when the dialog closes after the element that opened it has left the page. */
+  onFocusLost(): void;
+  /** Whether another app dialog is open, so this one waits instead of opening over it. */
+  blockingDialogOpen(): boolean;
+  /** Calls `cb` when another app dialog closes; returns its unsubscribe. */
+  onBlockingDialogClosed(cb: () => void): () => void;
 }
 
 export interface SetupCheckDialog {
@@ -59,7 +65,14 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         list.append(item);
       }
       body.append(intro, list);
-      card.append(title, body);
+      const foot = doc.createElement('div');
+      foot.className = 'mfoot';
+      const close = doc.createElement('button');
+      close.type = 'button';
+      close.className = 'pill';
+      close.textContent = 'Close';
+      foot.append(close);
+      card.append(title, body, foot);
       return { card, initialFocus: null, describedById: `${intro.id} ${list.id}`, grow: body, scroll: body };
     });
   }

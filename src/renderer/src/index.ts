@@ -353,7 +353,12 @@ if (flowStripHost) {
 
 const setupCheckHost = document.getElementById('setup-check-host');
 if (setupCheckHost) {
-  const setupCheck = createSetupCheckDialog(setupCheckHost, { status: (repoKey) => window.setup.status(repoKey) });
+  const setupCheck = createSetupCheckDialog(setupCheckHost, {
+    status: (repoKey) => window.setup.status(repoKey),
+    onFocusLost: () => {},
+    blockingDialogOpen: () => false,
+    onBlockingDialogClosed: () => () => {},
+  });
   repo.onChange((info) => void setupCheck.check(info.repoKey));
 }
 

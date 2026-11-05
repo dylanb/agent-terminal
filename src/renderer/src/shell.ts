@@ -37,6 +37,10 @@ export interface Shell {
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
   setViewerFullscreen(on: boolean): void;
   isViewerFullscreen(): boolean;
+  /** True while an `aria-modal` dialog is open anywhere in the document. */
+  modalIsOpen(): boolean;
+  /** Calls `cb` each time `modalIsOpen()` turns from true to false; returns its unsubscribe. */
+  onModalClosed(cb: () => void): () => void;
   dispose(): void;
 }
 
@@ -276,6 +280,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     getTheme: () => theme,
     setViewerFullscreen,
     isViewerFullscreen: () => fullscreen,
+    modalIsOpen: () => false,
+    onModalClosed: () => () => {},
     dispose() {
       unbindNav();
       doc.removeEventListener('keydown', onKeyDown, true);

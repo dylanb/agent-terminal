@@ -74,3 +74,298 @@ describe('a check whose status lists nothing', () => {
     expect(seen()[0]).toContain(REPO.charlie);
   });
 });
+
+const KEYS = Object.values(REPO);
+
+/** The repository the open dialog names, or null when none is open. */
+function openFor(screen: ReturnType<typeof setupCheckScreen>): string | null {
+  if (!screen.isOpen()) return null;
+  const shown = `${screen.title()} ${screen.description()}`;
+  return KEYS.find((key) => shown.includes(key)) ?? null;
+}
+
+/** The repository each recorded dialog named, in the order the dialogs appeared. */
+const namedIn = (seen: () => string[]) => (): Array<string | null> =>
+  seen().map((shown) => KEYS.find((key) => shown.includes(key)) ?? null);
+
+/** Runs every microtask the fake status replies queue, which all settle before the next task. */
+const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A focusable control outside the dialog's host, focused, standing for where the operator was. */
+function focusedOpener(): HTMLButtonElement {
+  const opener = document.body.appendChild(document.createElement('button'));
+  opener.textContent = 'opener';
+  opener.focus();
+  return opener;
+}
+
+const DOORS: Array<{ door: string; close: (screen: ReturnType<typeof setupCheckScreen>) => void }> = [
+  { door: 'Close', close: (screen) => screen.control('Close').click() },
+  { door: 'Escape', close: (screen) => screen.pressEscape() },
+  { door: 'a scrim click', close: (screen) => screen.pressScrim() },
+];
+
+describe('the popup is a modal dialog (AC11)', () => {
+  it('is announced as a modal dialog with its title and description, and takes focus on open', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const { dialog, screen } = mountDialog(fake);
+    focusedOpener();
+
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    const shown = screen.dialog();
+    expect({
+      modal: shown.getAttribute('aria-modal'),
+      named: screen.title().length > 0,
+      described: screen.description().length > 0,
+      focusInside: shown.contains(document.activeElement),
+    }).toEqual({ modal: 'true', named: true, described: true, focusInside: true });
+  });
+
+  for (const { door, close } of DOORS) {
+    it(`closes on ${door}, with focus back where the operator was`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+      const { dialog, screen } = mountDialog(fake);
+      const opener = focusedOpener();
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      close(screen);
+
+      expect({ open: screen.isOpen(), focusOnOpener: document.activeElement === opener }).toEqual({
+        open: false,
+        focusOnOpener: true,
+      });
+    });
+  }
+
+  it('lands focus through onFocusLost when the opener left the page while the dialog was open', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.malformed]));
+    const { dialog, screen } = mountDialog(fake);
+    const landing = document.body.appendChild(document.createElement('button'));
+    landing.textContent = 'landing';
+    fake.landFocusOn(landing);
+    const opener = focusedOpener();
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+    opener.remove();
+
+    screen.pressEscape();
+
+    expect(document.activeElement).toBe(landing);
+  });
+
+  it('dispose() removes the dialog without moving focus back to the opener', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const { dialog, screen } = mountDialog(fake);
+    const opener = focusedOpener();
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    dialog.dispose();
+
+    expect({ open: screen.isOpen(), focusOnOpener: document.activeElement === opener }).toEqual({
+      open: false,
+      focusOnOpener: false,
+    });
+  });
+
+  const PLACEMENTS: Array<{ placement: string; mount: () => HTMLElement }> = [
+    { placement: 'a host directly under <body>', mount: () => document.body.appendChild(document.createElement('div')) },
+    {
+      placement: 'a host nested inside another region',
+      mount: () => {
+        const region = document.body.appendChild(document.createElement('section'));
+        region.appendChild(document.createElement('p')).textContent = 'region content';
+        return region.appendChild(document.createElement('div'));
+      },
+    },
+  ];
+
+  for (const { placement, mount } of PLACEMENTS) {
+    it(`works the same in ${placement}, touching nothing outside its host (UI-STANDARDS.md §3.3)`, async () => {
+      const outside = document.body.appendChild(document.createElement('aside'));
+      outside.textContent = 'outside the host';
+      const outsideBefore = outside.outerHTML;
+      const host = mount();
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.unchecked]));
+      const dialog = createSetupCheckDialog(host, fake.deps);
+      mounted.push(dialog);
+      const screen = setupCheckScreen(host);
+      const opener = focusedOpener();
+
+      void dialog.check(REPO.bravo);
+      await shownFor(screen, REPO.bravo);
+      const listed = screen.entries().length;
+      screen.pressEscape();
+
+      expect({
+        listed,
+        open: screen.isOpen(),
+        focusOnOpener: document.activeElement === opener,
+        outsideUnchanged: outside.outerHTML === outsideBefore,
+      }).toEqual({ listed: 1, open: false, focusOnOpener: true, outsideUnchanged: true });
+    });
+  }
+});
+
+describe('another app dialog is open', () => {
+  it('opens no setup dialog while it stays open, then opens once it closes', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored]));
+    const { dialog, screen } = mountDialog(fake);
+    fake.otherDialog.open();
+
+    void dialog.check(REPO.alpha);
+    await nextTask();
+    const whileBlocked = screen.isOpen();
+    fake.otherDialog.close();
+
+    await vi.waitFor(() =>
+      expect({ whileBlocked, afterItClosed: openFor(screen) }).toEqual({ whileBlocked: false, afterItClosed: REPO.alpha }),
+    );
+  });
+  it('opens no setup dialog when the other one opened while the status request was still pending', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    const { dialog, screen } = mountDialog(fake);
+    const release = fake.hold(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    await nextTask();
+
+    fake.otherDialog.open();
+    release();
+    await nextTask();
+    const whileBlocked = screen.isOpen();
+    fake.otherDialog.close();
+
+    await vi.waitFor(() =>
+      expect({ whileBlocked, afterItClosed: openFor(screen) }).toEqual({ whileBlocked: false, afterItClosed: REPO.alpha }),
+    );
+  });
+});
+
+describe('checks run one at a time, each repository at most once', () => {
+  for (const { door, close } of DOORS) {
+    it(`shows back-to-back checks one at a time, in arrival order, the next once the first closes on ${door}`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+      const { dialog, screen } = mountDialog(fake);
+      const answered = fake.answered(REPO.alpha);
+
+      void dialog.check(REPO.alpha);
+      void dialog.check(REPO.bravo);
+      await answered;
+      const first = openFor(screen);
+      if (screen.isOpen()) close(screen);
+
+      await vi.waitFor(() =>
+        expect({ first, second: openFor(screen) }).toEqual({ first: REPO.alpha, second: REPO.bravo }),
+      );
+    });
+  }
+
+  it('shows the first check first even when its status answers after the second one was asked for', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+    const { host, dialog, screen } = mountDialog(fake);
+    const seen = namedIn(recordSetupDialogs(host));
+    const release = fake.hold(REPO.alpha);
+
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.bravo);
+    await nextTask();
+    release();
+    await nextTask();
+    if (screen.isOpen()) screen.pressEscape();
+
+    await vi.waitFor(() => expect(seen()).toEqual([REPO.alpha, REPO.bravo]));
+  });
+
+  it('raises one popup when the same repository is checked twice before its first status answers', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+    const { host, dialog, screen } = mountDialog(fake);
+    const seen = namedIn(recordSetupDialogs(host));
+
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.charlie);
+    await nextTask();
+    if (screen.isOpen()) screen.pressEscape();
+
+    await vi.waitFor(() => expect(seen()).toEqual([REPO.alpha, REPO.charlie]));
+  });
+
+  it('raises no second popup for a repository already checked and shown this session (AC10)', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+    const { host, dialog, screen } = mountDialog(fake);
+    const seen = namedIn(recordSetupDialogs(host));
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+    screen.pressEscape();
+
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.charlie);
+    await shownFor(screen, REPO.charlie);
+
+    expect(seen()).toEqual([REPO.alpha, REPO.charlie]);
+  });
+
+  it('does not check again a repository whose status listed nothing', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, []), repoStatus(REPO.alpha, [ENTRY.absent]));
+    fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+    const { host, dialog, screen } = mountDialog(fake);
+    const seen = namedIn(recordSetupDialogs(host));
+    const answered = fake.answered(REPO.alpha);
+    void dialog.check(REPO.alpha);
+    await answered;
+
+    void dialog.check(REPO.alpha);
+    void dialog.check(REPO.charlie);
+    await shownFor(screen, REPO.charlie);
+
+    expect(seen()).toEqual([REPO.charlie]);
+  });
+
+  const FAILED: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['answer']>[1] }> = [
+    { how: 'answers ok: false', reply: { ok: false, reason: 'scripted status failure' } },
+    { how: 'is rejected', reply: { reject: 'scripted invoke rejection' } },
+  ];
+
+  for (const { how, reply } of FAILED) {
+    it(`a status request that ${how} shows nothing, does not stall the next check, and leaves its repository to be checked again, once`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, reply, repoStatus(REPO.alpha, [ENTRY.absent]), repoStatus(REPO.alpha, [ENTRY.absent]));
+      fake.answer(REPO.charlie, repoStatus(REPO.charlie, [ENTRY.malformed]));
+      fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.notIgnored]));
+      const { host, dialog, screen } = mountDialog(fake);
+      const seen = namedIn(recordSetupDialogs(host));
+
+      void dialog.check(REPO.alpha);
+      void dialog.check(REPO.bravo);
+      await shownFor(screen, REPO.bravo);
+      screen.pressEscape();
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+      screen.pressEscape();
+      void dialog.check(REPO.alpha);
+      void dialog.check(REPO.charlie);
+      await shownFor(screen, REPO.charlie);
+
+      expect(seen()).toEqual([REPO.bravo, REPO.alpha, REPO.charlie]);
+    });
+  }
+});

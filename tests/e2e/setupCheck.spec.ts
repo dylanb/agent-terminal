@@ -3,6 +3,7 @@ import { expect, test, type ElectronApplication, type Locator, type Page } from 
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { CH, SESSION_ID, type FlowBootstrapErrorMsg } from '../../src/shared/ipc';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
@@ -146,4 +147,129 @@ test('starting outside a git repository raises no repository popup; the first cd
   await cdInto(page, probe);
 
   await expect.poll(async () => (await seen())[0] ?? '').toContain(probe);
+});
+
+/** Types a `cd` into whatever holds keyboard focus, without clicking the terminal first, and prints a marker
+ *  the typed line itself does not contain. */
+async function typeCd(page: Page, dir: string, marker: string): Promise<void> {
+  await page.keyboard.type(`cd ${shellQuote(dir)} && printf '%s-%s\\n' at ${marker}`, { delay: 20 });
+  await page.keyboard.press('Enter');
+}
+
+const focusIsInside = (popup: Locator): Promise<boolean> => popup.evaluate((el) => el.contains(document.activeElement));
+const focusIsOnTerminal = (page: Page): Promise<boolean> =>
+  page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') === true);
+
+test('re-entering a repository already checked this session raises no second popup (AC10)', { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  const probe = repoIn({ ignored: true, capabilities: 'absent' });
+  const page = await launchIn(passing);
+  const seen = await recordDialogs(page);
+  await cdInto(page, failing);
+  const popup = popupFor(page, failing);
+  await expect(popup).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(popup).toBeHidden();
+
+  await typeCd(page, passing, 'back');
+  await expect(page.locator('.xterm-rows')).toContainText('at-back');
+  await typeCd(page, failing, 'again');
+  await expect(page.locator('.xterm-rows')).toContainText('at-again');
+  await typeCd(page, probe, 'probe');
+
+  const named = async () => (await seen()).map((text) => [failing, probe].find((repo) => text.includes(repo)) ?? text);
+  await expect.poll(named).toEqual([failing, probe]);
+});
+
+test('the popup is announced as a modal dialog, keeps Tab inside, and Escape returns focus to the terminal (AC11)', { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  const page = await launchIn(passing);
+  await cdInto(page, failing);
+  const popup = popupFor(page, failing);
+  await expect(popup).toBeVisible();
+  const soft = expect.configure({ soft: true });
+
+  await soft(popup).toHaveAttribute('aria-modal', 'true');
+  await soft(popup).toHaveAccessibleName(/\S/);
+  await soft.poll(() => focusIsInside(popup)).toBe(true);
+  for (const key of ['Tab', 'Tab', 'Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab']) {
+    await page.keyboard.press(key);
+    soft(await focusIsInside(popup)).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await soft(popup).toBeHidden();
+  await soft.poll(() => focusIsOnTerminal(page)).toBe(true);
+});
+
+test('Close dismisses nothing: a restart with the same failures lists them again (AC16)', { tag: '@ownapp' }, async () => {
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  let page = await launchIn(failing);
+  const popup = popupFor(page, failing);
+  await expect(entriesOf(popup)).toHaveCount(2);
+
+  await popup.getByRole('button', { name: 'Close' }).click();
+  await expect.soft(popup).toBeHidden();
+  await app?.close();
+  page = await launchIn(failing);
+
+  await expect(entriesOf(popupFor(page, failing))).toHaveCount(2);
+});
+
+/** Raises the app's own bootstrap-failure alertdialog, through the push main sends when a bootstrap fails. */
+async function raiseAppErrorDialog(repoKey: string): Promise<void> {
+  const msg: FlowBootstrapErrorMsg = { sessionId: SESSION_ID, repoKey, step: 'setup-check-e2e-step', reason: 'scripted bootstrap failure' };
+  await app!.evaluate(({ BrowserWindow }, { channel, msg }) => BrowserWindow.getAllWindows()[0].webContents.send(channel, msg), {
+    channel: CH.flowOnBootstrapError,
+    msg,
+  });
+}
+
+/** From now on, for each dialog added to the page, how many `aria-modal` dialogs were open once it was. */
+async function recordModalCounts(page: Page): Promise<() => Promise<number[]>> {
+  await page.evaluate(() => {
+    const counts: number[] = [];
+    new MutationObserver((records) => {
+      const added = records.some((record) =>
+        [...record.addedNodes].some((node) => node instanceof Element && (node.matches('[aria-modal="true"]') || node.querySelector('[aria-modal="true"]') !== null)),
+      );
+      if (added) counts.push(document.querySelectorAll('[aria-modal="true"]').length);
+    }).observe(document.body, { childList: true, subtree: true });
+    (window as unknown as { modalCounts: number[] }).modalCounts = counts;
+  });
+  return () => page.evaluate(() => [...(window as unknown as { modalCounts: number[] }).modalCounts]);
+}
+
+test('a popup due while another app dialog is open waits, and opens once that dialog closes', { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  const page = await launchIn(passing);
+  const counts = await recordModalCounts(page);
+  await raiseAppErrorDialog(passing);
+  const other = page.getByRole('alertdialog').filter({ hasText: 'scripted bootstrap failure' });
+  await expect(other).toBeVisible();
+
+  await page.evaluate((line) => window.term.input(line), `cd ${shellQuote(failing)} && printf '%s-%s\\n' at blocked\r`);
+  await expect(page.locator('.xterm-rows')).toContainText('at-blocked');
+  await expect.poll(() => page.evaluate((repoKey) => window.setup.status(repoKey).then((r) => r.ok), failing)).toBe(true);
+  await other.getByRole('button', { name: 'Dismiss' }).dispatchEvent('click');
+  await expect(popupFor(page, failing)).toBeVisible();
+
+  expect(await counts()).toEqual([1, 1]);
+});
+
+test("closing the popup after the element that opened it left the page lands focus in the app, not on the page body", { tag: '@ownapp' }, async () => {
+  const passing = repoIn({ ignored: true, capabilities: 'valid' });
+  const failing = repoIn({ ignored: false, capabilities: 'absent' });
+  const page = await launchIn(passing);
+  await cdInto(page, failing);
+  const popup = popupFor(page, failing);
+  await expect(popup).toBeVisible();
+  await page.evaluate(() => document.querySelector('.xterm-helper-textarea')?.remove());
+
+  await page.keyboard.press('Escape');
+  await expect(popup).toBeHidden();
+
+  await expect.poll(() => page.evaluate(() => document.activeElement !== null && document.activeElement !== document.body)).toBe(true);
 });

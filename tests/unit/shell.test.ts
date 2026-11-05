@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShell, type Shell } from '../../src/renderer/src/shell';
+import { createModalShell } from '../../src/renderer/src/modalShell';
 import { FOCUS_VIEW_EVENT, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
 import { resolveKeymap } from '../../src/shared/keymap';
 
@@ -651,5 +652,73 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       ce.mockRestore();
       cens.mockRestore();
     }
+  });
+});
+
+// The one "a dialog is open" predicate, and the signal an app-raised dialog waits on before it opens, so two
+// `aria-modal` dialogs are never open together (UI-STANDARDS.md §5).
+describe('shell modal predicate and close signal', () => {
+  let shell: Shell;
+
+  beforeEach(() => {
+    document.body.innerHTML = SHELL_HTML;
+    shell = createShell(document.getElementById('app')!);
+  });
+
+  afterEach(() => shell.dispose());
+
+  /** A real modal-shell dialog in its own host beside the app. */
+  function realModal() {
+    const host = document.body.appendChild(document.createElement('div'));
+    const modal = createModalShell(host, 'shell-signal');
+    const card = () => {
+      const el = document.createElement('div');
+      el.append(document.createElement('button'));
+      return { card: el, initialFocus: null };
+    };
+    return { open: () => modal.render(card), close: () => modal.render(null) };
+  }
+
+  it('modalIsOpen() answers true while a modal-shell dialog is open and false once it has closed', () => {
+    const modal = realModal();
+    const before = shell.modalIsOpen();
+    modal.open();
+    const whileOpen = shell.modalIsOpen();
+    modal.close();
+
+    expect({ before, whileOpen, afterClose: shell.modalIsOpen() }).toEqual({ before: false, whileOpen: true, afterClose: false });
+  });
+
+  it('onModalClosed fires once the dialog closes, never while it stays open', async () => {
+    const modal = realModal();
+    let phase = 'open';
+    const fired: string[] = [];
+    shell.onModalClosed(() => fired.push(phase));
+    modal.open();
+    await flush();
+
+    phase = 'closed';
+    modal.close();
+
+    await vi.waitFor(() => expect(fired).toEqual(['closed']));
+  });
+
+  it('a listener that unsubscribed is not called on a later close, while one still subscribed is', async () => {
+    const modal = realModal();
+    let removedCalled = false;
+    let keptCalled = false;
+    const unsubscribe = shell.onModalClosed(() => {
+      removedCalled = true;
+    });
+    shell.onModalClosed(() => {
+      keptCalled = true;
+    });
+    unsubscribe();
+
+    modal.open();
+    await flush();
+    modal.close();
+
+    await vi.waitFor(() => expect({ keptCalled, removedCalled }).toEqual({ keptCalled: true, removedCalled: false }));
   });
 });
