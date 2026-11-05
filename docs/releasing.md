@@ -51,7 +51,8 @@ The run builds the same macOS arm64 and Linux x64 installers of both apps from t
 straight away as a **Pre-release**, not a draft, with notes that name the branch and commit. The version is
 `package.json`'s, without any `-` suffix, then `-branch-`, then the branch name in lowercase with every other character
 turned into `-`, then the run number, then `g` and the first 7 characters of the commit SHA. The installed apps and
-the installer file names carry it. Nothing is committed to the branch, and the run
+the installer file names carry it. The `.deb` package version writes each `-` as `~`, so `apt` sorts a test build
+before the release it is built on, and installing that release later upgrades it. Nothing is committed to the branch, and the run
 runs no tests. GitHub never marks a pre-release as the latest release, so `releases/latest` and the README's link
 still point at the last real release.
 
