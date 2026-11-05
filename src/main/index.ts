@@ -25,6 +25,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
+import { holdQuitForShell } from './shellQuit';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
@@ -1256,13 +1257,27 @@ async function createWindow(): Promise<void> {
     shadow.write(data);
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  let shellExited = false;
   ptyProcess.onExit(({ exitCode }) => {
+    shellExited = true;
     ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();
     }
   });
+  app.on('will-quit', holdQuitForShell(
+    {
+      exited: () => shellExited,
+      onExit: (run) => { ptyProcess.onExit(run); },
+      forceKill: () => {
+        try { ptyProcess.kill('SIGKILL'); } catch { /* §5: the shell may already be gone (ESRCH) */ }
+      },
+    },
+    config.shellQuitGraceMs,
+    (ms, run) => { setTimeout(run, ms); },
+    () => app.quit(),
+  ));
 
   const disposeIpc = registerIpcListeners(
     ipcMain,
