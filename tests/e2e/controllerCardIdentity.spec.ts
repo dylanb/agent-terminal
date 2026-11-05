@@ -1,10 +1,11 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createControllerDesktopHarness } from './controllerDesktop';
 import { seedTrustedFlow } from './autoGateHarness';
 import { STATUS_BUDGET_MS } from './controllerStatusObservation';
-import { cardHeaderElementLocator, cardHeaderLocator, cardLocator, headerRemainder } from '../helpers/controllerCards';
+import { cardHeaderElementLocator, cardHeaderLocator, cardLocator, directoryPattern, headerRemainder } from '../helpers/controllerCards';
 
 const terminalTarget = { kind: 'development' as const, entry: resolve('out/main/index.js') };
 const controllerTarget = { kind: 'development' as const, entry: resolve('out/main/controller.js') };
@@ -152,6 +153,78 @@ test('a terminal outside any git repository shows its title with no branch slot,
     expect.soft(await headerLeftover(header, directory, []), 'no title or branch slot, and no placeholder').toBe('');
     await expect.soft(header, 'repository name still shown').toContainText(basename(directory));
     await expect.soft(card, 'status still shown').toContainText(new RegExp(STATUS_WORD_SOURCE));
+  } finally {
+    await h.dispose();
+  }
+});
+
+async function launchSiblings(h: Harness, directories: readonly string[]) {
+  const controller = await h.launch(controllerTarget, h.fixture.nonGit);
+  const terminals = [];
+  for (const directory of directories) terminals.push(await h.launch(terminalTarget, directory));
+  const cards = directories.map(directory => {
+    const card = cardLocator(controller.page, directory);
+    return { directory, card, toggle: cardHeaderLocator(card, directory), header: cardHeaderElementLocator<Locator>(card) };
+  });
+  for (const { toggle } of cards) {
+    await expect(toggle).toBeVisible({ timeout: STATUS_BUDGET_MS });
+    if ((await toggle.getAttribute('aria-expanded')) !== 'false') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  }
+  return { controller, terminals, cards };
+}
+
+test('collapsed headers of two worktrees of one repository tell them apart by their own user titles, not by directory', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const titles = ['Alpha parser rewrite', 'Beta renderer polish'];
+  try {
+    const { terminals, cards } = await launchSiblings(h, h.fixture.worktrees);
+    for (const [index, terminal] of terminals.entries()) {
+      await nameWork(terminal.page, titles[index]);
+      await expect(statusTitle(terminal.page)).toHaveText(titles[index]);
+    }
+    for (const [index, { directory, header }] of cards.entries()) {
+      await expect.soft(header, `card ${index} shows its own title`).toContainText(titles[index], { timeout: STATUS_BUDGET_MS });
+      await expect.soft(header, `card ${index} does not show its sibling's title`).not.toContainText(titles[1 - index]);
+      await expect.soft(header, `card ${index} does not show its launch directory`).not.toContainText(directory);
+    }
+  } finally {
+    await h.dispose();
+  }
+});
+
+test('collapsed headers of two untitled worktrees tell them apart by their own branches, not by directory', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const branches = ['identity/alpha-branch', 'identity/beta-branch'];
+  try {
+    for (const [index, directory] of h.fixture.worktrees.entries()) {
+      execFileSync('git', ['-C', directory, 'branch', '-m', branches[index]], { env: h.fixture.env, stdio: 'pipe' });
+    }
+    const { cards } = await launchSiblings(h, h.fixture.worktrees);
+    for (const [index, { directory, header }] of cards.entries()) {
+      await expect.soft(header, `card ${index} shows its own branch`).toContainText(branches[index], { timeout: STATUS_BUDGET_MS });
+      await expect.soft(header, `card ${index} does not show its sibling's branch`).not.toContainText(branches[1 - index]);
+      await expect.soft(header, `card ${index} does not show its launch directory`).not.toContainText(directory);
+    }
+  } finally {
+    await h.dispose();
+  }
+});
+
+test('the launch directory is not in the header text, collapsed or expanded, yet the disclosure toggle is still named by it', { tag: '@ownapp' }, async () => {
+  test.setTimeout(180_000);
+  const h = await createControllerDesktopHarness();
+  const directory = h.fixture.repositories[0];
+  try {
+    const { card, header, setExpanded } = await launchPair(h, directory);
+    for (const expanded of [false, true]) {
+      await setExpanded(expanded);
+      await expect.soft(card.getByRole('button', { name: directoryPattern(directory), expanded }), `toggle named by the directory (expanded=${expanded})`).toHaveCount(1);
+      await expect.soft(header, `header text lacks the directory (expanded=${expanded})`).not.toContainText(directory);
+    }
+    await expect.soft(card, 'expanded card shows the directory').toContainText(directory);
   } finally {
     await h.dispose();
   }

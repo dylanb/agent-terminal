@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardsIn, controlName, directoryPattern, headerLabels, showsName, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
+import { bodyActivationIn, bringForwardIn, cardHeaderIn, cardsIn, controlName, directoryPattern, headerActivationIn, headerLabels, showsName, unshownCounts, windowHeaderIn } from '../helpers/controllerCards';
 import { mountControllerPanes } from '../helpers/controllerMount';
 import { directoryConflictFixture, STATUS_CASES, statusService, workStatus } from '../helpers/controllerStatusFixture';
 
@@ -10,7 +10,8 @@ const directory = members[0].launchDirectory;
 const matching = (host: HTMLElement) => cardsIn(host).filter(card => directoryPattern(directory).test(controlName(card)));
 const text = (host: HTMLElement) => matching(host).map(card => card.textContent).join('\n');
 const header = (host: HTMLElement) => matching(host)[0] && cardHeaderIn(matching(host)[0], directory);
-const action = (host: HTMLElement) => matching(host)[0] && bringForwardIn(matching(host)[0]);
+const action = (host: HTMLElement) => matching(host)[0] && headerActivationIn(matching(host)[0]);
+const bodyAction = (host: HTMLElement) => matching(host)[0] && bodyActivationIn(matching(host)[0]);
 afterEach(() => document.body.replaceChildren());
 
 describe('directory conflict presentation', () => {
@@ -23,7 +24,9 @@ describe('directory conflict presentation', () => {
       expect.soft(text(host)).toContain('Duplicate directory');
       expect.soft(text(host)).toMatch(/(?:close|reduce|keep|leave)[\s\S]*(?:one|1|extra|other)/i);
       expect.soft(showsName(matching(host)[0], directory, 'repository')).toBe(true);
-      expect.soft(action(host)?.textContent).toBe(count === 2 ? 'Bring both forward' : 'Bring 3 terminals forward');
+      expect.soft(Boolean(action(host)), 'header icon').toBe(true);
+      expect.soft(Boolean(bodyAction(host)), 'body activation button').toBe(false);
+      expect.soft(action(host)?.getAttribute('title') ?? '', 'tooltip').toMatch(/bring/i);
       expect.soft(controlName(action(host))).toContain(directory);
       expect.soft(controlName(action(host))).toContain('repository');
     } finally { dispose(); }
@@ -49,7 +52,8 @@ describe('directory conflict presentation', () => {
       expect.soft(text(host)).toContain('Current error');
       expect.soft(text(host)).toContain('Current request');
       expect.soft(text(host)).not.toMatch(/Duplicate directory|Ticket amber|Approve amber/);
-      expect.soft(action(host)?.textContent).toBe('Bring forward');
+      expect.soft(Boolean(action(host)), 'survivor header icon').toBe(true);
+      expect.soft(Boolean(bodyAction(host)), 'survivor body activation button').toBe(false);
       service.publish([{ ...current, work: second.work }, unrelated]);
       expect.soft(text(host)).toContain({ populated: 'Ticket blue', three: 'Ticket blue', loading: 'Loading', oversized: 'Status unavailable' }[state]);
     } finally { dispose(); }
@@ -134,6 +138,7 @@ describe('activation of captured directory connections', () => {
       return outcome;
     } });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
+    expect(action(host), 'header icon').toBeDefined();
     action(host)?.click();
     return vi.waitFor(() => expect([...service.activated].sort()).toEqual(members.map(member => member.id).sort())).finally(dispose);
   });
@@ -144,6 +149,7 @@ describe('activation of captured directory connections', () => {
     const service = statusService([...members.slice(0, 2), unrelated], { activation: id => id === members[0].id ? held : Promise.resolve('activated') });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
     try {
+      expect(action(host), 'header icon').toBeDefined();
       action(host)?.click();
       service.publish([members[1], members[2], unrelated]);
       finish('unavailable');
@@ -161,6 +167,7 @@ describe('activation of captured directory connections', () => {
     const service = statusService([...members.slice(0, 2), unrelated], { activation: id => id === unrelated.id ? Promise.resolve('activated') : old });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
     try {
+      expect(action(host), 'header icon').toBeDefined();
       action(host)?.click();
       const other = cardsIn(host).find(card => !matching(host).includes(card));
       (other && bringForwardIn(other))?.click();
@@ -179,6 +186,7 @@ describe('activation of captured directory connections', () => {
     const service = statusService(members.slice(0, 2), { activation: id => id === members[1].id ? pending : Promise.resolve('activated') });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
     try {
+      expect(action(host), 'header icon').toBeDefined();
       action(host)?.click();
       await Promise.resolve();
       service.publish([members[1]]);
@@ -195,6 +203,7 @@ describe('activation of captured directory connections', () => {
     const service = statusService(members, { activation: async id => retry || id === members[1].id ? 'activated' : 'unavailable' });
     const { host, dispose } = mountControllerPanes({ controller: service.api });
     try {
+      expect(action(host), 'header icon').toBeDefined();
       action(host)?.click();
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       expect.soft(host.querySelector('[role="alert"]')?.textContent).toMatch(/2 (?:of|out of) 3/);

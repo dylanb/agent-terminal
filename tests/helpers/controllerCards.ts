@@ -30,8 +30,11 @@ export const cardLocator = <L>(scope: RoleScope<L>, directory: string): L =>
 /** The card for `directory` only while its accessible name also holds `text`. */
 export const cardNamedLocator = <L>(scope: RoleScope<L>, directory: string, text: string): L =>
   scope.getByRole('article', { name: new RegExp(`^(?=[\\s\\S]*${directoryPattern(directory).source})(?=[\\s\\S]*${escapeRegExp(text)})`) });
-const activationName = /Bring (?:both |[0-9]+ terminals )?forward/;
+const activationName = /^Bring\b[\s\S]*\bforward\b/;
 export const bringForwardLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: activationName });
+/** The bring-forward icon button in the card's `<header>` element, apart from the disclosure toggle. */
+export const headerActivationLocator = <L extends RoleScope<L>>(card: { locator(selector: string): L }): L =>
+  card.locator('header').getByRole('button', { name: activationName });
 export const dismissLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: 'Dismiss disconnected terminal' });
 const loopMessageDismissalName = /^Dismiss (?:loop error|notice) /;
 export const dismissLoopMessageLocator = <L>(card: RoleScope<L>): L => card.getByRole('button', { name: loopMessageDismissalName });
@@ -96,6 +99,24 @@ export const windowHeaderIn = (root: ParentNode): HTMLElement | undefined =>
 const controlsIn = (scope: ParentNode, text: string | RegExp): HTMLElement[] => roleMatches(scope, ['button', 'switch'], text);
 const controlIn = (scope: ParentNode, text: string | RegExp): HTMLElement | undefined => controlsIn(scope, text)[0];
 export const bringForwardIn = (card: ParentNode) => controlIn(card, activationName);
+/** The card's activation control inside its `<header>` element that is not the disclosure toggle. */
+export function headerActivationIn(card: ParentNode): HTMLElement | undefined {
+  const header = card.querySelector('header');
+  return header ? roleMatches(header, ['button'], activationName).find(button => !button.hasAttribute('aria-expanded')) : undefined;
+}
+/** An activation control anywhere in the card outside its `<header>` element. */
+export const bodyActivationIn = (card: ParentNode): HTMLElement | undefined =>
+  roleMatches(card, ['button'], activationName).find(button => !button.closest('header'));
+/** The first button or switch of the card outside its `<header>` element. */
+export const bodyControlIn = (card: ParentNode): HTMLElement | undefined =>
+  roleMatches(card, ['button', 'switch']).find(control => !control.closest('header'));
+/** The element outside the card's `<header>`, and not inside anything hidden, whose own text holds `directory`. */
+export function bodyDirectoryIn(card: ParentNode, directory: string): HTMLElement | undefined {
+  const pattern = directoryPattern(directory);
+  return [...card.querySelectorAll<HTMLElement>('*')].find(element =>
+    !element.closest('header') && !element.closest('[hidden]')
+    && [...element.childNodes].some(node => node.nodeType === 3 && pattern.test(node.textContent ?? '')));
+}
 export const dismissIn = (card: ParentNode) => controlIn(card, 'Dismiss');
 export const dismissLoopMessageIn = (card: ParentNode) => controlIn(card, loopMessageDismissalName);
 export const showFullReasonIn = (card: ParentNode) => controlIn(card, 'Show full reason');

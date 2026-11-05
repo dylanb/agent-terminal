@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createControllerCard } from '../../src/renderer/src/controllerCard';
 import { CONTROLLER_OVERSIZED_STATUS_TEXT } from '../../src/shared/controllerStatus';
 import type { ControllerTerminal } from '../../src/shared/ipc';
-import { bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
+import { bodyActivationIn, bodyDirectoryIn, bringForwardIn, cardHeaderIn, cardHeaderTextIn, cardIn, directoryPattern, headerActivationIn, headerRemainder, controlName, dismissIn, dismissLoopMessageIn, showsName, statusRowIn } from '../helpers/controllerCards';
 import { STATUS_CASES, statusTerminal, type WorkStatus } from '../helpers/controllerStatusFixture';
 
 afterEach(() => document.body.replaceChildren());
@@ -65,7 +65,7 @@ describe('controller card header control', () => {
 });
 
 describe('controller card body', () => {
-  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available', () => {
+  it('runs status, ticket, flow, activity and both condition boxes in order, with Bring forward available in the header', () => {
     const { terminal, text } = STATUS_CASES['flow-error-and-human'];
     const { element } = mount(terminal);
     const status = element ? statusRowIn(element)?.textContent?.trim() : undefined;
@@ -75,7 +75,8 @@ describe('controller card body', () => {
         text, '#219', 'Show live controller status', 'Flow: feature-dev — Step: implement', 'Idle',
         'Human needed: needs a human', 'Approve the plan', 'Error', 'Step exited 1',
       ]),
-      ...(element && bringForwardIn(element) ? [] : ['Bring forward is missing']),
+      ...(element && headerActivationIn(element) ? [] : ['Bring forward is missing from the header']),
+      ...(element && bodyActivationIn(element) ? ['Bring forward is also in the body'] : []),
     ]).toEqual([]);
   });
 
@@ -125,17 +126,6 @@ describe('controller card body', () => {
     ]).toEqual([]);
   });
 
-  it('offers Bring forward, named with the directory, which reports its use once', () => {
-    const { terminal } = STATUS_CASES.working;
-    const { element, calls } = mount(terminal);
-    const control = element ? bringForwardIn(element) : undefined;
-    control?.click();
-    expect({
-      named: controlName(control).includes(terminal.launchDirectory),
-      calls,
-    }).toEqual({ named: true, calls: { bringForward: 1, dismiss: 0 } });
-  });
-
   it('shows a disconnected card as Disconnected with no work details and Dismiss, which reports its use once', () => {
     const { terminal } = STATUS_CASES['disconnected-with-error'];
     const { element, calls } = mount(terminal);
@@ -147,9 +137,78 @@ describe('controller card body', () => {
       ...(element && statusRowIn(element)?.textContent?.trim() === 'Disconnected' ? [] : ['wrong status row']),
       ...['Step exited 1', 'Approve the plan', 'Human needed', '#219', 'Flow:', 'Working'].filter(detail => text.includes(detail)).map(detail => `shows "${detail}"`),
       ...(element && bringForwardIn(element) ? ['offers Bring forward'] : []),
+      ...(dismiss && !dismiss.closest('header') ? [] : ['Dismiss is not in the body']),
       ...(controlName(dismiss).includes(terminal.launchDirectory) ? [] : ['Dismiss is not named with the directory']),
       ...(calls.dismiss === 1 && calls.bringForward === 0 ? [] : [`calls ${JSON.stringify(calls)}`]),
     ]).toEqual([]);
+  });
+});
+
+describe('controller card launch directory', () => {
+  const { terminal } = STATUS_CASES.working;
+  const directory = terminal.launchDirectory;
+
+  it.each([true, false])('keeps the directory out of the header text while the card and toggle names still hold it (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const toggle = element ? cardHeaderIn(element, directory) : undefined;
+    expect({
+      headerHoldsDirectory: element ? cardHeaderTextIn(element).includes(directory) : 'no card',
+      toggleName: directoryPattern(directory).test(controlName(toggle)),
+      cardName: directoryPattern(directory).test(controlName(element)),
+    }).toEqual({ headerHoldsDirectory: false, toggleName: true, cardName: true });
+  });
+
+  it('shows the directory as text of the expanded body', () => {
+    const { element } = mount(terminal, true);
+    expect(Boolean(element && bodyDirectoryIn(element, directory))).toBe(true);
+  });
+});
+
+describe('controller card bring-forward icon', () => {
+  const terminal = statusTerminal();
+
+  it.each([true, false])('sits in the header outside the disclosure toggle and leaves the body without a Bring forward button (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    const toggle = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    expect({
+      inHeader: Boolean(icon),
+      outsideToggle: Boolean(icon && toggle && !toggle.contains(icon) && !icon.contains(toggle)),
+      inBody: Boolean(element && bodyActivationIn(element)),
+    }).toEqual({ inHeader: true, outsideToggle: true, inBody: false });
+  });
+
+  it.each([true, false])('is named with the repository and the full launch directory, and explains itself to pointer users (expanded=%s)', expanded => {
+    const { element } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    expect({
+      directory: directoryPattern(terminal.launchDirectory).test(controlName(icon)),
+      repository: /\brepository\b/.test(controlName(icon)),
+      tooltip: /bring/i.test(icon?.getAttribute('title') ?? ''),
+    }).toEqual({ directory: true, repository: true, tooltip: true });
+  });
+
+  it('draws a decorative glyph that adds nothing to its name', () => {
+    const { element } = mount(terminal, true);
+    const icon = element ? headerActivationIn(element) : undefined;
+    const glyphs = [...(icon?.querySelectorAll('svg') ?? [])];
+    expect({ glyphs: glyphs.length > 0, hidden: glyphs.every(glyph => glyph.getAttribute('aria-hidden') === 'true') }).toEqual({ glyphs: true, hidden: true });
+  });
+
+  it.each([true, false])('reports its use once and leaves the card as expanded or collapsed as it was (expanded=%s)', expanded => {
+    const { element, calls } = mount(terminal, expanded);
+    const icon = element ? headerActivationIn(element) : undefined;
+    icon?.click();
+    const toggle = element ? cardHeaderIn(element, terminal.launchDirectory) : undefined;
+    expect({ icon: Boolean(icon), calls, expanded: toggle?.getAttribute('aria-expanded') })
+      .toEqual({ icon: true, calls: { bringForward: 1, dismiss: 0 }, expanded: String(expanded) });
+  });
+
+  it('is not offered on a disconnected card, whose Dismiss stays in the body', () => {
+    const { terminal: gone } = STATUS_CASES['disconnected-with-error'];
+    const { element } = mount(gone);
+    expect({ icon: Boolean(element && headerActivationIn(element)), dismissInBody: Boolean(element && dismissIn(element) && !dismissIn(element)?.closest('header')) })
+      .toEqual({ icon: false, dismissInBody: true });
   });
 });
 
