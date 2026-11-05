@@ -1,0 +1,28 @@
+version: v2
+name: simple-finalize-loop-v1
+work:
+  recipe: prompts/work.md
+  artifact: finalize-summary
+  goal: "the associated PR is reconciled with its actual target, all relevant changes are committed and pushed, required local verification and latest-remote-head CI pass, the implementation description is updated and verified, and the complete audit report is published matching the local artifact before the human gate"
+reviewers: []
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary]
+gate:
+  - option: approve
+  - option: redo
+inputs:
+  - id: groom-intent
+    path: groom-intent.md
+  - id: plan
+    path: plan.md
+  - id: impl-report
+    path: impl-report.md
+    sections_dir: impl-report
+  - id: impl-summary
+    path: impl-summary.md
+outputs:
+  - id: finalize-summary
+    path: finalize-summary.md

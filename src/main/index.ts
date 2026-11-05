@@ -526,6 +526,7 @@ async function createWindow(): Promise<void> {
       return brief !== null && brief.slice === flow.currentSlice(repoDir) ? brief : null;
     },
     currentSlice: (repoDir) => flow.currentSlice(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     workRefs: (repoDir) => {
       const r = resolveAppGateRefs(flow.state(repoDir).refs, trustedAppBootstraps.get(repoDir) ?? null);
       return { ticket: r.ticket, pr: r.pr };
@@ -1155,6 +1156,7 @@ async function createWindow(): Promise<void> {
     // §28.4.2 — the brief is keyed to the slice being reopened, read back by the engine's sliceBrief below.
     recordSliceBrief: (repoDir, fromStep, text) => writeSliceBrief(repoDir, { slice: flow.currentSlice(repoDir), fromStep, text }),
     clearSliceBrief: (repoDir) => clearSliceBrief(repoDir),
+    reopenStep: (repoDir) => flow.sliceStartStep(repoDir),
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
     emitError: (reason) => loopMessages.post('error', reason),
     emitNotice: (reason) => loopMessages.post('notice', reason),
@@ -1369,7 +1371,7 @@ async function createWindow(): Promise<void> {
       // Fail-closed to false.
       [CH.flowAppRedo]: (_e, m) =>
         isValidFlowAppRedo(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
-      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at RED so the
+      // §28.4.2 — back-to-red with a brief is TWO-way like redo: it returns whether the flow is back at its return step so the
       // composer holds open on a failed reopen and never loses the brief. Fail-closed to false.
       [CH.flowAppBackToRed]: (_e, m) =>
         isValidFlowAppBackToRed(m) ? humanRunners.decide(m.repoKey, m.step, m.turnKey, 'back-to-red', m.brief) : false,

@@ -96,6 +96,8 @@ export class AppLoopEngineHarness {
   workRefsResult!: { ticket: number | null; pr: number | null };
   /** §28.4.2 — the back-to-RED brief the engine's `sliceBrief` dep returns for the current slice. */
   sliceBriefResult!: { slice: number; fromStep: string; text: string } | null;
+  /** The step the engine's `reopenStep` dep names as the back-to-red return step. */
+  reopenStepResult!: string | null;
   /** §28.4 D1 */
   currentSliceResult!: number;
   defResult!: LoopDefV2Result;
@@ -186,6 +188,7 @@ export class AppLoopEngineHarness {
     this.injected = [];
     this.workRefsResult = { ticket: null, pr: null };
     this.sliceBriefResult = null;
+    this.reopenStepResult = null;
     this.currentSliceResult = 1;
     this.polishStep = null;
     this.clearPolishError = null;
@@ -249,6 +252,7 @@ export class AppLoopEngineHarness {
       hostedAgentKind: () => 'claude-code',
       workRefs: () => this.workRefsResult,
       sliceBrief: () => this.sliceBriefResult,
+      reopenStep: () => this.reopenStepResult,
       currentSlice: () => this.currentSliceResult,
       artifactCheckCommand: (check) =>
         check.kind === 'report'

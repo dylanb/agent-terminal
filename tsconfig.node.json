@@ -70,6 +70,7 @@
     "src/renderer/src/terminal.ts",
     "src/renderer/src/env.d.ts",
     "electron.vite.config.ts",
+    "vite.testProof.config.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
     "tests/fixtures/**/*.ts",

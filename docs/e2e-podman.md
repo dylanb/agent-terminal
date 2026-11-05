@@ -16,7 +16,25 @@ clipboard works.
 E2E_IO_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
                                      # red-check run (§28.5.2): runs the tests listed in
                                      # <dir>/select.txt, writes a JSON report to <dir>/report.json
+E2E_REPORT_DIR=<repo-relative dir> ./scripts/e2e-podman.sh
+                                     # full run with machine-readable results (see below)
 ```
+
+### `E2E_REPORT_DIR` — the test-proof report contract
+
+`pnpm run test:proof` sets `E2E_REPORT_DIR` to `.agent-terminal/test-proof`, a git-ignored
+dir inside the bind-mounted checkout, and reads what the run leaves there through `src/main/testProofResults.ts`.
+With it set, the run is the same full, unfiltered run, with the same live `list` output and the same retries, except
+that a focused (`test.only`) test fails it, and it also writes into that dir:
+
+- `report.json`: Playwright's JSON report of the run;
+- `environment.json`: a JSON object with exactly the keys `node` (the container's `node --version`), `electron`
+  (the installed `electron` package version) and `image` (the ID of the image the container ran from, which
+  `scripts/e2e-podman.sh` takes from its own `podman build --iidfile` and runs by, so another checkout retagging
+  `agent-terminal-e2e` mid-run cannot swap it).
+
+The dir must already exist; the command creates it and removes both files before each run, so a run that writes
+neither is never read as an earlier run's result. A missing file or key makes the proof refuse.
 
 ## One-time setup
 

@@ -1683,6 +1683,7 @@ function approveDeps(over: Partial<AppGateDecisionDeps> & { advances?: string[] 
     reopenSlice: () => true,
     recordSliceBrief: () => {},
     clearSliceBrief: () => {},
+    reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
     ...over,

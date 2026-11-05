@@ -240,6 +240,7 @@ function makeRig(opts: RigOpts = {}): Rig {
     reopenSlice: () => true,
     recordSliceBrief: () => {},
     clearSliceBrief: () => {},
+    reopenStep: () => null,
     sourceSliceCount: () => {},
     maybeBeginEpicPromotion: () => ({ kind: 'not-epic' }),
   });

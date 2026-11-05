@@ -9,7 +9,7 @@ import { join, basename, dirname } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
-import { load } from 'js-yaml';
+import { dump, load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, gateDecisionAuditCmd, gateDecisionDecider, gateDecisionKind, stepWindowEvents, type AuditEvent } from '../../src/shared/audit';
@@ -5364,11 +5364,12 @@ test('a §27 turn that stalls on an agent question completes when the operator a
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
   expect(readIf(appRunState(repo))).toContain('stalled');
-  await expectLoopMessage('error');
+  await expect.poll(() => controllerOf(app).loopMessage()?.kind, { timeout: 15_000 }).toBe('error');
 
   await typeCommand('yes');
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  await expect.poll(() => controllerOf(app).loopMessage() ?? null, { timeout: 15_000 }).toBeNull();
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(1); // never re-injected
   expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
 
@@ -7419,8 +7420,8 @@ const V3_FLOW_SOURCE = join(process.cwd(), 'example', 'flows', 'feature-dev-v3',
 // A real-git repo carrying the shipped feature-dev-v3 flow.yaml, entered at `startStep` (default `plan`) with the
 // groomed ticket planning reads; bootstrap pre-completed so every phase loop runs on this repo's one branch (the
 // §28.5.1 slice key). With `catalogEntry` the flow is bound as that catalog entry under its name instead.
-function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntry?: { home: string; id: string; name: string } } = {}): string {
-  const flowYaml = readFileSync(V3_FLOW_SOURCE, 'utf8');
+function seedV3ChainRepo(prefix: string, opts: { startStep?: string; catalogEntry?: { home: string; id: string; name: string }; editFlow?: (yaml: string) => string } = {}): string {
+  const flowYaml = (opts.editFlow ?? ((y: string) => y))(readFileSync(V3_FLOW_SOURCE, 'utf8'));
   const entry = opts.catalogEntry;
   const { dir } = seedFlowRepoBase(prefix, {
     flowYaml: entry === undefined ? flowYaml : undefined,
@@ -7646,11 +7647,12 @@ test('§28.4.2 — back-to-red at a phase gate sends the flow back to the slice 
   if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
   const backToRed = loopPanel().locator('[data-gate-option="back-to-red"]');
   await expect(backToRed).toBeVisible({ timeout: 30_000 });
-  await expect(backToRed).toHaveText('Back to RED'); // the readable label
+  await expect(backToRed).toHaveText('Back to red'); // named after the flow's return step
   await backToRed.click();
   // The composer opens; submitting it empty is a plain reopen (the brief is optional).
   const composer = page.locator('#feedback-composer-host .flow-modal');
   await expect(composer).toBeVisible({ timeout: 10_000 });
+  await expect(composer.locator('.confirm')).toHaveText('Back to red'); // the composer is told the same return step
   await composer.locator('.confirm').click();
   await expect(composer).toHaveCount(0, { timeout: 15_000 });
 
@@ -7744,6 +7746,70 @@ test('§28.4.2 — back-to-red with a brief delivers it to the slice RED, GREEN 
   for (const [step, run] of [['red', 2], ['green', 2], ['refactor', 1]] as const) expect(prompt(step, run), `${step} run ${run}`).toContain(BRIEF);
   await expect.poll(() => prompt('integration-slice', 1), { timeout: 90_000 }).not.toBe('');
   expect(prompt('integration-slice', 1)).not.toContain(BRIEF);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(cfg, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §28.4.2 — a flow whose back-to-red returns to a step that is no TDD phase: that step's session is handed the
+// brief, told the work came back to it, and approving it clears the brief. The flow is this test's own input: the
+// shipped chain without its slice steps, so impl-approve returns to infra, whose loop declares no work completion.
+test('§28.4.2 — back-to-red to a step that is no TDD phase hands that step the brief and clears it when the step is approved', { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(4));
+  const SLICE_STEPS = ['red', 'green', 'refactor', 'integration-slice'];
+  const returnToInfra = (yaml: string): string => {
+    const flow = load(yaml) as { steps: { id: string; repeat?: unknown }[] };
+    flow.steps = flow.steps.filter((st) => !SLICE_STEPS.includes(st.id));
+    for (const st of flow.steps) if (st.id === 'impl-approve') st.repeat = { back_to: 'infra', count_input: 'never-repeats' };
+    return dump(flow);
+  };
+  const repo = seedV3ChainRepo('agent-term-e2e-retbrief-', { startStep: 'infra', editFlow: returnToInfra });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-retbrief-home-'));
+  const cfg = seedV3Config('agent-term-e2e-retbrief-cfg-');
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-retbrief-bin-', { realCommitOps: true });
+  seedV3GoalAgent(binDir, 'fake-agent', v3ImplGoals(), {
+    'impl-approve': `${v3Section('impl-approve')}; ${writePromptedArtifact(['## Needs your call', 'None.', completionMarker('impl-approve')])}`,
+  });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: cfg, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await passAutoGate(home, repo, 'infra');
+
+  const atImplApprove = async (): Promise<void> => {
+    await expect.poll(() => readIf(appRunState(repo)), { timeout: EPIC_GATE_WAIT.gate }).toMatch(/step: impl-approve[\s\S]*verdict: clean/);
+    if ((await loopReadout().getAttribute('aria-expanded')) !== 'true') await loopReadout().click();
+  };
+  await atImplApprove();
+  const BRIEF = 'Cover the empty-input case the tests missed';
+  const backTo = loopPanel().locator('[data-gate-option="back-to-red"]');
+  await expect(backTo).toHaveText('Back to infra');
+  await backTo.click();
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  await composer.locator('textarea').fill(BRIEF);
+  await composer.locator('.confirm').click();
+  await expect(composer).toHaveCount(0, { timeout: 15_000 });
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: EPIC_GATE_WAIT.step }).toContain('step: infra\n');
+
+  const briefFile = join(repo, '.agent-terminal', 'loop', 'slice-brief.yaml');
+  await passAutoGate(home, repo, 'infra');
+  expect(existsSync(briefFile)).toBe(false); // its only reader was approved → the brief is cleared
+
+  const prompt = (step: string, run: number): string => readIf(join(repo, '.agent-terminal', `goal-prompt.${step}.${run}.md`));
+  expect(prompt('infra', 2)).toContain(BRIEF);
+  expect(prompt('infra', 2)).toContain('back to the infra step from the impl-approve gate');
+  expect(prompt('infra', 1)).not.toContain(BRIEF);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

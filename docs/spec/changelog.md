@@ -22,6 +22,18 @@
 
 §18.1: the build generates `engine-capabilities.md`, a guide for agents that author flows, from the definitions the flow loader validates against: every flow-definition key and accepted value, with what it does and when to choose it, where flows and loops live in each tier, and the §27.8 lookup order. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md` and replaces it whole on every install, the one exception to per-destination consent; the preview lists it as always replaced. §18.2: the `action` step kind is removed, because the loader accepts only `manual` and `loop`. IPC: the `examples:preview` result gains `alwaysReplaced`, and the destination list gains `engineGuide` (definitions in `src/shared/ipc.ts`).
 
+## simple-dev-v1 — a lighter flow, and the back-to-red control names where it returns
+
+§18.7.1/§28.4.2: the flow catalog gains `simple-dev-v1`, for a ticket that fits one `feature-dev-v3` impl-slice. It plans the ticket and writes its intent in one step, warns at plan approval when the ticket fails the fit check (a RED/GREEN dependency, more than 400 estimated lines, new test infrastructure, or an epic) and flags new complexity that would benefit from `feature-dev-v3`'s wider review, builds the plan in one development goal loop that commits `RED:` and `GREEN:` per increment, and then runs `feature-dev-v3`'s integration review, implementation approval and finalize. It names `dev` as its return step through a `repeat` on `impl-approve` whose count input nothing writes, so the count-driven loop-back never fires. The back-to-red gate control and its composer are now labelled after the step the flow returns to (`Back to red` in `feature-dev-v3`, `Back to dev` in `simple-dev-v1`): the loop view carries that step as `reopenStep`. The decision on the wire is still `back-to-red`. The back-to-red brief now also reaches the loop at the return step, so `simple-dev-v1`'s `dev` step receives it although it declares no `work.completion`; it is cleared when that step is approved, since `dev` is its only reader there, and that step is told the work was sent back to it rather than to a RED phase.
+
+## #283 — PRs merge on a local test proof, not on CI test runs
+
+§27.13: plan approval still flips the PR non-draft, but no longer to trigger CI, since GitHub Actions runs no vitest or e2e on an open PR (the suites run only on the push to `main` a merge creates). N13a now names the `test-proof/vitest` and `test-proof/e2e` statuses from `pnpm run test:proof` (`docs/test-proof.md`) as the checks a reviewer pulls, and drops the recorded override that justified going non-draft mid-impl to run CI.
+
+## A loop error clears when the loop recovers or moves on
+
+§23.6: a loop error stayed on the controller card until someone pressed **Dismiss**, even after the loop had recovered on its own. A stalled turn that resumed and chained into the next step still showed **Loop error** while the terminal showed it working. Now a loop error that is the loop's own error, the one its panel shows (a stalled or failed turn, or an Accept the loop's gate refused), is withdrawn when the flow moves to a new step, or when the loop leaves its error status, as the panel's own error is. Any other loop error (a failed gate side effect, push or save, or an input announced missing on Retry) and every notice keep their lifetime: they stay until dismissed or replaced, so a failed push at an approve is not lost when the gate advances.
+
 ## #221 slice 5 — Clear survives unchanged recovery
 
 - 2026-10-29: §23.6 reconciliation: notification frames use minor 2, preserving minor 1 for loop-message status/dismissal. History and Clear compose the shared pressed-control guard while retaining stale-Clear checks.
