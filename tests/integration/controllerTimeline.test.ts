@@ -82,6 +82,30 @@ it.each(['notification first', 'status first'] as const)('a request raised after
   expect.soft(items.filter(item => item.kind === 'notification' && item.message === request.message).length).toBeLessThanOrEqual(1);
 });
 
+it('a request whose notification arrives before a status that also changes activity stays the newest entry', async () => {
+  const h = await fixture(); const { terminal, report } = await h.connect();
+  await terminal.reportCurrent(null);
+  await report({ activity: 'active' });
+  h.time(3000);
+  await terminal.raise(request);
+  await report({ activity: 'quiet', attention });
+  const items = h.timeline();
+  expect.soft(items[0]).toEqual({ kind: 'notification', message: request.message, receivedAt: 3000, count: 1 });
+  expect.soft(items[1]).toEqual({ kind: 'status', text: expect.stringContaining('Idle'), receivedAt: 3000 });
+});
+
+it('a request that clears through status alone and is re-raised as the current request is a new entry above the clearing', async () => {
+  const h = await fixture(); const { terminal, report } = await h.connect();
+  await terminal.reportCurrent(null);
+  await report({ activity: 'quiet' });
+  h.time(1000); await terminal.raise(request); await report({ activity: 'quiet', attention });
+  h.time(2000); await report({ activity: 'quiet' });
+  h.time(3000); await terminal.reportCurrent(request); await report({ activity: 'quiet', attention });
+  const items = h.timeline();
+  expect.soft(items[0]?.receivedAt).toBe(3000);
+  expect.soft(items[1]).toEqual({ kind: 'status', text: expect.stringContaining('cleared'), receivedAt: 2000 });
+});
+
 it('an older terminal without notification support gets one condition entry for the same request', async () => {
   const h = await fixture(); const { report } = await h.connect(CONTROLLER_LOOP_MESSAGE_MINOR);
   await report({ activity: 'quiet' });

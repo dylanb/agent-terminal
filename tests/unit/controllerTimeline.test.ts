@@ -72,6 +72,11 @@ it('a run starting together with its first step is one entry', async () => {
   expect(result).toHaveLength(1);
 });
 
+it('a run starting on the step it was already on is one entry', async () => {
+  const result = await changes(base({ flow: { ...running, assignment: 'unassigned' } }), base({ flow: running }));
+  expect(result).toHaveLength(1);
+});
+
 it('a run finishing on its last step is one entry containing Completed', async () => {
   const result = await changes(base(), base({ flow: { ...running, assignment: 'completed' } }));
   expect(result).toHaveLength(1);
