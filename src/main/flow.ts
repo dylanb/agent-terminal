@@ -16,7 +16,7 @@ import { heldRunOf, runRecordRead } from './runHoldRead';
 import { isSelectionLocked } from '../shared/flowStarted';
 import type { DispositionRead, ResolvedRunDefinition } from './resolveRunDefinition';
 import { isRecord } from './yamlRecord';
-import { FLOW_HOME_SUBDIR, flowHomeDir } from './flowHome';
+import { FLOW_DEF_FILE, FLOW_HOME_SUBDIR, FLOWS_CATALOG_SUBDIR, flowHomeDir } from './flowHome';
 import { errMsg, isErrno } from './errno';
 import { readBoundedNoFollow } from './boundedRead';
 import { displaySafeEcho, MAX_ECHOED_LOAD_ERROR_LENGTH, MAX_ECHOED_REASON_LENGTH } from '../shared/controlChars';
@@ -24,6 +24,10 @@ import { offersHeldRunRecovery, shownHeldStep, type HeldRunView } from '../share
 import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { GATE_AUTHORITIES, isGateAuthority, type GateAuthority } from '../shared/gateAuthority';
+import { isOneOf } from '../shared/oneOf';
+import { ACTED_INPUT_TYPES, FLOW_BOOTSTRAPS, FLOW_STEP_KINDS, MAX_SLICES, type ActedInputType, type FlowBootstrap, type FlowStepKind } from '../shared/engineCapabilities/flow';
+
+const INPUT_TYPE_REFS: Readonly<Record<ActedInputType, keyof FlowRefs>> = { 'github-ticket': 'ticket', pr: 'pr' };
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -44,11 +48,9 @@ export interface FlowInputDef {
   required: boolean;
 }
 
-/** A §18.1 step. `manual`: a human produces an artifact. `loop` (§24.2.3 T2): runs an agent-loop,
- *  binding its LoopDef by name (`loop`). The `action` kind (§18.2) is a later phase. */
 export interface FlowStepDef {
   id: string;
-  kind: 'manual' | 'loop';
+  kind: FlowStepKind;
   skill?: string;
   todoTemplate?: string;
   /** The bound agent-loop LoopDef name; `loop` steps only. */
@@ -59,9 +61,7 @@ export interface FlowStepDef {
    *  flow file, not of what is installed on the machine. */
   loopNamespace?: LoopBinding;
   gateAuthority?: GateAuthority;
-  /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
-   *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
-  bootstrap?: 'pickup';
+  bootstrap?: FlowBootstrap;
   inputs?: FlowInputDef[];
   /** §28.4 loop-back (repeat) primitive: on advancing OFF this step, jump the flow back to `backTo` (an
    *  EARLIER step) instead of the next step, until it has looped back `count` times. `countInput` names the
@@ -69,10 +69,6 @@ export interface FlowStepDef {
    *  [1, MAX_SLICES]. The mechanism §28.2's slice-loop×N needs to run RED→GREEN→refactor once per impl-slice. */
   repeat?: { backTo: string; countInput: string };
 }
-
-/** Upper bound on loop-back iterations (§28.4): an untrusted plan-supplied slice count is clamped to this,
- *  so it can neither disable the loop (fails to 1) nor drive it unbounded (CWE-20/770). */
-export const MAX_SLICES = 50;
 
 export interface FlowDefinition {
   name: string;
@@ -87,9 +83,6 @@ export type FlowLoad =
 
 export { FLOW_HOME_SUBDIR, flowHomeDir };
 
-/** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
- *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is in flowHome.ts). */
-export const FLOW_DEF_FILE = 'flow.yaml';
 const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
 /** Whether `root` holds a flow definition at its flow home — the single presence gate the local-first loader
@@ -109,8 +102,6 @@ export function flowDefinitionFile(root: string): string {
 export function resumesAt(definition: FlowDefinition, step: string): boolean {
   return definition.steps.some((s) => s.id === step);
 }
-
-export const FLOWS_CATALOG_SUBDIR = 'flows';
 
 /** The app-state catalog of selectable flows (§18.1/§18.7.1) — one per-flow-home entry per subdirectory. The
  *  install writes through this resolver and the catalog reader consumes it, so the seeded location and the
@@ -198,13 +189,12 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
 
-  // Only `manual` and `loop` kinds are in scope (§24.2.3 T1/T2); the `action` kind (§18.2) is rejected.
   const steps: FlowStepDef[] = [];
   for (const raw of doc.steps) {
     if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
       return { ok: false, error: 'flow.yaml step is missing an id' };
-    if (raw.kind !== 'manual' && raw.kind !== 'loop')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+    if (!isOneOf(FLOW_STEP_KINDS, raw.kind))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: ${FLOW_STEP_KINDS.join(', ')})` };
     if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
       return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
     // §27.9.1 N9b.1 — the field names who decides a loop gate; a non-loop step has none to decide.
@@ -235,8 +225,8 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
     if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
-    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
-      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+    if (raw.bootstrap !== undefined && !isOneOf(FLOW_BOOTSTRAPS, raw.bootstrap))
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: ${FLOW_BOOTSTRAPS.join(', ')})` };
     const inputs = parseInputs(raw.inputs);
     if (inputs === 'invalid')
       return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
@@ -262,7 +252,7 @@ function parseFlowDefinition(raw: string, file: string): FlowLoad {
       ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
       ...(raw.kind === 'loop' ? { loop: raw.loop as string, loopNamespace } : {}),
       ...(gateAuthority !== undefined ? { gateAuthority } : {}),
-      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+      ...(raw.bootstrap !== undefined ? { bootstrap: raw.bootstrap } : {}),
       ...(inputs.length > 0 ? { inputs } : {}),
       ...(repeat ? { repeat } : {}),
     });
@@ -404,15 +394,17 @@ export function createFlowMachine(
   const returnStep = steps.find((s) => s.repeat)?.repeat?.backTo ?? null;
   // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
   // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
-  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
+  const typedInput = (type: ActedInputType): { step: FlowStepDef; name: string } | undefined => {
     for (const step of steps) {
       const input = (step.inputs ?? []).find((i) => i.type === type);
       if (input) return { step, name: input.name };
     }
     return undefined;
   };
-  const ticketInput = typedInput('github-ticket');
-  const prInput = typedInput('pr');
+  const refInputs = ACTED_INPUT_TYPES.flatMap((type) => {
+    const input = typedInput(type);
+    return input ? [{ field: INPUT_TYPE_REFS[type], ...input }] : [];
+  });
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -468,14 +460,14 @@ export function createFlowMachine(
     if (n === undefined || !Number.isInteger(n) || n < 1) return 1;
     return Math.min(n, MAX_SLICES);
   };
-  const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
+  const computeRefs = (entered: readonly FlowStepDef[]): FlowRefs | undefined => {
     // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
     // linkedIssues/pr went with the bridge.
-    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
-    const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
-    if (typeof ticket === 'number') refs.ticket = ticket;
-    if (typeof pr === 'number') refs.pr = pr;
+    for (const { field, step, name } of refInputs) {
+      const value = entered.includes(step) ? numericInput(name) : undefined;
+      if (typeof value === 'number') refs[field] = value;
+    }
     return hasFlowRefs(refs) ? refs : undefined;
   };
 
@@ -492,9 +484,7 @@ export function createFlowMachine(
     };
     // §24.2.3 T7 (refs) / §27.15 (loop view).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
-    const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
-    const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
-    const refs = computeRefs({ ticketStepEntered, prStepEntered });
+    const refs = computeRefs(entered);
     const withRefs = refs ? { ...base, refs } : base;
     // §27.15 — the loop-view provider is selected on the most-recent loop step's namespace binding. Every
     // binding names the surviving (§27) engine except an explicitly-`legacy` one, which names no surviving

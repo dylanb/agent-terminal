@@ -15,16 +15,29 @@ import {
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
-import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, LOOP_OVERRIDE_FILE, LOOP_OVERRIDE_MAP_KEY, loopDefRelPath } from './appLoopPaths';
 import type {
   AppBootstrapLabelMutation,
   AppBootstrapWipePolicy,
 } from '../shared/appBootstrap';
-
-/** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
- *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
- *  bumps it. A def declaring any other version fails to resolve (never partially parsed). */
-export const LOOP_DEF_V2_VERSION = 'v2';
+import {
+  BOUNDARY_MODES,
+  EXEC_SIDE_EFFECT_KIND,
+  FROZEN_CHECK_VALUES,
+  GOAL_CONDITION_MAX_CHARS,
+  LOOP_DEF_V2_VERSION,
+  LOOP_TOP_KEYS,
+  PICKUP_CONFLICT_POLICIES,
+  PICKUP_LABEL_ACTIONS,
+  PICKUP_LABEL_TARGETS,
+  POLISH_POLICIES,
+  REQUEST_CHANGES_OPTION,
+  WORK_COMPLETIONS,
+  type BoundaryMode,
+  type PolishPolicy,
+  type WorkCompletion,
+} from '../shared/engineCapabilities/loop';
+import { isOneOf } from '../shared/oneOf';
 
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
@@ -53,7 +66,7 @@ export interface ReviewerCatalogEntry {
 /** One actor-boundary policy (§27.7): `clear`, or `compact` carrying the message naming what survives it. */
 export interface BoundaryPolicy {
   boundary: string;
-  mode: 'clear' | 'compact';
+  mode: BoundaryMode;
   message?: string;
 }
 
@@ -72,16 +85,8 @@ export interface GateOptionDef {
   sideEffects: GateSideEffect[];
 }
 
-/** The framework-neutral phase-completion mode a loop declares (§28.4/§28.5.5) — which machine completion
- *  predicate its phase gates on: `red`/`green` gate the WORK turn (S3/S4), `refactor` gates each REVIEW-AND-FIX
- *  round (S5, §28.5.3 — the refactor loop "is review-and-fix", so it produces no work-turn result file). A
- *  closed set recognized by exact string, single-sourced so the field type AND the parser's validation both
- *  derive from it (mirroring PHASE_OUTCOMES). */
-export const WORK_COMPLETIONS = ['red', 'green', 'refactor'] as const;
-export type WorkCompletion = (typeof WORK_COMPLETIONS)[number];
-const WORK_COMPLETION_SET: ReadonlySet<string> = new Set(WORK_COMPLETIONS);
 export function isWorkCompletion(value: string): value is WorkCompletion {
-  return WORK_COMPLETION_SET.has(value);
+  return isOneOf(WORK_COMPLETIONS, value);
 }
 
 /** §28.5.5 F1 — the completion modes whose work turn produces NO result file and so are EXEMPT from the
@@ -106,10 +111,6 @@ export interface WorkRecipe {
   /** §28.5.1 */
   frozenCheck?: true;
 }
-
-/** §27.3 — the longest goal condition a def may declare: the agent caps a goal at 4000 characters, and the
- *  engine's framing around the condition must fit beside it. */
-export const GOAL_CONDITION_MAX_CHARS = 2000;
 
 /** §27.3/§27.8 */
 export type ReviewRounds = { kind: 'engine'; consolidator: string } | { kind: 'none' };
@@ -142,13 +143,8 @@ export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
-/** §27.8 — whether a loop's review-and-fix rounds fix polish-only findings or defer them to a later
- *  full-catalog sweep. Closed set, recognized by exact string. */
-export const POLISH_POLICIES = ['fix', 'defer'] as const;
-export type PolishPolicy = (typeof POLISH_POLICIES)[number];
-
 function isPolishPolicy(value: string): value is PolishPolicy {
-  return (POLISH_POLICIES as readonly string[]).includes(value);
+  return isOneOf(POLISH_POLICIES, value);
 }
 
 /** The prescribed round-report structure (§27.5) and the polish policy its dispositions follow (§27.8). */
@@ -200,22 +196,6 @@ export interface LoopDefV2Context {
 function flowLoopsDir(loopsRoot: string, flow: string): string | null {
   return isSafePathSegment(flow) ? path.join(loopsRoot, flow) : null;
 }
-
-const ALLOWED_TOP_KEYS = new Set([
-  'version',
-  'name',
-  'work',
-  'reviewers',
-  'consolidator',
-  'boundaries',
-  'report',
-  'gate',
-  'pickup',
-  'inputs',
-  'outputs',
-  'exec',
-  'brief',
-]);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
@@ -312,8 +292,8 @@ function toBoundaries(raw: unknown): BoundaryPolicy[] {
     if (!isRecord(b)) fail('each boundary must be a mapping');
     const rec = b as Record<string, unknown>;
     const boundary = requireString(rec.boundary, 'boundary name');
-    if (rec.mode !== 'clear' && rec.mode !== 'compact') fail(`boundary ${boundary} mode must be clear or compact`);
-    const mode = rec.mode as 'clear' | 'compact';
+    const mode = rec.mode;
+    if (!isOneOf(BOUNDARY_MODES, mode)) fail(`boundary ${boundary} mode must be ${BOUNDARY_MODES.join(' or ')}`);
     if (mode === 'compact') return { boundary, mode, message: requireString(rec.message, `boundary ${boundary} compact message`) };
     return { boundary, mode };
   });
@@ -333,7 +313,7 @@ function toGate(raw: unknown): GateOptionDef[] {
       // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
       // through a gate side-effect, so the executable surface is single rather than scattered (CWE-829). Def
       // tiers carry no trust distinction.
-      if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
+      if (kind === EXEC_SIDE_EFFECT_KIND) fail(`gate option ${option} side-effect must not name kind: ${EXEC_SIDE_EFFECT_KIND} (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
     });
@@ -362,9 +342,8 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
 
 function toWipePolicy(raw: unknown): WipePolicy {
   if (raw === undefined) return { mode: 'abort' };
-  if (raw === 'abort') return { mode: 'abort' };
-  if (raw === 'wipe-and-retry') return { mode: 'wipe-and-retry' };
-  fail(`pickup on_conflict must be abort or wipe-and-retry: ${String(raw)}`);
+  if (isOneOf(PICKUP_CONFLICT_POLICIES, raw)) return { mode: raw };
+  fail(`pickup on_conflict must be ${PICKUP_CONFLICT_POLICIES.join(' or ')}: ${String(raw)}`);
 }
 
 function toPickupLabels(raw: unknown): PickupLabelV2[] {
@@ -372,9 +351,10 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   if (!Array.isArray(raw)) fail('pickup initial_labels must be a list');
   return (raw as unknown[]).map((l) => {
     const rec = requireRecord(l, 'pickup initial_labels entry');
-    if (rec.action !== 'add' && rec.action !== 'remove') fail(`pickup label action must be add or remove: ${String(rec.action)}`);
-    if (rec.target !== 'issue' && rec.target !== 'pr') fail(`pickup label target must be issue or pr: ${String(rec.target)}`);
-    return { action: rec.action, target: rec.target, label: requireNonBlankString(rec.label, 'pickup label') };
+    const { action, target } = rec;
+    if (!isOneOf(PICKUP_LABEL_ACTIONS, action)) fail(`pickup label action must be ${PICKUP_LABEL_ACTIONS.join(' or ')}: ${String(action)}`);
+    if (!isOneOf(PICKUP_LABEL_TARGETS, target)) fail(`pickup label target must be ${PICKUP_LABEL_TARGETS.join(' or ')}: ${String(target)}`);
+    return { action, target, label: requireNonBlankString(rec.label, 'pickup label') };
   });
 }
 
@@ -400,7 +380,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   const rec = doc as Record<string, unknown>;
 
   for (const key of Object.keys(rec)) {
-    if (!ALLOWED_TOP_KEYS.has(key)) fail(`unknown key: ${key}`);
+    if (!isOneOf(LOOP_TOP_KEYS, key)) fail(`unknown key: ${key}`);
   }
   if (rec.version !== LOOP_DEF_V2_VERSION) fail(`unknown schema version: ${String(rec.version)} (expected ${LOOP_DEF_V2_VERSION})`);
   // `name` is resolver-assigned from the resolving path — def content cannot forge it. A declared `name` is
@@ -418,7 +398,7 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
     if (!isWorkCompletion(c)) fail(`unknown work completion: ${c}`);
     workCompletion = c;
   }
-  if (work.frozen_check !== undefined && work.frozen_check !== true) fail('work frozen_check must be true when declared');
+  if (work.frozen_check !== undefined && !isOneOf(FROZEN_CHECK_VALUES, work.frozen_check)) fail('work frozen_check must be true when declared');
   const workFrozenCheck = work.frozen_check === true;
 
   let workGoal: string | undefined;
@@ -457,8 +437,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, rep
   }
 
   const gate = toGate(rec.gate);
-  if (rounds.kind === 'none' && gate.some((g) => g.option === 'request-changes')) {
-    fail('gate option request-changes re-enters a review round, and this loop runs none');
+  if (rounds.kind === 'none' && gate.some((g) => g.option === REQUEST_CHANGES_OPTION)) {
+    fail(`gate option ${REQUEST_CHANGES_OPTION} re-enters a review round, and this loop runs none`);
   }
 
   let exec: ExecSideEffect | null = null;
@@ -516,7 +496,7 @@ interface DefCandidate {
 function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
   let raw: string;
   try {
-    raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
+    raw = readFileSync(path.join(repoDir, LOOP_OVERRIDE_FILE), 'utf8');
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return null;
     return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
@@ -527,9 +507,10 @@ function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: 
   } catch {
     return null;
   }
-  if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
+  const loops = isRecord(doc) ? doc[LOOP_OVERRIDE_MAP_KEY] : undefined;
+  if (!isRecord(loops) || typeof loops[name] !== 'string') return null;
   const root = path.resolve(repoDir);
-  const target = path.resolve(root, doc.loops[name]);
+  const target = path.resolve(root, loops[name]);
   // The repo tier root is a jail sitting INSIDE untrusted content, where a link can be planted at the jail's
   // own final segment — resolveJail. A null here REFUSES with a reason (unlike a tier candidate, which falls
   // through to the next tier).
@@ -562,8 +543,8 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
     return jail === null ? [] : [{ root, tierName, jail }];
   });
   const candidateIn = (tier: (typeof tierCandidates)[number], dir: string): DefCandidate => {
-    const defDir = path.join(dir, name);
-    return { tierRoot: tier.root, defDir, defPath: path.join(defDir, `${name}.yaml`), tierName: tier.tierName, jail: tier.jail };
+    const defPath = path.join(dir, loopDefRelPath(name));
+    return { tierRoot: tier.root, defDir: path.dirname(defPath), defPath, tierName: tier.tierName, jail: tier.jail };
   };
   for (const tier of tierCandidates) {
     const flowDir = ctx.flow === undefined ? null : flowLoopsDir(tier.root, ctx.flow);

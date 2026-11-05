@@ -5,6 +5,8 @@ import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
 import { createGitHubRepositorySource, type GitHubRepositoryIdentity } from './githubRepository';
 import { createRealPullRequestLookup, pickupMismatch, type PullRequest } from './pullRequestLookup';
+import { ACTED_GH_ACTIONS } from '../shared/engineCapabilities/loop';
+import { isOneOf } from '../shared/oneOf';
 
 export interface AppGateSideEffectCtx {
   pr: number | null;
@@ -56,6 +58,7 @@ export function createAppGateGitHub(
   };
 
   return async (action, ctx) => {
+    if (!isOneOf(ACTED_GH_ACTIONS, action)) throw new Error(`unknown approve side-effect action: ${action}`);
     switch (action) {
       case 'mark-ready':
         if (ctx.pr === null) return { outcome: 'no-target', reason: 'no PR to mark ready' };
@@ -85,8 +88,10 @@ export function createAppGateGitHub(
           ctx.bootstrap?.issue ?? null,
         );
         return { outcome: 'done' };
-      default:
-        throw new Error(`unknown approve side-effect action: ${action}`);
+      default: {
+        const unhandled: never = action;
+        return unhandled;
+      }
     }
   };
 }

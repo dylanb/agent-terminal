@@ -8,6 +8,9 @@ import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { reviewRoster } from '../../src/main/reviewTurn';
 import { installedCodexReviewerProblem, installedReviewerProblem, renderCodexReviewerAgent, renderReviewerAgent, reviewerAgentName } from '../../src/main/reviewerAgents';
 import { parse as parseToml } from 'smol-toml';
+import { useBuiltBundle } from '../helpers/builtBundle';
+
+const builtBundle = useBuiltBundle();
 
 // §27.4 — every reviewer of every bundled loop is installed as a Claude Code sub-agent whose own instructions
 // are its charter, so a reviewer is never asked to go and read it. Expected values come from the bundle itself.
@@ -61,7 +64,7 @@ let dirs: InstallDestination[];
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'reviewer-agents-cfg-'));
-  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
+  dirs = exampleInstallDirs(builtBundle(), { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });

@@ -5,10 +5,11 @@
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { FLOWS_CATALOG_SUBDIR, FLOW_DEF_FILE, FLOW_HOME_SUBDIR, catalogEntryDefFile, flowCatalogDir } from './flow';
+import { FLOW_HOME_SUBDIR, catalogEntryDefFile, flowCatalogDir } from './flow';
 import { confinedRealPathResult, resolveJail, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { isSafeCatalogId } from '../shared/pathSegment';
 import { type CatalogResolution, type CatalogTier } from './resolveRunDefinition';
+import { FLOWS_CATALOG_SUBDIR, FLOW_DEF_FILE } from './flowHome';
 
 /** The two roots a pointer-named id is resolved against: the untrusted worktree, and the app-owned global. */
 export interface CatalogRoots {

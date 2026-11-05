@@ -1,10 +1,10 @@
-export type AppBootstrapWipePolicy =
-  | { mode: 'abort' }
-  | { mode: 'wipe-and-retry' };
+import type { PickupConflictPolicy, PickupLabelAction, PickupLabelTarget } from './engineCapabilities/loop';
+
+export type AppBootstrapWipePolicy = { [M in PickupConflictPolicy]: { mode: M } }[PickupConflictPolicy];
 
 export interface AppBootstrapLabelMutation {
-  action: 'add' | 'remove';
-  target: 'issue' | 'pr';
+  action: PickupLabelAction;
+  target: PickupLabelTarget;
   label: string;
 }
 

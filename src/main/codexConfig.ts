@@ -2,6 +2,7 @@
 
 import os from 'node:os';
 import path from 'node:path';
+import { LOOPS_V2_SUBDIR } from './userConfig';
 
 /** `null` when the result is relative: Codex resolves a relative CODEX_HOME against its own cwd, so the value
  *  names no single directory, and anchoring it at ours would seed one Codex never reads (CWE-829). */
@@ -16,7 +17,7 @@ export function codexHome(): string | null {
 }
 
 export function codexLoopsV2Dir(codexHomeDir: string): string {
-  return path.join(codexHomeDir, 'loops-v2');
+  return path.join(codexHomeDir, LOOPS_V2_SUBDIR);
 }
 
 export function codexAgentsDir(codexHomeDir: string): string {

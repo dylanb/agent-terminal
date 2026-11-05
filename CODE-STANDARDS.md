@@ -175,6 +175,28 @@ how a mispackaged bundle plans zero files and reports a *successful install of n
 walk uses it. A best-effort *reader* that treats any failure as "nothing to show" (the todo-template
 picker) is a different, correct policy — the rule is not "every readdir routes here."
 
+## Closed lists — one list, `isOneOf` for membership, the compiler for every use
+
+A closed set of values the code branches on (a step kind, a gate option, a side-effect kind) is **one `as
+const` list** with its type derived from it (`ACTED_SIDE_EFFECT_KINDS` / `ActedSideEffectKind`), never a
+union written out beside a list that "obviously agrees". Two halves keep it honest:
+
+- **Membership goes through `isOneOf` (`src/shared/oneOf.ts`).** It narrows an `unknown` read from a file,
+  an IPC payload or YAML to the list's type. A hand-written `(LIST as readonly string[]).includes(v)` or
+  `LIST.includes(v as T)` casts away exactly the check it performs, and its copies drift (one checked
+  `typeof v === 'string'`, the next forgot). Lint enforces this half (`ONE_OF` in `eslint.config.mjs`).
+- **Every place that acts on each member is bound to the list at compile time**: a `switch` ending in
+  `default: { const unhandled: never = x; return unhandled; }`, or a `Readonly<Record<T, …>>` table. Adding a
+  member then fails `pnpm typecheck` at every place that has not decided what to do with it; without the
+  binding, a new member silently falls through an `if` chain or a missing `case`. A case or key that names
+  no member fails too (TS2678, TS2353), so a typo cannot hide.
+
+One definition stops two copies of the list; this stops the code that acts on it from ignoring a member
+added later. A set of plain strings looked up but never branched on per member (`agentKind.ts`'s launcher
+names) is not a closed list in this sense. Live instances: `src/shared/engineCapabilities/` (the lists the
+flow and loop loaders and the engine guide share), `appGateDecision.ts` and `appGateGithub.ts` (exhaustive
+dispatch), `flow.ts`'s input-type refs table.
+
 ## Validating an untrusted value that feeds a safety limit — where, and which way it fails
 
 A value read from attacker-plantable persisted state (`.agent-terminal/loop/run-state.yaml`, any on-disk

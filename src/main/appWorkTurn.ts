@@ -58,13 +58,6 @@ export function sliceArtifact(artifact: { path: string; rel: string }, slice: nu
   return { path: insertSliceSuffix(artifact.path, slice), rel: insertSliceSuffix(artifact.rel, slice) };
 }
 
-/** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
- *  completion check reads back (§27.12) — present-and-marker, never a quality judgment. Anchored on the
- *  step, so it is stable across retries of the same turn and distinct between steps. */
-export function completionMarker(stepId: string): string {
-  return `<!-- agent-terminal:work-turn-complete:${stepId} -->`;
-}
-
 /** Whether the artifact is well-formed (§27.12): present AND carrying the marker. `content` is the domain
  *  concept "the artifact's content" (null = absent/unreadable) — the fs read is the caller's, so this stays
  *  a pure predicate. */

@@ -1,3 +1,15 @@
+## #276 slice 5 — the engine-capabilities guide covers the turn contract
+
+§18.1: the guide now states the turn contract — the artifact marker line, the turn-done file and turn keys, the `loop-capabilities.yaml` keys, and where a `{…}` slot is expanded or rejected — and how briefs, recipes and charters become turns.
+
+## #276 slice 3 — the engine-capabilities guide covers loop definitions
+
+§18.1: the guide now lists every loop-definition key and accepted value, including the gate options, side-effect kinds and `gh` actions the engine acts on and the args each side-effect kind reads. The accepted flow and loop values have one shared definition that both loaders validate against and the guide is generated from.
+
+## #276 slice 1 — an installed engine-capabilities guide for flow authors
+
+§18.1: the build generates `engine-capabilities.md`, a guide for agents that author flows, from the definitions the flow loader validates against: every flow-definition key and accepted value, with what it does and when to choose it, where flows and loops live in each tier, and the §27.8 lookup order. Install examples writes it to `<A>/.agent-terminal/engine-capabilities.md` and replaces it whole on every install, the one exception to per-destination consent; the preview lists it as always replaced. §18.2: the `action` step kind is removed, because the loader accepts only `manual` and `loop`. IPC: the `examples:preview` result gains `alwaysReplaced`, and the destination list gains `engineGuide` (definitions in `src/shared/ipc.ts`).
+
 ## simple-dev-v1 — a lighter flow, and the back-to-red control names where it returns
 
 §18.7.1/§28.4.2: the flow catalog gains `simple-dev-v1`, for a ticket that fits one `feature-dev-v3` impl-slice. It plans the ticket and writes its intent in one step, warns at plan approval when the ticket fails the fit check (a RED/GREEN dependency, more than 400 estimated lines, new test infrastructure, or an epic) and flags new complexity that would benefit from `feature-dev-v3`'s wider review, builds the plan in one development goal loop that commits `RED:` and `GREEN:` per increment, and then runs `feature-dev-v3`'s integration review, implementation approval and finalize. It names `dev` as its return step through a `repeat` on `impl-approve` whose count input nothing writes, so the count-driven loop-back never fires. The back-to-red gate control and its composer are now labelled after the step the flow returns to (`Back to red` in `feature-dev-v3`, `Back to dev` in `simple-dev-v1`): the loop view carries that step as `reopenStep`. The decision on the wire is still `back-to-red`. The back-to-red brief now also reaches the loop at the return step, so `simple-dev-v1`'s `dev` step receives it although it declares no `work.completion`; it is cleared when that step is approved, since `dev` is its only reader there, and that step is told the work was sent back to it rather than to a RED phase.

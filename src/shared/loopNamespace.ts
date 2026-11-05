@@ -1,3 +1,5 @@
+import { isOneOf } from './oneOf';
+
 // The closed set of def namespaces a flow step's loop binding may name that select a SURVIVING engine
 // (§27.15). The N8 sweep narrowed it to one member: the retired in-terminal loop engine and its `legacy`
 // namespace are gone. The
@@ -34,7 +36,7 @@ export type LoopBinding = LoopNamespace | typeof RETIRED_LOOP_NAMESPACE;
 /** True for a member of the surviving set only — the affirmative SELECTION test (never the negation of the
  *  deleted member), so a marked binding is unbindable by construction. */
 export function isLoopNamespace(v: unknown): v is LoopNamespace {
-  return typeof v === 'string' && (LOOP_NAMESPACES as readonly string[]).includes(v);
+  return isOneOf(LOOP_NAMESPACES, v);
 }
 
 /** True for a value the loader can PARSE onto a step: a surviving namespace, or the retired `legacy` literal

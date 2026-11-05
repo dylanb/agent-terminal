@@ -7,6 +7,7 @@ import {
   resolveExampleCommandsDir,
   resolveExampleLoopsV2Dir,
   resolveExampleCodexSkillsDir,
+  resolveEngineGuideFile,
 } from '../../src/main/exampleAssets';
 import type { BundleLocation } from '../../src/main/bundleLocation';
 
@@ -90,4 +91,11 @@ describe('extraResources packaged-path coupling', () => {
       expect(builderYml).toMatch(new RegExp(`to:\\s*${to.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm'));
     });
   }
+
+  it('ships the built engine guide from the build output to the exact path its packaged resolver reads back (#276)', () => {
+    const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const from = path.relative(root, resolveEngineGuideFile({ packaged: false, appPath: path.join(root, 'out', 'main') }));
+    const to = path.relative(RESOURCES, resolveEngineGuideFile(packaged));
+    expect(builderYml).toMatch(new RegExp(`from:\\s*${escape(from)}\\s*\\n\\s*to:\\s*${escape(to)}\\s*$`, 'm'));
+  });
 });

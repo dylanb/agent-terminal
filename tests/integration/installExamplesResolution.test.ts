@@ -9,6 +9,9 @@ import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 import { FEATURE_DEV_ID } from '../../src/main/exampleAssets';
 import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { bundledFlowOf } from '../helpers/bundledLoops';
+import { useBuiltBundle } from '../helpers/builtBundle';
+
+const builtBundle = useBuiltBundle();
 
 const BUNDLE_FLOW = path.resolve('example', 'flows', 'feature-dev-v3');
 const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
@@ -38,7 +41,7 @@ beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-res-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'install-res-cfg-'));
   repo = mkdtempSync(path.join(tmpdir(), 'install-res-repo-'));
-  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
+  dirs = exampleInstallDirs(builtBundle(), { flowGlobalDir: home, configDir: configRoot, codexHome: path.join(home, '.codex') });
 });
 afterEach(() => {
   for (const d of [home, configRoot, repo]) rmSync(d, { recursive: true, force: true });

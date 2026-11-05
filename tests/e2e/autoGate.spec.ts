@@ -16,7 +16,6 @@ import { recordDisposition } from '../../src/main/runDisposition';
 import { createTrustedPickups } from '../../src/main/trustedPickups';
 import { readRedTestChanges } from '../../src/main/redTestChanges';
 import { readGateRunState } from '../../src/main/gateRunState';
-import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleEpicPlan } from '../../src/shared/epicPlan';
 import {
   b64,
@@ -54,6 +53,7 @@ import {
   type AutoGateStep,
   type GateEntry,
 } from './autoGateHarness';
+import { completionMarker } from '../../src/shared/loopTurn';
 
 // #137 — §27.9.1 per-step gate authority: an `auto` loop step's clean gate is decided by the engine through the
 // same approve a human click runs; anything else waits for the human.

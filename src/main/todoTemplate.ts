@@ -3,11 +3,11 @@
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
+import { TODO_TEMPLATES_SUBDIR } from './flowHome';
 
 /** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
  *  by the reader that lists them and the installer that seeds them — two copies would let the installer
  *  seed a directory, or a file extension, the reader does not look for (CLAUDE.md writer↔reader rule). */
-export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
 export function todoTemplatesDir(flowDir: string): string {
   return path.join(flowDir, TODO_TEMPLATES_SUBDIR);
 }

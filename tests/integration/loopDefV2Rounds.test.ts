@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GOAL_CONDITION_MAX_CHARS, resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
+import { resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
+import { GOAL_CONDITION_MAX_CHARS } from '../../src/shared/engineCapabilities/loop';
 
 // §27.3/§27.8 — whether a loop runs engine review rounds is decided by its def: a consolidator means
 // review-and-fix rounds judged by it; no consolidator means the work turn goes straight to the gate. A goal

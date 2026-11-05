@@ -11,7 +11,7 @@ import { readBoundedNoFollow } from './boundedRead';
 import { flowHomeDir, flowHomeLeaf } from './flowHome';
 import { isSafeCatalogId, MAX_CATALOG_ID_LENGTH } from '../shared/pathSegment';
 import { displaySafeEcho } from '../shared/controlChars';
-import { type PointerRead } from './resolveRunDefinition';
+import type { PointerRead } from './resolveRunDefinition';
 
 export const ACTIVE_FLOW_FILE = 'active-flow.yaml';
 
