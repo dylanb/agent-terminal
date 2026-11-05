@@ -391,7 +391,7 @@ Agent Terminal is developed largely by coding agents running inside Agent Termin
 
 ```sh
 pnpm test                  # typecheck, then vitest: unit, integration and browser projects
-pnpm run lint              # eslint, including the repo's local rules
+pnpm run lint              # eslint, including the repo's local rules, then a parse check of every Markdown Mermaid diagram
 ./scripts/e2e-podman.sh    # Playwright _electron e2e in a Linux container under Xvfb
 ```
 
