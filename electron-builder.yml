@@ -31,8 +31,9 @@ extraResources:
   - from: example/codex-skills
     to: example/codex-skills
 mac:
-  # A release needs a real Developer ID and hardened runtime for notarization. Do not pin an
-  # ad-hoc identity here; development bundle signing belongs to scripts/sign-bundle.sh.
+  # Release signing is chosen on the command line by .github/workflows/release.yml (ad-hoc today; see
+  # docs/releasing.md § macOS signing). Do not pin an identity here; development bundle signing belongs
+  # to scripts/sign-bundle.sh.
   target:
     - dmg
     - zip

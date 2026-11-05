@@ -6,25 +6,19 @@
 # job's live run, not a number pinned here that drifts on the next test added.
 name: e2e
 
-# Trigger on push and pull_request. pull_request lists its types explicitly because naming any type
-# replaces GitHub's defaults, so opened/synchronize/reopened are re-listed and ready_for_review is
-# added — a draft→ready flip then starts an e2e run without needing a new push. (A head commit
-# carrying [skip ci] still suppresses the run; GitHub honors [skip ci] on pull_request events too, so
-# the commit that marks a PR ready must omit it.) This workflow is not yet on the default branch, and
-# scoping push to a branch filter would leave this PR's branch with no e2e run. The concurrency group
-# is keyed on the head commit SHA — which a push and its pull_request share — so if both ever fire for
-# one commit they collapse into a single run (github.ref would not, since the two carry different refs).
+# A PR merges on its local test proof (docs/test-proof.md), so this suite runs only on the push to main
+# that the merge creates: the check that the proofs were honest. A head commit carrying [skip ci]
+# suppresses that run, which is why a PR's squash title and description must not contain it.
 on:
   push:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
 
 # This job only checks out and runs tests; it needs no write scopes.
 permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.pull_request.head.sha || github.sha }}
+  group: e2e-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

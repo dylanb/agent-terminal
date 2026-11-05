@@ -23,7 +23,13 @@ if [ -n "${E2E_IO_DIR:-}" ]; then
   code=$?
 else
   # E2E_GREP optionally narrows the run (passed through from scripts/e2e-podman.sh).
-  pnpm exec playwright test --reporter=list ${E2E_GREP:+-g "$E2E_GREP"}
+  if [ -n "${E2E_REPORT_DIR:-}" ]; then
+    node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ node: process.version, electron: require("electron/package.json").version, image: process.argv[2] }))' \
+      "$E2E_REPORT_DIR/environment.json" "${E2E_IMAGE_ID:-}"
+    PLAYWRIGHT_JSON_OUTPUT_NAME="$E2E_REPORT_DIR/report.json" pnpm exec playwright test --forbid-only --reporter=list,json ${E2E_GREP:+-g "$E2E_GREP"}
+  else
+    pnpm exec playwright test --reporter=list ${E2E_GREP:+-g "$E2E_GREP"}
+  fi
   code=$?
 fi
 kill "$XVFB_PID" 2>/dev/null

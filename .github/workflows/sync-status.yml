@@ -1,0 +1,31 @@
+# Reports how many commits each sync source (sync/*.json) has that this repo has not pulled in yet (docs/sync.md).
+# Prints counts only: a private source's commit subjects must not reach this repo's Actions logs.
+name: sync-status
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 13 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # checkout's persisted GITHUB_TOKEN header is sent to every github.com URL and would override
+          # the private source's token in SOFTWARE_FACTORY_URL.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - run: node scripts/sync.mjs report >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SOFTWARE_FACTORY_URL: ${{ secrets.SOFTWARE_FACTORY_URL }}

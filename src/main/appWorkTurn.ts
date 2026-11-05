@@ -4,7 +4,7 @@
 // completion marker the work prompt instructs and the completion check reads (ONE definition, so the
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
-import type { SliceBrief } from './appLoopState';
+import type { SliceBriefDelivery } from './sliceBriefReader';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 import type { ChainedInput } from './chainedInput';
@@ -102,7 +102,7 @@ export interface AppWorkPromptReq {
    *  re-derives its target from ambient state). Absent when the flow resolved no ticket. */
   ticket?: number;
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase turn belongs to. */
-  sliceBrief?: SliceBrief;
+  sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
   loopBrief?: string;
   /** §27.3 */
@@ -205,14 +205,20 @@ export function goalProgressLines(req: { progressRel: string; notesRel: string; 
 }
 
 /** §28.4.2 — the back-to-RED brief as the work turn states it. */
-export function sliceBriefLines(brief: SliceBrief, audience: 'work' | 'fixer'): string[] {
-  const lead =
-    audience === 'work'
+export function sliceBriefLines({ brief, reader }: SliceBriefDelivery, audience: 'work' | 'fixer'): string[] {
+  const head =
+    reader.kind === 'phase'
+      ? `REDO of impl-slice ${brief.slice} — the operator sent this slice back to RED from the ${brief.fromStep} gate with this brief.`
+      : `REDO — the operator sent this work back to the ${reader.step} step from the ${brief.fromStep} gate with this brief.`;
+  const workLead =
+    reader.kind === 'phase'
       ? 'The RED, GREEN and refactor phases of this slice must each satisfy it — do this phase\'s part:'
-      : 'Judge this round against it as well as the ticket, and record in the round report how the round serves it:';
+      : 'This step redoes the whole of the work, so it must satisfy all of it:';
+  const lead =
+    audience === 'work' ? workLead : 'Judge this round against it as well as the ticket, and record in the round report how the round serves it:';
   return [
     '',
-    `REDO of impl-slice ${brief.slice} — the operator sent this slice back to RED from the ${brief.fromStep} gate with this brief.`,
+    head,
     lead,
     '',
     brief.text,

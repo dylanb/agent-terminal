@@ -3,6 +3,9 @@ import type { ControllerLoopMessage } from '../shared/ipc';
 
 const MAX_REASON_CHARS = 8 * 1024;
 
+export const publishedLoopReason = (reason: string): string =>
+  reason.length > MAX_REASON_CHARS ? `${reason.slice(0, MAX_REASON_CHARS)}…` : reason;
+
 export interface LoopMessages {
   current(): ControllerLoopMessage | null;
   post(kind: ControllerLoopMessage['kind'], reason: string): void;
@@ -15,7 +18,7 @@ export function createLoopMessages(onChange: () => void): LoopMessages {
   return {
     current: () => (latest ? { ...latest } : null),
     post(kind, reason) {
-      latest = { id: randomUUID(), kind, reason: reason.length > MAX_REASON_CHARS ? `${reason.slice(0, MAX_REASON_CHARS)}…` : reason };
+      latest = { id: randomUUID(), kind, reason: publishedLoopReason(reason) };
       onChange();
     },
     dismiss(id) {
