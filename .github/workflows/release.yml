@@ -5,7 +5,7 @@
 # Four entry points:
 #   - workflow_dispatch(version) on main: opens a "Release vX.Y.Z" PR that bumps package.json. Nothing is built.
 #   - workflow_dispatch on any other branch: builds that branch's head as a published pre-release, versioned
-#     <package.json version>-branch-<branch>.<run number>. Nothing is committed to the branch.
+#     <package.json version>-branch-<branch>.<run number>.g<short sha>. Nothing is committed to the branch.
 #   - push to main that changes package.json's version (the bump PR merging): tags the merge commit, builds.
 #   - push of a v* tag on a commit in main: checks the tag matches package.json at that commit, builds.
 # Tags and PR branches pushed with GITHUB_TOKEN start no workflow run, so the main-push path builds in its
@@ -149,7 +149,7 @@ jobs:
               echo "::error::Branch $REF_NAME has no letters or digits to name a pre-release by."
               exit 1
             fi
-            version="${version%%-*}-branch-$slug.$RUN_NUMBER"
+            version="${version%%-*}-branch-$slug.$RUN_NUMBER.g${sha:0:7}"
             if ! [[ "$version" =~ $RELEASE_VERSION_RE ]]; then
               echo "::error::Pre-release version '$version' is not a release version."
               exit 1

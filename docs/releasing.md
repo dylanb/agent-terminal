@@ -47,10 +47,11 @@ gh workflow run release.yml --ref <branch>
 ```
 
 The run builds the same macOS arm64 and Linux x64 installers of both apps from the branch's head, tags that commit
-`v<version>-branch-<branch>.<run number>` (for example `v0.1.0-branch-plan-loop-issue-299.12`), and publishes them
+`v<version>-branch-<branch>.<run number>.g<short SHA>` (for example `v0.1.0-branch-plan-loop-issue-299.12.g031e67e`), and publishes them
 straight away as a **Pre-release**, not a draft, with notes that name the branch and commit. The version is
 `package.json`'s, without any `-` suffix, then `-branch-`, then the branch name in lowercase with every other character
-turned into `-`, then the run number. The installed apps report it. Nothing is committed to the branch, and the run
+turned into `-`, then the run number, then `g` and the first 7 characters of the commit SHA. The installed apps and
+the installer file names carry it. Nothing is committed to the branch, and the run
 runs no tests. GitHub never marks a pre-release as the latest release, so `releases/latest` and the README's link
 still point at the last real release.
 
