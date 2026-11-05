@@ -17,22 +17,14 @@ export function holdQuitForShell(
   quit: () => void,
 ): (event: { preventDefault(): void }) => void {
   let waiting = false;
-  let released = false;
-  const release = (): void => {
-    if (released) return;
-    released = true;
-    quit();
-  };
   return (event) => {
-    if (released || shell.exited()) return;
+    if (shell.exited()) return;
     event.preventDefault();
     if (waiting) return;
     waiting = true;
-    shell.onExit(release);
+    shell.onExit(quit);
     after(graceMs, () => {
-      if (released || shell.exited()) return;
-      shell.forceKill();
-      after(graceMs, release);
+      if (!shell.exited()) shell.forceKill();
     });
   };
 }

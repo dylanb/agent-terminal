@@ -1,6 +1,6 @@
 ## #301 — Quitting waits for the shell's exit
 
-§5: the app aborted on quit about once in a few hundred quits (`terminate called after throwing an instance of 'Napi::Error'`), when node-pty delivered the hung-up shell's exit while the app was already tearing down; under load the core dump then held the process for about a minute. The quit is now held until the shell's exit is delivered, with a kill after `APP_SHELL_QUIT_GRACE_MS` and a release after a second grace.
+§5: the app aborted on quit about once in a few hundred quits (`terminate called after throwing an instance of 'Napi::Error'`), when node-pty delivered the hung-up shell's exit while the app was already tearing down; under load the core dump then held the process for about a minute. The quit is now held until the shell's exit is delivered, and a shell still running after `APP_SHELL_QUIT_GRACE_MS` is killed. A shell that ignored the hang-up used to keep the app from exiting at all.
 
 ## #301 — Controller cards show title and branch, a header bring-forward icon, and a timeline
 

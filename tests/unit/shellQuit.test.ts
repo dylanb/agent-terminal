@@ -51,6 +51,9 @@ describe('holding the app quit until the hosted shell has exited (§5)', () => {
     const h = harness();
     expect(h.willQuit()).toBe(true);
     expect(h.willQuit()).toBe(true);
+    expect(h.timers).toHaveLength(1);
+    h.elapse();
+    expect(h.state.killed).toBe(1);
     h.shellExits();
     expect(h.state.quits).toBe(1);
   });
@@ -64,16 +67,6 @@ describe('holding the app quit until the hosted shell has exited (§5)', () => {
     expect(h.state.quits).toBe(0);
     h.shellExits();
     expect(h.state.quits).toBe(1);
-  });
-
-  it('quits anyway when even the killed shell reports no exit within a second grace', () => {
-    const h = harness();
-    h.willQuit();
-    h.elapse();
-    expect(h.timers.map(timer => timer.ms)).toEqual([500]);
-    h.elapse();
-    expect(h.state.quits).toBe(1);
-    expect(h.willQuit()).toBe(false);
   });
 
   it('does not kill a shell whose exit arrived before the grace ran out', () => {
