@@ -248,7 +248,7 @@ jobs:
         with:
           name: release-${{ runner.os }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 3
           path: |
             dist/*.dmg
             dist/*.zip

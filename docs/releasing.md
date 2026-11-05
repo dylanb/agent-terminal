@@ -59,7 +59,8 @@ pre-release and its tag when you are done with it: `gh release delete <tag> --cl
 
 ## Re-running
 
-Re-run the run from the Actions page, either all jobs or only the failed ones. A tag that the run already pushed
+Re-run the run from the Actions page, either all jobs or only the failed ones. The release job uploads the files the
+build jobs left, which expire after 3 days, so after that re-run all jobs. A tag that the run already pushed
 for the same commit does not stop it. When the draft release already exists, the release job replaces its assets
 instead of creating a second release. Once the release is published, a re-run fails rather than replace the assets
 users have downloaded. The `release/vX.Y.Z` branch and the tag both block a
