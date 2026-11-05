@@ -101,6 +101,13 @@ The imperatives below are the enforceable rules; **[CODE-STANDARDS.md](CODE-STAN
 - Every §25 run-log entry is true: written only when that outcome happened, never one entry for two outcomes. When a yes/no can't tell outcomes apart, return a value naming each, and RED-test both directions. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - One theme per PR — a second theme wants a second PR, or a per-theme review checkpoint when they must land together. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
 - Fixing churn or dev friction you hit while doing a PR's work is REQUIRED in that same PR — it is not a second theme. The boundary is the source of the discovery, not the file it touches. → [CODE-STANDARDS.md](CODE-STANDARDS.md)
+- **A PR keeps `README.md` current in the same PR.** Update it when the PR:
+  - adds, removes or renames a bundled flow, or changes a bundled flow's steps or gates;
+  - adds, removes or renames a reviewer persona on a bundled loop;
+  - adds or changes a notable user-visible feature — a capability a new user would want to know about, not every bug fix or internal refactor;
+  - changes install or upgrade steps, the published platforms or architectures, the prerequisites, or an environment variable in the README's `## Settings (environment variables)` table.
+
+  A PR that meets one of these and leaves the README unchanged states in its description why no update is needed.
 
 ## Ticket standards (agent-loop ready)
 
