@@ -1,4 +1,4 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
+import type { ActiveFlowWriteResult, SetupDismissReply, SetupStatusReply } from '../../src/shared/ipc';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
 import type { SetupCheckDialogDeps } from '../../src/renderer/src/setupCheckDialog';
 
@@ -24,11 +24,13 @@ export const ENTRY = {
 /** The app version every scripted status reply names. */
 export const APP_VERSION = '7.3.1-fixture';
 
-export const repoStatus = (repoKey: string, entries: SetupConditionEntry[]): SetupStatusReply => ({
+/** The status of a git repository; the repo-setup flow is not installed unless `setupFlowInstalled` says so. */
+export const repoStatus = (repoKey: string, entries: SetupConditionEntry[], setupFlowInstalled = false): SetupStatusReply => ({
   ok: true,
   repoKey,
   isRepository: true,
   appVersion: APP_VERSION,
+  setupFlowInstalled,
   entries,
 });
 
@@ -38,17 +40,24 @@ export const plainStatus = (dir: string, entries: SetupConditionEntry[]): SetupS
   repoKey: dir,
   isRepository: false,
   appVersion: APP_VERSION,
+  setupFlowInstalled: false,
   entries,
 });
 
+/** The flow a repository's start runs when the dialog selected none for it. */
+export const PREVIOUS_FLOW = 'flow-selected-before';
+
 type Scripted = SetupStatusReply | { reject: string };
 type ScriptedDismiss = SetupDismissReply | { reject: string };
+type ScriptedSelection = ActiveFlowWriteResult | { reject: string };
 
 /** The dialog's deps over scripted status replies, consumed in order per repository key; an unscripted key
  *  answers a failed reply. Another app dialog is modelled by `otherDialog`, and `onFocusLost` lands focus on
  *  whatever `landFocusOn` names, as the composition root's fallback does. Each `openInstallExamples` call is
  *  recorded with what `whenInstallOpens` reports at that moment. Each `dismiss` call is recorded, and answers the
- *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. */
+ *  next reply `answerDismiss` queued, or `{ ok: true }` when none is queued. `flows` stands for the two flow
+ *  requests: a selection is recorded per repository unless `answerSelection` scripted a refusal, and a start runs
+ *  the flow its repository has selected, `PREVIOUS_FLOW` when nothing was selected; each `announce` is recorded. */
 export function fakeSetupDeps() {
   const scripts = new Map<string, Scripted[]>();
   const deliveries = new Map<string, Array<() => void>>();
@@ -60,6 +69,10 @@ export function fakeSetupDeps() {
   let atInstallOpen: () => unknown = () => null;
   const dismissals: SetupDismissal[] = [];
   const dismissReplies: ScriptedDismiss[] = [];
+  const selected = new Map<string, string>();
+  const started = new Map<string, string>();
+  const selectionReplies: ScriptedSelection[] = [];
+  const announcements: Array<{ title: string; message: string }> = [];
   const deps: SetupCheckDialogDeps = {
     status: async (repoKey) => {
       const held = holds.get(repoKey);
@@ -81,6 +94,18 @@ export function fakeSetupDeps() {
     },
     openInstallExamples: () => {
       installOpens.push(atInstallOpen());
+    },
+    setActiveFlow: async (repoKey, id) => {
+      const next = selectionReplies.shift() ?? { ok: true };
+      if ('reject' in next) throw new Error(next.reject);
+      if (next.ok) selected.set(repoKey, id);
+      return next;
+    },
+    start: async (repoKey) => {
+      started.set(repoKey, selected.get(repoKey) ?? PREVIOUS_FLOW);
+    },
+    announce: (title, message) => {
+      announcements.push({ title, message });
     },
     onFocusLost: () => landing?.focus(),
     blockingDialogOpen: () => blocking,
@@ -119,6 +144,16 @@ export function fakeSetupDeps() {
     },
     /** One record per `openInstallExamples` call, in order. */
     installOpens: (): unknown[] => [...installOpens],
+    flows: {
+      /** Queue the replies the next selections get, in order; unqueued selections are written. */
+      answerSelection(...replies: ScriptedSelection[]): void {
+        selectionReplies.push(...replies);
+      },
+      /** The flow each repository has started, by repository key. */
+      started: (): Record<string, string> => Object.fromEntries(started),
+    },
+    /** Every message `announce` showed, in order. */
+    announcements: (): Array<{ title: string; message: string }> => [...announcements],
     /** Where `onFocusLost` lands focus. */
     landFocusOn(el: HTMLElement): void {
       landing = el;

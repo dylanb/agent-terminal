@@ -10,6 +10,7 @@ export interface SetupCheckDeps {
   isGitRepository(dir: string): boolean;
   agentTerminalIgnored(repoDir: string): Promise<IgnoreAnswer>;
   loadCapabilities(repoDir: string): LoopCapabilitiesLoad;
+  setupFlowInstalled(repoDir: string): boolean;
   appVersion: string;
   dismissals: SetupDismissals;
 }
@@ -55,7 +56,14 @@ export function createSetupCheck(deps: SetupCheckDeps): SetupCheck {
 async function unfilteredStatus(deps: SetupCheckDeps, repoKey: string): Promise<Extract<SetupStatusReply, { ok: true }>> {
   const examples = examplesEntry(() => deps.examplesCurrent());
   if (!deps.isGitRepository(repoKey)) {
-    return { ok: true, repoKey, isRepository: false, appVersion: deps.appVersion, entries: examples ? [examples] : [] };
+    return {
+      ok: true,
+      repoKey,
+      isRepository: false,
+      appVersion: deps.appVersion,
+      setupFlowInstalled: deps.setupFlowInstalled(repoKey),
+      entries: examples ? [examples] : [],
+    };
   }
   const ignore = await deps.agentTerminalIgnored(repoKey).catch((): IgnoreAnswer => 'unknown');
   const capabilities = deps.loadCapabilities(repoKey);
@@ -64,10 +72,11 @@ async function unfilteredStatus(deps: SetupCheckDeps, repoKey: string): Promise<
   const ignoreEntry = IGNORE_ENTRY[ignore];
   if (ignoreEntry) entries.push(ignoreEntry);
   if (!capabilities.ok) entries.push({ condition: 'capabilities', failure: capabilities.cause });
-  return { ok: true, repoKey, isRepository: true, appVersion: deps.appVersion, entries };
+  return { ok: true, repoKey, isRepository: true, appVersion: deps.appVersion, setupFlowInstalled: deps.setupFlowInstalled(repoKey), entries };
 }
 
 /** The check runs unless `APP_SETUP_CHECK` is exactly `off`, the e2e suite's switch for specs that do not test it. */
 export function setupCheckEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
   return env.APP_SETUP_CHECK !== 'off';
 }
+

@@ -1,4 +1,4 @@
-import type { SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
+import type { ActiveFlowWriteResult, SetupDismissReply, SetupStatusReply } from '../../shared/ipc';
 import { silencedBy, type SetupConditionEntry, type SetupDismissal } from '../../shared/setupCheck';
 import { createModalShell } from './modalShell';
 
@@ -7,6 +7,12 @@ export interface SetupCheckDialogDeps {
   dismiss(dismissal: SetupDismissal): Promise<SetupDismissReply>;
   /** Opens the Settings view's install-examples flow. */
   openInstallExamples(): void;
+  /** Selects flow `id` for `repoKey`, as the flow picker does; refused once that repository's run has begun. */
+  setActiveFlow(repoKey: string, id: string): Promise<ActiveFlowWriteResult>;
+  /** Starts `repoKey`'s selected flow as a press of the flow strip's Start does. */
+  start(repoKey: string): Promise<void>;
+  /** Shows a message that must outlive the closed dialog. */
+  announce(title: string, message: string): void;
   /** Lands focus when the dialog closes after the element that opened it has left the page. */
   onFocusLost(): void;
   /** Whether another app dialog is open, so this one waits instead of opening over it. */
@@ -150,6 +156,7 @@ export function createSetupCheckDialog(host: HTMLElement, deps: SetupCheckDialog
         if (lists(forRepo)) actions.push(button("Don't show again for this repo", dismissWith(forRepo)));
         const untilUpdate: SetupDismissal = { kind: 'examples', appVersion };
         if (lists(untilUpdate)) actions.push(button("Don't show again until the app updates", dismissWith(untilUpdate)));
+        if (reply.setupFlowInstalled) button('Run setup loop', () => {});
         button('Close', dismiss);
         card.append(title, body, foot);
         const initialFocus = focusFirstAction ? (actions[0] ?? null) : null;

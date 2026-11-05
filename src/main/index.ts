@@ -83,6 +83,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, findRepoRoot, resolveRepoKey } from './repoKey';
 import { agentTerminalIgnored } from './gitIgnoreCheck';
 import { createSetupCheck, setupCheckEnabled } from './setupCheck';
+import { repoSetupFlowInstalled } from './setupFlowInstalled';
 import { createSetupDismissals } from './setupDismissals';
 import { loadLoopCapabilities } from './loopCapabilities';
 import { createScanner } from './scanner';
@@ -349,12 +350,20 @@ async function createWindow(): Promise<void> {
     isGitRepository,
     agentTerminalIgnored,
     loadCapabilities: loadLoopCapabilities,
+    setupFlowInstalled: (repoKey) => repoSetupFlowInstalled({ worktreeDir: repoKey, globalRoot: flowGlobalDir }),
     appVersion: app.getVersion(),
     dismissals: createSetupDismissals(flowGlobalDir),
   });
   const setupStatus: (repoKey: string) => Promise<SetupStatusReply> = setupCheckEnabled(process.env)
     ? (repoKey) => setupCheck.status(repoKey)
-    : async (repoKey) => ({ ok: true, repoKey, isRepository: isGitRepository(repoKey), appVersion: app.getVersion(), entries: [] });
+    : async (repoKey) => ({
+        ok: true,
+        repoKey,
+        isRepository: isGitRepository(repoKey),
+        appVersion: app.getVersion(),
+        setupFlowInstalled: false,
+        entries: [],
+      });
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;

@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSetupCheckDialog, type SetupCheckDialog } from '../../src/renderer/src/setupCheckDialog';
 import { APP_VERSION, ENTRY, REPO, fakeSetupDeps, plainStatus, repoStatus } from '../helpers/setupCheckFixtures';
 import type { SetupConditionEntry, SetupDismissal } from '../../src/shared/setupCheck';
-import { recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
+import { openModalDialogs, recordSetupDialogs, setupCheckScreen } from '../helpers/setupCheckScreen';
+import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
+import { createFlowStrip } from '../../src/renderer/src/flowStrip';
+import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
+import type { FlowStateView } from '../../src/shared/ipc';
 
 // The setup-check popup lists each condition the checked repository fails, in plain words, one message per
 // failure kind.
@@ -760,5 +764,165 @@ describe('a dismissal still being saved when the dialog is disposed', () => {
       open: false,
       focusInHost: false,
     });
+  });
+});
+
+const RUN_SETUP = 'Run setup loop';
+
+describe('Run setup loop is offered only for the entries the setup flow fixes, with the flow installed (AC12, AC18)', () => {
+  const RULES: Array<{ when: string; entries: SetupConditionEntry[]; installed: boolean; shown: boolean }> = [
+    { when: 'only a not-ignored entry is listed', entries: [ENTRY.notIgnored], installed: true, shown: true },
+    { when: 'only an absent capabilities entry is listed', entries: [ENTRY.absent], installed: true, shown: true },
+    { when: 'only the examples entry is listed', entries: [ENTRY.examplesStale], installed: true, shown: false },
+    {
+      when: 'only malformed, confinement and unchecked entries are listed',
+      entries: [ENTRY.malformed, ENTRY.confinement, ENTRY.unchecked],
+      installed: true,
+      shown: false,
+    },
+    { when: 'the setup flow is not installed', entries: [ENTRY.notIgnored], installed: false, shown: false },
+  ];
+
+  for (const { when, entries, installed, shown } of RULES) {
+    it(`${shown ? 'shows' : 'hides'} it when ${when}`, async () => {
+      const fake = fakeSetupDeps();
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, entries, installed));
+      const { dialog, screen } = mountDialog(fake);
+
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      expect(screen.hasControl(RUN_SETUP)).toBe(shown);
+    });
+  }
+});
+
+describe('pressing Run setup loop (AC18, AC19)', () => {
+  /** A popup for alpha offering Run setup loop, with the terminal already moved on to bravo, whose check waits. */
+  async function runSetupOffered(fake: ReturnType<typeof fakeSetupDeps>) {
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored, ENTRY.absent], true));
+    fake.answer(REPO.bravo, repoStatus(REPO.bravo, [ENTRY.malformed]));
+    const mountedDialog = mountDialog(fake);
+    void mountedDialog.dialog.check(REPO.alpha);
+    void mountedDialog.dialog.check(REPO.bravo);
+    await shownFor(mountedDialog.screen, REPO.alpha);
+    return mountedDialog;
+  }
+
+  it("starts the repo-setup flow in the popup's repository, not the one the terminal moved to", async () => {
+    const fake = fakeSetupDeps();
+    const { screen } = await runSetupOffered(fake);
+
+    screen.control(RUN_SETUP).click();
+
+    await vi.waitFor(() => expect(fake.flows.started()).toEqual({ [REPO.alpha]: REPO_SETUP_FLOW_ID }));
+  });
+
+  it('closes the popup once the start has run, and announces nothing itself', async () => {
+    const fake = fakeSetupDeps();
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+
+    await vi.waitFor(() =>
+      expect({ open: screen.isOpen(), started: fake.flows.started(), announced: fake.announcements() }).toEqual({
+        open: false,
+        started: { [REPO.alpha]: REPO_SETUP_FLOW_ID },
+        announced: [],
+      }),
+    );
+  });
+
+  const REFUSALS: Array<{ how: string; reply: Parameters<ReturnType<typeof fakeSetupDeps>['flows']['answerSelection']>[0]; reason: string }> = [
+    { how: 'is refused because the run has begun', reply: { ok: false, reason: 'scripted begun-run refusal' }, reason: 'scripted begun-run refusal' },
+    { how: 'is rejected', reply: { reject: 'scripted selection rejection' }, reason: 'scripted selection rejection' },
+  ];
+
+  for (const { how, reply, reason } of REFUSALS) {
+    it(`when the selection ${how}, closes the popup, announces why, and starts nothing`, async () => {
+      const fake = fakeSetupDeps();
+      fake.flows.answerSelection(reply);
+      fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.notIgnored], true));
+      const { dialog, screen } = mountDialog(fake);
+      void dialog.check(REPO.alpha);
+      await shownFor(screen, REPO.alpha);
+
+      screen.control(RUN_SETUP).click();
+
+      await vi.waitFor(() =>
+        expect({
+          open: screen.isOpen(),
+          announcedReason: fake.announcements().some(({ message }) => message.includes(reason)),
+          started: fake.flows.started(),
+        }).toEqual({ open: false, announcedReason: true, started: {} }),
+      );
+    });
+  }
+
+  it('closing the popup through it lets a queued check raise its popup (AC11)', async () => {
+    const fake = fakeSetupDeps();
+    const { screen } = await runSetupOffered(fake);
+
+    screen.control(RUN_SETUP).click();
+
+    await vi.waitFor(() => expect(openFor(screen)).toBe(REPO.bravo));
+  });
+});
+
+describe('Run setup loop over the real flow strip (AC18)', () => {
+  it('opens the step-entry input modal only once the popup has gone, so two modal dialogs are never open, and focus ends in it', async () => {
+    const promptView: FlowStateView = {
+      stepName: 'setup-entry',
+      runStarted: 'started',
+      steps: ['setup-entry'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'note', type: 'text' }], bootstrap: '' },
+    };
+    const idle: FlowStateView = { ...promptView, runStarted: 'never-started', status: 'not_started', prompt: undefined };
+    const stripHost = document.body.appendChild(document.createElement('div'));
+    const inputHost = document.body.appendChild(document.createElement('div'));
+    const inputModal = createFlowInputModal(inputHost);
+    const modalsOpenWhenInputOpened: number[] = [];
+    const strip = createFlowStrip(stripHost, {
+      state: async () => idle,
+      start: async () => promptView,
+      advance: async () => promptView,
+      restart: async () => promptView,
+      undo: async () => promptView,
+      terminate: async () => idle,
+      provideInput: async () => promptView,
+      onStateChanged: () => () => {},
+      onStatusBar: () => {},
+      onPrompt: (prompt, stepName, submit) => {
+        if (prompt) modalsOpenWhenInputOpened.push(openModalDialogs(document.body));
+        inputModal.render(prompt, stepName, submit);
+      },
+    });
+    strip.onRepoChanged(REPO.alpha);
+    const fake = fakeSetupDeps();
+    fake.deps.start = (repoKey) => strip.start(repoKey);
+    fake.answer(REPO.alpha, repoStatus(REPO.alpha, [ENTRY.absent], true));
+    const { dialog, screen } = mountDialog(fake);
+    void dialog.check(REPO.alpha);
+    await shownFor(screen, REPO.alpha);
+
+    screen.control(RUN_SETUP).click();
+
+    try {
+      await vi.waitFor(() =>
+        expect({ modalsOpenWhenInputOpened, focusInInputModal: inputHost.contains(document.activeElement) }).toEqual({
+          modalsOpenWhenInputOpened: [0],
+          focusInInputModal: true,
+        }),
+      );
+    } finally {
+      strip.dispose();
+      inputModal.dispose();
+    }
   });
 });

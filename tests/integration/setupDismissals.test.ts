@@ -48,6 +48,7 @@ const launchedCheck = (appVersion = VERSION) =>
     isGitRepository: (dir) => findRepoRoot(dir) === dir,
     agentTerminalIgnored,
     loadCapabilities: loadLoopCapabilities,
+    setupFlowInstalled: () => false,
     appVersion,
     dismissals: createSetupDismissals(appHome),
   });

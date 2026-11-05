@@ -1,19 +1,20 @@
 /// <reference lib="dom" />
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CH, SESSION_ID, type FlowBootstrapErrorMsg } from '../../src/shared/ipc';
 import { shellQuote } from '../../src/shared/shellQuote';
 import { REPO_SETUP_FLOW_ID } from '../../src/shared/setupCheck';
-import { writeActiveFlow } from '../../src/main/activeFlowPointer';
+import { readActiveFlow, writeActiveFlow } from '../../src/main/activeFlowPointer';
+import { userConfigLoopsV2Dir } from '../../src/main/userConfig';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { createGitRepoFixture, type GitRepoFixture } from '../helpers/gitRepo';
 import { writeRepoConditions, type RepoConditionsFixture } from '../helpers/setupRepoConditions';
 import { snapshotTree } from '../helpers/treeSnapshot';
 import { createWorktreeFixture, type WorktreeFixture } from '../helpers/worktreeFixture';
 import { electron } from './registeredElectron';
-import { FAKE_AGENT_READY, seedFakeAgentV2 } from './fakeTools';
+import { FAKE_AGENT_READY, chainBudget, seedFakeAgentSteps, seedFakeAgentV2, seedFakeGhGit, writeCatalogEntry } from './fakeTools';
 import { createSetupCheckMachine, failingCheckIgnoreGit, type SetupCheckMachine } from './setupCheckEnv';
 
 // The startup setup check (#290): a repository that fails a condition raises a blocking popup listing each
@@ -556,3 +557,190 @@ test('the installed repo-setup flow, once selected, starts with no flow-load err
   await expect.poll(agent.injectedLog, { timeout: 40_000 }).toContain('turn-done:work-');
   await expect(flowError(page)).toHaveCount(0);
 });
+
+const RUN_SETUP = 'Run setup loop';
+const FX_SETUP = 'fx-setup';
+const FX_PUBLISH = 'fx-publish';
+
+/** A two-step `repo-setup` flow of this test's own, both steps human-gated loops with one work turn each and no
+ *  reviewers, so the e2e reads none of the shipped flow's configured values. */
+const FIXTURE_SETUP_FLOW = [
+  `name: ${REPO_SETUP_FLOW_ID}`,
+  'steps:',
+  ...[FX_SETUP, FX_PUBLISH].flatMap((step) => [
+    `  - id: ${step}`,
+    '    kind: loop',
+    '    gate_authority: human',
+    `    loop: ${step}-loop`,
+    '    loop_namespace: app',
+  ]),
+  '',
+].join('\n');
+
+/** Installs `flowYaml` as the `repo-setup` entry of this machine's global catalog, and the fixture's two loops in
+ *  its Claude config. Each loop's work artifact is named after its step, the id the fake agent's marker carries. */
+function installFixtureSetupFlow(flowYaml = FIXTURE_SETUP_FLOW): void {
+  writeCatalogEntry(machine.appHome, REPO_SETUP_FLOW_ID, flowYaml);
+  const loops = userConfigLoopsV2Dir(machine.claudeConfigDir);
+  if (loops === null) throw new Error(`no loops-v2 directory under ${machine.claudeConfigDir}`);
+  for (const step of [FX_SETUP, FX_PUBLISH]) {
+    const dir = join(loops, `${step}-loop`);
+    mkdirSync(join(dir, 'prompts'), { recursive: true });
+    writeFileSync(join(dir, 'prompts', 'work.md'), `Do the ${step} work.\n`);
+    writeFileSync(
+      join(dir, `${step}-loop.yaml`),
+      [
+        'version: v2', `name: ${step}-loop`, 'work:', '  recipe: prompts/work.md', `  artifact: ${step}`, 'reviewers: []', 'boundaries: []',
+        'report:', '  sections: [summary]', 'gate:', '  - option: approve', '  - option: redo', 'outputs:', `  - id: ${step}`, `    path: ${step}.md`, '',
+      ].join('\n'),
+    );
+  }
+}
+
+/** A fake agent for the fixture flow that logs every line it is handed. Its setup turn completes; its publish turn
+ *  commits and opens a PR through the fake git and gh, whose calls are logged. */
+function seedFixtureSetupAgent(repo: string): { env: Record<string, string | undefined>; injectedLog: () => string; toolLog: () => string } {
+  const binDir = mkdtempSync(join(tmpdir(), 'setup-check-fx-agent-'));
+  scratch.push(binDir);
+  const tools = seedFakeGhGit('setup-check-fx-tools-');
+  scratch.push(tools.binDir);
+  seedFakeAgentSteps(binDir, {
+    [FX_SETUP]: { artifactRel: `.agent-terminal/loop/artifacts/${FX_SETUP}.md`, work: 'complete', logInjected: true },
+    [FX_PUBLISH]: {
+      artifactRel: `.agent-terminal/loop/artifacts/${FX_PUBLISH}.md`,
+      work: 'complete',
+      extraShell: { work: ['git commit --allow-empty -m publish; git push origin HEAD; gh pr create --draft --title publish --body publish'] },
+    },
+  });
+  const log = join(repo, '.agent-terminal', 'injected-log');
+  return {
+    env: {
+      ...machine.env,
+      FAKE_GHGIT_LOG: tools.logFile,
+      PATH: `${binDir}${delimiter}${tools.binDir}${delimiter}${process.env.PATH ?? ''}`,
+    },
+    injectedLog: () => (existsSync(log) ? readFileSync(log, 'utf8') : ''),
+    toolLog: () => (existsSync(tools.logFile) ? readFileSync(tools.logFile, 'utf8') : ''),
+  };
+}
+
+/** Runs the fake agent in the terminal, through the app's own input path, and waits until it is hosted. */
+async function hostFakeAgent(page: Page): Promise<void> {
+  await page.evaluate((line) => window.term.input(line), 'fake-agent\r');
+  await expect(page.locator('.xterm-rows')).toContainText(FAKE_AGENT_READY);
+}
+
+const activeStation = (page: Page): Locator => page.locator('#flow-strip .stn.active .nm');
+const loopTone = (page: Page): Locator => page.locator('#flow-strip .loopstat .spill');
+
+/** What the page shows of the setup run in `repo`, read once: whether its popup is open, whether the fixture's
+ *  first step's work prompt has reached the agent, the strip's active station, whether that station's loop has
+ *  settled (its turn done, the step held at its human gate), and how many dialogs are open. */
+async function setupRunSeen(page: Page, repo: string, injectedLog: () => string) {
+  const tone = loopTone(page);
+  return {
+    popupOpen: await popupFor(page, repo).count(),
+    firstTurnRan: injectedLog().includes(`turn-done:work-${FX_SETUP}`),
+    activeStation: await activeStation(page).allTextContents(),
+    settledAtGate: (await tone.count()) === 1 && /\bsettle\b/.test((await tone.getAttribute('class')) ?? ''),
+    dialogsOpen: await page.getByRole('dialog').count(),
+  };
+}
+
+const AT_FIRST_GATE = { popupOpen: 0, firstTurnRan: true, activeStation: [FX_SETUP], settledAtGate: true, dialogsOpen: 0 };
+
+test("Run setup loop starts the installed repo-setup flow in the popup's repository with no ticket prompt, and its first step reaches its gate (AC18)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  installFixtureSetupFlow();
+  const agent = seedFixtureSetupAgent(repo);
+  const page = await launchIn(repo, agent.env);
+  const popup = popupFor(page, repo);
+  await expect(popup).toBeVisible();
+  await hostFakeAgent(page);
+
+  await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+  await expect.poll(() => setupRunSeen(page, repo, agent.injectedLog), { timeout: 40_000 }).toEqual(AT_FIRST_GATE);
+});
+
+test("at the setup flow's first gate nothing is committed, pushed or filed, and the next step's turn has not run (AC20)", { tag: '@ownapp' }, async () => {
+  test.setTimeout(chainBudget(2));
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  installFixtureSetupFlow();
+  const agent = seedFixtureSetupAgent(repo);
+  const page = await launchIn(repo, agent.env);
+  const popup = popupFor(page, repo);
+  await expect(popup).toBeVisible();
+  await hostFakeAgent(page);
+  const soft = expect.configure({ soft: true });
+
+  await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+  await soft.poll(() => setupRunSeen(page, repo, agent.injectedLog), { timeout: 40_000 }).toEqual(AT_FIRST_GATE);
+  soft(agent.injectedLog()).not.toContain(`turn-done:work-${FX_PUBLISH}`);
+  soft(agent.toolLog().split('\n').filter((line) => /^(git (commit|push)|gh (pr|issue) create)\b/.test(line))).toEqual([]);
+});
+
+const BEGUN_STATES = ['in_progress', 'done'] as const;
+
+for (const status of BEGUN_STATES) {
+  test(`with the repository's run ${status === 'done' ? 'done and not reset' : 'in progress'}, Run setup loop is refused with a visible alert and changes nothing about the run (AC19)`, { tag: '@ownapp' }, async () => {
+    const repo = repoIn({ ignored: false, capabilities: 'absent' });
+    installFixtureSetupFlow();
+    writeCatalogEntry(machine.appHome, 'operator-flow', 'name: operator-flow\nsteps:\n  - id: operator-step\n    kind: manual\n');
+    writeActiveFlow(repo, 'operator-flow');
+    git.writeRepoFile(repo, '.agent-terminal/flow-state.yaml', `step: operator-step\nstatus: ${status}\n`);
+    const page = await launchIn(repo);
+    const popup = popupFor(page, repo);
+    await expect(popup).toBeVisible();
+    const before = snapshotTree(repo);
+    const soft = expect.configure({ soft: true });
+
+    await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+    await soft(popup).toHaveCount(0);
+    const gate = await page.evaluate(({ repoKey, id }) => window.flow.setActiveFlow(repoKey, id), { repoKey: repo, id: REPO_SETUP_FLOW_ID });
+    soft(gate, "the selection gate still refuses the repository's begun run").toMatchObject({ ok: false });
+    await soft(page.getByRole('alertdialog').filter({ hasText: gate.ok ? '' : gate.reason })).toBeVisible();
+    expect(snapshotTree(repo)).toEqual(before);
+  });
+}
+
+test('a repo-setup flow that fails to load is selected, the popup closes, and the flow strip shows its load error', { tag: '@ownapp' }, async () => {
+  const repo = repoIn({ ignored: false, capabilities: 'absent' });
+  installFixtureSetupFlow(`name: ${REPO_SETUP_FLOW_ID}\nsteps: not-a-list\n`);
+  const page = await launchIn(repo);
+  const popup = popupFor(page, repo);
+  await expect(popup).toBeVisible();
+  const errorBefore = await flowError(page).allTextContents();
+  const soft = expect.configure({ soft: true });
+
+  await popup.getByRole('button', { name: RUN_SETUP }).click();
+
+  await soft.poll(async () => ({
+    popupOpen: await popupFor(page, repo).count(),
+    newLoadError: await flowError(page).allTextContents().then((now) => now.length === 1 && now[0] !== errorBefore[0]),
+  })).toEqual({ popupOpen: 0, newLoadError: true });
+  soft(readActiveFlow(repo)).toEqual({ kind: 'value', id: REPO_SETUP_FLOW_ID });
+});
+
+const HIDDEN_RUN_SETUP: Array<{ when: string; conditions: RepoConditionsFixture; entries: number; installed: 'fixture' | 'none' | 'repository too' }> = [
+  { when: 'lists only the examples entry', conditions: { ignored: true, capabilities: 'valid' }, entries: 1, installed: 'fixture' },
+  { when: 'lists only a rejected loop-capabilities.yaml beside the examples entry', conditions: { ignored: true, capabilities: 'malformed' }, entries: 2, installed: 'fixture' },
+  { when: 'has no repo-setup flow installed', conditions: { ignored: false, capabilities: 'valid' }, entries: 2, installed: 'none' },
+  { when: 'carries its own repo-setup flow beside the installed one', conditions: { ignored: false, capabilities: 'valid' }, entries: 2, installed: 'repository too' },
+];
+
+for (const { when, conditions, entries, installed } of HIDDEN_RUN_SETUP) {
+  test(`a popup for a repository that ${when} offers no Run setup loop (AC12, AC18)`, { tag: '@ownapp' }, async () => {
+    const repo = repoIn(conditions);
+    if (installed !== 'none') installFixtureSetupFlow();
+    if (installed === 'repository too') writeCatalogEntry(repo, REPO_SETUP_FLOW_ID, FIXTURE_SETUP_FLOW);
+    const page = await launchIn(repo);
+    const popup = popupFor(page, repo);
+    await expect(entriesOf(popup)).toHaveCount(entries);
+
+    await expect(popup.getByRole('button', { name: RUN_SETUP })).toHaveCount(0);
+  });
+}

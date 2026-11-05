@@ -47,6 +47,7 @@ const realDeps: SetupCheckDeps = {
   isGitRepository: (dir) => findRepoRoot(dir) === dir,
   agentTerminalIgnored,
   loadCapabilities: loadLoopCapabilities,
+  setupFlowInstalled: () => false,
   appVersion: APP_VERSION,
   dismissals: dismissalsOf(),
 };
@@ -71,7 +72,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'capabilities', failure: 'absent' }],
     });
   });
@@ -81,7 +82,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'capabilities', failure: 'malformed' }],
     });
   });
@@ -91,7 +92,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'capabilities', failure: 'malformed' }],
     });
   });
@@ -101,7 +102,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'capabilities', failure: 'confinement' }],
     });
   });
@@ -111,7 +112,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'ignore', failure: 'not-ignored' }],
     });
   });
@@ -122,7 +123,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'ignore', failure: 'not-ignored' }],
     });
   });
@@ -132,7 +133,7 @@ describe('the repository conditions a git repository fails', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [
         { condition: 'capabilities', failure: 'absent' },
         { condition: 'ignore', failure: 'not-ignored' },
@@ -142,7 +143,7 @@ describe('the repository conditions a git repository fails', () => {
 
   it('lists nothing for a repository that ignores .agent-terminal/ and has a file the reader accepts (AC4)', async () => {
     const repo = repoIn({ ignored: true, capabilities: 'valid' });
-    expect(await statusOf(repo)).toEqual({ ok: true, repoKey: repo, isRepository: true, appVersion: APP_VERSION, entries: [] });
+    expect(await statusOf(repo)).toEqual({ ok: true, repoKey: repo, isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false, entries: [] });
   });
 });
 
@@ -153,7 +154,7 @@ describe('an ignore check that could not run never passes (AC6)', () => {
     expect(status).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'ignore', failure: 'unchecked' }],
     });
   });
@@ -167,7 +168,7 @@ describe('an ignore check that could not run never passes (AC6)', () => {
     expect(status).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'ignore', failure: 'unchecked' }],
     });
   });
@@ -179,7 +180,7 @@ describe('an ignore check that could not run never passes (AC6)', () => {
     expect(await statusOf(repo)).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [
         { condition: 'capabilities', failure: 'absent' },
         { condition: 'ignore', failure: 'unchecked' },
@@ -193,7 +194,7 @@ describe('a directory that is not a git repository (AC9, repository half)', () =
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'setup-check-plain-')));
     scratch.push(dir);
     writeFileSync(join(dir, 'loop-capabilities.yaml'), 'test_globs: 42\n');
-    expect(await statusOf(dir)).toEqual({ ok: true, repoKey: dir, isRepository: false, appVersion: APP_VERSION, entries: [] });
+    expect(await statusOf(dir)).toEqual({ ok: true, repoKey: dir, isRepository: false, appVersion: APP_VERSION, setupFlowInstalled: false, entries: [] });
   });
 });
 
@@ -205,7 +206,7 @@ describe('the examples condition, for any directory (AC7, AC9 examples half)', (
     expect(await statusOf(repo, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'examples', failure: 'stale' }],
     });
   });
@@ -216,7 +217,7 @@ describe('the examples condition, for any directory (AC7, AC9 examples half)', (
     expect(status).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'examples', failure: 'unchecked' }],
     });
   });
@@ -232,7 +233,7 @@ describe('the examples condition, for any directory (AC7, AC9 examples half)', (
     expect(status).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'examples', failure: 'unchecked' }],
     });
   });
@@ -242,7 +243,7 @@ describe('the examples condition, for any directory (AC7, AC9 examples half)', (
     expect(await statusOf(repo, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
       ok: true,
       repoKey: repo,
-      isRepository: true, appVersion: APP_VERSION,
+      isRepository: true, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [
         { condition: 'capabilities', failure: 'absent' },
         { condition: 'examples', failure: 'stale' },
@@ -258,7 +259,7 @@ describe('the examples condition, for any directory (AC7, AC9 examples half)', (
     expect(await statusOf(dir, { ...realDeps, examplesCurrent: () => STALE })).toEqual({
       ok: true,
       repoKey: dir,
-      isRepository: false, appVersion: APP_VERSION,
+      isRepository: false, appVersion: APP_VERSION, setupFlowInstalled: false,
       entries: [{ condition: 'examples', failure: 'stale' }],
     });
   });
@@ -315,8 +316,18 @@ describe('a recorded dismissal stops the status listing what it silences (AC13, 
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'setup-check-plain-')));
     scratch.push(dir);
     const status = await statusOf(dir, failingEverything({ kind: 'examples', appVersion: APP_VERSION }));
-    expect(status).toEqual({ ok: true, repoKey: dir, isRepository: false, appVersion: APP_VERSION, entries: [] });
+    expect(status).toEqual({ ok: true, repoKey: dir, isRepository: false, appVersion: APP_VERSION, setupFlowInstalled: false, entries: [] });
   });
+});
+
+describe("the reply says whether Run setup loop can start the repo-setup flow for the repository (AC18)", () => {
+  for (const installed of [true, false]) {
+    it(`answers setupFlowInstalled ${installed} when the seam answers ${installed} for this repository`, async () => {
+      const repo = repoIn({ ignored: false, capabilities: 'absent' });
+      const status = await statusOf(repo, { ...realDeps, setupFlowInstalled: (dir) => dir === repo && installed });
+      expect(status).toMatchObject({ ok: true, repoKey: repo, setupFlowInstalled: installed });
+    });
+  }
 });
 
 describe('dismiss() hands the dismissal to the store and answers what it answered', () => {

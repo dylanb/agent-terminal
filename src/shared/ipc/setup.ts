@@ -18,7 +18,7 @@ export interface SetupStatusMsg {
 }
 
 export type SetupStatusReply =
-  | { ok: true; repoKey: string; isRepository: boolean; appVersion: string; entries: SetupConditionEntry[] }
+  | { ok: true; repoKey: string; isRepository: boolean; appVersion: string; setupFlowInstalled: boolean; entries: SetupConditionEntry[] }
   | { ok: false; reason: string };
 
 export interface SetupDismissMsg {

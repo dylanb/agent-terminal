@@ -92,3 +92,8 @@ export function recordSetupDialogs(host: HTMLElement): () => string[] {
     return [...seen];
   };
 }
+
+/** How many modal dialogs, `aria-modal="true"` dialogs and alertdialogs alike, are open under `root`. */
+export function openModalDialogs(root: ParentNode): number {
+  return [...everyByRole(root, 'dialog'), ...everyByRole(root, 'alertdialog')].filter((el) => el.getAttribute('aria-modal') === 'true').length;
+}
