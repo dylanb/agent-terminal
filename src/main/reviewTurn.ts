@@ -7,7 +7,7 @@
 import type { LoopDefV2, ReviewerTools } from './loopDefV2';
 import { boundaryCommand, flowDocumentLines, designCheckLines, sliceBriefLines } from './appWorkTurn';
 import type { ChainedInput } from './chainedInput';
-import type { SliceBrief } from './appLoopState';
+import type { SliceBriefDelivery } from './sliceBriefReader';
 import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, FIXED_DISPOSITION, INVALID_DISPOSITION, NEEDS_HUMAN_DISPOSITION, OUT_OF_SCOPE_DISPOSITION, FAILED_STATUS, NOT_LOADED_STATUS, RAN_STATUS, REPORT_FIELDS, exampleRoundReport } from '../shared/roundReport';
@@ -97,7 +97,7 @@ export interface ReviewAndFixPromptReq {
   /** §27.10/§27.4 */
   inputs?: ChainedInput[];
   /** §28.4.2 — the operator's back-to-RED brief for the slice this TDD phase round belongs to. */
-  sliceBrief?: SliceBrief;
+  sliceBrief?: SliceBriefDelivery;
   /** §27.3 */
   loopBrief?: string;
   /** §28.4 */

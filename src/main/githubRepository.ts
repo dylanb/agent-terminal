@@ -96,6 +96,10 @@ function repositoryFromRemote(
   };
 }
 
+export function repositoryHost(repository: Pick<GitHubRepositoryIdentity, 'selector'>): string {
+  return repository.selector.split('/')[0] ?? '';
+}
+
 export function validGitHubRepositorySelector(value: string): boolean {
   const parts = value.split('/');
   return (
@@ -123,7 +127,7 @@ export function matchesGitHubRepositoryUrl(
       parsed.port === '' &&
       parsed.search === '' &&
       parsed.hash === '' &&
-      parsed.hostname.toLowerCase() === repository.selector.split('/')[0] &&
+      parsed.hostname.toLowerCase() === repositoryHost(repository) &&
       parts.length === 4 &&
       (parts[0] ?? '').toLowerCase() === repository.owner &&
       (parts[1] ?? '').toLowerCase() === repository.name &&
@@ -141,9 +145,9 @@ function originConfigReader(repoDir: string): OriginConfigReader {
   );
 }
 
-export async function resolveGitHubRepository(
+export async function originGitHubRepository(
   repoDir: string,
-): Promise<ResolvedGitHubRepository> {
+): Promise<Omit<ResolvedGitHubRepository, 'defaultBranch'>> {
   const reader = originConfigReader(repoDir);
   const fetchUrls = await originUrls(reader, 'fetch');
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
@@ -159,6 +163,13 @@ export async function resolveGitHubRepository(
   ) {
     throw new Error('origin repository targets do not match');
   }
+  return { ...expected, fetchUrl: (fetchUrls[0] ?? '').trim(), pushUrl: (pushUrls[0] ?? '').trim() };
+}
+
+export async function resolveGitHubRepository(
+  repoDir: string,
+): Promise<ResolvedGitHubRepository> {
+  const expected = await originGitHubRepository(repoDir);
   const viewedRepository = await runAppCommand(
     'gh',
     [
@@ -198,7 +209,5 @@ export async function resolveGitHubRepository(
   return {
     ...expected,
     defaultBranch: raw.defaultBranchRef.name,
-    fetchUrl: (fetchUrls[0] ?? '').trim(),
-    pushUrl: (pushUrls[0] ?? '').trim(),
   };
 }

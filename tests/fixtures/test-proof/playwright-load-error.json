@@ -1,0 +1,25 @@
+{
+  "config": {
+    "version": "1.61.0"
+  },
+  "suites": [],
+  "errors": [
+    {
+      "message": "Error: Cannot find module './missing'",
+      "stack": "Error: Cannot find module './missing'",
+      "location": {
+        "file": "/work/tests/e2e/broken.spec.ts",
+        "line": 1,
+        "column": 1
+      }
+    }
+  ],
+  "stats": {
+    "startTime": "2020-01-01T00:00:00.000Z",
+    "duration": 1,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
